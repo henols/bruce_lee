@@ -18,7 +18,7 @@ import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { createServer } from "node:http";
 
-import { acquire, readRegistry, instanceFor, refreshLease, DEFAULT_PORT, poolHealth, diagnose, leaseInfo } from "./vice-pool.mjs";
+import { acquire, readRegistry, instanceFor, refreshLease, DEFAULT_PORT, poolHealth, diagnose, leaseInfo, formatPoolHealth } from "./vice-pool.mjs";
 import { call, useInstance, formatToolsOutput } from "./vice.mjs";
 import { repoRoot } from "./repo-root.mjs";
 import { probeInstance, probeAll, PROBE_TOOL, DEFAULT_PROBE_TIMEOUT_MS } from "./vice-probe.mjs";
@@ -1394,4 +1394,97 @@ test("poolHealth(): D-4 end-to-end -- a dead pooled instance's diagnosis moves f
     assert.equal(second.records[0].alive, false);
     assert.match(second.records[0].diagnosis, /DEAD SUPERVISOR/);
   });
+});
+
+// ============================================================================
+// Task 3 (quick-260730-p5x): formatPoolHealth() as a pure formatter, and the
+// `pool status` CLI verb -- container-side surfacing of the four answers.
+// ============================================================================
+
+test("formatPoolHealth: a synthetic health object renders all four answers and the diagnosis, with no calls made", () => {
+  const health = {
+    pooled: true,
+    records: [
+      {
+        port: 6600,
+        launched: true,
+        alive: true,
+        alive_reason: null,
+        lease: { held: false },
+        epoch: { present: true, epoch: 4 },
+        diagnosis: "alive and free",
+      },
+      {
+        port: 6601,
+        launched: true,
+        alive: false,
+        alive_reason: "ECONNREFUSED",
+        lease: { held: false },
+        epoch: { present: false, epoch: null },
+        diagnosis: "dead, no epoch file -- nothing is supervising this port. Fix: start a supervisor.",
+      },
+    ],
+  };
+  const out = formatPoolHealth(health);
+  assert.match(out, /port 6600/);
+  assert.match(out, /launched:yes/);
+  assert.match(out, /alive:yes/);
+  assert.match(out, /leased:no/);
+  assert.match(out, /supervised:yes \(epoch 4\)/);
+  assert.match(out, /alive and free/);
+
+  assert.match(out, /port 6601/);
+  assert.match(out, /alive:no \(ECONNREFUSED\)/);
+  assert.match(out, /supervised:no/);
+  assert.match(out, /nothing is supervising/);
+});
+
+test("formatPoolHealth: the unpooled default (launched:null) renders as n/a, not a bare false", () => {
+  const health = {
+    pooled: false,
+    records: [
+      {
+        port: DEFAULT_PORT,
+        launched: null,
+        alive: false,
+        alive_reason: "ECONNREFUSED",
+        lease: { held: false },
+        epoch: { present: false, epoch: null },
+        diagnosis: "dead, no epoch file -- nothing is supervising this port.",
+      },
+    ],
+  };
+  const out = formatPoolHealth(health);
+  assert.match(out, /launched:n\/a/);
+});
+
+test("CLI `pool status`: prints port/alive/leased/supervised and completes in under 3 seconds with an EXPIRED session file present", async () => {
+  const dir = tmpPoolDir();
+  const sessionFile = join(dir, "session.json");
+  writeFileSync(
+    sessionFile,
+    JSON.stringify({
+      session_id: "expired-pool-status-test",
+      port: DEFAULT_PORT,
+      url: `http://127.0.0.1:${DEFAULT_PORT}/mcp`,
+      epoch_file: "unused",
+      pooled: false,
+      created_at: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+      expires_at: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+      ttl_ms: 60000,
+      epoch_at_acquire: { present: false, epoch: null },
+    })
+  );
+  const env = { ...process.env, VICE_POOL_DIR: dir, VICE_SESSION_FILE: sessionFile };
+  const start = Date.now();
+  const { stdout } = await execFileP(process.execPath, [VICE_CLI, "pool", "status"], { env });
+  const elapsedMs = Date.now() - start;
+  assert.match(stdout, new RegExp(`port ${DEFAULT_PORT}`));
+  assert.match(stdout, /alive:/);
+  assert.match(stdout, /leased:/);
+  assert.match(stdout, /supervised:/);
+  assert.ok(
+    elapsedMs < 3000,
+    `expected pool status to complete quickly even with an expired session present, took ${elapsedMs}ms`
+  );
 });

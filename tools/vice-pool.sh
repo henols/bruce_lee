@@ -487,6 +487,17 @@ cmd_status() {
       "$([ "$entry_stale" = "yes" ] && echo STALE || echo ok)"
   done
 
+  # D-5 permits either half (host shell or container Node) to own the
+  # "is VICE actually answering" question; this is the split actually taken:
+  # the "alive" column above is the SUPERVISOR PID's liveness as `ps` sees it
+  # from the HOST -- it says nothing about whether VICE itself is answering a
+  # vice_ping. Re-implementing a liveness probe here in shell would be a
+  # second, weaker copy of the one vice-probe.mjs already provides
+  # (quick-260730-p5x) -- pids, epoch files and lease files are all this
+  # script can see from the host; whether VICE is actually up is answered
+  # container-side.
+  echo "vice-pool: for actual VICE liveness (not just supervisor-pid liveness), run inside the container: node .claude/skills/vice-session/vice.mjs pool status"
+
   if [ "$stale" -eq 1 ]; then
     exit 5
   fi

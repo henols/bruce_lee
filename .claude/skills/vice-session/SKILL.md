@@ -13,6 +13,7 @@ node .claude/skills/vice-session/vice.mjs tools NAME              # a tool's ful
 node .claude/skills/vice-session/vice.mjs call TOOL '{"k":"v"}'   # invoke any vice_* tool, print its JSON result
 node .claude/skills/vice-session/vice.mjs session status          # read-only session report, no emulator touched
 node .claude/skills/vice-session/vice.mjs session release         # free the lease, end the session
+node .claude/skills/vice-session/vice.mjs pool status             # launched/alive/leased/supervised per instance
 ```
 
 No `mcp__vice__*` tool is available in this project. `.claude/skills/vice-session/vice.mjs`
@@ -23,9 +24,9 @@ one of them.
 ## Self-contained for the container side only
 
 This skill directory (`repo-root.mjs`, `vice.mjs`, `vice-pool.mjs`,
-`vice-session.mjs`, `vice-pool.test.mjs`) is everything needed for the
-CONTAINER half of driving VICE, and can be copied into another project as a
-unit. But the HOST half — `tools/vice-supervisor.sh`, `tools/vice-pool.sh`
+`vice-probe.mjs`, `vice-session.mjs`, `vice-pool.test.mjs`) is everything
+needed for the CONTAINER half of driving VICE, and can be copied into another
+project as a unit. But the HOST half — `tools/vice-supervisor.sh`, `tools/vice-pool.sh`
 and `tools/lib/container-guard.sh` — deliberately remains in `tools/` at the
 repo root, not in this directory, and **must be copied alongside this skill**
 for restart detection and the instance pool to work at all. Copying only
@@ -94,12 +95,32 @@ tools/vice-pool.sh stop
 
 These run on the host workspace, never in this container.
 
+## Four questions, four mechanisms
+
+"The registry says this port exists" is not the same as "this port is
+usable right now" — a pool answers four SEPARATE questions, never collapsed
+into one:
+
+| Question | Answered by |
+|---|---|
+| LAUNCHED | `registry.json` (written by `tools/vice-pool.sh start`, host-only) |
+| ALIVE | a real `vice_ping` this instant (`vice-probe.mjs`'s `probeAll()`) — never assumed from LAUNCHED |
+| FREE | the instance's lease file (`leaseInfo()`) — an instance can be alive-but-leased, which is not the same as dead |
+| SUPERVISED | that instance's own `epoch.json` (`readEpoch()`) — present/absent, and whether it has moved since a prior observation |
+
+`acquire()` probes ALIVE before leasing anything, so a registered-but-dead
+instance is skipped rather than handed out. `node .claude/skills/vice-session/vice.mjs pool status`
+prints all four per instance, container-side, plus a diagnosis; run it any
+time liveness (not just launch/lease/supervision state) needs checking.
+
 ## Troubleshooting
 
 | Symptom | Fix |
 |---|---|
 | `session ... expired at ... -- refusing to fall back to the default instance silently` | `node .claude/skills/vice-session/vice.mjs session release` then `session acquire` again. |
 | `transport error` / `ECONNREFUSED` / timed out after retries | The host VICE MCP server is down or unreachable from this container. Recovery is host-side (`tools/vice-supervisor.sh`); this container cannot restart it. |
-| `acquire: no free instance within Nms -- every candidate port is held` | Every pooled instance is leased. Wait, or check `tools/vice-pool.sh status` (host-only) for a leak. |
+| `acquire: no free instance within Nms -- every candidate rejected: ...` | Read the per-candidate reasons in the message: "no answer" means dead (see the next two rows), "leased by pid ... " means busy — wait, or check `pool status`/`tools/vice-pool.sh status` for a leak. |
+| A registered instance that does not answer (`pool status` shows `alive:no`) | LAUNCHED does not imply ALIVE. `acquire()` already skips it automatically; `pool status`'s diagnosis says whether it's unsupervised, unproven, a dead supervisor, or mid-respawn — follow that fix directly rather than guessing. |
+| `pool status` diagnosis says `DEAD SUPERVISOR` (epoch unchanged across two probes on a dead port) | The host-side supervisor for that instance died too — a live one would have respawned VICE and bumped the epoch. Restart it on the HOST (`tools/vice-supervisor.sh`); this container cannot. |
 | `the emulator restarted since this session was acquired -- epoch changed from X to Y` | The host respawned VICE mid-session. This session's results are suspect: `session release` then `session acquire` and redo the affected work. |
 | A session lease that nobody released | `session status` reports time-to-expiry; a session lease self-frees on TTL expiry even if nobody explicitly releases it, so a leaked one is not permanent. |

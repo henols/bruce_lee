@@ -613,8 +613,14 @@ if (process.argv[1] && resolve(process.argv[1]) === SELF) {
     // expired session -- would itself refuse to run. `session acquire` and
     // `session status` read/write the session file directly and have no
     // need for the redirect either.
+    //
+    // Also skipped for `pool` (quick-260730-p5x, D-5): health reporting has
+    // to work when the session is expired or the emulator is unreachable --
+    // that is exactly when it is most needed -- the same reasoning that
+    // already makes `session status` a pure file read never gated on a live
+    // session.
     let resolved = null;
-    if (cmd !== "session") {
+    if (cmd !== "session" && cmd !== "pool") {
       const { resolveInstance } = await import("./vice-session.mjs");
       resolved = resolveInstance();
     }
@@ -678,6 +684,16 @@ if (process.argv[1] && resolve(process.argv[1]) === SELF) {
       }
       die("usage: session <acquire [--ttl-min N] | release | status>");
     }
+    if (cmd === "pool") {
+      const { poolHealth, formatPoolHealth } = await import("./vice-pool.mjs");
+      const sub = rest[0];
+      if (sub === "status") {
+        const health = await poolHealth({});
+        console.log(formatPoolHealth(health));
+        return;
+      }
+      die("usage: pool status");
+    }
 
     // This block is the fallback documentation surface when the vice-session
     // skill isn't loaded (D-3): it has to document every verb completely, not
@@ -701,6 +717,7 @@ if (process.argv[1] && resolve(process.argv[1]) === SELF) {
   session acquire [--ttl-min N]   lease an instance and record it in a session file
   session release                 free the active session's lease and delete its file
   session status                  read-only report on the active session (no MCP call)
+  pool status                     launched/alive/leased/supervised per instance, plus a diagnosis
 
 active instance: port ${activeInstance().port} (${activeInstance().url})
 ${sessionLine}

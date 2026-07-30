@@ -716,3 +716,38 @@ export async function acquire({
     await sleepMs(Math.max(0, Math.min(pollMs, deadline - Date.now())));
   }
 }
+
+/**
+ * Pure formatter for a `poolHealth()` result (D-5) -- makes no calls itself,
+ * mirroring how `tools/vice.mjs`'s `formatToolsOutput` is a pure function of
+ * a `tools/list` payload, so this is testable with a synthetic object and no
+ * emulator, pool, or filesystem involved. One line per instance covering all
+ * four questions -- launched, alive, leased (with holder), supervised (with
+ * the epoch value) -- plus the diagnosis, and a summary line comparing how
+ * many were launched against how many answered.
+ */
+export function formatPoolHealth(health) {
+  const records = Array.isArray(health?.records) ? health.records : [];
+  const lines = records.map((r) => {
+    const launchedStr = r.launched === null ? "n/a (unpooled default)" : r.launched ? "yes" : "no";
+    const aliveStr = r.alive ? "yes" : `no (${r.alive_reason})`;
+    const leaseStr = r.lease && r.lease.held
+      ? r.lease.unreadable
+        ? "yes (lease file unreadable)"
+        : `yes (pid ${r.lease.holder_pid} on ${r.lease.holder_host}, kind ${r.lease.kind})`
+      : "no (free)";
+    const supervisedStr = r.epoch && r.epoch.present ? `yes (epoch ${r.epoch.epoch})` : "no (no epoch file)";
+    return (
+      `port ${r.port}  launched:${launchedStr}  alive:${aliveStr}  leased:${leaseStr}  ` +
+      `supervised:${supervisedStr}  -- ${r.diagnosis}`
+    );
+  });
+
+  const launchedCount = records.filter((r) => r.launched).length;
+  const aliveCount = records.filter((r) => r.alive).length;
+  const summary = health?.pooled
+    ? `${aliveCount}/${launchedCount} launched instance(s) answering`
+    : `unpooled default instance -- ${aliveCount ? "answering" : "not answering"}`;
+
+  return [...lines, summary].join("\n");
+}
