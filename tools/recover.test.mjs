@@ -12,8 +12,9 @@ import { mkdtempSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { assembleChunks, captureImage, voidRun, classifyRuns, VOLATILE_RANGES } from "./recover.mjs";
+import { assembleChunks, captureImage, voidRun, classifyRuns, VOLATILE_RANGES, snapshotName } from "./recover.mjs";
 import { beginSession, assertSameMachine, readEpoch, MachineRestartedError } from "./vice.mjs";
+import { DEFAULT_PORT } from "./vice-pool.mjs";
 
 const tmpEpochDir = () => mkdtempSync(join(tmpdir(), "vice-epoch-"));
 
@@ -304,4 +305,29 @@ test("classifyRuns: volatile scratch ($0100-$03FF) is excluded and counted", () 
 
 test("classifyRuns: rejects images that are not exactly 65536 bytes", () => {
   assert.throws(() => classifyRuns({ runA: Buffer.alloc(100), runB: flat(0) }), /65536/);
+});
+
+// --------------------------------------------------------- snapshotName (D-4)
+//
+// vice_snapshot_save accepts only a name, not a path, and writes into a
+// SHARED host directory (~/.config/vice/mcp_snapshots/) -- so N instances
+// saving the same name would silently overwrite each other's snapshots. The
+// port prefix is the fix, applied UNCONDITIONALLY (including the 6510
+// fallback), so a name never depends on whether a pool happened to be
+// running.
+
+test("snapshotName: returns p<port>_<release>_gameentry_<runLabel>", () => {
+  assert.equal(snapshotName(6511, "danish", "run1"), "p6511_danish_gameentry_run1");
+});
+
+test("snapshotName: two ports never produce the same name for the same release and run label", () => {
+  const a = snapshotName(6511, "danish", "run1");
+  const b = snapshotName(6512, "danish", "run1");
+  assert.notEqual(a, b);
+});
+
+test("snapshotName: the fallback instance is namespaced too -- a name never depends on whether a pool happened to be running", () => {
+  const name = snapshotName(DEFAULT_PORT, "danish", "run1");
+  assert.equal(name, "p6510_danish_gameentry_run1");
+  assert.match(name, /^p6510_/);
 });
