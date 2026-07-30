@@ -17,10 +17,18 @@ probe and `vice.mjs`'s resilient `withReconnect()` ladder "must NEVER be merged"
 jobs, own module, structurally isolated. Synchronization is a third such job: put it in
 `.claude/skills/vice-session/scripts/vice-sync.mjs`.
 
-**Gate to update:** the `260730-ryz` plan installed an automated check that greps `SKILL.md`
-for a `LEAKS` regex of module names and requires each to appear in `INTERNALS.md`. Add
-`vice-sync\.mjs` to that regex and document the module in `INTERNALS.md`, or the gate silently
-stops covering it.
+**Gate to update — and note what changed.** The `260730-ryz` plan installed an automated check
+with two halves: `SKILL.md` must not name any module, and every name removed from it must be
+findable in `INTERNALS.md`. **`INTERNALS.md` has since been deleted deliberately** — a
+maintainer doc enumerating module names, internal functions and state files is exactly the
+internal-mechanics disclosure the split was meant to avoid, so the answer is not to document
+those mechanics elsewhere but to not write them down as a shipped doc at all.
+
+So only the first half survives, and it survives as the whole rule: **no module under
+`scripts/` may be named in `SKILL.md`**, except the documented entry point `vice.mjs`. Add
+`vice-sync\.mjs` to the names that must not appear. Do NOT recreate `INTERNALS.md`, and do not
+add a "see also" pointing at any replacement. Rationale for the new module belongs in its own
+header comment, next to the code it explains — the same place `vice-probe.mjs` keeps its.
 
 ## What moves
 

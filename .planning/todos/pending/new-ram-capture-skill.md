@@ -73,5 +73,8 @@ is `acme-build`):
 > equivalent under RAM drift. Use when asked to dump RAM, depack a program by running it,
 > capture a memory image at a checkpoint, or compare two captures for reproducibility.
 
-Mirror `vice-session`'s doc split that landed in `260730-ryz`: `SKILL.md` is a usage-only
-guide, architecture and rationale go in `INTERNALS.md`.
+Mirror `vice-session`'s doc posture: `SKILL.md` is a usage-only guide that names no internal
+module. Do **not** add a companion `INTERNALS.md` — `vice-session`'s was deleted deliberately,
+because a doc enumerating module names, internal functions and state files is itself the
+internal-mechanics disclosure the usage-only split exists to prevent. Architecture and
+rationale live in each module's own header comment, beside the code they explain.
