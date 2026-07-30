@@ -518,10 +518,26 @@ export async function call(toolName, args = {}, opts = {}) {
 // Alias -- some call sites read more naturally as callTool(...).
 export const callTool = call;
 
-/** The server's tools/list result (name, description, inputSchema per tool). */
+/**
+ * The server's tools/list result (name, description, inputSchema per tool),
+ * with every DENY_LIST tool STRIPPED OUT.
+ *
+ * Filtering here rather than at each render site is deliberate: this is the
+ * single choke point every consumer goes through -- the `tools` CLI verb, its
+ * `--json` dump, and recover.mjs -- so a forbidden tool is not merely marked
+ * as forbidden, it never appears at all. An agent cannot be tempted by a tool
+ * it never learns exists, and a discovery listing that shows a tool the seam
+ * would refuse anyway is just an invitation to try it.
+ *
+ * This does NOT replace the DENY_LIST guard in call(). Discovery filtering
+ * and call-time refusal are independent layers: one hides the tool, the other
+ * refuses it even when the name was obtained some other way.
+ */
 export async function serverInfo() {
   await ensureInitialized();
-  return rpc("tools/list", {});
+  const payload = await rpc("tools/list", {});
+  if (!Array.isArray(payload?.tools)) return payload;
+  return { ...payload, tools: payload.tools.filter((t) => !DENY_LIST.includes(t?.name)) };
 }
 
 /**
@@ -538,8 +554,10 @@ export async function serverInfo() {
  * `json: true` returns the raw payload, pretty-printed, for anything that
  * wants the unprocessed `tools/list` result.
  *
- * Any tool on DENY_LIST is rendered with a clear FORBIDDEN marker and the
- * reason, in EVERY mode -- never presented as a plain, callable option.
+ * There is no FORBIDDEN rendering branch: serverInfo() strips DENY_LIST tools
+ * before any payload reaches here, so a denied tool has nothing to render.
+ * Marking a tool as forbidden in a listing still told the reader it existed;
+ * removing it from discovery entirely is the stronger property.
  *
  * A pure function of its `payload` argument (never calls the network
  * itself) so it is fully testable with a synthetic `tools/list` payload,
@@ -549,15 +567,11 @@ export function formatToolsOutput(payload, { query, json = false } = {}) {
   if (json) return JSON.stringify(payload, null, 2);
 
   const tools = Array.isArray(payload?.tools) ? payload.tools : [];
-  const forbiddenNote = (name) =>
-    DENY_LIST.includes(name)
-      ? " [FORBIDDEN -- crashes the shared host VICE MCP server; recovery is a manual host-side restart]"
-      : "";
 
   if (!query) {
     if (tools.length === 0) return "(server reported no tools)";
     return tools
-      .map((t) => `${t.name}${forbiddenNote(t.name)}${t.description ? ` -- ${t.description}` : ""}`)
+      .map((t) => `${t.name}${t.description ? ` -- ${t.description}` : ""}`)
       .join("\n");
   }
 
@@ -566,7 +580,7 @@ export function formatToolsOutput(payload, { query, json = false } = {}) {
 
   return matches
     .map((t) => {
-      const lines = [`${t.name}${forbiddenNote(t.name)}`];
+      const lines = [`${t.name}`];
       if (t.description) lines.push(`  ${t.description}`);
       const schema = t.inputSchema && typeof t.inputSchema === "object" ? t.inputSchema : {};
       const props = schema.properties && typeof schema.properties === "object" ? schema.properties : {};

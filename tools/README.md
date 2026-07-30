@@ -412,6 +412,8 @@ node .claude/skills/vice-session/vice.mjs tools vice_memory_read    # full input
 node .claude/skills/vice-session/vice.mjs tools --json              # the raw tools/list result
 ```
 
-`vice_disk_list` is always rendered `[FORBIDDEN]` here, never as a plain
-callable option — the deny-list check in `call()` and this listing are two
-independent places the same prohibition is enforced.
+`vice_disk_list` never appears in any of these, including `--json` —
+`serverInfo()` strips DENY_LIST tools before the payload reaches a formatter.
+The prohibition is enforced in two independent places: discovery removes the
+tool, and `call()` refuses it before a request is serialised even if the name
+is obtained some other way.

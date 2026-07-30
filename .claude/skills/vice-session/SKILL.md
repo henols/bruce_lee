@@ -63,11 +63,12 @@ node .claude/skills/vice-session/vice.mjs tools vice_memory_read   # full input 
 
 ## `vice_disk_list` is forbidden, always
 
-Never call `vice_disk_list`, under any circumstance — not to test the
-deny-list live, not "just to check". It crashes the shared host VICE MCP
-server and recovery needs a manual host-side restart.
-`.claude/skills/vice-session/vice.mjs` refuses it before any request is even
-sent, and `tools` renders it FORBIDDEN rather than as a callable option.
+It crashes the shared host VICE MCP server, and recovery costs a host-side
+restart. Two independent layers keep it out of reach: `tools` never lists it
+(`serverInfo()` strips it from discovery), and `call()` refuses it before a
+request is serialised. Never reach for it by name anyway — not to test the
+guard, not "just to check". Read `.d64` bytes directly, or use
+`vice_disk_read_sector`.
 
 ## Every state-reading call pauses the machine
 

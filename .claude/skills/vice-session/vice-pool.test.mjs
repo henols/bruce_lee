@@ -19,7 +19,7 @@ import { fileURLToPath } from "node:url";
 import { createServer } from "node:http";
 
 import { acquire, readRegistry, instanceFor, refreshLease, DEFAULT_PORT, poolHealth, diagnose, leaseInfo, formatPoolHealth } from "./vice-pool.mjs";
-import { call, useInstance, formatToolsOutput } from "./vice.mjs";
+import { call, useInstance, formatToolsOutput, serverInfo } from "./vice.mjs";
 import { repoRoot } from "./repo-root.mjs";
 import { probeInstance, probeAll, PROBE_TOOL, DEFAULT_PROBE_TIMEOUT_MS } from "./vice-probe.mjs";
 
@@ -822,21 +822,49 @@ test("VICE_MCP_URL beats a session file, with a stderr warning naming the sessio
   });
 });
 
-test("tool listing marks the forbidden tool: a synthetic tools/list payload containing vice_disk_list renders it FORBIDDEN, never as a plain callable option, with no network reached", () => {
-  const payload = {
-    tools: [
-      { name: "vice_ping", description: "Ping the server" },
-      { name: "vice_disk_list", description: "List files on a disk" },
-    ],
-  };
-  const listing = formatToolsOutput(payload);
-  const diskListLine = listing.split("\n").find((l) => l.startsWith("vice_disk_list"));
-  assert.ok(diskListLine, "vice_disk_list must appear in the listing");
-  assert.match(diskListLine, /FORBIDDEN/);
-  assert.notEqual(diskListLine.trim(), "vice_disk_list", "must never be rendered as a bare, callable name");
+test("serverInfo() strips DENY_LIST tools from discovery: a server that advertises vice_disk_list yields a payload with no trace of it, in the object and in the --json dump alike", async () => {
+  // A stub speaking just enough MCP to answer initialize + tools/list. The
+  // server deliberately DOES advertise the forbidden tool -- the property
+  // under test is that the seam removes it, not that the server hides it.
+  const srv = createServer((req, res) => {
+    let body = "";
+    req.on("data", (d) => (body += d));
+    req.on("end", () => {
+      const msg = JSON.parse(body);
+      const result =
+        msg.method === "initialize"
+          ? { protocolVersion: "2024-11-05" }
+          : {
+              tools: [
+                { name: "vice_ping", description: "Ping the server" },
+                { name: "vice_disk_list", description: "List files on a disk" },
+                { name: "vice_memory_read", description: "Read memory" },
+              ],
+            };
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result }));
+    });
+  });
+  await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+  const port = srv.address().port;
 
-  const schemaView = formatToolsOutput(payload, { query: "vice_disk_list" });
-  assert.match(schemaView, /FORBIDDEN/);
+  try {
+    useInstance({ port, url: `http://127.0.0.1:${port}/mcp` });
+    const info = await serverInfo();
+    const names = info.tools.map((t) => t.name);
+
+    assert.ok(!names.includes("vice_disk_list"), "the forbidden tool must not survive discovery");
+    assert.deepEqual(names, ["vice_ping", "vice_memory_read"], "every other tool passes through untouched");
+
+    // The --json dump is the same payload, so the tool is absent there too --
+    // that path used to be the way to see it despite the FORBIDDEN marker.
+    assert.ok(!formatToolsOutput(info, { json: true }).includes("vice_disk_list"));
+    // And a direct query for it finds nothing, because it is simply not there.
+    assert.match(formatToolsOutput(info, { query: "vice_disk_list" }), /no tool matches/);
+  } finally {
+    srv.close();
+    useInstance({ port: DEFAULT_PORT, url: instanceFor(DEFAULT_PORT).url });
+  }
 });
 
 test("tools <name> renders a matching tool's full input schema: parameter names, types, required-ness, enum and default", () => {
