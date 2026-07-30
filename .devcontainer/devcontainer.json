@@ -6,7 +6,7 @@
 	"image": "mcr.microsoft.com/devcontainers/base:trixie",
 	"features": {
 		// Needed for npx, which the MCP servers in .mcp.json are launched with.
-		"ghcr.io/devcontainers/features/node:1": {},
+		"ghcr.io/devcontainers/features/node:2": {},
 		"ghcr.io/stu-bell/devcontainer-features/claude-code:0": {},
 		"ghcr.io/devcontainer-community/devcontainer-features/github.com-cli:1": {}
 	},
