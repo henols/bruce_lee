@@ -17,17 +17,61 @@ import { readFileSync } from "node:fs";
 
 const SELF = fileURLToPath(import.meta.url);
 
-const ENDPOINT = process.env.VICE_MCP_URL || "http://host.docker.internal:6510/mcp";
+// Renamed from ENDPOINT to DEFAULT_ENDPOINT (D-5): a pool lease redirects
+// the seam to a DIFFERENT endpoint at runtime via useInstance() below, so
+// this is only the starting value, never assumed to be the active one.
+const DEFAULT_ENDPOINT = process.env.VICE_MCP_URL || "http://host.docker.internal:6510/mcp";
 const DEFAULT_TIMEOUT_MS = Number(process.env.VICE_MCP_TIMEOUT_MS || 30000);
 
 // Where tools/vice-supervisor.sh (host-only) writes its restart epoch --
 // resolved relative to THIS file's own location (never hardcoded), so the
 // path is correct regardless of the caller's cwd. Overridable for tests and
 // for anyone running the supervisor with a non-default
-// VICE_SUPERVISOR_DIR.
+// VICE_SUPERVISOR_DIR. Kept exactly as-is (D-5: no behaviour change with no
+// pool running) -- this remains the default that activeEpochFile below
+// starts from.
 export const EPOCH_FILE = process.env.VICE_EPOCH_FILE
   ? resolve(process.env.VICE_EPOCH_FILE)
   : resolve(dirname(SELF), "..", ".vice-supervisor", "epoch.json");
+
+// -------------------------------------------------------- active instance
+//
+// Mutable module-level state, deliberately NOT frozen at module load (D-5):
+// restart detection has to stay correct PER INSTANCE, which is impossible if
+// the epoch path is fixed at import time. useInstance() below is the only
+// writer; every other read goes through the functions in this file so a
+// lease redirect takes effect everywhere at once (rpc()'s POST target,
+// readEpoch()'s default path, beginSession()'s default path).
+let activeUrl = DEFAULT_ENDPOINT;
+let activeEpochFile = EPOCH_FILE;
+let activePort = null; // null until a lease sets it -- no pool, no port identity
+
+/**
+ * Redirect the transport seam to a specific pooled (or fallback) instance.
+ * MUST reset the MCP handshake (`initialized = false`): the handshake
+ * belongs to the endpoint it was performed against, and continuing to use a
+ * "logged in" flag from a DIFFERENT endpoint would silently talk to the new
+ * instance without ever having initialized a session there. Warns on stderr
+ * if called while a session is already open against the previous instance,
+ * since that is a real behaviour change the caller should notice.
+ */
+export function useInstance({ port, url, epochFile } = {}) {
+  if (initialized) {
+    console.error(
+      `warn: useInstance(port ${port}) called while a session was already open against ` +
+        `${activeUrl} -- resetting the handshake. If this is mid-procedure, make sure that was intended.`
+    );
+  }
+  activeUrl = url;
+  activeEpochFile = epochFile;
+  activePort = port;
+  initialized = false;
+}
+
+/** Read-only accessor: the instance the seam is currently pointed at. */
+export function activeInstance() {
+  return { port: activePort, url: activeUrl, epochFile: activeEpochFile };
+}
 
 // Forbidden tool names.  Checked by exact string match before any network
 // call is made -- see call() below.  Never remove vice_disk_list from this
@@ -77,7 +121,7 @@ async function rpc(method, params, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
   const body = JSON.stringify({ jsonrpc: "2.0", id, method, params });
   let res;
   try {
-    res = await fetch(ENDPOINT, {
+    res = await fetch(activeUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -253,7 +297,7 @@ function summarizeCall(toolName, args) {
  * fields are ignored, and no path derived from the file's contents is ever
  * opened.
  */
-export function readEpoch(path = EPOCH_FILE) {
+export function readEpoch(path = activeEpochFile) {
   const absent = { present: false, epoch: null, spawned_at: null, pid: null, path };
   let raw;
   try {
@@ -285,7 +329,7 @@ export function readEpoch(path = EPOCH_FILE) {
  * counter so a PRIOR session's reconnects (e.g. from a previous `recover()`
  * run inside the same `reproduce()` process) don't leak into this one.
  */
-export function beginSession({ epochPath = EPOCH_FILE } = {}) {
+export function beginSession({ epochPath = activeEpochFile } = {}) {
   const baseline = readEpoch(epochPath);
   reconnectCount = 0;
   currentSession = { baseline, epochPath, startedAt: new Date().toISOString() };
@@ -461,7 +505,7 @@ if (process.argv[1] && resolve(process.argv[1]) === SELF) {
   async function main() {
     if (cmd === "ping") {
       const res = await call("vice_ping", {});
-      console.log(`VICE ${res.version} (${res.machine}) -- ${res.execution}`);
+      console.log(`VICE ${res.version} (${res.machine}) -- ${res.execution} [${activeInstance().url}]`);
       return;
     }
     if (cmd === "call") {
@@ -477,7 +521,8 @@ if (process.argv[1] && resolve(process.argv[1]) === SELF) {
   ping                       print server version, machine, execution state
   call <tool> [json-args]    invoke any vice_* tool and print its JSON result
 
-env: VICE_MCP_URL          override the MCP endpoint (default ${ENDPOINT})
+active endpoint: ${activeInstance().url}
+env: VICE_MCP_URL          override the MCP endpoint (default ${DEFAULT_ENDPOINT})
      VICE_MCP_TIMEOUT_MS   per-request abort timeout in ms (default ${DEFAULT_TIMEOUT_MS})`);
     process.exit(cmd ? 1 : 0);
   }

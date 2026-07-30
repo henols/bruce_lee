@@ -108,126 +108,23 @@ done
 # ---------------------------------------------------------------- container guard
 #
 # Load-bearing (D-2): this check runs before ANY state is written and before
-# ANY process is spawned. More than one signal is collected, because relying
-# on a single check (e.g. only /.dockerenv) is exactly the kind of narrow
-# check that silently stops working when the container runtime changes.
-#
-# REMOVED, DO NOT RE-ADD: a `grep docker /proc/self/mountinfo` check used to
-# live here. It answered the WRONG QUESTION -- it detects "Docker is
-# installed on this machine", not "this process is inside a container". Any
-# host that runs a devcontainer has /var/lib/docker/... overlay entries in
-# its mountinfo, so the check fired on the real host and refused to launch
-# on exactly the machine this script exists to run on. It cannot be fixed by
-# tightening the pattern; the signal itself is invalid. It is gone.
-#
-# CONTAINER_REPORT carries one line per signal (fired or not, with its
-# evidence) so --check-container can show the whole picture and so a refusal
-# message can name what actually matched instead of leaving the operator to
-# guess -- which is precisely how the mountinfo bug above went unnoticed.
-CONTAINER_SIGNALS=()
-CONTAINER_REPORT=()
-
-record_signal() {
-  # $1 = fired (0/1), $2 = description, $3 = evidence (may be empty)
-  local fired="$1" desc="$2" evidence="${3:-}"
-  if [ "$fired" -eq 1 ]; then
-    CONTAINER_SIGNALS+=("$desc${evidence:+ -- $evidence}")
-    CONTAINER_REPORT+=("  [FIRED] $desc${evidence:+
-            evidence: $evidence}")
-  else
-    CONTAINER_REPORT+=("  [clear] $desc${evidence:+ ($evidence)}")
-  fi
-}
-
-if [ -e /.dockerenv ]; then
-  record_signal 1 "/.dockerenv exists"
-else
-  record_signal 0 "/.dockerenv exists"
-fi
-
-if [ -e /run/.containerenv ]; then
-  record_signal 1 "/run/.containerenv exists (podman)"
-else
-  record_signal 0 "/run/.containerenv exists (podman)"
-fi
-
-if [ -n "${CONTAINER_WORKSPACE_PATH:-}" ]; then
-  record_signal 1 "CONTAINER_WORKSPACE_PATH is set (this devcontainer sets it)" "$CONTAINER_WORKSPACE_PATH"
-else
-  record_signal 0 "CONTAINER_WORKSPACE_PATH is set (this devcontainer sets it)"
-fi
-
-# systemd-detect-virt is authoritative on systemd Linux and answers exactly
-# the question we care about: --container reports the container technology,
-# or "none" (exit 1) on a bare host. Absence of the binary is not an error --
-# it simply contributes no signal.
-if command -v systemd-detect-virt >/dev/null 2>&1; then
-  detected_virt="$(systemd-detect-virt --container 2>/dev/null || true)"
-  if [ -n "$detected_virt" ] && [ "$detected_virt" != "none" ]; then
-    record_signal 1 "systemd-detect-virt --container" "reports: $detected_virt"
-  else
-    record_signal 0 "systemd-detect-virt --container" "reports: ${detected_virt:-none}"
-  fi
-else
-  record_signal 0 "systemd-detect-virt --container" "binary not present, signal skipped"
-fi
-
-# PID 1's cgroup PATH (the field after the last colon), matched against
-# container-indicating path components only. A systemd host's `0::/init.scope`
-# and a bare `0::/` must not match; `/docker/<id>`, `/system.slice/docker-<id>.scope`,
-# `/kubepods/...`, `/libpod-...` and `/lxc/...` must. Note this deliberately
-# does NOT match `/system.slice/docker.service` -- that is the Docker daemon's
-# own cgroup on a HOST, and PID 1 there is systemd in /init.scope anyway.
-cgroup_match=""
-if [ -r /proc/1/cgroup ]; then
-  cgroup_match="$(awk -F: '{ p = $NF; if (p ~ /(^|\/)(docker|lxc|kubepods|libpod)(\/|-|$)/) { print; exit } }' \
-                   /proc/1/cgroup 2>/dev/null || true)"
-fi
-if [ -n "$cgroup_match" ]; then
-  record_signal 1 "/proc/1/cgroup path names a container" "$cgroup_match"
-else
-  record_signal 0 "/proc/1/cgroup path names a container" "no container path component in PID 1's cgroup"
-fi
+# ANY process is spawned. The guard itself -- signal collection, the
+# --check-container report, and enforcement -- lives in
+# tools/lib/container-guard.sh so tools/vice-pool.sh shares the exact same
+# code rather than a second, hand-maintained copy that could drift out of
+# sync. See that file for the removed-mountinfo-signal history (do not re-add
+# it) and the full signal list.
+source "$(dirname "${BASH_SOURCE[0]}")/lib/container-guard.sh"
 
 # --check-container reports and exits, without spawning or writing anything.
 # It deliberately ignores VICE_SUPERVISOR_ALLOW_CONTAINER: its job is to say
 # what the signals actually are, not what the escape hatch would permit.
 if [ "$CHECK_CONTAINER" -eq 1 ]; then
-  echo "vice-supervisor: container guard evaluation"
-  for line in "${CONTAINER_REPORT[@]}"; do
-    echo "$line"
-  done
-  if [ "${#CONTAINER_SIGNALS[@]}" -gt 0 ]; then
-    echo "verdict: CONTAINER (${#CONTAINER_SIGNALS[@]} signal(s) fired) -- the guard would refuse here."
-    exit 3
-  fi
-  echo "verdict: HOST (no signals fired) -- the guard would allow x64sc to launch here."
-  exit 0
+  rc=0; container_guard_report "vice-supervisor" || rc=$?
+  exit "$rc"
 fi
 
-if [ "${#CONTAINER_SIGNALS[@]}" -gt 0 ] && [ "${VICE_SUPERVISOR_ALLOW_CONTAINER:-0}" != "1" ]; then
-  {
-    echo "FATAL: tools/vice-supervisor.sh refuses to run inside a container." >&2
-    echo "This script is HOST-ONLY. Signals that fired:" >&2
-    for sig in "${CONTAINER_SIGNALS[@]}"; do
-      echo "  - $sig" >&2
-    done
-    echo "" >&2
-    echo "If you believe this IS the host, run --check-container for the full" >&2
-    echo "per-signal breakdown and report which signal is wrong." >&2
-    echo "" >&2
-    echo "This cannot work in here: there is no x64sc binary, no display, and" >&2
-    echo "the entire point of this script is to restart a process the container" >&2
-    echo "has no access to in the first place." >&2
-    echo "" >&2
-    echo "Escape hatch (TESTING ONLY -- never to actually run VICE):" >&2
-    echo "  VICE_SUPERVISOR_ALLOW_CONTAINER=1" >&2
-    echo "" >&2
-    echo "Run this script on the HOST instead, from the host workspace, e.g.:" >&2
-    echo "  /home/henrik/dev/henrik/git/bruce_lee/tools/vice-supervisor.sh" >&2
-  } >&2
-  exit 2
-fi
+container_guard_enforce "tools/vice-supervisor.sh" "/home/henrik/dev/henrik/git/bruce_lee/tools/vice-supervisor.sh"
 
 # ---------------------------------------------------------------- configuration
 #
