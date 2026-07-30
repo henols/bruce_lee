@@ -107,6 +107,52 @@ async function ensureInitialized() {
   initialized = true;
 }
 
+// The host server has been observed to drop connections and recover on its own,
+// but the outage outlasts a short backoff -- a 6s total budget was measured as
+// too short. These values give it ~50s to come back before we declare it dead
+// and ask for a manual restart.
+const RECONNECT_ATTEMPTS = 5;
+const RECONNECT_BACKOFF_MS = [2000, 5000, 12000, 30000, 0];
+const nap = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * A single dropped connection used to be fatal: the error propagated straight
+ * out and, worse, `initialized` stayed true, so every later call spoke into a
+ * dead session. The host server has been observed both to drop a connection
+ * mid-request and to come back moments later, so transport failures are
+ * retried with backoff and the session handshake is redone.
+ *
+ * Only TRANSPORT failures are retried. An RPC-level error (the server answered
+ * and said no) is a real answer and is never retried -- retrying a rejected
+ * tool call would just repeat a mistake, and for a tool with side effects could
+ * repeat it destructively.
+ */
+async function withReconnect(toolName, args, opts) {
+  let lastErr;
+  for (let attempt = 0; attempt < RECONNECT_ATTEMPTS; attempt++) {
+    try {
+      await ensureInitialized();
+      return await rpc("tools/call", { name: toolName, arguments: args }, opts);
+    } catch (e) {
+      const transport = /transport error|timed out|no data: lines|non-JSON response/i.test(e.message);
+      if (!transport) throw e;
+      lastErr = e;
+      initialized = false; // force a fresh handshake -- the old session is gone
+      if (attempt < RECONNECT_ATTEMPTS - 1) {
+        console.error(
+          `warn: ${toolName} transport failure (attempt ${attempt + 1}/${RECONNECT_ATTEMPTS}), ` +
+            `reconnecting in ${RECONNECT_BACKOFF_MS[attempt]}ms: ${e.message}`
+        );
+        await nap(RECONNECT_BACKOFF_MS[attempt]);
+      }
+    }
+  }
+  throw new ViceError(
+    `${toolName} failed after ${RECONNECT_ATTEMPTS} transport attempts: ${lastErr.message} ` +
+      `-- if this persists the host VICE MCP server needs a restart (this container cannot perform it).`
+  );
+}
+
 /**
  * Call a vice_* tool by name and return its parsed JSON result.
  *
@@ -121,8 +167,7 @@ export async function call(toolName, args = {}, opts = {}) {
         `(see CLAUDE.md's hazard note). Refusing to serialise this request.`
     );
   }
-  await ensureInitialized();
-  const result = await rpc("tools/call", { name: toolName, arguments: args }, opts);
+  const result = await withReconnect(toolName, args, opts);
   const content = result?.content?.[0];
   if (!content || content.type !== "text") {
     throw new ViceError(`unexpected tool result shape from ${toolName}: ${JSON.stringify(result)}`);

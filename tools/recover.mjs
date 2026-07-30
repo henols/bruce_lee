@@ -212,12 +212,19 @@ async function waitCheckpointHit(cpId, addr, label) {
     // checkpoint never fires -- which is exactly the bug this comment exists
     // to stop someone reintroducing. Measured: with a resume + quiet interval
     // the machine sustains ~991k cycles/s (100% of PAL); without it, ~6k/s.
+    //
+    // The interval is deliberately COARSE. Two reasons: (1) every extra call
+    // is another monitor pause/resume transition, and the host server has
+    // dropped its connection repeatedly under call churn; (2) a stop:true
+    // checkpoint sitting inside a tight loop re-fires the instant we resume,
+    // so fine-grained polling burns round-trips for almost no forward
+    // progress (we measured hit_count 1790 on one such gate).
     await call("vice_execution_run", {});
-    await sleep(POLL_INTERVAL_MS);
+    await sleep(POLL_WINDOWS_MS[i]);
   }
   throw new Error(
     `waitCheckpointHit(${label} ${hex4(addr)}): checkpoint never fired within ` +
-      `${(POLL_MAX_ATTEMPTS * POLL_INTERVAL_MS) / 1000}s. vice_run_until's cycles argument is ` +
+      `${POLL_WINDOWS_MS.reduce((a, b) => a + b, 0) / 1000}s. vice_run_until's cycles argument is ` +
       `documented as "not yet implemented" so there is no server-side timeout backing this. ` +
       `Manual recovery: restart the host-side VICE MCP server (see the release NOTES.md).`
   );
@@ -285,9 +292,17 @@ export async function boot(releaseId) {
     // frames pass and the poll would never see the key. Hold it explicitly,
     // advance the CPU with a bounded step batch so the crack's $DC00/$DC01
     // poll actually observes it, then release.
+    // Deliver the key over a FIXED INSTRUCTION COUNT, not a wall-clock window.
+    // This is the difference between a reproducible dump and an unreproducible
+    // one: with `execution_run` + sleep(300ms) the release lands on a
+    // different CPU cycle every run, which shifts every downstream cycle --
+    // measured as 264 differing bytes between two runs, including the live
+    // game counter at $0049 that the trigger routine itself reads. A fixed
+    // step count is cycle-identical across runs. Stepping advances the machine
+    // normally (frames included), so the crack's $DC00/$DC01 poll still sees
+    // the key.
     await call("vice_keyboard_matrix", { key: g.key, pressed: true });
-    await call("vice_execution_run", {});   // must be the LAST call before the quiet interval
-    await sleep(g.deliver_ms ?? 300);       // ~15 PAL frames of real running; the crack polls every frame
+    await call("vice_execution_step", { count: g.deliver_steps ?? 200000 }, { timeoutMs: 120000 });
     await call("vice_keyboard_matrix", { key: g.key, pressed: false });
     gatesWalked.push({ address: hex4(addr), key: g.key, hit_count: hit.hitCount });
   }
@@ -352,22 +367,34 @@ export async function findEntry(releaseId, { batchSize = 400, maxBatches = 150 }
 
 // ----------------------------------------------------------------- capture
 
-const POLL_INTERVAL_MS = 150;
-const POLL_MAX_ATTEMPTS = 400; // ~60s ceiling -- see manual-recovery note below
+// Each poll cycle is: read state (which PAUSES the machine), resume, then let
+// it run for one window. The window is not idle waiting -- it is the only
+// interval in which the emulated CPU actually advances, so a short window
+// starves the machine and the trigger appears to "never fire". A KERNAL cold
+// boot plus a turbo-loader disk load needs tens of emulated seconds.
+//
+// Progressively longer run windows, in ms. Rationale, and it is not just about
+// speed: a `stop:true` checkpoint halts the machine exactly at the trigger
+// whether we notice 2 seconds later or 30, so POLLING FREQUENCY HAS NO EFFECT
+// ON WHERE THE MACHINE STOPS. Polling rarely is therefore strictly better --
+// identical determinism, an order of magnitude fewer monitor enter/exit
+// transitions. That matters because the host server has dropped its connection
+// five times in one session, always during a monitor transition
+// (`vice_execution_run` or checkpoint work), so transition count is the one
+// risk factor we control. This schedule spans ~150s of emulated running in 8
+// round-trips instead of ~60.
+const POLL_WINDOWS_MS = [3000, 6000, 12000, 20000, 25000, 28000, 28000, 28000];
+const POLL_MAX_ATTEMPTS = POLL_WINDOWS_MS.length;
 
-/** Poll vice_ping until execution reports "paused", or throw with the recorded manual-recovery path. */
-async function waitPaused() {
-  for (let i = 0; i < POLL_MAX_ATTEMPTS; i++) {
-    const p = await call("vice_ping", {});
-    if (p.execution === "paused") return;
-    await sleep(POLL_INTERVAL_MS);
-  }
-  throw new Error(
-    `waitPaused: execution did not pause within ${(POLL_MAX_ATTEMPTS * POLL_INTERVAL_MS) / 1000}s -- ` +
-      `vice_run_until's cycles argument is documented as "not yet implemented" so there is no server-side ` +
-      `timeout backing this; manual recovery is a host-side VICE restart (see recovery/${"<release>"}/NOTES.md).`
-  );
-}
+// NOTE: a `waitPaused()` helper used to live here, polling vice_ping until
+// execution reported "paused". It is deliberately DELETED, not kept "just in
+// case". It was wrong in a way that produced a silently-wrong capture point:
+// the machine is normally ALREADY paused when we arm a checkpoint (every
+// checkpoint stop leaves it paused, and every state read pauses it), so the
+// poll returned instantly without any transition having occurred, and the
+// caller then read hit_count 0 and either refused or captured from the wrong
+// place. Wait on the checkpoint's own hit_count instead -- see
+// waitCheckpointHit above. Do not reintroduce a paused-poll.
 
 /**
  * Arm the checkpoint, kick off run_until, and confirm via the checkpoint's
@@ -456,12 +483,33 @@ export async function recover(releaseId, { runLabel = "run1" } = {}) {
 
   const cap = await capture(releaseId, triggerAddress);
 
-  const snapshotName = `${releaseId}_gameentry_v1`;
-  await call("vice_snapshot_save", {
-    name: snapshotName,
-    description: `${releaseId}: paused at the recorded game-entry trigger ${hex4(triggerAddress)}, post-decrunch`,
-  });
-  const { directory: hostSnapshotDir } = await call("vice_snapshot_list", {});
+  // Per-run name: vice_snapshot_save REFUSES to overwrite an existing name and
+  // the tool surface has no snapshot_delete, so a fixed name makes the second
+  // run of `reproduce` fail. Still explicit and never "snapshot.vsf".
+  const snapshotName = `${releaseId}_gameentry_${runLabel}`;
+  let snapshotSaved = true;
+  let snapshotNote = null;
+  try {
+    await call("vice_snapshot_save", {
+      name: snapshotName,
+      description: `${releaseId}: paused at the recorded game-entry trigger ${hex4(triggerAddress)}, post-decrunch`,
+    });
+  } catch (e) {
+    // The snapshot is a HOST-SIDE CONVENIENCE ONLY (see the D-07 correction:
+    // its bytes cannot be exported into this container and it is not a
+    // committed artifact). Reproducibility runs through the recorded
+    // procedure, not through this blob -- so a snapshot failure must never
+    // discard an otherwise-good 64K capture.
+    snapshotSaved = false;
+    snapshotNote = e.message;
+    console.error(`warn: snapshot "${snapshotName}" not saved (capture is unaffected): ${e.message}`);
+  }
+  let hostSnapshotDir = null;
+  try {
+    ({ directory: hostSnapshotDir } = await call("vice_snapshot_list", {}));
+  } catch (e) {
+    console.error(`warn: could not read snapshot directory: ${e.message}`);
+  }
 
   const dumpsDir = join(releaseDir(releaseId), "dumps");
   mkdirSync(dumpsDir, { recursive: true });
@@ -481,6 +529,8 @@ export async function recover(releaseId, { runLabel = "run1" } = {}) {
     bytes_read: cap.bytesRead,
     sha256: cap.sha256,
     snapshot_name: snapshotName,
+    snapshot_saved: snapshotSaved,
+    snapshot_note: snapshotNote,
     host_snapshot_dir: hostSnapshotDir,
     vice_server_version: cap.viceServerVersion,
     machine: cap.machine,

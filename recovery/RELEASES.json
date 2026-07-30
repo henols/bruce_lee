@@ -24,7 +24,7 @@
           {
             "address": "$0900",
             "key": "SPACE",
-            "hit_count": 2433
+            "hit_count": 2958
           }
         ]
       },
@@ -33,8 +33,33 @@
         "address": "$08B1",
         "how_located": "Located empirically against a live host VICE 3.10 (C64SC, PAL) on 2026-07-30. After vice_disk_attach + vice_autostart the CPU is still HALTED (reset used run_after:false), so vice_execution_run is required before any loader code executes at all. Once running, the machine settles into a tight loop at $0900/$0901 -- the cracktro's 'hit any key' poll. vice_keyboard_type is invisible to it (the crack polls the CIA data ports directly), so the gate is cleared with vice_keyboard_matrix SPACE. The cracktro then self-runs through animation phases observed at $08F5/$08F7, $0D64-$0D82 and $0340-$035E (the last being the cassette-buffer region, a classic loader-stub location), ending on the Danish Crackers sign-off screen. Execution then settles into a stable two-cluster steady state across $08B1-$08F8 and $139E-$142B, with Datasoft's original title screen on display ('DATASOFT PRESENTS / BRUCE LEE (TM) / BY RON J FORTIER / F3-F5-F7'). vice_disassemble confirms $08B1 is a genuine routine entry, not a mid-instruction landing: $08B1 LDA $49 / $08B3 ORA $4A / $08B5 BNE $08BA / $08B7 JMP $0531 / $08BA LDA #$00 / $08BC STA $010E / $08BF JSR $139E. It calls the game's own input scanner at $139E: LDA $010C / BNE $13AD / LDA $DC00 / AND $DC01 / EOR #$FF -- i.e. $08B1 is the title-screen input dispatcher, game code, distinct from the loader's own $0900 poll. vice_backtrace at an arbitrary asynchronous pause showed KERNAL IRQ $FF41 in the frame chain, confirming the title screen is IRQ-driven and therefore that a bare vice_execution_pause lands nondeterministically -- only a checkpoint yields a re-armable stop point."
       },
-      "dumps": [],
-      "snapshot_names": [],
+      "dumps": [
+        {
+          "label": "run1",
+          "kind": "gameentry",
+          "bin": "recovery/danish/dumps/danish-gameentry-run1.bin",
+          "capture_record": "recovery/danish/dumps/danish-gameentry-run1.capture.json",
+          "chip_state": null,
+          "range_manifest": null,
+          "sha256": "cd51e0d501337a39f752da2cedc7606617794c1d32f14e783fbaf357e22f2fe6",
+          "load_event_ref": null
+        },
+        {
+          "label": "run2",
+          "kind": "gameentry",
+          "bin": "recovery/danish/dumps/danish-gameentry-run2.bin",
+          "capture_record": "recovery/danish/dumps/danish-gameentry-run2.capture.json",
+          "chip_state": null,
+          "range_manifest": null,
+          "sha256": "54ce15e98fba21a9f193329cfb402ba8b79a75c105ddffca9d723b32f3356c87",
+          "load_event_ref": null
+        }
+      ],
+      "snapshot_names": [
+        "danish_gameentry_v1",
+        "danish_gameentry_run1",
+        "danish_gameentry_run2"
+      ],
       "tier1_evidence": [
         "Cracktro screen reads 'Danish Crackers Presents BRUCE LEE' with scroller text including the release id 'DC-011/P' (captured: recovery/danish/dumps/probe-stepped.png, probe-postkey.png).",
         "Cracktro sign-off screen reads 'DC - They make'em, We break'em.' (captured: recovery/danish/dumps/probe-run5.png).",
