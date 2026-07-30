@@ -1,0 +1,1282 @@
+{
+  "note": "Addresses NOT identical across 3 independent cold-boot captures of danish.d64. Establishes which bytes carry no evidence: 6510 on-chip port registers, volatile scratch, and never-written RAM subject to continuous drift. NOT a complete set -- drift is stochastic, and 93 bytes were identical in runs 1+2 yet differed in run 3, which is why 2 runs is insufficient.",
+  "runs": [
+    "run1",
+    "run2",
+    "run3"
+  ],
+  "sha256": [
+    {
+      "run": "run1",
+      "sha256": "6e444cf1dedbc71b067365f47ec06af900374d74ea42a0dce491eb3b563d7f11"
+    },
+    {
+      "run": "run2",
+      "sha256": "e964450f17b58f3fee079e27b476959759ebbb95a4e989643bf2ed2424158f93"
+    },
+    {
+      "run": "run3",
+      "sha256": "f3fdd5df9c499a6a1a3a77c8839cdb438ab3f2d8984b1f9e2ed180371cafb033"
+    }
+  ],
+  "unstable_count": 309,
+  "zone_breakdown": [
+    {
+      "zone": "$0000-$0001 6510 on-chip port registers (not RAM)",
+      "count": 1
+    },
+    {
+      "zone": "$0002-$00FF zero page",
+      "count": 0
+    },
+    {
+      "zone": "$0100-$01FF stack page",
+      "count": 23
+    },
+    {
+      "zone": "$0200-$03FF KERNAL work area / BASIC input buffer",
+      "count": 87
+    },
+    {
+      "zone": "$0400-$CB66 program image",
+      "count": 0
+    },
+    {
+      "zone": "$CB67-$FFFF upper RAM (incl. RAM under banked-in ROM)",
+      "count": 198
+    }
+  ],
+  "coalesced_ranges": [
+    {
+      "start": "$0000",
+      "end": "$0000",
+      "bytes": 1
+    },
+    {
+      "start": "$01DA",
+      "end": "$01F7",
+      "bytes": 30
+    },
+    {
+      "start": "$020B",
+      "end": "$0212",
+      "bytes": 8
+    },
+    {
+      "start": "$021E",
+      "end": "$0221",
+      "bytes": 4
+    },
+    {
+      "start": "$022E",
+      "end": "$0244",
+      "bytes": 23
+    },
+    {
+      "start": "$0251",
+      "end": "$0253",
+      "bytes": 3
+    },
+    {
+      "start": "$025D",
+      "end": "$0266",
+      "bytes": 10
+    },
+    {
+      "start": "$0274",
+      "end": "$0276",
+      "bytes": 3
+    },
+    {
+      "start": "$0283",
+      "end": "$0289",
+      "bytes": 7
+    },
+    {
+      "start": "$0296",
+      "end": "$0299",
+      "bytes": 4
+    },
+    {
+      "start": "$02A6",
+      "end": "$02B0",
+      "bytes": 11
+    },
+    {
+      "start": "$02B9",
+      "end": "$02BC",
+      "bytes": 4
+    },
+    {
+      "start": "$02C9",
+      "end": "$02DE",
+      "bytes": 22
+    },
+    {
+      "start": "$02EC",
+      "end": "$02EE",
+      "bytes": 3
+    },
+    {
+      "start": "$02FA",
+      "end": "$02FF",
+      "bytes": 6
+    },
+    {
+      "start": "$CB67",
+      "end": "$CB67",
+      "bytes": 1
+    },
+    {
+      "start": "$CB74",
+      "end": "$CB74",
+      "bytes": 1
+    },
+    {
+      "start": "$CBA7",
+      "end": "$CBA7",
+      "bytes": 1
+    },
+    {
+      "start": "$CBB1",
+      "end": "$CBB5",
+      "bytes": 5
+    },
+    {
+      "start": "$CBC8",
+      "end": "$CBC8",
+      "bytes": 1
+    },
+    {
+      "start": "$CBD8",
+      "end": "$CBE0",
+      "bytes": 9
+    },
+    {
+      "start": "$CC88",
+      "end": "$CC88",
+      "bytes": 1
+    },
+    {
+      "start": "$CCA3",
+      "end": "$CCA3",
+      "bytes": 1
+    },
+    {
+      "start": "$CCFC",
+      "end": "$CCFC",
+      "bytes": 1
+    },
+    {
+      "start": "$CD2F",
+      "end": "$CD2F",
+      "bytes": 1
+    },
+    {
+      "start": "$CD61",
+      "end": "$CD61",
+      "bytes": 1
+    },
+    {
+      "start": "$CDA4",
+      "end": "$CDA4",
+      "bytes": 1
+    },
+    {
+      "start": "$CDB4",
+      "end": "$CDB4",
+      "bytes": 1
+    },
+    {
+      "start": "$CDC8",
+      "end": "$CDC8",
+      "bytes": 1
+    },
+    {
+      "start": "$CE43",
+      "end": "$CE43",
+      "bytes": 1
+    },
+    {
+      "start": "$CE51",
+      "end": "$CE51",
+      "bytes": 1
+    },
+    {
+      "start": "$CE82",
+      "end": "$CE82",
+      "bytes": 1
+    },
+    {
+      "start": "$CE8B",
+      "end": "$CE8B",
+      "bytes": 1
+    },
+    {
+      "start": "$CEAF",
+      "end": "$CEAF",
+      "bytes": 1
+    },
+    {
+      "start": "$D042",
+      "end": "$D042",
+      "bytes": 1
+    },
+    {
+      "start": "$D078",
+      "end": "$D078",
+      "bytes": 1
+    },
+    {
+      "start": "$D0C0",
+      "end": "$D0C3",
+      "bytes": 4
+    },
+    {
+      "start": "$D0D2",
+      "end": "$D0D2",
+      "bytes": 1
+    },
+    {
+      "start": "$D116",
+      "end": "$D116",
+      "bytes": 1
+    },
+    {
+      "start": "$D122",
+      "end": "$D122",
+      "bytes": 1
+    },
+    {
+      "start": "$D134",
+      "end": "$D134",
+      "bytes": 1
+    },
+    {
+      "start": "$D141",
+      "end": "$D141",
+      "bytes": 1
+    },
+    {
+      "start": "$D166",
+      "end": "$D166",
+      "bytes": 1
+    },
+    {
+      "start": "$D17C",
+      "end": "$D17C",
+      "bytes": 1
+    },
+    {
+      "start": "$D190",
+      "end": "$D190",
+      "bytes": 1
+    },
+    {
+      "start": "$D1E4",
+      "end": "$D1E4",
+      "bytes": 1
+    },
+    {
+      "start": "$D212",
+      "end": "$D212",
+      "bytes": 1
+    },
+    {
+      "start": "$D2B3",
+      "end": "$D2B3",
+      "bytes": 1
+    },
+    {
+      "start": "$D2C7",
+      "end": "$D2C7",
+      "bytes": 1
+    },
+    {
+      "start": "$D307",
+      "end": "$D307",
+      "bytes": 1
+    },
+    {
+      "start": "$D31B",
+      "end": "$D31D",
+      "bytes": 3
+    },
+    {
+      "start": "$D3CE",
+      "end": "$D3CE",
+      "bytes": 1
+    },
+    {
+      "start": "$D404",
+      "end": "$D404",
+      "bytes": 1
+    },
+    {
+      "start": "$D424",
+      "end": "$D424",
+      "bytes": 1
+    },
+    {
+      "start": "$D4A9",
+      "end": "$D4A9",
+      "bytes": 1
+    },
+    {
+      "start": "$D4F1",
+      "end": "$D4F1",
+      "bytes": 1
+    },
+    {
+      "start": "$D50C",
+      "end": "$D50C",
+      "bytes": 1
+    },
+    {
+      "start": "$D54E",
+      "end": "$D54E",
+      "bytes": 1
+    },
+    {
+      "start": "$D575",
+      "end": "$D575",
+      "bytes": 1
+    },
+    {
+      "start": "$D64C",
+      "end": "$D64C",
+      "bytes": 1
+    },
+    {
+      "start": "$D661",
+      "end": "$D661",
+      "bytes": 1
+    },
+    {
+      "start": "$D677",
+      "end": "$D677",
+      "bytes": 1
+    },
+    {
+      "start": "$D6CA",
+      "end": "$D6CA",
+      "bytes": 1
+    },
+    {
+      "start": "$D707",
+      "end": "$D707",
+      "bytes": 1
+    },
+    {
+      "start": "$D73F",
+      "end": "$D73F",
+      "bytes": 1
+    },
+    {
+      "start": "$D74C",
+      "end": "$D74C",
+      "bytes": 1
+    },
+    {
+      "start": "$D761",
+      "end": "$D761",
+      "bytes": 1
+    },
+    {
+      "start": "$D7B5",
+      "end": "$D7B5",
+      "bytes": 1
+    },
+    {
+      "start": "$D7FC",
+      "end": "$D7FC",
+      "bytes": 1
+    },
+    {
+      "start": "$D889",
+      "end": "$D889",
+      "bytes": 1
+    },
+    {
+      "start": "$D899",
+      "end": "$D899",
+      "bytes": 1
+    },
+    {
+      "start": "$D8B7",
+      "end": "$D8B7",
+      "bytes": 1
+    },
+    {
+      "start": "$D8CA",
+      "end": "$D8CA",
+      "bytes": 1
+    },
+    {
+      "start": "$D8D4",
+      "end": "$D8D4",
+      "bytes": 1
+    },
+    {
+      "start": "$D909",
+      "end": "$D909",
+      "bytes": 1
+    },
+    {
+      "start": "$D91D",
+      "end": "$D920",
+      "bytes": 4
+    },
+    {
+      "start": "$D934",
+      "end": "$D934",
+      "bytes": 1
+    },
+    {
+      "start": "$D9A7",
+      "end": "$D9B3",
+      "bytes": 13
+    },
+    {
+      "start": "$D9ED",
+      "end": "$D9ED",
+      "bytes": 1
+    },
+    {
+      "start": "$DA0B",
+      "end": "$DA0B",
+      "bytes": 1
+    },
+    {
+      "start": "$DA7F",
+      "end": "$DA7F",
+      "bytes": 1
+    },
+    {
+      "start": "$DA9C",
+      "end": "$DA9C",
+      "bytes": 1
+    },
+    {
+      "start": "$DAAF",
+      "end": "$DAAF",
+      "bytes": 1
+    },
+    {
+      "start": "$DAC6",
+      "end": "$DAC6",
+      "bytes": 1
+    },
+    {
+      "start": "$DADB",
+      "end": "$DADB",
+      "bytes": 1
+    },
+    {
+      "start": "$DAFC",
+      "end": "$DB02",
+      "bytes": 7
+    },
+    {
+      "start": "$DB18",
+      "end": "$DB1C",
+      "bytes": 5
+    },
+    {
+      "start": "$DB2A",
+      "end": "$DB2A",
+      "bytes": 1
+    },
+    {
+      "start": "$DB42",
+      "end": "$DB42",
+      "bytes": 1
+    },
+    {
+      "start": "$DB5F",
+      "end": "$DB66",
+      "bytes": 8
+    },
+    {
+      "start": "$DB9C",
+      "end": "$DB9C",
+      "bytes": 1
+    },
+    {
+      "start": "$DBC7",
+      "end": "$DBC7",
+      "bytes": 1
+    },
+    {
+      "start": "$DBD6",
+      "end": "$DBDB",
+      "bytes": 6
+    },
+    {
+      "start": "$DC25",
+      "end": "$DC25",
+      "bytes": 1
+    },
+    {
+      "start": "$DC47",
+      "end": "$DC47",
+      "bytes": 1
+    },
+    {
+      "start": "$DC55",
+      "end": "$DC55",
+      "bytes": 1
+    },
+    {
+      "start": "$DC62",
+      "end": "$DC68",
+      "bytes": 7
+    },
+    {
+      "start": "$DCBB",
+      "end": "$DCBB",
+      "bytes": 1
+    },
+    {
+      "start": "$DCC4",
+      "end": "$DCC4",
+      "bytes": 1
+    },
+    {
+      "start": "$DCD9",
+      "end": "$DCD9",
+      "bytes": 1
+    },
+    {
+      "start": "$DD3A",
+      "end": "$DD42",
+      "bytes": 9
+    },
+    {
+      "start": "$DD5C",
+      "end": "$DD5C",
+      "bytes": 1
+    },
+    {
+      "start": "$DD75",
+      "end": "$DD75",
+      "bytes": 1
+    },
+    {
+      "start": "$DD8E",
+      "end": "$DD8E",
+      "bytes": 1
+    },
+    {
+      "start": "$DDAF",
+      "end": "$DDAF",
+      "bytes": 1
+    },
+    {
+      "start": "$DDCE",
+      "end": "$DDCE",
+      "bytes": 1
+    },
+    {
+      "start": "$DDE3",
+      "end": "$DDE3",
+      "bytes": 1
+    },
+    {
+      "start": "$DE93",
+      "end": "$DE93",
+      "bytes": 1
+    },
+    {
+      "start": "$DE9C",
+      "end": "$DE9C",
+      "bytes": 1
+    },
+    {
+      "start": "$DEF3",
+      "end": "$DEF3",
+      "bytes": 1
+    },
+    {
+      "start": "$DF6F",
+      "end": "$DF7B",
+      "bytes": 13
+    },
+    {
+      "start": "$DF84",
+      "end": "$DF84",
+      "bytes": 1
+    },
+    {
+      "start": "$F209",
+      "end": "$F209",
+      "bytes": 1
+    },
+    {
+      "start": "$F226",
+      "end": "$F226",
+      "bytes": 1
+    },
+    {
+      "start": "$F233",
+      "end": "$F233",
+      "bytes": 1
+    },
+    {
+      "start": "$F242",
+      "end": "$F242",
+      "bytes": 1
+    },
+    {
+      "start": "$F2C4",
+      "end": "$F2C4",
+      "bytes": 1
+    },
+    {
+      "start": "$F301",
+      "end": "$F301",
+      "bytes": 1
+    },
+    {
+      "start": "$F312",
+      "end": "$F312",
+      "bytes": 1
+    },
+    {
+      "start": "$F31C",
+      "end": "$F31C",
+      "bytes": 1
+    },
+    {
+      "start": "$F348",
+      "end": "$F348",
+      "bytes": 1
+    },
+    {
+      "start": "$F355",
+      "end": "$F355",
+      "bytes": 1
+    },
+    {
+      "start": "$F39F",
+      "end": "$F39F",
+      "bytes": 1
+    },
+    {
+      "start": "$F3B6",
+      "end": "$F3B6",
+      "bytes": 1
+    },
+    {
+      "start": "$F3D2",
+      "end": "$F3D2",
+      "bytes": 1
+    },
+    {
+      "start": "$F427",
+      "end": "$F427",
+      "bytes": 1
+    },
+    {
+      "start": "$F440",
+      "end": "$F447",
+      "bytes": 8
+    },
+    {
+      "start": "$F479",
+      "end": "$F479",
+      "bytes": 1
+    },
+    {
+      "start": "$F4F9",
+      "end": "$F4F9",
+      "bytes": 1
+    },
+    {
+      "start": "$F53E",
+      "end": "$F545",
+      "bytes": 8
+    },
+    {
+      "start": "$F572",
+      "end": "$F57A",
+      "bytes": 9
+    },
+    {
+      "start": "$F5A5",
+      "end": "$F5A5",
+      "bytes": 1
+    },
+    {
+      "start": "$F5C3",
+      "end": "$F5C3",
+      "bytes": 1
+    },
+    {
+      "start": "$F5E9",
+      "end": "$F5E9",
+      "bytes": 1
+    },
+    {
+      "start": "$F614",
+      "end": "$F614",
+      "bytes": 1
+    },
+    {
+      "start": "$F68D",
+      "end": "$F68D",
+      "bytes": 1
+    },
+    {
+      "start": "$F6B8",
+      "end": "$F6BD",
+      "bytes": 6
+    },
+    {
+      "start": "$F6C8",
+      "end": "$F6CC",
+      "bytes": 5
+    },
+    {
+      "start": "$F6D6",
+      "end": "$F6D6",
+      "bytes": 1
+    },
+    {
+      "start": "$F713",
+      "end": "$F713",
+      "bytes": 1
+    },
+    {
+      "start": "$F762",
+      "end": "$F762",
+      "bytes": 1
+    },
+    {
+      "start": "$F772",
+      "end": "$F772",
+      "bytes": 1
+    },
+    {
+      "start": "$F808",
+      "end": "$F808",
+      "bytes": 1
+    },
+    {
+      "start": "$F814",
+      "end": "$F814",
+      "bytes": 1
+    },
+    {
+      "start": "$F823",
+      "end": "$F823",
+      "bytes": 1
+    },
+    {
+      "start": "$F8A2",
+      "end": "$F8A2",
+      "bytes": 1
+    },
+    {
+      "start": "$F8EE",
+      "end": "$F8EE",
+      "bytes": 1
+    },
+    {
+      "start": "$F90E",
+      "end": "$F90E",
+      "bytes": 1
+    },
+    {
+      "start": "$F926",
+      "end": "$F926",
+      "bytes": 1
+    },
+    {
+      "start": "$F95D",
+      "end": "$F95D",
+      "bytes": 1
+    },
+    {
+      "start": "$F98F",
+      "end": "$F98F",
+      "bytes": 1
+    },
+    {
+      "start": "$F9EB",
+      "end": "$F9EB",
+      "bytes": 1
+    },
+    {
+      "start": "$F9F9",
+      "end": "$F9F9",
+      "bytes": 1
+    },
+    {
+      "start": "$FA3F",
+      "end": "$FA3F",
+      "bytes": 1
+    },
+    {
+      "start": "$FAF0",
+      "end": "$FAF0",
+      "bytes": 1
+    },
+    {
+      "start": "$FB2D",
+      "end": "$FB34",
+      "bytes": 8
+    },
+    {
+      "start": "$FB51",
+      "end": "$FB52",
+      "bytes": 2
+    },
+    {
+      "start": "$FB69",
+      "end": "$FB69",
+      "bytes": 1
+    },
+    {
+      "start": "$FB84",
+      "end": "$FB84",
+      "bytes": 1
+    },
+    {
+      "start": "$FB8F",
+      "end": "$FB8F",
+      "bytes": 1
+    },
+    {
+      "start": "$FB9B",
+      "end": "$FB9B",
+      "bytes": 1
+    },
+    {
+      "start": "$FBC8",
+      "end": "$FBC8",
+      "bytes": 1
+    },
+    {
+      "start": "$FBF4",
+      "end": "$FBF4",
+      "bytes": 1
+    },
+    {
+      "start": "$FC0A",
+      "end": "$FC0A",
+      "bytes": 1
+    },
+    {
+      "start": "$FC1F",
+      "end": "$FC1F",
+      "bytes": 1
+    },
+    {
+      "start": "$FC33",
+      "end": "$FC33",
+      "bytes": 1
+    },
+    {
+      "start": "$FC45",
+      "end": "$FC45",
+      "bytes": 1
+    },
+    {
+      "start": "$FC51",
+      "end": "$FC51",
+      "bytes": 1
+    },
+    {
+      "start": "$FC81",
+      "end": "$FC81",
+      "bytes": 1
+    },
+    {
+      "start": "$FCA6",
+      "end": "$FCAF",
+      "bytes": 10
+    },
+    {
+      "start": "$FCF2",
+      "end": "$FCF2",
+      "bytes": 1
+    },
+    {
+      "start": "$FD0A",
+      "end": "$FD0A",
+      "bytes": 1
+    },
+    {
+      "start": "$FD5E",
+      "end": "$FD62",
+      "bytes": 5
+    },
+    {
+      "start": "$FDA1",
+      "end": "$FDA1",
+      "bytes": 1
+    },
+    {
+      "start": "$FDD9",
+      "end": "$FDD9",
+      "bytes": 1
+    },
+    {
+      "start": "$FDEC",
+      "end": "$FDEC",
+      "bytes": 1
+    },
+    {
+      "start": "$FE10",
+      "end": "$FE10",
+      "bytes": 1
+    },
+    {
+      "start": "$FE7B",
+      "end": "$FE7B",
+      "bytes": 1
+    },
+    {
+      "start": "$FE98",
+      "end": "$FE9B",
+      "bytes": 4
+    },
+    {
+      "start": "$FEF5",
+      "end": "$FEF5",
+      "bytes": 1
+    },
+    {
+      "start": "$FF0A",
+      "end": "$FF0A",
+      "bytes": 1
+    },
+    {
+      "start": "$FF1B",
+      "end": "$FF1B",
+      "bytes": 1
+    },
+    {
+      "start": "$FF84",
+      "end": "$FF84",
+      "bytes": 1
+    },
+    {
+      "start": "$FFE2",
+      "end": "$FFE2",
+      "bytes": 1
+    }
+  ],
+  "addresses": [
+    0,
+    474,
+    475,
+    476,
+    477,
+    478,
+    479,
+    480,
+    481,
+    482,
+    490,
+    491,
+    492,
+    493,
+    494,
+    495,
+    496,
+    497,
+    498,
+    499,
+    500,
+    501,
+    502,
+    503,
+    523,
+    524,
+    525,
+    526,
+    527,
+    528,
+    529,
+    530,
+    542,
+    543,
+    544,
+    545,
+    558,
+    559,
+    560,
+    561,
+    565,
+    566,
+    567,
+    568,
+    569,
+    570,
+    577,
+    578,
+    579,
+    580,
+    593,
+    594,
+    595,
+    605,
+    606,
+    607,
+    608,
+    609,
+    612,
+    613,
+    614,
+    628,
+    629,
+    630,
+    643,
+    644,
+    645,
+    646,
+    647,
+    648,
+    649,
+    662,
+    663,
+    664,
+    665,
+    678,
+    679,
+    680,
+    681,
+    683,
+    684,
+    685,
+    686,
+    687,
+    688,
+    697,
+    698,
+    699,
+    700,
+    713,
+    714,
+    715,
+    716,
+    723,
+    724,
+    725,
+    726,
+    727,
+    728,
+    732,
+    733,
+    734,
+    748,
+    749,
+    750,
+    762,
+    763,
+    764,
+    765,
+    766,
+    767,
+    52071,
+    52084,
+    52135,
+    52145,
+    52149,
+    52168,
+    52184,
+    52186,
+    52191,
+    52192,
+    52360,
+    52387,
+    52476,
+    52527,
+    52577,
+    52644,
+    52660,
+    52680,
+    52803,
+    52817,
+    52866,
+    52875,
+    52911,
+    53314,
+    53368,
+    53440,
+    53443,
+    53458,
+    53526,
+    53538,
+    53556,
+    53569,
+    53606,
+    53628,
+    53648,
+    53732,
+    53778,
+    53939,
+    53959,
+    54023,
+    54043,
+    54045,
+    54222,
+    54276,
+    54308,
+    54441,
+    54513,
+    54540,
+    54606,
+    54645,
+    54860,
+    54881,
+    54903,
+    54986,
+    55047,
+    55103,
+    55116,
+    55137,
+    55221,
+    55292,
+    55433,
+    55449,
+    55479,
+    55498,
+    55508,
+    55561,
+    55581,
+    55584,
+    55604,
+    55719,
+    55723,
+    55731,
+    55789,
+    55819,
+    55935,
+    55964,
+    55983,
+    56006,
+    56027,
+    56060,
+    56066,
+    56088,
+    56092,
+    56106,
+    56130,
+    56159,
+    56166,
+    56220,
+    56263,
+    56278,
+    56283,
+    56357,
+    56391,
+    56405,
+    56418,
+    56424,
+    56507,
+    56516,
+    56537,
+    56634,
+    56642,
+    56668,
+    56693,
+    56718,
+    56751,
+    56782,
+    56803,
+    56979,
+    56988,
+    57075,
+    57199,
+    57203,
+    57211,
+    57220,
+    61961,
+    61990,
+    62003,
+    62018,
+    62148,
+    62209,
+    62226,
+    62236,
+    62280,
+    62293,
+    62367,
+    62390,
+    62418,
+    62503,
+    62528,
+    62535,
+    62585,
+    62713,
+    62782,
+    62789,
+    62834,
+    62838,
+    62842,
+    62885,
+    62915,
+    62953,
+    62996,
+    63117,
+    63160,
+    63165,
+    63176,
+    63180,
+    63190,
+    63251,
+    63330,
+    63346,
+    63496,
+    63508,
+    63523,
+    63650,
+    63726,
+    63758,
+    63782,
+    63837,
+    63887,
+    63979,
+    63993,
+    64063,
+    64240,
+    64301,
+    64308,
+    64337,
+    64338,
+    64361,
+    64388,
+    64399,
+    64411,
+    64456,
+    64500,
+    64522,
+    64543,
+    64563,
+    64581,
+    64593,
+    64641,
+    64678,
+    64679,
+    64687,
+    64754,
+    64778,
+    64862,
+    64866,
+    64929,
+    64985,
+    65004,
+    65040,
+    65147,
+    65176,
+    65179,
+    65269,
+    65290,
+    65307,
+    65412,
+    65506
+  ]
+}

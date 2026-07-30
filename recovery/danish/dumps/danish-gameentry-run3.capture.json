@@ -1,0 +1,31 @@
+{
+  "release": "danish",
+  "run_label": "run3",
+  "trigger_kind": "pc-exec-checkpoint",
+  "trigger_address": "$08B1",
+  "how_located": "Located empirically against a live host VICE 3.10 (C64SC, PAL) on 2026-07-30. After vice_disk_attach + vice_autostart the CPU is still HALTED (reset used run_after:false), so vice_execution_run is required before any loader code executes at all. Once running, the machine settles into a tight loop at $0900/$0901 -- the cracktro's 'hit any key' poll. vice_keyboard_type is invisible to it (the crack polls the CIA data ports directly), so the gate is cleared with vice_keyboard_matrix SPACE. The cracktro then self-runs through animation phases observed at $08F5/$08F7, $0D64-$0D82 and $0340-$035E (the last being the cassette-buffer region, a classic loader-stub location), ending on the Danish Crackers sign-off screen. Execution then settles into a stable two-cluster steady state across $08B1-$08F8 and $139E-$142B, with Datasoft's original title screen on display ('DATASOFT PRESENTS / BRUCE LEE (TM) / BY RON J FORTIER / F3-F5-F7'). vice_disassemble confirms $08B1 is a genuine routine entry, not a mid-instruction landing: $08B1 LDA $49 / $08B3 ORA $4A / $08B5 BNE $08BA / $08B7 JMP $0531 / $08BA LDA #$00 / $08BC STA $010E / $08BF JSR $139E. It calls the game's own input scanner at $139E: LDA $010C / BNE $13AD / LDA $DC00 / AND $DC01 / EOR #$FF -- i.e. $08B1 is the title-screen input dispatcher, game code, distinct from the loader's own $0900 poll. vice_backtrace at an arbitrary asynchronous pause showed KERNAL IRQ $FF41 in the frame chain, confirming the title screen is IRQ-driven and therefore that a bare vice_execution_pause lands nondeterministically -- only a checkpoint yields a re-armable stop point.",
+  "port01_value": "35",
+  "ranges": [
+    {
+      "start": 0,
+      "end": 65535,
+      "bank": "ram"
+    }
+  ],
+  "chunk_size": 4096,
+  "bytes_read": 65536,
+  "sha256": "f3fdd5df9c499a6a1a3a77c8839cdb438ab3f2d8984b1f9e2ed180371cafb033",
+  "snapshot_name": "danish_gameentry_run3",
+  "snapshot_saved": true,
+  "snapshot_note": null,
+  "host_snapshot_dir": "/home/henrik/.config/vice/mcp_snapshots",
+  "vice_server_version": "3.10",
+  "machine": "C64SC",
+  "video_standard": "PAL",
+  "captured_at": "2026-07-30T16:00:38.453Z",
+  "tool_version": "1.0.0",
+  "ram_vs_rom_e000": {
+    "ram": "4C00E34C06E34C9EE426D7AAE626D7AA",
+    "rom": "8556200FBCA561C988900320D4BA20CC"
+  }
+}

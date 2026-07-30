@@ -24,7 +24,7 @@
           {
             "address": "$0900",
             "key": "SPACE",
-            "hit_count": 477
+            "hit_count": 1804
           }
         ],
         "keys_held_into_capture": [
@@ -56,12 +56,23 @@
           "range_manifest": null,
           "sha256": "e964450f17b58f3fee079e27b476959759ebbb95a4e989643bf2ed2424158f93",
           "load_event_ref": null
+        },
+        {
+          "label": "run3",
+          "kind": "gameentry",
+          "bin": "recovery/danish/dumps/danish-gameentry-run3.bin",
+          "capture_record": "recovery/danish/dumps/danish-gameentry-run3.capture.json",
+          "chip_state": null,
+          "range_manifest": null,
+          "sha256": "f3fdd5df9c499a6a1a3a77c8839cdb438ab3f2d8984b1f9e2ed180371cafb033",
+          "load_event_ref": null
         }
       ],
       "snapshot_names": [
         "danish_gameentry_v1",
         "danish_gameentry_run1",
-        "danish_gameentry_run2"
+        "danish_gameentry_run2",
+        "danish_gameentry_run3"
       ],
       "tier1_evidence": [
         "Cracktro screen reads 'Danish Crackers Presents BRUCE LEE' with scroller text including the release id 'DC-011/P' (captured: recovery/danish/dumps/probe-stepped.png, probe-postkey.png).",
