@@ -16,16 +16,21 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-30)
 
 **Core value:** An ACME source tree that rebuilds a Bruce Lee which plays identically to the original, where every gameplay system is explained well enough that someone could change it.
+**Current milestone:** v1.0 — Pipeline Proven (Phases 1–4, 24 requirements)
 **Current focus:** Phase 1 — Recovery & Provenance
 
 ## Current Position
 
-Phase: 1 of 7 (Recovery & Provenance)
+Milestone: v1.0 — Pipeline Proven (Phases 1–4 of 7 total)
+Phase: 1 of 7 overall — 1 of 4 in this milestone (Recovery & Provenance)
 Plan: 0 of 5 in current phase
 Status: Ready to plan
-Last activity: 2026-07-30 — Roadmap created: 7 phases, 44/44 requirements mapped
+Last activity: 2026-07-30 — Milestone split applied at the Phase 4 boundary
 
-Progress: [░░░░░░░░░░] 0%
+Progress (v1.0): [░░░░░░░░░░] 0% — 0/19 plans
+Progress (overall): [░░░░░░░░░░] 0% — 0/34 plans
+
+**Milestone roadmap:** v1.0 = Phases 1–4 (proven pipeline) · v2.0 = Phases 5–7 (complete reconstruction, where "fully documented and recompiled" is met) · v3.0 = round-trip assets + editor, not yet phased.
 
 ## Performance Metrics
 
@@ -56,6 +61,7 @@ Recent decisions affecting current work:
 - [Roadmap]: Vertical-slice-first structure over horizontal layers — the three project-sinking risks (mistimed dump, jump-table code misclassified as data, silent ACME addressing/alignment drift) all surface only at verification under layering. Phase 4 drives one subsystem through the full pipeline to move discovery early.
 - [Roadmap]: Sprite/display chosen as the pilot subsystem — bounded and IRQ-driven enough to isolate, but exercises every stage including alignment-sensitive data extraction and a checkpoint meaningful on both verification channels. Combat rejected as too entangled; sound rejected because the checkpoint design never samples SID.
 - [Roadmap]: Verification harness scheduled at Phase 3, not terminal — baseline capture needs only the recovered image plus harness plumbing, so plans 03-01/03-02 run as a parallel workstream alongside Phase 2.
+- [Milestones]: Split at the Phase 4 boundary — v1.0 closes on a proven pipeline (24 reqs), v2.0 on the complete reconstruction (20 reqs). Archives and the PROJECT.md evolution review happen while context is small and after the pipeline's assumptions have been tested. Accepted cost: v1.0 is not the originally-stated deliverable; v2.0 is.
 
 ### Pending Todos
 

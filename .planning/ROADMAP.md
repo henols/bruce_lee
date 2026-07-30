@@ -22,6 +22,20 @@ These apply across every phase and every plan; `/gsd-plan-phase` should inherit 
 
 **No UI hint on any phase.** Several phases match generic UI keywords ("display", "screen", "title screen", "layout") but none is a frontend phase — this is 6510 assembly against VIC-II registers. `/gsd-ui-phase` would be misapplied here, so the annotation is deliberately omitted rather than overlooked.
 
+## Milestones
+
+The 7 phases are split across two milestones at the Phase 4 boundary, with a third already scoped from the deferred requirements.
+
+| Milestone | Phases | Reqs | What it delivers |
+|---|---|---|---|
+| **v1.0 — Pipeline Proven** *(active)* | 1–4 | 24 | A clean canonical image with per-byte provenance, a full code/data map, a working replay-verification harness with the original's baselines recorded, and one subsystem (sprite/display) driven end-to-end through the pipeline to a verified `.prg`. The deliverable is a **proven pipeline**. |
+| **v2.0 — Complete Reconstruction** | 5–7 | 20 | Every remaining subsystem documented and reconstructed, all data formats proven by round-trip, the annotated listing complete, source split to mirror the docs, a bootable `.d64`, and the full replay suite passing. This is where "fully documented and recompiled" is actually met. |
+| **v3.0 — Editable** | — | 6 | Round-trip asset converters (`ASSET-01..04`) and the change guide + chamber editor (`EXT-01..02`). Deferred; not yet phased. |
+
+**Scope note.** v1.0 intentionally ships short of the original project goal. The full "documented and recompiled" deliverable lands at v2.0 — v1.0 exists to de-risk it by proving every stage of the pipeline works before scaling out. Do not read a v1.0 close as project completion.
+
+**At v1.0 close**, `/gsd-complete-milestone` archives Phases 1–4 to `.planning/milestones/v1.0-ROADMAP.md`, archives the 24 completed requirements, runs the PROJECT.md evolution review, and `/gsd-new-milestone` opens v2.0 with Phases 5–7 promoted into a fresh `REQUIREMENTS.md`.
+
 ## Phases
 
 **Phase Numbering:**
@@ -30,13 +44,20 @@ These apply across every phase and every plan; `/gsd-plan-phase` should inherit 
 
 Decimal phases appear between their surrounding integers in numeric order.
 
+### Milestone v1.0 — Pipeline Proven *(active)*
+
 - [ ] **Phase 1: Recovery & Provenance** - Defeat both crack loaders, capture a clean canonical memory image, and give every byte range a provenance verdict
 - [ ] **Phase 2: Coverage, Hazards & Memory Map** - Classify every byte as code/data/untouched by live trace, label every reachable routine, catalogue every reconstruction hazard, document the memory map
 - [ ] **Phase 3: Verification Harness & Original Baselines** - Build the deterministic replay harness and record the original's checkpoint baselines, before any rebuild exists
 - [ ] **Phase 4: Vertical Slice — Sprite & Display Pilot** - Prove the whole pipeline end-to-end on one subsystem: trace → annotate → document → extract → ACME → `.prg` → verified against baseline
+
+### Milestone v2.0 — Complete Reconstruction
+
 - [ ] **Phase 5: Actors — Movement, Combat & AI** - Scale the proven pipeline across player movement, the move set and combat resolution, Yamo, and the Ninja
 - [ ] **Phase 6: World, Audio & Shell + Data Format Validation** - Scale out chambers, traps, scoring/two-player, sound, and the shell; prove every data format spec by round-trip
 - [ ] **Phase 7: Complete Source Tree, Bootable Disk & Full-Suite Verification** - Finish the annotated listing, split source to mirror the docs, package the bootable `.d64`, pass the full replay suite
+
+**Cross-milestone dependency:** Phase 6 depends only on Phase 4, not Phase 5 — so if v2.0 planning wants to overlap Phases 5 and 6, nothing in the dependency graph forbids it.
 
 ## Phase Details
 
@@ -241,30 +262,36 @@ Two cross-phase overlaps are intended and should be honoured when scheduling wor
 - Phase 3 plans 03-01 and 03-02 depend only on Phase 1 and run alongside Phase 2.
 - Phase 6 depends only on Phase 4 and can overlap Phase 5.
 
-| Phase | Plans Complete | Status | Completed |
-|-------|----------------|--------|-----------|
-| 1. Recovery & Provenance | 0/5 | Not started | - |
-| 2. Coverage, Hazards & Memory Map | 0/5 | Not started | - |
-| 3. Verification Harness & Original Baselines | 0/4 | Not started | - |
-| 4. Vertical Slice — Sprite & Display Pilot | 0/5 | Not started | - |
-| 5. Actors — Movement, Combat & AI | 0/5 | Not started | - |
-| 6. World, Audio & Shell + Data Format Validation | 0/5 | Not started | - |
-| 7. Complete Source Tree, Bootable Disk & Full-Suite Verification | 0/5 | Not started | - |
+| Milestone | Phase | Plans Complete | Status | Completed |
+|-----------|-------|----------------|--------|-----------|
+| v1.0 | 1. Recovery & Provenance | 0/5 | Not started | - |
+| v1.0 | 2. Coverage, Hazards & Memory Map | 0/5 | Not started | - |
+| v1.0 | 3. Verification Harness & Original Baselines | 0/4 | Not started | - |
+| v1.0 | 4. Vertical Slice — Sprite & Display Pilot | 0/5 | Not started | - |
+| v2.0 | 5. Actors — Movement, Combat & AI | 0/5 | Not started | - |
+| v2.0 | 6. World, Audio & Shell + Data Format Validation | 0/5 | Not started | - |
+| v2.0 | 7. Complete Source Tree, Bootable Disk & Full-Suite Verification | 0/5 | Not started | - |
+
+**v1.0 progress:** 0/19 plans · **v2.0 progress:** 0/15 plans
 
 ## Requirement Coverage
 
-All 44 v1 requirements map to exactly one phase. No orphans, no duplicates.
+All 44 requirements map to exactly one phase. No orphans, no duplicates.
 
-| Phase | Requirements | Count |
-|-------|--------------|-------|
-| 1 | RECOVER-01, RECOVER-02, RECOVER-03, RECOVER-04, RECOVER-05, RECOVER-06, RECOVER-07, RECOVER-08 | 8 |
-| 2 | MAP-01, MAP-02, MAP-03, MAP-04, MAP-05 | 5 |
-| 3 | VERIFY-01, VERIFY-02, VERIFY-03, VERIFY-04 | 4 |
-| 4 | DOCS-01, DATA-02, BUILD-01, BUILD-02, BUILD-03, BUILD-04, VERIFY-05 | 7 |
-| 5 | DOCS-02, DOCS-03, DOCS-04, DOCS-05, DATA-04 | 5 |
-| 6 | DOCS-06, DOCS-07, DOCS-08, DOCS-09, DOCS-10, DATA-01, DATA-03, DATA-05, DATA-06 | 9 |
-| 7 | DOCS-11, BUILD-05, BUILD-06, BUILD-07, VERIFY-06, VERIFY-07 | 6 |
-| **Total** | | **44** |
+| Milestone | Phase | Requirements | Count |
+|-----------|-------|--------------|-------|
+| v1.0 | 1 | RECOVER-01, RECOVER-02, RECOVER-03, RECOVER-04, RECOVER-05, RECOVER-06, RECOVER-07, RECOVER-08 | 8 |
+| v1.0 | 2 | MAP-01, MAP-02, MAP-03, MAP-04, MAP-05 | 5 |
+| v1.0 | 3 | VERIFY-01, VERIFY-02, VERIFY-03, VERIFY-04 | 4 |
+| v1.0 | 4 | DOCS-01, DATA-02, BUILD-01, BUILD-02, BUILD-03, BUILD-04, VERIFY-05 | 7 |
+| | | **v1.0 subtotal** | **24** |
+| v2.0 | 5 | DOCS-02, DOCS-03, DOCS-04, DOCS-05, DATA-04 | 5 |
+| v2.0 | 6 | DOCS-06, DOCS-07, DOCS-08, DOCS-09, DOCS-10, DATA-01, DATA-03, DATA-05, DATA-06 | 9 |
+| v2.0 | 7 | DOCS-11, BUILD-05, BUILD-06, BUILD-07, VERIFY-06, VERIFY-07 | 6 |
+| | | **v2.0 subtotal** | **20** |
+| | | **Total** | **44** |
+
+**v3.0 (not yet phased):** ASSET-01, ASSET-02, ASSET-03, ASSET-04, EXT-01, EXT-02 — 6 requirements.
 
 ## Tooling Decisions & Open Questions — Where Each Lands
 

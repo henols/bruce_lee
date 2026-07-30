@@ -28,6 +28,16 @@ An ACME source tree that rebuilds a Bruce Lee which plays identically to the ori
 - [ ] Package the rebuild as a bootable `.d64` disk image
 - [ ] Automated verification: scripted joystick input replayed through the VICE MCP against original and rebuild, comparing framebuffer hash and game-state RAM at defined checkpoints
 
+### Milestone Split
+
+Active requirements are delivered across two milestones, split at the Phase 4 boundary:
+
+- **v1.0 — Pipeline Proven** (Phases 1–4, 24 reqs): recovery + provenance, code/data map, verification harness with the original's baselines, and one subsystem (sprite/display) driven end-to-end to a verified `.prg`. Deliverable is a *proven pipeline*.
+- **v2.0 — Complete Reconstruction** (Phases 5–7, 20 reqs): every remaining subsystem documented and reconstructed, formats proven by round-trip, listing complete, source split, bootable `.d64`, full replay suite passing.
+- **v3.0 — Editable** (not yet phased, 6 reqs): round-trip asset converters, change guide, chamber editor.
+
+**v1.0 intentionally ships short of this project's stated goal.** "Fully documented and recompiled" is met at v2.0. v1.0 exists to de-risk it — the three project-sinking risks are confronted on one subsystem before the work scales out. A v1.0 close is not project completion.
+
 ### Out of Scope
 
 - **Byte-identical rebuild** — Chose functional equivalence instead. Byte-exactness would forbid restructuring the source for readability, which conflicts with "a base to build on." Verification is behavioural, not `cmp`-based.
@@ -85,7 +95,8 @@ Driver 1 sets documentation depth. Driver 2 sets source structure and pushes the
 | Recover original game code as the subject | Crack loaders and the cruncher are obstacles to get past, not the object of study. | — Pending |
 | Automated replay + RAM diff verification | "Plays identically" is otherwise a judgement call at every phase boundary. A scripted, deterministic gate survives refactors. | — Pending |
 | Gameplay-systems documentation depth | Concentrates effort where the craft lives. The *rebuild* still covers every executing byte — only doc depth is prioritized. | — Pending |
-| Read-only asset extraction in v1 | Round-trip converters are wanted later; deferring them keeps v1 focused while the format specs still get written and validated by inspection. | — Pending |
+| Read-only asset extraction before v3.0 | Round-trip converters are wanted later; deferring them keeps the reconstruction focused while the format specs still get written and validated by round-trip. | — Pending |
+| Milestone split at the Phase 4 boundary | v1.0 closes on a proven pipeline rather than a complete reconstruction, so the archive/evolution review happens while context is still small and the pipeline's assumptions have been tested. Accepted cost: v1.0 is not the deliverable originally asked for; v2.0 is. | — Pending |
 | Emit both `.prg` and `.d64` | `.prg` gives fast build/test iteration; `.d64` is the deliverable that boots like the original. | — Pending |
 
 ## Evolution
