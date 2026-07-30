@@ -270,10 +270,10 @@ async function withReconnect(toolName, args, opts) {
     }
   }
   throw new ViceError(
-    `${toolName} failed after ${RECONNECT_ATTEMPTS} transport attempts: ${lastErr.message} ` +
-      `-- recovery is a HOST-SIDE restart, which this container cannot perform. Run ` +
-      `tools/vice-supervisor.sh on the HOST (see its header comment) -- it restarts x64sc ` +
-      `automatically and logs the crash for the still-open root-cause investigation.`
+    `${toolName} failed after ${RECONNECT_ATTEMPTS} transport attempts against ${activeUrl} ` +
+      `(port ${activePort}): ${lastErr.message} -- recovery is a HOST-SIDE restart, which this ` +
+      `container cannot perform. Run tools/vice-supervisor.sh on the HOST (see its header comment) ` +
+      `-- it restarts x64sc automatically and logs the crash for the still-open root-cause investigation.`
   );
 }
 
@@ -521,6 +521,72 @@ export async function serverInfo() {
   return rpc("tools/list", {});
 }
 
+/**
+ * Pure formatter for a `tools/list` result (D-3). Removing the MCP
+ * registration (D-5) removes the typed tool schemas an agent used to read
+ * from Claude Code's own tool listing -- this is the replacement, and it has
+ * to be good enough that an agent can work out how to call a tool with no
+ * external docs at all.
+ *
+ * With no `query`, renders one line per tool: name plus its one-line
+ * description. With a `query` (an exact name or a substring), renders the
+ * FULL input schema for every matching tool -- parameter name, type,
+ * required-ness, and enum/default values where the schema carries them.
+ * `json: true` returns the raw payload, pretty-printed, for anything that
+ * wants the unprocessed `tools/list` result.
+ *
+ * Any tool on DENY_LIST is rendered with a clear FORBIDDEN marker and the
+ * reason, in EVERY mode -- never presented as a plain, callable option.
+ *
+ * A pure function of its `payload` argument (never calls the network
+ * itself) so it is fully testable with a synthetic `tools/list` payload,
+ * with no server involved.
+ */
+export function formatToolsOutput(payload, { query, json = false } = {}) {
+  if (json) return JSON.stringify(payload, null, 2);
+
+  const tools = Array.isArray(payload?.tools) ? payload.tools : [];
+  const forbiddenNote = (name) =>
+    DENY_LIST.includes(name)
+      ? " [FORBIDDEN -- crashes the shared host VICE MCP server; recovery is a manual host-side restart]"
+      : "";
+
+  if (!query) {
+    if (tools.length === 0) return "(server reported no tools)";
+    return tools
+      .map((t) => `${t.name}${forbiddenNote(t.name)}${t.description ? ` -- ${t.description}` : ""}`)
+      .join("\n");
+  }
+
+  const matches = tools.filter((t) => t.name === query || t.name.includes(query));
+  if (matches.length === 0) return `no tool matches "${query}"`;
+
+  return matches
+    .map((t) => {
+      const lines = [`${t.name}${forbiddenNote(t.name)}`];
+      if (t.description) lines.push(`  ${t.description}`);
+      const schema = t.inputSchema && typeof t.inputSchema === "object" ? t.inputSchema : {};
+      const props = schema.properties && typeof schema.properties === "object" ? schema.properties : {};
+      const required = new Set(Array.isArray(schema.required) ? schema.required : []);
+      const paramNames = Object.keys(props);
+      if (paramNames.length === 0) {
+        lines.push("  (no parameters)");
+      } else {
+        for (const name of paramNames) {
+          const p = props[name] && typeof props[name] === "object" ? props[name] : {};
+          const type = p.type ?? "any";
+          const reqTag = required.has(name) ? "required" : "optional";
+          const extras = [];
+          if (Array.isArray(p.enum)) extras.push(`enum: ${p.enum.join("|")}`);
+          if (p.default !== undefined) extras.push(`default: ${JSON.stringify(p.default)}`);
+          lines.push(`  ${name}: ${type} [${reqTag}]${extras.length ? ` (${extras.join(", ")})` : ""}`);
+        }
+      }
+      return lines.join("\n");
+    })
+    .join("\n\n");
+}
+
 // -------------------------------------------------------------------- CLI
 
 if (process.argv[1] && resolve(process.argv[1]) === SELF) {
@@ -568,6 +634,13 @@ if (process.argv[1] && resolve(process.argv[1]) === SELF) {
       console.log(JSON.stringify(res, null, 2));
       return;
     }
+    if (cmd === "tools") {
+      const jsonFlag = rest.includes("--json");
+      const query = rest.find((a) => !a.startsWith("--"));
+      const info = await serverInfo();
+      console.log(formatToolsOutput(info, { query, json: jsonFlag }));
+      return;
+    }
     if (cmd === "session") {
       const { acquireSession, releaseSession, sessionStatus } = await import("./vice-session.mjs");
       const sub = rest[0];
@@ -602,18 +675,37 @@ if (process.argv[1] && resolve(process.argv[1]) === SELF) {
       }
       die("usage: session <acquire [--ttl-min N] | release | status>");
     }
+
+    // This block is the fallback documentation surface when the vice-session
+    // skill isn't loaded (D-3): it has to document every verb completely, not
+    // just the ones a quick reminder would cover.
+    let sessionLine;
+    try {
+      const { sessionStatus } = await import("./vice-session.mjs");
+      const s = sessionStatus();
+      sessionLine = s.present
+        ? `active session: ${s.session_id} on port ${s.port}${s.expired ? " (EXPIRED)" : ""}`
+        : `no active session (${s.reason}) -- default instance in use`;
+    } catch (e) {
+      sessionLine = `no active session (could not read session file: ${e.message})`;
+    }
+
     console.log(`usage: node ${SELF} <command>
 
-  ping                       print server version, machine, execution state
-  call <tool> [json-args]    invoke any vice_* tool and print its JSON result
+  ping                            print server version, machine, execution state
+  tools [name|substring] [--json] list every tool, or show one tool's input schema
+  call <tool> [json-args]         invoke any vice_* tool and print its JSON result
   session acquire [--ttl-min N]   lease an instance and record it in a session file
   session release                 free the active session's lease and delete its file
   session status                  read-only report on the active session (no MCP call)
 
 active instance: port ${activeInstance().port} (${activeInstance().url})
+${sessionLine}
+
 env: VICE_MCP_URL          override the MCP endpoint (default ${DEFAULT_ENDPOINT})
      VICE_MCP_TIMEOUT_MS   per-request abort timeout in ms (default ${DEFAULT_TIMEOUT_MS})
-     VICE_SESSION_FILE     session file location (default <repo>/.vice-supervisor/session.json)`);
+     VICE_SESSION_FILE     session file location (default <repo>/.vice-supervisor/session.json)
+     VICE_SESSION_TTL_MS   default session TTL in ms (default 1800000 -- 30 minutes)`);
     process.exit(cmd ? 1 : 0);
   }
 

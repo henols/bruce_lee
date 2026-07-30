@@ -229,6 +229,34 @@ export function sessionStatus({ sessionPath = sessionFilePath() } = {}) {
  * "quiet wrong answer" failure class this codebase keeps rejecting
  * elsewhere (see `vice.mjs`'s `MachineRestartedError`). The command refuses
  * and names both recovery verbs; nothing is auto-released or auto-reacquired.
+ *
+ * Two more checks run once a session is confirmed active and unexpired, in
+ * this order, both BEFORE any network call is made:
+ *
+ *   - The cross-invocation EPOCH GUARD (D-1, D-3). `vice.mjs`'s own
+ *     `beginSession()`/`assertSameMachine()` solve the analogous problem for
+ *     ONE process's lifetime by keeping a baseline in module state -- which
+ *     is worthless here, because every CLI invocation is a fresh process
+ *     with no module state surviving from the last one. The session FILE
+ *     carries the baseline instead (`epoch_at_acquire`, captured once at
+ *     `session acquire` time). If both the baseline and the CURRENT epoch
+ *     file are present and differ, the emulator restarted since this
+ *     session was acquired: refuse, name both epochs, do not auto-recover.
+ *     If both are present and equal, proceed silently -- proven same
+ *     machine. If either side is missing (no supervisor running now, or
+ *     none was running at acquire time), the signal is AMBIGUOUS, not
+ *     proof of anything: warn on stderr and proceed, because failing every
+ *     future read on an ambiguous signal would make sessions unusable the
+ *     moment nobody happens to be running a supervisor.
+ *   - TTL REFRESH-ON-USE (D-2): a session is only dead when nobody is using
+ *     it, and use is the only signal available across separate processes --
+ *     there is no "still open" flag a fresh CLI invocation could check
+ *     instead. So every successful resolution pushes both the lease's and
+ *     the session file's `expires_at` out to `now + ttl_ms` via the
+ *     token-checked `refreshLease()` (T-nh5-04: never refresh a lease that
+ *     was reclaimed and reacquired by someone else) plus a
+ *     temp-file-plus-rename session rewrite. A session in continuous use
+ *     therefore never approaches its own expiry.
  */
 export function resolveInstance({ sessionPath = sessionFilePath() } = {}) {
   if (process.env.VICE_MCP_URL) {
@@ -255,6 +283,79 @@ export function resolveInstance({ sessionPath = sessionFilePath() } = {}) {
     );
   }
 
+  assertEpochContinuity(s);
+  refreshOnUse(sessionPath, s);
+
   useInstance({ port: s.port, url: s.url, epochFile: s.epochFile, pooled: s.pooled });
   return { source: "session", session: s };
+}
+
+/**
+ * The cross-invocation epoch guard (D-1, D-3) -- see resolveInstance()'s doc
+ * comment above for the full four-rule explanation. A synchronous file
+ * read only (readEpoch() never makes network traffic), so a refusal here
+ * arrives before any MCP call is even attempted -- the fast-refusal
+ * behaviour a dead/restarted target needs.
+ */
+function assertEpochContinuity(s) {
+  const baseline = s.epoch_at_acquire && typeof s.epoch_at_acquire === "object"
+    ? s.epoch_at_acquire
+    : { present: false, epoch: null };
+  const current = readEpoch(s.epochFile);
+
+  if (baseline.present && current.present) {
+    if (baseline.epoch !== current.epoch) {
+      throw new Error(
+        `session ${s.session_id} (port ${s.port}): the emulator restarted since this session was acquired -- ` +
+          `epoch changed from ${baseline.epoch} to ${current.epoch}. This session's results are suspect; do not ` +
+          `trust them. Recover with: \`node tools/vice.mjs session release\` then ` +
+          `\`node tools/vice.mjs session acquire\`.`
+      );
+    }
+    return; // both present, both equal -- proven same machine, proceed silently
+  }
+
+  if (baseline.present !== current.present) {
+    // Ambiguous: one side has evidence, the other doesn't (supervisor
+    // stopped, or started, somewhere between acquire and now). Not proof of
+    // a restart, and not proof of safety either -- warn loudly and proceed,
+    // rather than making every future read fail just because a supervisor
+    // happened not to be running at one of the two points compared.
+    console.error(
+      `warn: session ${s.session_id} (port ${s.port}): epoch continuity is ambiguous -- ` +
+        `${baseline.present ? `baseline epoch ${baseline.epoch}` : "no baseline epoch recorded at acquire time"} vs ` +
+        `${current.present ? `current epoch ${current.epoch}` : "no current epoch file"}. Proceeding, but this ` +
+        `session's restart-safety could not be confirmed either way.`
+    );
+    return;
+  }
+  // Both absent -- no supervisor running now, and none at acquire time
+  // either. Nothing changed; nothing to warn about.
+}
+
+/**
+ * TTL refresh-on-use (D-2) -- see resolveInstance()'s doc comment above.
+ * Refreshes the pool lease (only if this session actually holds one --
+ * unpooled sessions over the default instance don't) and always rewrites
+ * the session file's own `expires_at`, via temp-file-plus-rename so a
+ * concurrent reader never observes a half-written record.
+ */
+function refreshOnUse(sessionPath, s) {
+  const ttlMs = Number.isFinite(s.ttl_ms) ? s.ttl_ms : DEFAULT_TTL_MS;
+  if (s.lease_path && s.lease_token) {
+    refreshLease(s.lease_path, s.lease_token, ttlMs);
+  }
+  writeSessionAtomic(sessionPath, {
+    session_id: s.session_id,
+    port: s.port,
+    url: s.url,
+    epoch_file: s.epochFile,
+    pooled: s.pooled,
+    lease_path: s.lease_path,
+    lease_token: s.lease_token,
+    created_at: s.created_at,
+    expires_at: new Date(Date.now() + ttlMs).toISOString(),
+    ttl_ms: ttlMs,
+    epoch_at_acquire: s.epoch_at_acquire,
+  });
 }

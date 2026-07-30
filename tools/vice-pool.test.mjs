@@ -12,13 +12,13 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir, hostname } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 
-import { acquire, readRegistry, instanceFor, DEFAULT_PORT } from "./vice-pool.mjs";
-import { call, useInstance } from "./vice.mjs";
+import { acquire, readRegistry, instanceFor, refreshLease, DEFAULT_PORT } from "./vice-pool.mjs";
+import { call, useInstance, formatToolsOutput } from "./vice.mjs";
 
 const execFileP = promisify(execFile);
 const MODULE_URL = new URL("./vice-pool.mjs", import.meta.url).href;
@@ -556,4 +556,305 @@ test("untrusted session file (T-nh5-01): a string or negative port is reported u
   assert.equal(s2.port, 6818);
   assert.ok(!s2.epochFile.includes("etc/passwd"), "the hostile epoch_file string must never be opened or reflected");
   assert.ok(s2.epochFile.includes("6818"), "the epoch path actually used must be derived from the validated port");
+});
+
+// ============================================================================
+// TTL refresh-on-use, the cross-invocation epoch guard, and the tool-listing
+// formatter (D-2, D-3, quick-260730-nh5 Task 2). Same posture as the Task 1
+// block above: everything offline and deterministic, no emulator involved.
+// ============================================================================
+
+function writeEpochFile(path, epoch) {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, JSON.stringify({ epoch, spawned_at: new Date().toISOString(), pid: 1 }) + "\n");
+}
+
+/** Hand-write a session.json fixture with full control over every field --
+ * readSession() derives url/epochFile from port+pooled itself, so this only
+ * needs to supply the fields readSession() actually trusts. */
+function writeSessionFixture(sessionFile, { port, pooled = true, epochAtAcquire = { present: false, epoch: null }, expiresAt, leasePath = null, leaseToken = null, ttlMs = 1800000, sessionId } = {}) {
+  writeFileSync(
+    sessionFile,
+    JSON.stringify({
+      session_id: sessionId || `test-session-${port}`,
+      port,
+      url: `http://127.0.0.1:${port}/mcp`,
+      epoch_file: "should-never-be-opened",
+      pooled,
+      lease_path: leasePath,
+      lease_token: leaseToken,
+      created_at: new Date().toISOString(),
+      expires_at: expiresAt,
+      ttl_ms: ttlMs,
+      epoch_at_acquire: epochAtAcquire,
+    })
+  );
+}
+
+function withPoolDirEnv(dir, fn) {
+  const prev = process.env.VICE_POOL_DIR;
+  process.env.VICE_POOL_DIR = dir;
+  return Promise.resolve()
+    .then(fn)
+    .finally(() => {
+      if (prev === undefined) delete process.env.VICE_POOL_DIR;
+      else process.env.VICE_POOL_DIR = prev;
+    });
+}
+
+test("TTL refreshed on each use (D-2): a session in continuous use never approaches its own expires_at", async () => {
+  const dir = tmpPoolDir();
+  writeRegistry(dir, [6825]);
+  const sessionFile = join(dir, "session.json");
+  const env = { ...process.env, VICE_POOL_DIR: dir, VICE_SESSION_FILE: sessionFile, VICE_SESSION_TTL_MS: "1000" };
+
+  await execFileP(process.execPath, [VICE_CLI, "session", "acquire"], { env });
+  const leaseFirst = JSON.parse(readFileSync(leasePathOf(dir, 6825), "utf8"));
+  const sessionFirst = JSON.parse(readFileSync(sessionFile, "utf8"));
+
+  await new Promise((r) => setTimeout(r, 400)); // a fraction of the 1000ms TTL
+
+  // Drive resolveInstance() directly -- exactly what every ping/call
+  // invocation does at the top of main() -- in a SEPARATE process, so this
+  // stays fully offline (no live network round trip needed to prove the
+  // refresh side effect) while still being a genuinely separate invocation.
+  const resolveSrc = `
+    import { resolveInstance } from ${JSON.stringify(VICE_SESSION_MODULE_URL)};
+    resolveInstance();
+  `;
+  await execFileP(process.execPath, ["--input-type=module", "-e", resolveSrc], { env });
+
+  const leaseSecond = JSON.parse(readFileSync(leasePathOf(dir, 6825), "utf8"));
+  const sessionSecond = JSON.parse(readFileSync(sessionFile, "utf8"));
+  assert.ok(
+    Date.parse(leaseSecond.expires_at) > Date.parse(leaseFirst.expires_at),
+    "the lease file's expires_at must move forward on use"
+  );
+  assert.ok(
+    Date.parse(sessionSecond.expires_at) > Date.parse(sessionFirst.expires_at),
+    "the session file's expires_at must move forward on use"
+  );
+
+  await execFileP(process.execPath, [VICE_CLI, "session", "release"], { env });
+});
+
+test("refresh is token-checked (T-nh5-04): refreshLease() against a lease with a mismatched on-disk token returns false and leaves the file byte-identical", async () => {
+  const dir = tmpPoolDir();
+  writeRegistry(dir, [6826]);
+  const l = await acquire({ dir, kind: "session", ttlMs: 60000 });
+  const before = readFileSync(l.leasePath, "utf8");
+
+  const ok = refreshLease(l.leasePath, "not-the-real-token", 120000);
+  assert.equal(ok, false);
+  const after = readFileSync(l.leasePath, "utf8");
+  assert.equal(after, before, "a token-mismatched refresh must leave the lease file byte-identical");
+
+  await l.release();
+});
+
+test("epoch continuity, hard refusal (D-1): a session whose epoch_at_acquire differs from the live epoch file refuses fast, with no MCP call attempted", async () => {
+  const dir = tmpPoolDir();
+  const sessionFile = join(dir, "session.json");
+  const port = 6819; // nothing listens here -- the point is that no network call is ever attempted
+  const epochFile = join(dir, String(port), "epoch.json");
+  writeEpochFile(epochFile, 4);
+  writeSessionFixture(sessionFile, {
+    port,
+    pooled: true,
+    epochAtAcquire: { present: true, epoch: 3 },
+    expiresAt: new Date(Date.now() + 60000).toISOString(),
+  });
+  const env = { ...process.env, VICE_POOL_DIR: dir, VICE_SESSION_FILE: sessionFile, VICE_MCP_TIMEOUT_MS: "5000" };
+
+  const start = Date.now();
+  try {
+    await execFileP(process.execPath, [VICE_CLI, "ping"], { env });
+    assert.fail("expected ping to exit non-zero against a session with a proven epoch mismatch");
+  } catch (e) {
+    const elapsedMs = Date.now() - start;
+    assert.ok(elapsedMs < 3000, `expected a fast refusal well inside the transport timeout, took ${elapsedMs}ms`);
+    assert.match(e.stderr, /restarted/);
+    assert.match(e.stderr, /3/);
+    assert.match(e.stderr, /4/);
+  }
+});
+
+test("epoch continuity, same value: baseline and current epoch equal -> no warning, no refusal, resolution proceeds", async () => {
+  const dir = tmpPoolDir();
+  const sessionFile = join(dir, "session.json");
+  const port = 6820;
+  writeEpochFile(join(dir, String(port), "epoch.json"), 3);
+  writeSessionFixture(sessionFile, {
+    port,
+    pooled: true,
+    epochAtAcquire: { present: true, epoch: 3 },
+    expiresAt: new Date(Date.now() + 60000).toISOString(),
+  });
+
+  await withPoolDirEnv(dir, async () => {
+    const { resolveInstance } = await import("./vice-session.mjs");
+    const originalError = console.error;
+    let warned = false;
+    console.error = () => {
+      warned = true;
+    };
+    let result;
+    try {
+      result = resolveInstance({ sessionPath: sessionFile });
+    } finally {
+      console.error = originalError;
+    }
+    assert.equal(result.source, "session");
+    assert.equal(warned, false, "matching epochs must not produce any warning");
+  });
+});
+
+test("epoch continuity, warn-only: an ambiguous signal (only one side has evidence) warns but still proceeds, in both directions", async () => {
+  const dir = tmpPoolDir();
+  const sessionFile = join(dir, "session.json");
+
+  await withPoolDirEnv(dir, async () => {
+    const { resolveInstance } = await import("./vice-session.mjs");
+    const originalError = console.error;
+
+    // baseline present, current absent (supervisor stopped mid-session)
+    writeSessionFixture(sessionFile, {
+      port: 6821,
+      pooled: true,
+      epochAtAcquire: { present: true, epoch: 5 },
+      expiresAt: new Date(Date.now() + 60000).toISOString(),
+    });
+    let warnedA = false;
+    console.error = () => {
+      warnedA = true;
+    };
+    let resultA;
+    try {
+      resultA = resolveInstance({ sessionPath: sessionFile });
+    } finally {
+      console.error = originalError;
+    }
+    assert.equal(resultA.source, "session");
+    assert.equal(warnedA, true, "baseline-present/current-absent must warn");
+
+    // baseline absent, current present (a supervisor started mid-session)
+    const portB = 6822;
+    writeEpochFile(join(dir, String(portB), "epoch.json"), 1);
+    writeSessionFixture(sessionFile, {
+      port: portB,
+      pooled: true,
+      epochAtAcquire: { present: false, epoch: null },
+      expiresAt: new Date(Date.now() + 60000).toISOString(),
+    });
+    let warnedB = false;
+    console.error = () => {
+      warnedB = true;
+    };
+    let resultB;
+    try {
+      resultB = resolveInstance({ sessionPath: sessionFile });
+    } finally {
+      console.error = originalError;
+    }
+    assert.equal(resultB.source, "session");
+    assert.equal(warnedB, true, "baseline-absent/current-present must warn");
+  });
+});
+
+test("expired session refuses rather than silently falling back: a ping child exits non-zero and names both recovery verbs", async () => {
+  const dir = tmpPoolDir();
+  const sessionFile = join(dir, "session.json");
+  writeSessionFixture(sessionFile, {
+    port: 6823,
+    pooled: false,
+    epochAtAcquire: { present: false, epoch: null },
+    expiresAt: new Date(Date.now() - 1000).toISOString(),
+  });
+  const env = { ...process.env, VICE_POOL_DIR: dir, VICE_SESSION_FILE: sessionFile, VICE_MCP_TIMEOUT_MS: "5000" };
+
+  try {
+    await execFileP(process.execPath, [VICE_CLI, "ping"], { env });
+    assert.fail("expected ping to exit non-zero for an expired session");
+  } catch (e) {
+    assert.match(e.stderr, /session release/);
+    assert.match(e.stderr, /session acquire/);
+  }
+});
+
+test("VICE_MCP_URL beats a session file, with a stderr warning naming the session that was ignored", async () => {
+  const dir = tmpPoolDir();
+  const sessionFile = join(dir, "session.json");
+  writeSessionFixture(sessionFile, {
+    port: 6824,
+    pooled: false,
+    epochAtAcquire: { present: false, epoch: null },
+    expiresAt: new Date(Date.now() + 60000).toISOString(),
+    sessionId: "test-session-env-override",
+  });
+
+  await withPoolDirEnv(dir, async () => {
+    const prevUrl = process.env.VICE_MCP_URL;
+    process.env.VICE_MCP_URL = "http://127.0.0.1:1/mcp";
+    try {
+      const { resolveInstance } = await import("./vice-session.mjs");
+      const originalError = console.error;
+      let warning = "";
+      console.error = (msg) => {
+        warning += msg;
+      };
+      let result;
+      try {
+        result = resolveInstance({ sessionPath: sessionFile });
+      } finally {
+        console.error = originalError;
+      }
+      assert.equal(result.source, "env");
+      assert.match(warning, /VICE_MCP_URL/);
+      assert.match(warning, /test-session-env-override/);
+    } finally {
+      if (prevUrl === undefined) delete process.env.VICE_MCP_URL;
+      else process.env.VICE_MCP_URL = prevUrl;
+    }
+  });
+});
+
+test("tool listing marks the forbidden tool: a synthetic tools/list payload containing vice_disk_list renders it FORBIDDEN, never as a plain callable option, with no network reached", () => {
+  const payload = {
+    tools: [
+      { name: "vice_ping", description: "Ping the server" },
+      { name: "vice_disk_list", description: "List files on a disk" },
+    ],
+  };
+  const listing = formatToolsOutput(payload);
+  const diskListLine = listing.split("\n").find((l) => l.startsWith("vice_disk_list"));
+  assert.ok(diskListLine, "vice_disk_list must appear in the listing");
+  assert.match(diskListLine, /FORBIDDEN/);
+  assert.notEqual(diskListLine.trim(), "vice_disk_list", "must never be rendered as a bare, callable name");
+
+  const schemaView = formatToolsOutput(payload, { query: "vice_disk_list" });
+  assert.match(schemaView, /FORBIDDEN/);
+});
+
+test("tools <name> renders a matching tool's full input schema: parameter names, types, required-ness, enum and default", () => {
+  const payload = {
+    tools: [
+      {
+        name: "vice_memory_read",
+        description: "Read memory",
+        inputSchema: {
+          type: "object",
+          properties: {
+            address: { type: "string" },
+            size: { type: "number" },
+            bank: { type: "string", enum: ["ram", "rom"], default: "ram" },
+          },
+          required: ["address", "size"],
+        },
+      },
+    ],
+  };
+  const out = formatToolsOutput(payload, { query: "vice_memory_read" });
+  assert.match(out, /address: string \[required\]/);
+  assert.match(out, /size: number \[required\]/);
+  assert.match(out, /bank: string \[optional\].*enum: ram\|rom.*default: "ram"/);
 });
