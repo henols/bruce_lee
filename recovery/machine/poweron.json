@@ -1,7 +1,9 @@
 {
-  "sha256": "1e937f6370602e5e32f4e8865f2961285e7fc2a29f3c07861e47b19931e0cc47",
+  "sha256": "7ecdf6138920acefd52ea1738b2ef2f82a8e1155c06a772e9481f1785c7c427f",
   "bytes": 65536,
   "chunk_size": 4096,
-  "captured_at": "2026-07-30T15:32:54.603Z",
-  "server": null
+  "epoch": 3,
+  "captured_at": "2026-07-30T15:52:22.781Z",
+  "server": null,
+  "caveat": "Valid ONLY if captured as the first emulator action of this epoch. A hard reset does not restore pristine RAM once the machine has run (measured: 2551 bytes of drift between two mid-epoch baselines)."
 }

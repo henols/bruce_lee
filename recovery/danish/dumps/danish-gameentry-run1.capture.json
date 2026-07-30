@@ -14,7 +14,7 @@
   ],
   "chunk_size": 4096,
   "bytes_read": 65536,
-  "sha256": "c54189cdb7035014bdd12dce71e4859e122d8455a29a28574f68eb8e41ab00f5",
+  "sha256": "6e444cf1dedbc71b067365f47ec06af900374d74ea42a0dce491eb3b563d7f11",
   "snapshot_name": "danish_gameentry_run1",
   "snapshot_saved": false,
   "snapshot_note": "Snapshot with this name already exists. Use a different name or delete the existing one first.",
@@ -22,7 +22,7 @@
   "vice_server_version": "3.10",
   "machine": "C64SC",
   "video_standard": "PAL",
-  "captured_at": "2026-07-30T15:15:40.688Z",
+  "captured_at": "2026-07-30T15:55:02.307Z",
   "tool_version": "1.0.0",
   "ram_vs_rom_e000": {
     "ram": "4C00E34C06E34C9EE426D7AAE626D7AA",
