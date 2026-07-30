@@ -527,9 +527,37 @@ if (process.argv[1] && resolve(process.argv[1]) === SELF) {
   const [cmd, ...rest] = process.argv.slice(2);
 
   async function main() {
+    // Session resolution (D-1, D-5): this is the ONE place every CLI verb
+    // funnels through before touching the emulator, so `ping` and `call`
+    // transparently honour whatever `session acquire` set up in an earlier,
+    // separate Bash invocation. Loaded via a DYNAMIC import, not a static
+    // top-level one: tools/vice-session.mjs imports THIS file (useInstance,
+    // readEpoch), so a static import here would be a module cycle -- and
+    // more importantly, a static import would give every programmatic
+    // caller of vice.mjs's library surface (tools/recover.mjs, its test
+    // suite) an unwanted dependency on the pool/session layer, which must
+    // stay purely a CLI concern (D-6).
+    //
+    // Deliberately skipped for the `session` verb itself: resolveInstance()
+    // throws on an EXPIRED session, and if that happened unconditionally
+    // here, `session release` -- the one command that's supposed to fix an
+    // expired session -- would itself refuse to run. `session acquire` and
+    // `session status` read/write the session file directly and have no
+    // need for the redirect either.
+    let resolved = null;
+    if (cmd !== "session") {
+      const { resolveInstance } = await import("./vice-session.mjs");
+      resolved = resolveInstance();
+    }
+
     if (cmd === "ping") {
       const res = await call("vice_ping", {});
-      console.log(`VICE ${res.version} (${res.machine}) -- ${res.execution} [${activeInstance().url}]`);
+      const inst = activeInstance();
+      const sessionId = resolved?.session?.session_id;
+      console.log(
+        `VICE ${res.version} (${res.machine}) -- ${res.execution} [port ${inst.port}, ${inst.url}]` +
+          (sessionId ? ` (session ${sessionId})` : "")
+      );
       return;
     }
     if (cmd === "call") {
@@ -540,14 +568,52 @@ if (process.argv[1] && resolve(process.argv[1]) === SELF) {
       console.log(JSON.stringify(res, null, 2));
       return;
     }
+    if (cmd === "session") {
+      const { acquireSession, releaseSession, sessionStatus } = await import("./vice-session.mjs");
+      const sub = rest[0];
+      if (sub === "acquire") {
+        const ttlIdx = rest.indexOf("--ttl-min");
+        const ttlMin = ttlIdx !== -1 ? Number(rest[ttlIdx + 1]) : null;
+        const opts = Number.isFinite(ttlMin) ? { ttlMs: ttlMin * 60 * 1000 } : {};
+        const record = await acquireSession(opts);
+        console.log(
+          `session acquired: ${record.session_id} on port ${record.port} (${record.url})` +
+            `${record.pooled ? "" : " [default instance, not pooled]"}, expires ${record.expires_at}`
+        );
+        return;
+      }
+      if (sub === "release") {
+        const r = await releaseSession();
+        console.log(r.released ? `session released: ${r.sessionId}` : "no active session to release");
+        return;
+      }
+      if (sub === "status") {
+        const s = sessionStatus();
+        if (!s.present) {
+          console.log(`no active session (${s.reason})`);
+        } else {
+          console.log(
+            `session ${s.session_id}: port ${s.port} (${s.url})${s.pooled ? "" : " [default instance, not pooled]"}, ` +
+              `${s.expired ? "EXPIRED" : "active"}, expires ${s.expires_at}` +
+              (s.ttl_remaining_ms != null && !s.expired ? ` (${Math.round(s.ttl_remaining_ms / 1000)}s remaining)` : "")
+          );
+        }
+        return;
+      }
+      die("usage: session <acquire [--ttl-min N] | release | status>");
+    }
     console.log(`usage: node ${SELF} <command>
 
   ping                       print server version, machine, execution state
   call <tool> [json-args]    invoke any vice_* tool and print its JSON result
+  session acquire [--ttl-min N]   lease an instance and record it in a session file
+  session release                 free the active session's lease and delete its file
+  session status                  read-only report on the active session (no MCP call)
 
-active endpoint: ${activeInstance().url}
+active instance: port ${activeInstance().port} (${activeInstance().url})
 env: VICE_MCP_URL          override the MCP endpoint (default ${DEFAULT_ENDPOINT})
-     VICE_MCP_TIMEOUT_MS   per-request abort timeout in ms (default ${DEFAULT_TIMEOUT_MS})`);
+     VICE_MCP_TIMEOUT_MS   per-request abort timeout in ms (default ${DEFAULT_TIMEOUT_MS})
+     VICE_SESSION_FILE     session file location (default <repo>/.vice-supervisor/session.json)`);
     process.exit(cmd ? 1 : 0);
   }
 

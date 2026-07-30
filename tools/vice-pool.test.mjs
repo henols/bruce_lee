@@ -15,12 +15,16 @@ import { tmpdir, hostname } from "node:os";
 import { join } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { fileURLToPath } from "node:url";
 
 import { acquire, readRegistry, instanceFor, DEFAULT_PORT } from "./vice-pool.mjs";
 import { call, useInstance } from "./vice.mjs";
 
 const execFileP = promisify(execFile);
 const MODULE_URL = new URL("./vice-pool.mjs", import.meta.url).href;
+const VICE_SESSION_MODULE_URL = new URL("./vice-session.mjs", import.meta.url).href;
+const VICE_MODULE_URL = new URL("./vice.mjs", import.meta.url).href;
+const VICE_CLI = fileURLToPath(VICE_MODULE_URL);
 
 const tmpPoolDir = () => mkdtempSync(join(tmpdir(), "vice-pool-"));
 
@@ -326,4 +330,230 @@ test("cross-process exclusivity: 8 concurrent racers against a 2-port registry p
 test("deny-list survives redirection: call('vice_disk_list') after useInstance() still rejects with the permanently-forbidden message, before any network request", async () => {
   useInstance({ port: 9999, url: "http://127.0.0.1:9999/mcp", epochFile: "/tmp/does-not-matter" });
   await assert.rejects(call("vice_disk_list", {}), /permanently forbidden/);
+});
+
+// ============================================================================
+// Session layer (D-1, D-2, quick-260730-nh5): tools/vice-session.mjs's
+// `kind:"session"` pool lease, driven end-to-end through `tools/vice.mjs`'s
+// CLI. Every test drives a temp VICE_POOL_DIR (a synthetic registry, no host
+// launcher) and a temp VICE_SESSION_FILE -- no emulator involved anywhere in
+// this section.
+// ============================================================================
+
+test("session cross-process survival (D-1, THE load-bearing test): a session acquired in one child process is visible to a second, separate child process sharing only env", async () => {
+  const dir = tmpPoolDir();
+  writeRegistry(dir, [6810]);
+  const sessionFile = join(dir, "session.json");
+  const env = { ...process.env, VICE_POOL_DIR: dir, VICE_SESSION_FILE: sessionFile };
+
+  const { stdout: acquireOut } = await execFileP(process.execPath, [VICE_CLI, "session", "acquire"], { env });
+  const acquireMatch = acquireOut.match(/session acquired: (\S+) on port (\d+)/);
+  assert.ok(acquireMatch, `unexpected acquire output: ${acquireOut}`);
+  const [, sessionId, port] = acquireMatch;
+  assert.equal(port, "6810");
+
+  // A SEPARATE child process, sharing only VICE_POOL_DIR/VICE_SESSION_FILE in
+  // env -- nothing an `export` inside the first child could have carried.
+  const { stdout: statusOut } = await execFileP(process.execPath, [VICE_CLI, "session", "status"], { env });
+  assert.match(statusOut, new RegExp(`session ${sessionId}: port ${port}`));
+
+  await execFileP(process.execPath, [VICE_CLI, "session", "release"], { env });
+});
+
+test("session lease survives its creator's exit: the lease file remains after the acquiring child exits, decodes with kind:session and a parseable expires_at", async () => {
+  const dir = tmpPoolDir();
+  writeRegistry(dir, [6811]);
+  const sessionFile = join(dir, "session.json");
+  const env = { ...process.env, VICE_POOL_DIR: dir, VICE_SESSION_FILE: sessionFile };
+
+  await execFileP(process.execPath, [VICE_CLI, "session", "acquire"], { env });
+
+  const lp = leasePathOf(dir, 6811);
+  assert.equal(existsSync(lp), true, "lease file must still exist after the acquiring process exited");
+  const rec = JSON.parse(readFileSync(lp, "utf8"));
+  assert.equal(rec.kind, "session");
+  assert.ok(Number.isFinite(Date.parse(rec.expires_at)), "expires_at must be a parseable date");
+
+  await execFileP(process.execPath, [VICE_CLI, "session", "release"], { env });
+});
+
+test("a second acquire() cannot take a port held by a live session lease -- session and process leases share one lease namespace", async () => {
+  const dir = tmpPoolDir();
+  writeRegistry(dir, [6812]);
+  const l = await acquire({ dir, kind: "session", ttlMs: 60000 });
+  assert.equal(l.pooled, true);
+  await assert.rejects(acquire({ dir, timeoutMs: 0 }), /6812/);
+  await l.release();
+});
+
+test("session lease is NOT pid-reclaimable (D-2): a confirmably-dead holder_pid does not free it, but the same fixture with kind omitted (a process lease) is reclaimed", async () => {
+  const dir = tmpPoolDir();
+  writeRegistry(dir, [6813]);
+  const { stdout } = await execFileP(process.execPath, ["-e", "console.log(process.pid)"]);
+  const deadPid = Number(stdout.trim());
+  mkdirSync(leasesDirOf(dir), { recursive: true });
+
+  const sessionRec = {
+    port: 6813,
+    holder_pid: deadPid,
+    holder_host: hostname(),
+    token: "dead-pid-session-token",
+    acquired_at: new Date().toISOString(),
+    argv: "test",
+    kind: "session",
+    expires_at: new Date(Date.now() + 60000).toISOString(),
+  };
+  writeFileSync(leasePathOf(dir, 6813), JSON.stringify(sessionRec));
+  await assert.rejects(acquire({ dir, timeoutMs: 0 }), /6813/, "a session lease must not be pid-reclaimed");
+
+  const processRec = { ...sessionRec, token: "dead-pid-process-token" };
+  delete processRec.kind;
+  delete processRec.expires_at;
+  writeFileSync(leasePathOf(dir, 6813), JSON.stringify(processRec));
+  const l = await acquire({ dir, timeoutMs: 0 });
+  assert.equal(l.port, 6813, "the same dead-pid fixture as a plain process lease must still be pid-reclaimed");
+  await l.release();
+});
+
+test("session lease outlives maxLeaseAgeMs: a two-hour-old but unexpired session lease is not stolen by the age-based reclaim rule", async () => {
+  const dir = tmpPoolDir();
+  writeRegistry(dir, [6814]);
+  mkdirSync(leasesDirOf(dir), { recursive: true });
+  writeFileSync(
+    leasePathOf(dir, 6814),
+    JSON.stringify({
+      port: 6814,
+      holder_pid: process.pid,
+      holder_host: hostname(),
+      token: "long-session-token",
+      acquired_at: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+      argv: "test",
+      kind: "session",
+      expires_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+    })
+  );
+  await assert.rejects(acquire({ dir, timeoutMs: 0, maxLeaseAgeMs: 1000 }), /6814/);
+});
+
+test("expired session lease IS reclaimed: acquire() succeeds once expires_at has passed", async () => {
+  const dir = tmpPoolDir();
+  writeRegistry(dir, [6815]);
+  mkdirSync(leasesDirOf(dir), { recursive: true });
+  writeFileSync(
+    leasePathOf(dir, 6815),
+    JSON.stringify({
+      port: 6815,
+      holder_pid: process.pid,
+      holder_host: hostname(),
+      token: "expired-session-token",
+      acquired_at: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+      argv: "test",
+      kind: "session",
+      expires_at: new Date(Date.now() - 1000).toISOString(),
+    })
+  );
+  const l = await acquire({ dir, timeoutMs: 0 });
+  assert.equal(l.port, 6815);
+  await l.release();
+});
+
+test("malformed session lease (kind session, unparseable expires_at) is reclaimed with a stderr warning, not wedged forever", async () => {
+  const dir = tmpPoolDir();
+  writeRegistry(dir, [6816]);
+  mkdirSync(leasesDirOf(dir), { recursive: true });
+  writeFileSync(
+    leasePathOf(dir, 6816),
+    JSON.stringify({
+      port: 6816,
+      holder_pid: process.pid,
+      holder_host: hostname(),
+      token: "malformed-session-token",
+      acquired_at: new Date().toISOString(),
+      argv: "test",
+      kind: "session",
+      expires_at: "not-a-date",
+    })
+  );
+  const originalError = console.error;
+  let warned = false;
+  console.error = (...args) => {
+    warned = true;
+    originalError.apply(console, args);
+  };
+  let l;
+  try {
+    l = await acquire({ dir, timeoutMs: 0 });
+  } finally {
+    console.error = originalError;
+  }
+  assert.equal(l.port, 6816);
+  assert.equal(warned, true, "a malformed session lease must warn on stderr, not silently wedge the port");
+  await l.release();
+});
+
+test("no session file at all: resolveInstance() leaves the default port 6510 active and writes no lease anywhere (D-1, hard requirement)", async () => {
+  const dir = tmpPoolDir();
+  const sessionFile = join(dir, "does-not-exist", "session.json");
+  const src = `
+    import { resolveInstance } from ${JSON.stringify(VICE_SESSION_MODULE_URL)};
+    import { activeInstance } from ${JSON.stringify(VICE_MODULE_URL)};
+    resolveInstance();
+    console.log(JSON.stringify(activeInstance()));
+  `;
+  const { stdout } = await execFileP(process.execPath, ["--input-type=module", "-e", src], {
+    env: { ...process.env, VICE_POOL_DIR: dir, VICE_SESSION_FILE: sessionFile },
+  });
+  const lines = stdout.trim().split("\n").filter(Boolean);
+  const inst = JSON.parse(lines[lines.length - 1]);
+  assert.equal(inst.port, DEFAULT_PORT);
+  assert.equal(inst.pooled, false);
+  assert.equal(existsSync(leasesDirOf(dir)), false, "no session file -- must not even create a leases dir");
+});
+
+test("session release frees the port: after the release child exits, both the lease file and the session file are gone", async () => {
+  const dir = tmpPoolDir();
+  writeRegistry(dir, [6817]);
+  const sessionFile = join(dir, "session.json");
+  const env = { ...process.env, VICE_POOL_DIR: dir, VICE_SESSION_FILE: sessionFile };
+
+  await execFileP(process.execPath, [VICE_CLI, "session", "acquire"], { env });
+  assert.equal(existsSync(sessionFile), true);
+  assert.equal(existsSync(leasePathOf(dir, 6817)), true);
+
+  await execFileP(process.execPath, [VICE_CLI, "session", "release"], { env });
+  assert.equal(existsSync(sessionFile), false);
+  assert.equal(existsSync(leasePathOf(dir, 6817)), false);
+});
+
+test("untrusted session file (T-nh5-01): a string or negative port is reported unusable; a traversal epoch_file is never opened -- the epoch path used is derived from the validated port only", async () => {
+  const dir = tmpPoolDir();
+  const sessionFile = join(dir, "session.json");
+  const { readSession } = await import("./vice-session.mjs");
+
+  for (const bad of [
+    JSON.stringify({ session_id: "x", port: "6510", expires_at: new Date().toISOString() }),
+    JSON.stringify({ session_id: "x", port: -1, expires_at: new Date().toISOString() }),
+    JSON.stringify({ session_id: "x", port: 999999, expires_at: new Date().toISOString() }),
+    "not valid json {{{",
+  ]) {
+    writeFileSync(sessionFile, bad);
+    const s = readSession(sessionFile);
+    assert.equal(s.present, false, `expected present:false for: ${bad}`);
+  }
+
+  writeFileSync(
+    sessionFile,
+    JSON.stringify({
+      session_id: "y",
+      port: 6818,
+      expires_at: new Date(Date.now() + 60000).toISOString(),
+      pooled: true,
+      epoch_file: "../../../etc/passwd",
+    })
+  );
+  const s2 = readSession(sessionFile);
+  assert.equal(s2.present, true);
+  assert.equal(s2.port, 6818);
+  assert.ok(!s2.epochFile.includes("etc/passwd"), "the hostile epoch_file string must never be opened or reflected");
+  assert.ok(s2.epochFile.includes("6818"), "the epoch path actually used must be derived from the validated port");
 });

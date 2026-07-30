@@ -1026,6 +1026,17 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
    * execute on the same machine for the epoch identity check
    * (assertSameMachine) to mean anything. Released in `finally` so it runs
    * whether the verb succeeded, threw, or merely set process.exitCode.
+   *
+   * This is deliberately a DEFAULT `kind:"process"` lease (see
+   * `vice-pool.mjs`'s `acquire()`), with pid-based reclaim in
+   * `isReclaimable()`, because its holder is ONE long-running process that
+   * lives for the entire verb -- if this process dies mid-`recover`, its pid
+   * is confirmably gone and the lease should free up. That is the opposite
+   * situation from `tools/vice.mjs session acquire` (D-2): an interactive
+   * session's holder process EXITS the instant the acquire command returns,
+   * so pid-liveness would reclaim it immediately; a session is therefore a
+   * `kind:"session"` lease, reclaimed by TTL expiry only, never by pid.
+   * Cross-reference `isReclaimable()` for where both rules are enforced.
    */
   async function main() {
     const lease = await acquire();

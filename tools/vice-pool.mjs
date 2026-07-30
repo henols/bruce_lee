@@ -18,6 +18,15 @@
 // a no-op release(): exactly today's behaviour with zero configuration, and
 // explicitly not an error (D-3).
 //
+// Also carries a SECOND lease kind for `tools/vice-session.mjs` (D-1, D-2):
+// acquire({kind:"session", ttlMs}) leases a port exactly like a `"process"`
+// lease, but the resulting record is reclaimed on TTL expiry only, never on
+// its holder process's pid dying or exiting -- because a session's holder is
+// a short-lived CLI invocation that exits the instant `session acquire`
+// returns, unlike a process lease's holder, which lives for the whole verb.
+// See isReclaimable()'s session branch and acquire()'s own doc comment below
+// for the two places this distinction is enforced.
+//
 // POLICY: blocking-with-timeout (chosen over fail-fast or wait-forever). A
 // capture run is long and `reproduce` is two of them back to back, so
 // failing the instant every port is busy would make routine work flaky; but
@@ -38,7 +47,7 @@
 // guidance tools/vice.mjs already produces. Do not "fix" this by adding a
 // container-side pid check that appears to work against a supervisor pid --
 // it does not check what it looks like it checks.
-import { readFileSync, writeFileSync, unlinkSync, mkdirSync, linkSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, unlinkSync, mkdirSync, linkSync, renameSync, existsSync } from "node:fs";
 import { hostname } from "node:os";
 import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -140,6 +149,9 @@ const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
  * Treats the lease file as untrusted, exactly like registry.json:
  *   - unparseable / not an object -> reclaim (a malformed file must not wedge
  *     a port forever; the caller logs a loud warning).
+ *   - a SESSION lease (rec.kind === "session") -> decided FIRST, before either
+ *     branch below, and by a completely different rule (D-2). See the
+ *     dedicated comment just above that branch for why.
  *   - older than maxLeaseAgeMs -> reclaim, regardless of host or pid.
  *   - holder_host equals THIS host AND the pid is confirmably gone
  *     (process.kill(pid, 0) throws ESRCH) -> reclaim.
@@ -166,6 +178,34 @@ function isReclaimable(lp, maxLeaseAgeMs) {
   if (rec === null || typeof rec !== "object") {
     return { reclaim: true, reason: "lease file did not decode to an object" };
   }
+
+  // SESSION LEASES (D-2) -- evaluated BEFORE the age branch and BEFORE the pid
+  // branch below, deliberately. A session's holder is a short-lived
+  // `node tools/vice.mjs session acquire` process that EXITS the instant the
+  // command returns -- its pid is gone within milliseconds of a successful
+  // acquire, so pid-liveness would reclaim a live, actively-used session out
+  // from under itself almost immediately. maxLeaseAgeMs is wrong for the same
+  // reason: a session held open for a long working day is not stale just
+  // because it is old, as long as it is still being refreshed on use (see
+  // vice-session.mjs's resolveInstance()). TTL expiry is therefore the ONLY
+  // reclaim signal for a session lease: reclaim once expires_at has passed,
+  // or immediately (with a warning) if expires_at is missing or unparseable,
+  // so a malformed session record cannot wedge a port forever either.
+  if (rec.kind === "session") {
+    const expiresAtMs = Date.parse(rec.expires_at);
+    if (!Number.isFinite(expiresAtMs)) {
+      return { reclaim: true, reason: "session lease has a missing or unparseable expires_at" };
+    }
+    if (Date.now() >= expiresAtMs) {
+      return { reclaim: true, reason: `session lease expired at ${rec.expires_at}` };
+    }
+    return { reclaim: false };
+  }
+
+  // Process lease -- today's rules, verbatim (see tools/recover.mjs's own
+  // lease-acquisition comment for why pid-based reclaim is the right rule for
+  // THIS kind: its holder is one long-running process that lives for the
+  // whole verb, unlike a session's holder, which exits between commands).
   const acquiredAtMs = Date.parse(rec.acquired_at);
   if (Number.isFinite(acquiredAtMs) && Date.now() - acquiredAtMs > maxLeaseAgeMs) {
     return { reclaim: true, reason: `lease older than maxLeaseAgeMs (${maxLeaseAgeMs}ms)` };
@@ -209,8 +249,13 @@ function describeHolder(port, dir) {
  * reaper won and this call reports busy for this round rather than looping.
  * Returns `{ token }` on success, or null (occupied -- caller tries the next
  * port, or the next poll cycle).
+ *
+ * `kind` ("process", the default, or "session") and `ttlMs` are written
+ * straight into the lease record so isReclaimable() above can tell the two
+ * schemes apart from the file alone -- a session lease carries `expires_at`
+ * (now + ttlMs); a process lease carries neither field.
  */
-function tryAcquirePort(port, dir, holderPid, argv, maxLeaseAgeMs) {
+function tryAcquirePort(port, dir, holderPid, argv, maxLeaseAgeMs, kind = "process", ttlMs = null) {
   mkdirSync(leasesDir(dir), { recursive: true });
   const lp = leasePath(port, dir);
   const token = randomUUID();
@@ -221,6 +266,8 @@ function tryAcquirePort(port, dir, holderPid, argv, maxLeaseAgeMs) {
     token,
     acquired_at: new Date().toISOString(),
     argv,
+    kind,
+    expires_at: kind === "session" ? new Date(Date.now() + ttlMs).toISOString() : null,
   };
   const tmp = join(leasesDir(dir), `.tmp-${process.pid}-${token}`);
   writeFileSync(tmp, JSON.stringify(record, null, 2) + "\n");
@@ -256,6 +303,64 @@ function tryAcquirePort(port, dir, holderPid, argv, maxLeaseAgeMs) {
   // Another reaper won the retry -- treat as busy for this round.
   try { unlinkSync(tmp); } catch { /* best effort */ }
   return null;
+}
+
+/**
+ * Release the lease at `leasePath` iff its on-disk token still matches
+ * `token` (T-mef-04 / T-nh5-04): a lease that was reclaimed and reacquired by
+ * someone else now carries a DIFFERENT token, and deleting it anyway would
+ * steal a live lease out from under its legitimate new holder. Returns
+ * `true` if this call actually removed the file, `false` for every other
+ * case (mismatch, already gone, unreadable) -- all of which are treated as
+ * an idempotent no-op, never an error, because "release something that's
+ * already released" is the expected shape of both a double-release and a
+ * post-reclaim release.
+ *
+ * The `acquire()` lease's own `release()` closure below delegates to this
+ * function so there is exactly one implementation of "release by token" --
+ * previously that logic lived only inline in the closure, which is fine for
+ * an in-process release but useless to `tools/vice-session.mjs`, whose
+ * `session release` runs as a BRAND NEW process with no closure to call.
+ */
+export function releaseLeaseByToken(leasePath, token) {
+  try {
+    const rec = JSON.parse(readFileSync(leasePath, "utf8"));
+    if (rec.token !== token) return false;
+    unlinkSync(leasePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Push `expires_at` forward to `now + ttlMs` for the lease at `leasePath`,
+ * iff its on-disk token still matches `token` (T-nh5-04 -- same reasoning as
+ * releaseLeaseByToken above: refreshing a reclaimed-and-reacquired lease
+ * would extend someone ELSE's lease under this caller's belief that it's
+ * still theirs). Writes via a temp-file-plus-rename so a concurrent reader
+ * (isReclaimable's readFileSync, or another refresh) never observes a
+ * partially-written record. Returns `true` on a real refresh, `false` (and
+ * the file left byte-identical) on any token mismatch or read failure.
+ *
+ * This is the cross-process half of D-2's "TTL refreshed on each use":
+ * `tools/vice-session.mjs`'s `resolveInstance()` calls this on every CLI
+ * invocation that successfully resolves an active session, so a session in
+ * continuous use never approaches its own `expires_at`.
+ */
+export function refreshLease(leasePath, token, ttlMs) {
+  let rec;
+  try {
+    rec = JSON.parse(readFileSync(leasePath, "utf8"));
+  } catch {
+    return false;
+  }
+  if (rec.token !== token) return false;
+  const updated = { ...rec, expires_at: new Date(Date.now() + ttlMs).toISOString() };
+  const tmp = `${leasePath}.tmp-${process.pid}-${randomUUID()}`;
+  writeFileSync(tmp, JSON.stringify(updated, null, 2) + "\n");
+  renameSync(tmp, leasePath);
+  return true;
 }
 
 // -------------------------------------------------------- crash-safety net
@@ -299,6 +404,18 @@ function ensureExitHandlers() {
  * `pollMs`, reclaiming stale leases as it goes, until one is free or
  * `timeoutMs` elapses (`timeoutMs: 0` fails on the first pass, immediately).
  * A busy instance is never returned.
+ *
+ * `kind` (default `"process"`, today's meaning) and `ttlMs` are D-2/D-1
+ * additions for `tools/vice-session.mjs`'s `session acquire`. When `kind` is
+ * `"session"`, the returned lease is DELIBERATELY NOT added to
+ * `pendingLeases` and does NOT register the exit handlers below -- a session
+ * is supposed to outlive the process that created it (that's the entire
+ * distinction from a process lease); adding it to the exit-cleanup set would
+ * release the lease the instant this `acquire()` call returns and the CLI
+ * process exits, destroying every session before its caller could ever use
+ * it. TTL expiry (isReclaimable's session branch, above) is the only reclaim
+ * mechanism for a session lease -- see that function's comment for the full
+ * reasoning.
  */
 export async function acquire({
   dir = poolDir(),
@@ -306,11 +423,13 @@ export async function acquire({
   timeoutMs = Number(process.env.VICE_POOL_ACQUIRE_TIMEOUT_MS || 120000),
   pollMs = 500,
   maxLeaseAgeMs = Number(process.env.VICE_POOL_LEASE_MAX_AGE_MS || 3600000),
+  kind = "process",
+  ttlMs = null,
 } = {}) {
   const reg = readRegistry(registryPath(dir));
   if (!reg.present || reg.ports.length === 0) {
     const inst = defaultInstance(dir);
-    return { ...inst, pooled: false, leasePath: null, release: async () => {} };
+    return { ...inst, pooled: false, leasePath: null, token: null, release: async () => {} };
   }
 
   const candidates = [...reg.ports].sort((a, b) => b - a); // descending
@@ -318,36 +437,32 @@ export async function acquire({
 
   while (true) {
     for (const port of candidates) {
-      const result = tryAcquirePort(port, dir, process.pid, argv, maxLeaseAgeMs);
+      const result = tryAcquirePort(port, dir, process.pid, argv, maxLeaseAgeMs, kind, ttlMs);
       if (result == null) continue; // occupied -- try the next candidate port
 
       const inst = instanceFor(port, dir);
       const lp = leasePath(port, dir);
       const entry = { leasePath: lp, token: result.token };
-      pendingLeases.add(entry);
-      ensureExitHandlers();
+      if (kind !== "session") {
+        // Process-lease-only crash-safety net -- see the trap explained in
+        // this function's own doc comment just above: registering a session
+        // lease here would auto-release it the moment `session acquire`'s
+        // short-lived process exits.
+        pendingLeases.add(entry);
+        ensureExitHandlers();
+      }
 
       let released = false;
       return {
         ...inst,
         pooled: true,
         leasePath: lp,
+        token: result.token,
         release: async () => {
           if (released) return;
           released = true;
           pendingLeases.delete(entry);
-          try {
-            const rec = JSON.parse(readFileSync(lp, "utf8"));
-            // Token check (T-mef-04): if this lease was reaped and
-            // reacquired by someone else, the on-disk token is now theirs --
-            // deleting it would steal a live lease out from under its
-            // legitimate holder.
-            if (rec.token === result.token) unlinkSync(lp);
-          } catch {
-            // lease already gone or unreadable -- nothing to do, and nothing
-            // to warn about: this is the expected shape of an idempotent or
-            // already-reclaimed release.
-          }
+          releaseLeaseByToken(lp, result.token);
         },
       };
     }
