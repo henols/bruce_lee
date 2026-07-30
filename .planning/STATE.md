@@ -6,9 +6,9 @@ current_phase: 01
 current_phase_name: recovery-provenance
 status: executing
 stopped_at: Phase 1 context gathered
-last_updated: "2026-07-30T12:45:53.920Z"
+last_updated: "2026-07-30T14:44:28.000Z"
 last_activity: 2026-07-30
-last_activity_desc: Phase 01 execution started
+last_activity_desc: quick-260730-jty — host-side VICE supervisor + restart detection added
 progress:
   total_phases: 1
   completed_phases: 0
@@ -33,7 +33,7 @@ Milestone: v1.0 — Pipeline Proven (Phases 1–4 of 7 total)
 Phase: 01 (recovery-provenance) — EXECUTING
 Plan: 1 of 6
 Status: Executing Phase 01
-Last activity: 2026-07-30 — Phase 01 execution started
+Last activity: 2026-07-30 — Completed quick task 260730-jty: host-side VICE crash supervision + container-side restart detection
 
 Progress (v1.0): [░░░░░░░░░░] 0% — 0/20 plans
 Progress (overall): [░░░░░░░░░░] 0% — 0/35 plans
@@ -84,6 +84,7 @@ None yet.
 - **[Phase 1, 2026-07-30]: keypress delivery — three mechanisms measured, only one works.** `vice_keyboard_type` is invisible to the crack (it polls `$DC00/$DC01` directly). `vice_execution_run` + a wall-clock sleep *does* deliver the key but the release lands on a different CPU cycle each run — measured as **264 of 65536 bytes differing**, including `$0049`, the exact byte the trigger routine reads, plus the whole stack page. `vice_execution_step(fixed count)` is cycle-identical but **never delivers a held matrix key** (machine sat at `$0900` for 150 s). **Working design: press at the gate, HOLD, release at the trigger checkpoint** — a program event, so the same cycle every run, and the dump has no key held in CIA state.
 - **[Phase 1, 2026-07-30]: VICE power-on RAM init is DETERMINISTIC** — two cold `machine_reset(hard, run_after:false)` cycles read byte-identical 64K (`8175cd4d…`, 0 bytes differing). This **refutes** "scattered single-bit diffs are emulator DRAM noise" and means any dump mismatch is *our* nondeterminism, hence fixable. Useful as a control experiment whenever a diff looks like hardware randomness.
 - **[HAZARD CANDIDATE — Phase 1, 2026-07-30]: earlier hypothesis, now WEAKENED.** The first two crashes both happened during checkpoint + `vice_run_until` work, suggesting `run_until`'s competing `temporary` checkpoint (two live checkpoints at `$08B1`, one `temporary`, were observed) was the trigger. Outages 3–6 happened with `run_until` already removed, so it is **not** the sole cause. `capture()` still avoids `run_until` (an armed checkpoint plus one resume is simpler and equally signal-based), and `reset()` still skips `temporary` checkpoints and tolerates delete/detach failures — but do not treat `run_until` as the explanation. `vice_disk_list` was never called either time. Leading suspects, in order: (1) `vice_run_until` creates its **own `temporary` checkpoint** at the target address — two live checkpoints at `$08B1` (one `temporary`) were observed after a failed attempt, so arming a permanent checkpoint *and* calling `run_until` on the same address (which plan 01-01 explicitly instructs as "belt and suspenders") may be the trigger; (2) `vice_checkpoint_delete` on an already-auto-reaped `temporary` id. Mitigations now in code: `capture()` no longer calls `run_until` at all (armed checkpoint + `execution_run` only — still a signal, not a duration), and `reset()` skips `temporary` checkpoints and tolerates delete/detach failures. **Unconfirmed — treat as a hypothesis with two supporting data points, not a diagnosis.**
+- **[quick-260730-jty, 2026-07-30]: host-side VICE crash supervision now exists (`tools/vice-supervisor.sh`, HOST-ONLY — run it from the host workspace, never in this container).** It respawns x64sc on crash with backoff and a crash-loop give-up threshold, and collects per-crash evidence under `.vice-supervisor/` (a timestamped log with x64sc's stderr plus decoded exit status/signal per death, and a `crashes.log` line per death) — this is the evidence trail for the still-unconfirmed `vice_run_until` / `vice_execution_run` hypothesis in the HAZARD CANDIDATE entry above, not a replacement for it. Critically, supervision alone would have been a *regression*: `withReconnect()` in `tools/vice.mjs` retries transport failures, and under a respawning supervisor that retry can start SUCCEEDING again against a brand-new, blank machine (no disk attached, no checkpoints armed) instead of the one a capture actually started with. The harness now detects this: every spawn writes a monotonically increasing "epoch" to `.vice-supervisor/epoch.json`, `tools/vice.mjs` reads it back (`readEpoch()`/`assertSameMachine()`), and `tools/recover.mjs` voids (renames to `*.VOID-<timestamp>` plus a sibling `.VOID.json` evidence note) any capture whose emulator identity changed — or could not be proven unchanged, via a checkpoint-presence fallback when no supervisor is running — rather than silently writing a dump from a fresh blank machine. Nothing is auto-reset, auto-rebooted or auto-resumed after a detected restart; the operator re-runs the capture. Absence of the epoch file (no supervisor running) remains completely normal and non-fatal.
 - **[Phase 1, 2026-07-30]: boot sequence established for `danish.d64`** — `vice_disk_attach` + `vice_autostart` leave the CPU **halted** (`reset` uses `run_after:false`), so `vice_execution_run` is mandatory or no loader code executes at all. The cracktro polls `$DC00/$DC01` **directly**, so `vice_keyboard_type` is invisible to it; the "hit any key" gate at `$0900` needs `vice_keyboard_matrix`. Gates are stored per-release in `recovery/RELEASES.json` (`boot.gates`), never in tool control flow.
 - **[Phase 1, 2026-07-30]: dump trigger located — `$08B1`**, the title-screen input dispatcher (`LDA $49 / ORA $4A / BNE / JMP $0531`, then `JSR $139E` which reads `$DC00 AND $DC01`). Distinct from the loader's own `$0900` poll. Full evidence narrative is in `recovery/RELEASES.json` → `danish.trigger.how_located`. A bare `vice_execution_pause` is **nondeterministic** (the title screen is IRQ-driven — `$FF41` appears in the backtrace), so only a checkpoint gives a re-armable stop point.
 - **[Phase 1, 2026-07-30]: Tier-1 provenance evidence captured** — the cracktro screen reads "Danish Crackers Presents BRUCE LEE", scroller includes release id **DC-011/P**, sign-off reads "They make'em, We break'em." This **corroborates the CSDb record** found during research from an independent source (the artifact itself). The post-cracktro title screen is Datasoft's original and unmodified ("DATASOFT PRESENTS / BRUCE LEE (TM) / BY RON J FORTIER"). Recorded in `RELEASES.json` → `danish.tier1_evidence`; feeds RECOVER-07 in plan 01-06.
@@ -99,6 +100,12 @@ None yet.
 - [Phase 3]: `.d64` writing tool unresolved (`c1541` standalone vs custom writer). If a `.prg` cannot be injected directly over MCP, this becomes a hard blocker on Phase 4, not Phase 7.
 - [All phases]: VICE is a single shared host instance. `parallelization: true` does not extend to emulator work — plans marked parallel are parallel in authoring; their VICE steps serialise.
 - [Phase 5/6]: `src/zeropage.a` and `src/main.a` are the highest-fan-in files. Parallel plans must not edit them concurrently; each phase's first plan allocates them for the whole phase.
+
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 260730-jty | Add host-side VICE crash supervision and container-side restart detection | 2026-07-30 | 6694cb1 | [260730-jty-add-host-side-vice-crash-supervision-and](./quick/260730-jty-add-host-side-vice-crash-supervision-and/) |
 
 ## Deferred Items
 
