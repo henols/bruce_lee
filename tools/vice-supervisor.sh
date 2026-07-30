@@ -20,11 +20,11 @@
 # session (see .planning/STATE.md's HOST INSTABILITY entry). Each death
 # hard-blocked every emulator task until a human noticed and restarted x64sc
 # by hand. This script respawns it automatically -- but respawning alone
-# would be a regression: tools/vice.mjs's withReconnect() retries transport
+# would be a regression: .claude/skills/vice-session/vice.mjs's withReconnect() retries transport
 # failures and would start SUCCEEDING against a brand-new, blank machine with
 # no disk attached and no checkpoints armed. That is why every spawn here
 # writes an "epoch" -- a monotonically increasing counter -- to a JSON file
-# that tools/vice.mjs's readEpoch() reads from the container side, so the
+# that .claude/skills/vice-session/vice.mjs's readEpoch() reads from the container side, so the
 # harness can tell "the emulator restarted out from under me" apart from "the
 # emulator has been running the whole time".
 set -euo pipefail
@@ -45,7 +45,7 @@ usage: tools/vice-supervisor.sh [--dry-run] [--check-container] [--print-paths] 
 
 HOST-ONLY. Launches and supervises x64sc's MCP server, restarting it on
 crash with backoff, collecting crash evidence, and recording a restart
-"epoch" that the container-side harness (tools/vice.mjs's readEpoch()) uses
+"epoch" that the container-side harness (.claude/skills/vice-session/vice.mjs's readEpoch()) uses
 to detect that a restart happened.
 
   --dry-run     Write exactly one epoch record (dry_run: true) and exit
@@ -208,7 +208,7 @@ echo "vice-supervisor: resolved command: $VICE_BIN ${VICE_ARGS_ARR[*]}"
 echo "vice-supervisor: supervisor dir:   $VICE_SUPERVISOR_DIR"
 echo "vice-supervisor: epoch file:       $EPOCH_FILE"
 echo "vice-supervisor: log dir:          $LOG_DIR"
-echo "vice-supervisor: the container-side harness (tools/vice.mjs's readEpoch())"
+echo "vice-supervisor: the container-side harness (.claude/skills/vice-session/vice.mjs's readEpoch())"
 echo "vice-supervisor: reads epoch.json over the bind mount to detect restarts."
 
 # ---------------------------------------------------------------- json helpers
@@ -241,7 +241,8 @@ json_string_array() {
 # rather than at the call site: this is intentionally lenient parsing of a
 # file that is, from this script's own perspective, its own prior output --
 # the untrusted-input hardening belongs to the container side's readEpoch(),
-# which treats this same file as attacker-adjacent input (see vice.mjs).
+# which treats this same file as attacker-adjacent input (see
+# .claude/skills/vice-session/vice.mjs).
 read_prev_epoch() {
   local prev="0"
   if [ -f "$EPOCH_FILE" ]; then

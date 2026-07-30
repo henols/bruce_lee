@@ -9,7 +9,7 @@
 # supervises ONE x64sc instance on one port. This script launches N of them
 # in parallel, each its own supervised instance with its own port, supervisor
 # dir (epoch file, logs, crash log), and coordinates with container-side
-# code (tools/vice-pool.mjs) via a registry.json file written on the same
+# code (.claude/skills/vice-session/vice-pool.mjs) via a registry.json file written on the same
 # bind mount tools/vice-supervisor.sh's epoch.json already uses (D-2) --
 # deliberately NOT a new port, socket, or IPC mechanism.
 #
@@ -44,7 +44,7 @@ usage: tools/vice-pool.sh <start [N] [--dry-run] | stop | status> [--help|-h] [-
 
 HOST-ONLY. Launches, tracks, and tears down N supervised x64sc MCP instances
 in parallel (D-1), coordinating with container-side harness code
-(tools/vice-pool.mjs) over a registry.json file on the shared bind mount
+(.claude/skills/vice-session/vice-pool.mjs) over a registry.json file on the shared bind mount
 (D-2) -- the same channel tools/vice-supervisor.sh's epoch.json already
 uses. \`.mcp.json\` is not touched: instance 0 is always the default port
 (6510), so the existing single-instance workflow keeps working untouched
