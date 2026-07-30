@@ -32,9 +32,16 @@ set -euo pipefail
 SELF_PATH="${BASH_SOURCE[0]}"
 REPO_ROOT="$(cd "$(dirname "$SELF_PATH")/.." && pwd)"
 
+# Hoisted here, ABOVE the container guard below, so --print-paths (which must
+# run before the guard -- see that check below) can report the value this
+# script would really use without duplicating the default. See the
+# "configuration" block further down for the rest of the overridable knobs;
+# this is the one the guard-free --print-paths path also needs.
+VICE_SUPERVISOR_DIR="${VICE_SUPERVISOR_DIR:-$REPO_ROOT/.vice-supervisor}"
+
 usage() {
   cat <<USAGE
-usage: tools/vice-supervisor.sh [--dry-run] [--check-container] [--help|-h]
+usage: tools/vice-supervisor.sh [--dry-run] [--check-container] [--print-paths] [--help|-h]
 
 HOST-ONLY. Launches and supervises x64sc's MCP server, restarting it on
 crash with backoff, collecting crash evidence, and recording a restart
@@ -53,6 +60,12 @@ to detect that a restart happened.
                 to diagnose a guard that refuses when it should not. Ignores
                 VICE_SUPERVISOR_ALLOW_CONTAINER: it reports what the signals
                 actually say, not what the escape hatch would let through.
+  --print-paths Print repo_root=, supervisor_dir= and epoch_file= (one
+                key=value line each) and exit 0. Writes no state and spawns
+                nothing, so it runs BEFORE the container guard below, exactly
+                like --help -- there is no reason to require
+                VICE_SUPERVISOR_ALLOW_CONTAINER=1 just to ask this script
+                which directory it resolves to.
   --help, -h    Print this usage and exit 0. Checked before the container
                 guard below, since printing usage writes no state and spawns
                 nothing.
@@ -87,9 +100,12 @@ USAGE
 
 # --help/-h is checked FIRST, before the container guard, because it writes
 # no state and spawns nothing -- there is no reason to make an operator set
-# VICE_SUPERVISOR_ALLOW_CONTAINER=1 just to read usage text.
+# VICE_SUPERVISOR_ALLOW_CONTAINER=1 just to read usage text. --print-paths
+# joins it here for the same reason (D-oga): it only prints already-resolved
+# variables.
 DRY_RUN=0
 CHECK_CONTAINER=0
+PRINT_PATHS=0
 for arg in "$@"; do
   case "$arg" in
     --help|-h)
@@ -102,8 +118,23 @@ for arg in "$@"; do
       # wrongly-refusing guard is the entire reason it exists.
       CHECK_CONTAINER=1
       ;;
+    --print-paths)
+      PRINT_PATHS=1
+      ;;
   esac
 done
+
+# --print-paths reports the resolved paths and exits, BEFORE the container
+# guard below is even sourced -- spawns nothing, writes nothing (no mkdir, no
+# epoch record), so there is no reason to make anyone set
+# VICE_SUPERVISOR_ALLOW_CONTAINER=1 just to ask this script which directory
+# it will use.
+if [ "$PRINT_PATHS" -eq 1 ]; then
+  echo "repo_root=$REPO_ROOT"
+  echo "supervisor_dir=$VICE_SUPERVISOR_DIR"
+  echo "epoch_file=$VICE_SUPERVISOR_DIR/epoch.json"
+  exit 0
+fi
 
 # ---------------------------------------------------------------- container guard
 #
@@ -137,7 +168,9 @@ container_guard_enforce "tools/vice-supervisor.sh" "/home/henrik/dev/henrik/git/
 # privilege), but a bad value should be visible, not silently mis-parsed.
 VICE_BIN="${VICE_BIN:-x64sc}"
 VICE_ARGS="${VICE_ARGS:--mcpserver -mcpserverhost 0.0.0.0}"
-VICE_SUPERVISOR_DIR="${VICE_SUPERVISOR_DIR:-$REPO_ROOT/.vice-supervisor}"
+# VICE_SUPERVISOR_DIR is hoisted ABOVE the container guard (top of file) so
+# --print-paths can report it without duplicating the default -- this is just
+# where the knob is documented, not where it's assigned.
 VICE_RESTART_BACKOFF_S="${VICE_RESTART_BACKOFF_S:-3}"
 VICE_RESTART_BACKOFF_MAX_S="${VICE_RESTART_BACKOFF_MAX_S:-30}"
 VICE_MAX_RESTARTS="${VICE_MAX_RESTARTS:-5}"
@@ -149,7 +182,7 @@ for arg in "$@"; do
     --dry-run)
       DRY_RUN=1
       ;;
-    --help|-h|--check-container)
+    --help|-h|--check-container|--print-paths)
       : # already handled above
       ;;
     *)

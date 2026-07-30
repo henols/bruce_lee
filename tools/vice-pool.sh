@@ -31,9 +31,16 @@ REPO_ROOT="$(cd "$(dirname "$SELF_PATH")/.." && pwd)"
 HOST_EXAMPLE_PATH="/home/henrik/dev/henrik/git/bruce_lee/tools/vice-pool.sh"
 SUPERVISOR_SCRIPT="$REPO_ROOT/tools/vice-supervisor.sh"
 
+# Hoisted here, ABOVE the container guard below, so --print-paths (which must
+# run before the guard -- see that check below) can report the values this
+# script would really use without duplicating the defaults. See the
+# "configuration" block further down for the rest of the overridable knobs.
+VICE_POOL_DIR="${VICE_POOL_DIR:-$REPO_ROOT/.vice-supervisor}"
+REGISTRY_PATH="$VICE_POOL_DIR/registry.json"
+
 usage() {
   cat <<USAGE
-usage: tools/vice-pool.sh <start [N] [--dry-run] | stop | status> [--help|-h] [--check-container]
+usage: tools/vice-pool.sh <start [N] [--dry-run] | stop | status> [--help|-h] [--check-container] [--print-paths]
 
 HOST-ONLY. Launches, tracks, and tears down N supervised x64sc MCP instances
 in parallel (D-1), coordinating with container-side harness code
@@ -77,6 +84,12 @@ Flags:
                 exit 0 on a host or 3 in a container. Spawns nothing, writes
                 no state, and works with no subcommand. Ignores
                 VICE_SUPERVISOR_ALLOW_CONTAINER.
+  --print-paths Print repo_root=, pool_dir= and registry_path= (one
+                key=value line each) and exit 0. Writes no state and spawns
+                nothing, works with no subcommand, and runs BEFORE the
+                container guard, exactly like --help -- there is no reason to
+                require VICE_SUPERVISOR_ALLOW_CONTAINER=1 just to ask this
+                script which directory it resolves to.
   --help, -h    Print this usage and exit 0. Checked before the container
                 guard, since printing usage writes no state and spawns
                 nothing.
@@ -129,6 +142,24 @@ for arg in "$@"; do
   esac
 done
 
+# --print-paths joins --help/--check-container above (D-oga): it only prints
+# already-resolved variables, writes no state and spawns nothing, so it runs
+# BEFORE the container guard below and works with no subcommand.
+PRINT_PATHS=0
+for arg in "$@"; do
+  case "$arg" in
+    --print-paths)
+      PRINT_PATHS=1
+      ;;
+  esac
+done
+if [ "$PRINT_PATHS" -eq 1 ]; then
+  echo "repo_root=$REPO_ROOT"
+  echo "pool_dir=$VICE_POOL_DIR"
+  echo "registry_path=$REGISTRY_PATH"
+  exit 0
+fi
+
 # ---------------------------------------------------------------- container guard
 #
 # Shared with tools/vice-supervisor.sh via tools/lib/container-guard.sh so
@@ -154,9 +185,11 @@ container_guard_enforce "tools/vice-pool.sh" "$HOST_EXAMPLE_PATH"
 # ---------------------------------------------------------------- configuration
 VICE_POOL_SIZE="${VICE_POOL_SIZE:-3}"
 VICE_POOL_BASE_PORT="${VICE_POOL_BASE_PORT:-6510}"
-VICE_POOL_DIR="${VICE_POOL_DIR:-$REPO_ROOT/.vice-supervisor}"
+# VICE_POOL_DIR and REGISTRY_PATH are hoisted ABOVE the container guard (top
+# of file) so --print-paths can report them without duplicating the
+# defaults -- this is just where the knobs are documented, not where they're
+# assigned.
 VICE_POOL_MCP_HOST="${VICE_POOL_MCP_HOST:-0.0.0.0}"
-REGISTRY_PATH="$VICE_POOL_DIR/registry.json"
 LEASES_DIR="$VICE_POOL_DIR/leases"
 
 # ---------------------------------------------------------------- subcommand parse
@@ -172,7 +205,7 @@ for arg in "$@"; do
     --dry-run)
       DRY_RUN=1
       ;;
-    --check-container|--help|-h)
+    --check-container|--help|-h|--print-paths)
       : # already handled above
       ;;
     *)

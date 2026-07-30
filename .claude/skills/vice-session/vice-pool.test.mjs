@@ -19,11 +19,13 @@ import { fileURLToPath } from "node:url";
 
 import { acquire, readRegistry, instanceFor, refreshLease, DEFAULT_PORT } from "./vice-pool.mjs";
 import { call, useInstance, formatToolsOutput } from "./vice.mjs";
+import { repoRoot } from "./repo-root.mjs";
 
 const execFileP = promisify(execFile);
 const MODULE_URL = new URL("./vice-pool.mjs", import.meta.url).href;
 const VICE_SESSION_MODULE_URL = new URL("./vice-session.mjs", import.meta.url).href;
 const VICE_MODULE_URL = new URL("./vice.mjs", import.meta.url).href;
+const REPO_ROOT_MODULE_URL = new URL("./repo-root.mjs", import.meta.url).href;
 const VICE_CLI = fileURLToPath(VICE_MODULE_URL);
 
 const tmpPoolDir = () => mkdtempSync(join(tmpdir(), "vice-pool-"));
@@ -857,4 +859,121 @@ test("tools <name> renders a matching tool's full input schema: parameter names,
   assert.match(out, /address: string \[required\]/);
   assert.match(out, /size: number \[required\]/);
   assert.match(out, /bank: string \[optional\].*enum: ram\|rom.*default: "ram"/);
+});
+
+// ============================================================================
+// Path agreement (D-2, D-3, quick-260730-oga Task 2): proves the Node side
+// (repo-root.mjs's supervisorDir(), plus everything derived from it) and the
+// shell side (tools/vice-supervisor.sh, tools/vice-pool.sh's --print-paths)
+// resolve the SAME .vice-supervisor directory. This is the regression a
+// naive move of these modules into .claude/skills/vice-session/ would
+// otherwise have introduced silently -- see repo-root.mjs's header comment.
+// ============================================================================
+
+/** Parse `key=value` lines (one per line, as --print-paths emits) into a
+ * plain object. */
+function parseKeyValueLines(text) {
+  const out = {};
+  for (const line of text.trim().split("\n")) {
+    const idx = line.indexOf("=");
+    if (idx === -1) continue;
+    out[line.slice(0, idx)] = line.slice(idx + 1);
+  }
+  return out;
+}
+
+test("path agreement (D-3, THE regression this task exists to catch): supervisor_dir === pool_dir === supervisorDir() === dirname(EPOCH_FILE) === poolDir() === dirname(sessionFilePath()), and the agreed path is not under .claude", async () => {
+  // Resolved through repoRoot() itself -- a missing script here means
+  // repoRoot() picked the wrong repo root, not a false pass; existsSync
+  // makes that loud (ENOENT-shaped) rather than a silent script-not-found.
+  const supervisorScript = join(repoRoot(), "tools", "vice-supervisor.sh");
+  const poolScript = join(repoRoot(), "tools", "vice-pool.sh");
+  assert.ok(existsSync(supervisorScript), `expected ${supervisorScript} to exist (resolved via repoRoot())`);
+  assert.ok(existsSync(poolScript), `expected ${poolScript} to exist (resolved via repoRoot())`);
+
+  // Strip every VICE_* env var so neither the shell scripts nor the Node
+  // child below can be pointed anywhere by a sibling test's leftover
+  // override -- this test asserts on the TRUE no-configuration defaults.
+  const cleanEnv = { ...process.env };
+  for (const k of Object.keys(cleanEnv)) {
+    if (k.startsWith("VICE_")) delete cleanEnv[k];
+  }
+
+  const { stdout: supOut } = await execFileP("bash", [supervisorScript, "--print-paths"], { env: cleanEnv });
+  const { stdout: poolOut } = await execFileP("bash", [poolScript, "--print-paths"], { env: cleanEnv });
+  const supVals = parseKeyValueLines(supOut);
+  const poolVals = parseKeyValueLines(poolOut);
+
+  // Node-side values computed in a FRESH child process, not via this test
+  // file's own already-imported modules -- immune to env mutation or
+  // module-load ordering from sibling tests sharing this process (several of
+  // which set process.env.VICE_POOL_DIR / VICE_MCP_URL directly).
+  const nodeSrc = `
+    import { supervisorDir } from ${JSON.stringify(REPO_ROOT_MODULE_URL)};
+    import { EPOCH_FILE } from ${JSON.stringify(VICE_MODULE_URL)};
+    import { poolDir } from ${JSON.stringify(MODULE_URL)};
+    import { sessionFilePath } from ${JSON.stringify(VICE_SESSION_MODULE_URL)};
+    import { dirname } from "node:path";
+    console.log(JSON.stringify({
+      supervisorDir: supervisorDir(),
+      epochDir: dirname(EPOCH_FILE),
+      poolDir: poolDir(),
+      sessionDir: dirname(sessionFilePath()),
+    }));
+  `;
+  const { stdout: nodeOut } = await execFileP(process.execPath, ["--input-type=module", "-e", nodeSrc], {
+    env: cleanEnv,
+  });
+  const nodeLines = nodeOut.trim().split("\n").filter(Boolean);
+  const nodeVals = JSON.parse(nodeLines[nodeLines.length - 1]);
+
+  assert.equal(poolVals.pool_dir, supVals.supervisor_dir, "shell: pool_dir must equal supervisor_dir");
+  assert.equal(nodeVals.supervisorDir, supVals.supervisor_dir, "Node supervisorDir() must equal the shell's supervisor_dir");
+  assert.equal(nodeVals.epochDir, supVals.supervisor_dir, "dirname(EPOCH_FILE) must equal the shell's supervisor_dir");
+  assert.equal(nodeVals.poolDir, supVals.supervisor_dir, "poolDir() must equal the shell's supervisor_dir");
+  assert.equal(nodeVals.sessionDir, supVals.supervisor_dir, "dirname(sessionFilePath()) must equal the shell's supervisor_dir");
+  assert.ok(
+    !supVals.supervisor_dir.includes(".claude"),
+    `the agreed directory must not sit under .claude -- got ${supVals.supervisor_dir} (the exact regression a naive move would introduce)`
+  );
+});
+
+test("repoRoot() ladder: a .git ancestor resolves with no env set; a containing CONTAINER_WORKSPACE_PATH wins over a NEARER .git; a non-containing CONTAINER_WORKSPACE_PATH loses to the .git walk", () => {
+  const outer = mkdtempSync(join(tmpdir(), "reporoot-"));
+  mkdirSync(join(outer, ".git"));
+  const inner = join(outer, "sub", "deeper");
+  mkdirSync(inner, { recursive: true });
+
+  // 1. No env set at all -> the .git walk finds `outer`.
+  assert.equal(repoRoot({ from: inner, env: {} }), outer);
+
+  // 2. A CONTAINER_WORKSPACE_PATH containing `from` wins over an even
+  //    NEARER .git ancestor -- the env var is checked FIRST and wins
+  //    whenever `from` resolves inside it, regardless of what a marker walk
+  //    would have found.
+  const envRoot = mkdtempSync(join(tmpdir(), "reporoot-env-"));
+  const envInner = join(envRoot, "a", "b");
+  mkdirSync(envInner, { recursive: true });
+  mkdirSync(join(envInner, ".git")); // nearer than envRoot -- must still lose
+  assert.equal(repoRoot({ from: envInner, env: { CONTAINER_WORKSPACE_PATH: envRoot } }), envRoot);
+
+  // 3. A CONTAINER_WORKSPACE_PATH that does NOT contain `from` loses to the
+  //    .git walk (the ambiguous, one-time-stderr-note branch) -- silenced
+  //    here since only the returned path is under test.
+  const unrelated = mkdtempSync(join(tmpdir(), "reporoot-unrelated-"));
+  const originalError = console.error;
+  console.error = () => {};
+  try {
+    assert.equal(repoRoot({ from: inner, env: { CONTAINER_WORKSPACE_PATH: unrelated } }), outer);
+  } finally {
+    console.error = originalError;
+  }
+});
+
+test("no-configuration fallback: the CLI's no-argument usage output reports port 6510 from the new .claude/skills/vice-session location", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vice-noconfig-"));
+  const env = { ...process.env, VICE_POOL_DIR: dir, VICE_SESSION_FILE: join(dir, "session.json") };
+  delete env.VICE_MCP_URL;
+  const { stdout } = await execFileP(process.execPath, [VICE_CLI], { env });
+  assert.match(stdout, /port 6510/);
 });
