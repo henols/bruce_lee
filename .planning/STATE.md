@@ -5,10 +5,10 @@ milestone_name: Pipeline Proven *
 current_phase: 01
 current_phase_name: recovery-provenance
 status: executing
-stopped_at: Phase 1 context gathered
-last_updated: "2026-07-30T14:44:28.000Z"
+stopped_at: "Completed quick task 260730-mef: parallel VICE instance pool launch"
+last_updated: "2026-07-30T16:40:57.998Z"
 last_activity: 2026-07-30
-last_activity_desc: quick-260730-jty — host-side VICE supervisor + restart detection added
+last_activity_desc: "Completed quick task 260730-jty: host-side VICE crash supervision + container-side restart detection"
 progress:
   total_phases: 1
   completed_phases: 0
@@ -33,7 +33,7 @@ Milestone: v1.0 — Pipeline Proven (Phases 1–4 of 7 total)
 Phase: 01 (recovery-provenance) — EXECUTING
 Plan: 1 of 6
 Status: Executing Phase 01
-Last activity: 2026-07-30 — Completed quick task 260730-jty: host-side VICE crash supervision + container-side restart detection
+Last activity: 2026-07-30 — Completed quick task 260730-mef: parallel VICE instance pool (launcher, registry, leases)
 
 Progress (v1.0): [░░░░░░░░░░] 0% — 0/20 plans
 Progress (overall): [░░░░░░░░░░] 0% — 0/35 plans
@@ -72,6 +72,7 @@ Recent decisions affecting current work:
 - [Roadmap]: Sprite/display chosen as the pilot subsystem — bounded and IRQ-driven enough to isolate, but exercises every stage including alignment-sensitive data extraction and a checkpoint meaningful on both verification channels. Combat rejected as too entangled; sound rejected because the checkpoint design never samples SID.
 - [Roadmap]: Verification harness scheduled at Phase 3, not terminal — baseline capture needs only the recovered image plus harness plumbing, so plans 03-01/03-02 run as a parallel workstream alongside Phase 2.
 - [Milestones]: Split at the Phase 4 boundary — v1.0 closes on a proven pipeline (24 reqs), v2.0 on the complete reconstruction (20 reqs). Archives and the PROJECT.md evolution review happen while context is small and after the pipeline's assumptions have been tested. Accepted cost: v1.0 is not the originally-stated deliverable; v2.0 is.
+- [Phase ?]: [quick-260730-mef]: Container guard extracted into tools/lib/container-guard.sh (sourced by both vice-supervisor.sh and vice-pool.sh) to prevent detection-logic drift; vice-pool.mjs's acquire() takes atomic linkSync-based leases, walking ports in descending order, with blocking-with-timeout semantics and hostname-gated stale-lease reclaim (cross-host pid comparison is never trusted); snapshotName() namespaces every vice_snapshot_save call by instance port unconditionally, since the host snapshot directory is shared across instances.
 
 ### Pending Todos
 
@@ -94,6 +95,7 @@ None yet.
 - **[HARD BLOCKER — Phase 1, 2026-07-30]: the host VICE MCP server is DOWN.** `http://host.docker.internal:6510/mcp` returns `ECONNREFUSED` from both the raw HTTP path and the harness MCP client. It was verified healthy (`vice_ping` → `version 3.10, C64SC, paused`) immediately before plan 01-01 was dispatched, then dropped mid-run (`SocketError: other side closed`, then refused). DNS to `host.docker.internal` still resolves (172.17.0.1), so this is the VICE process, not container networking. `vice_disk_list` was **never** called — root cause unknown. **Recovery requires restarting the host-side VICE MCP server (`x64sc -mcpserver`); the container cannot do it.** Verify with:
   `curl -s -X POST http://host.docker.internal:6510/mcp -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"vice_ping","arguments":{}}}'`
   Plans 01-01 through 01-04 all need the emulator and cannot proceed until this is restored.
+
 - [Phase 1]: **Recon finding to re-verify, not to trust** — before the outage, the executor traced `danish.d64` to a title-screen dispatcher at **$08B1**, reached via `JSR` from `$0711` and distinct from the loader's own `$0900` polling loop (confirmed by `vice_disassemble` + `vice_backtrace`). This is a strong D-06 trigger candidate. `recovery/RELEASES.json`'s `trigger` field is deliberately still `null` — the recorded value must come from the tool running live, not from these notes.
 - [Phase 1]: **`vice_run_until` returns immediately/asynchronously** — confirmed live, consistent with its schema's "timeout, not yet implemented" note on `cycles`. Synchronisation needs a poll-until-paused loop plus a client-side `AbortSignal.timeout`, or a wrong target address hangs with no safety net.
 - [Phase 1]: `vice_disk_list` crashes the host MCP server and needs a manual host-side VICE restart. Never call it; parse `.d64` bytes directly.
@@ -110,6 +112,7 @@ None yet.
 |---|-------------|------|--------|-----------|
 | 260730-jty | Add host-side VICE crash supervision and container-side restart detection | 2026-07-30 | 6694cb1 | [260730-jty-add-host-side-vice-crash-supervision-and](./quick/260730-jty-add-host-side-vice-crash-supervision-and/) |
 | 260730-jty-fix | Fix `vice-supervisor.sh` container guard false-positiving on the host (mountinfo signal removed; `--check-container` added) | 2026-07-30 | 362a710 | — |
+| 260730-mef | Add a parallel VICE instance pool launch (shared container guard, host launcher, container-side leases, port-namespaced snapshots) | 2026-07-30 | 9ea95f9 | [260730-mef-add-a-parallel-vice-instance-pool-launch](./quick/260730-mef-add-a-parallel-vice-instance-pool-launch/) |
 
 ## Deferred Items
 
@@ -121,6 +124,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-30T11:37:45.454Z
-Stopped at: Phase 1 context gathered
-Resume file: .planning/phases/01-recovery-provenance/01-CONTEXT.md
+Last session: 2026-07-30T16:39:36.379Z
+Stopped at: Completed quick task 260730-mef: parallel VICE instance pool launch
+Resume file: None
