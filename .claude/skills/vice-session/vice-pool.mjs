@@ -52,15 +52,18 @@ import { hostname } from "node:os";
 import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 
+import { supervisorDir } from "./repo-root.mjs";
+
 export const DEFAULT_PORT = 6510;
 
 /** VICE_POOL_DIR, or <repo>/.vice-supervisor -- the SAME default directory
  * tools/vice-supervisor.sh itself uses with no pool involved, which is what
- * makes the "no registry" fallback epoch path identical to today's. */
+ * makes the "no registry" fallback epoch path identical to today's. Resolved
+ * through repo-root.mjs's supervisorDir() (see that file's header comment
+ * for why the old fixed-hop-count `new URL(".", import.meta.url)` form was
+ * dropped entirely) rather than restated here. */
 export function poolDir() {
-  return process.env.VICE_POOL_DIR
-    ? resolve(process.env.VICE_POOL_DIR)
-    : resolve(new URL(".", import.meta.url).pathname, "..", ".vice-supervisor");
+  return process.env.VICE_POOL_DIR ? resolve(process.env.VICE_POOL_DIR) : supervisorDir();
 }
 
 export function registryPath(dir = poolDir()) {

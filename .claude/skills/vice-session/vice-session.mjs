@@ -15,14 +15,12 @@
 // works identically whether a pool is running (a real leased port) or not
 // (the single default port-6510 instance, D-1's zero-configuration case).
 import { readFileSync, writeFileSync, unlinkSync, renameSync, mkdirSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, resolve } from "node:path";
+import { resolve, join, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 
 import { acquire, releaseLeaseByToken, refreshLease, instanceFor, poolDir } from "./vice-pool.mjs";
 import { useInstance, readEpoch } from "./vice.mjs";
-
-const SELF = fileURLToPath(import.meta.url);
+import { supervisorDir } from "./repo-root.mjs";
 
 /**
  * Default TTL for a new session: 30 minutes. Overridable per-acquire via
@@ -32,17 +30,15 @@ export const DEFAULT_TTL_MS = Number(process.env.VICE_SESSION_TTL_MS || 30 * 60 
 
 /**
  * Where the session record lives: `VICE_SESSION_FILE` if set, else
- * `<repo>/.vice-supervisor/session.json` -- resolved relative to THIS
- * module's own URL, never from cwd, exactly like `vice.mjs`'s `EPOCH_FILE`
+ * `<repo>/.vice-supervisor/session.json` -- resolved through repo-root.mjs's
+ * supervisorDir(), never from cwd, exactly like `vice.mjs`'s `EPOCH_FILE`
  * and `vice-pool.mjs`'s `poolDir()` already do. That directory is already
  * gitignored (local machine state). The env override is the mechanism that
  * lets two concurrent workstreams each hold their own session without
  * stepping on each other -- point each at a different `VICE_SESSION_FILE`.
  */
 export function sessionFilePath() {
-  return process.env.VICE_SESSION_FILE
-    ? resolve(process.env.VICE_SESSION_FILE)
-    : resolve(dirname(SELF), "..", ".vice-supervisor", "session.json");
+  return process.env.VICE_SESSION_FILE ? resolve(process.env.VICE_SESSION_FILE) : join(supervisorDir(), "session.json");
 }
 
 function writeSessionAtomic(path, record) {

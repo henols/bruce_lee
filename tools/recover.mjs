@@ -12,8 +12,8 @@ import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
 
-import { call, serverInfo, beginSession, assertSameMachine, MachineRestartedError, lastToolCall, readEpoch, useInstance, activeInstance } from "./vice.mjs";
-import { acquire } from "./vice-pool.mjs";
+import { call, serverInfo, beginSession, assertSameMachine, MachineRestartedError, lastToolCall, readEpoch, useInstance, activeInstance } from "../.claude/skills/vice-session/vice.mjs";
+import { acquire } from "../.claude/skills/vice-session/vice-pool.mjs";
 import { release, releaseDir, upsertRelease } from "./releases.mjs";
 import { tryHostPaths } from "../.claude/skills/devcontainer-host-path/hostpath.mjs";
 

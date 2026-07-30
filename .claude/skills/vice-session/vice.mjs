@@ -12,8 +12,10 @@
 // blocker entry).  The guard below runs *before* any request is serialised,
 // so no caller -- however indirect -- can reach that tool by accident.
 import { fileURLToPath } from "node:url";
-import { resolve, dirname } from "node:path";
+import { resolve, join } from "node:path";
 import { readFileSync } from "node:fs";
+
+import { supervisorDir } from "./repo-root.mjs";
 
 const SELF = fileURLToPath(import.meta.url);
 
@@ -24,15 +26,16 @@ const DEFAULT_ENDPOINT = process.env.VICE_MCP_URL || "http://host.docker.interna
 const DEFAULT_TIMEOUT_MS = Number(process.env.VICE_MCP_TIMEOUT_MS || 30000);
 
 // Where tools/vice-supervisor.sh (host-only) writes its restart epoch --
-// resolved relative to THIS file's own location (never hardcoded), so the
-// path is correct regardless of the caller's cwd. Overridable for tests and
-// for anyone running the supervisor with a non-default
-// VICE_SUPERVISOR_DIR. Kept exactly as-is (D-5: no behaviour change with no
-// pool running) -- this remains the default that activeEpochFile below
-// starts from.
+// resolved via repo-root.mjs's supervisorDir() (never a fixed hop count off
+// this file's own location), so the path is correct regardless of the
+// caller's cwd AND regardless of how deep this file sits under the repo
+// root. Overridable for tests and for anyone running the supervisor with a
+// non-default VICE_SUPERVISOR_DIR. Kept exactly as-is (D-5: no behaviour
+// change with no pool running) -- this remains the default that
+// activeEpochFile below starts from.
 export const EPOCH_FILE = process.env.VICE_EPOCH_FILE
   ? resolve(process.env.VICE_EPOCH_FILE)
-  : resolve(dirname(SELF), "..", ".vice-supervisor", "epoch.json");
+  : join(supervisorDir(), "epoch.json");
 
 // -------------------------------------------------------- active instance
 //
