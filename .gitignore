@@ -65,4 +65,7 @@ dkms.conf
 !.claude/skills/
 
 # scratch notes
-anything.txt
+anything.*
+
+# transient VICE probe screenshots (evidence is re-captured by tools/recover.mjs)
+recovery/*/dumps/probe-*.png
