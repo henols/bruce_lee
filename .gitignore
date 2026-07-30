@@ -69,3 +69,8 @@ anything.*
 
 # transient VICE probe screenshots (evidence is re-captured by tools/recover.mjs)
 recovery/*/dumps/probe-*.png
+
+# host-side VICE supervisor output (tools/vice-supervisor.sh): crash logs and
+# the restart epoch file, regenerated fresh on every supervisor start -- not
+# a project artifact, just evidence for the current debugging session.
+.vice-supervisor/
