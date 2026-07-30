@@ -80,7 +80,9 @@ None yet.
 ### Blockers/Concerns
 
 - [Phase 1]: `vice_disk_list` crashes the host MCP server and needs a manual host-side VICE restart. Never call it; parse `.d64` bytes directly.
-- [Phase 1]: VICE bootstrap method unresolved — whether an MCP attach/boot tool exists or booting must go via `snapshot_load` from a pre-captured `.vsf`. Blocks all emulator work until plan 01-01 settles it.
+- [Phase 1]: VICE bootstrap — **tool question resolved** by Phase 1 research (verified live against the host MCP endpoint): `vice_disk_attach` and `vice_autostart` both exist, so booting does *not* require `snapshot_load` from a pre-captured `.vsf`. **Still open:** whether `autostart` actually defeats each crack's faked directory — plan 01-01 settles that empirically, with `disk_attach` + a recorded `LOAD"*",8,1` sequence as the fallback.
+- [Phase 1]: `vice_snapshot_save` takes only a `name`, not a `path`; snapshots are written host-side to `~/.config/vice/mcp_snapshots/` and there is **no tool to export their bytes into this container**. A `.vsf` therefore cannot be committed as a project artifact — supersedes CONTEXT.md D-07's original wording. Snapshots are recorded by name only; reproducibility runs through the recorded procedure instead.
+- [Phase 1]: `vice_run_until`'s `cycles` parameter is documented in its own live schema as "timeout, not yet implemented" — there is no safety net against hanging on a misidentified target address. Every run-to-checkpoint task needs a stated manual-recovery path.
 - [Phase 3]: `.d64` writing tool unresolved (`c1541` standalone vs custom writer). If a `.prg` cannot be injected directly over MCP, this becomes a hard blocker on Phase 4, not Phase 7.
 - [All phases]: VICE is a single shared host instance. `parallelization: true` does not extend to emulator work — plans marked parallel are parallel in authoring; their VICE steps serialise.
 - [Phase 5/6]: `src/zeropage.a` and `src/main.a` are the highest-fan-in files. Parallel plans must not edit them concurrently; each phase's first plan allocates them for the whole phase.
