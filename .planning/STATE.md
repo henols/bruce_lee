@@ -33,7 +33,7 @@ Milestone: v1.0 — Pipeline Proven (Phases 1–4 of 7 total)
 Phase: 01 (recovery-provenance) — EXECUTING
 Plan: 1 of 6
 Status: Executing Phase 01
-Last activity: 2026-07-30 — Completed quick task 260730-nh5: vice-session skill; MCP registration removed, Node seam is now the only path to the emulator
+Last activity: 2026-07-30 — Completed quick task 260730-oga: vice modules relocated into the vice-session skill
 
 Progress (v1.0): [░░░░░░░░░░] 0% — 0/20 plans
 Progress (overall): [░░░░░░░░░░] 0% — 0/35 plans
@@ -114,6 +114,7 @@ None yet.
 | 260730-jty-fix | Fix `vice-supervisor.sh` container guard false-positiving on the host (mountinfo signal removed; `--check-container` added) | 2026-07-30 | 362a710 | — |
 | 260730-mef | Add a parallel VICE instance pool launch (shared container guard, host launcher, container-side leases, port-namespaced snapshots) | 2026-07-30 | 9ea95f9 | [260730-mef-add-a-parallel-vice-instance-pool-launch](./quick/260730-mef-add-a-parallel-vice-instance-pool-launch/) |
 | 260730-nh5 | Add `vice-session` skill and make the Node seam the only path to the emulator (`.mcp.json` emptied; session leases, TTL refresh, tool discovery) | 2026-07-30 | 3d814a4 | [260730-nh5-add-vice-session-skill-and-make-the-node](./quick/260730-nh5-add-vice-session-skill-and-make-the-node/) |
+| 260730-oga | Move vice Node modules into the `vice-session` skill so it is self-contained (shared `repo-root.mjs`; shell/Node path-agreement test) | 2026-07-30 | c31b07d | [260730-oga-move-vice-node-modules-into-the-vice-ses](./quick/260730-oga-move-vice-node-modules-into-the-vice-ses/) |
 
 ## Deferred Items
 
