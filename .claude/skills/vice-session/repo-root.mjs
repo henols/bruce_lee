@@ -28,6 +28,8 @@ import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve, sep } from "node:path";
 
+import { ensureResourcesInstalled } from "./install-resources.mjs";
+
 const HERE = dirname(fileURLToPath(import.meta.url));
 
 // Gates the two "last resort" stderr notes below so a long-running process
@@ -118,4 +120,26 @@ export function repoRoot({ from = HERE, env = process.env } = {}) {
  * so the literal directory name also has exactly one definition. */
 export function supervisorDir(opts = {}) {
   return join(repoRoot(opts), ".vice-supervisor");
+}
+
+// Fires once per process, on whatever entry point happens to import THIS
+// module -- which is vice.mjs, vice-pool.mjs and vice-session.mjs already
+// (all three import repoRoot()/supervisorDir()), plus vice-probe.mjs's own
+// side-effect-only import (see that file). This one call is what makes the
+// deploy-on-first-use check (quick-260730-q4b, D-3) fire for every skill
+// .mjs entry point without any of them referencing install-resources.mjs
+// directly.
+//
+// POSITION IS LOAD-BEARING: this must run at the BOTTOM of this module body,
+// after HERE, repoRoot() and supervisorDir() are all initialised. Moving it
+// above HERE's initialisation reintroduces the exact module-cycle TDZ crash
+// install-resources.mjs's own header describes ("Cannot access 'HERE' before
+// initialization") -- install-resources.mjs takes the repo root as an
+// argument specifically so it never needs to import this file back.
+try {
+  ensureResourcesInstalled({ root: repoRoot() });
+} catch {
+  // ensureResourcesInstalled() already never throws (D-3) -- this catch is
+  // belt-and-suspenders against a future change to that contract, not a
+  // signal that one is expected.
 }

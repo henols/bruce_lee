@@ -15,7 +15,7 @@ import { fileURLToPath } from "node:url";
 import { resolve, join } from "node:path";
 import { readFileSync } from "node:fs";
 
-import { supervisorDir } from "./repo-root.mjs";
+import { supervisorDir, repoRoot } from "./repo-root.mjs";
 
 const SELF = fileURLToPath(import.meta.url);
 
@@ -633,8 +633,13 @@ if (process.argv[1] && resolve(process.argv[1]) === SELF) {
     // that is exactly when it is most needed -- the same reasoning that
     // already makes `session status` a pure file read never gated on a live
     // session.
+    //
+    // Also skipped for `install` (quick-260730-q4b, D-5): deploying the
+    // host launcher scripts must work when the session is expired and the
+    // emulator is unreachable -- exactly when a human is most likely to
+    // reach for it while troubleshooting.
     let resolved = null;
-    if (cmd !== "session" && cmd !== "pool") {
+    if (cmd !== "session" && cmd !== "pool" && cmd !== "install") {
       const { resolveInstance } = await import("./vice-session.mjs");
       resolved = resolveInstance();
     }
@@ -708,6 +713,54 @@ if (process.argv[1] && resolve(process.argv[1]) === SELF) {
       }
       die("usage: pool status");
     }
+    if (cmd === "install") {
+      // Dynamic import (D-6, matching the `session`/`pool` verbs' own
+      // pattern above): install-resources.mjs is a CLI-only concern and must
+      // not become a static dependency of vice.mjs's library surface, which
+      // tools/recover.mjs and its test suite import purely for `call()` /
+      // `useInstance()` / `serverInfo()`.
+      const { resourcesStatus, installResources, installTargetDir } = await import("./install-resources.mjs");
+      const force = rest.includes("--force");
+      const root = repoRoot();
+      const targetDir = installTargetDir(root);
+
+      if (!force) {
+        // Bare `install` reports status and acts on nothing (D-5): any
+        // MISSING entry has already been deployed automatically by
+        // repo-root.mjs's module-level ensureResourcesInstalled() trigger by
+        // the time this CLI even parses argv (unless
+        // VICE_SKIP_RESOURCE_INSTALL=1 opted out) -- this verb's own job is
+        // purely to report, never to write, so a diverged file is
+        // discoverable on demand without ever risking it.
+        const status = resourcesStatus({ root });
+        const entries = Object.keys(status);
+        for (const entry of entries) {
+          const s = status[entry];
+          if (s === "diverged") {
+            console.log(`DIVERGED  ${entry}  -- deployed copy differs from the tracked source; 'install --force' is the only thing that will overwrite it`);
+          } else {
+            console.log(`${s.padEnd(9)} ${entry}`);
+          }
+        }
+        console.log(
+          `\n${entries.length} entr${entries.length === 1 ? "y" : "ies"} checked under ${targetDir}. ` +
+            "Nothing written -- bare 'install' never overwrites; 'install --force' is the only overwrite path."
+        );
+        return;
+      }
+
+      // --force: the deliberate, human-invoked overwrite path. Every entry
+      // is restored from resources/, whatever its current state -- a
+      // divergence is information, not a failure, everywhere else in this
+      // command; forcing is simply the one command that acts on it.
+      const result = installResources({ root, force: true, log: console.error });
+      console.log(`install --force: wrote ${result.installed.length} entr${result.installed.length === 1 ? "y" : "ies"} from resources/ into ${targetDir}:`);
+      for (const entry of result.installed) console.log(`  wrote ${entry}`);
+      if (result.failed.length) {
+        console.log(`  FAILED (see stderr): ${result.failed.join(", ")}`);
+      }
+      return;
+    }
 
     // This block is the fallback documentation surface when the vice-session
     // skill isn't loaded (D-3): it has to document every verb completely, not
@@ -732,6 +785,7 @@ if (process.argv[1] && resolve(process.argv[1]) === SELF) {
   session release                 free the active session's lease and delete its file
   session status                  read-only report on the active session (no MCP call)
   pool status                     launched/alive/leased/supervised per instance, plus a diagnosis
+  install [--force]                report deployed host-script status; --force restores every entry from resources/
 
 active instance: port ${activeInstance().port} (${activeInstance().url})
 ${sessionLine}
