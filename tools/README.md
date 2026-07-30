@@ -20,25 +20,17 @@ Build it on the **host**, not in the devcontainer.
 
 ### Dependencies
 
-Debian / Ubuntu — what upstream documents:
+Debian / Ubuntu:
 
 ```bash
 apt install build-essential autoconf automake pkg-config \
-            libmicrohttpd-dev libgtk-3-dev xa65 flex byacc
+            libmicrohttpd-dev libgtk-3-dev xa65 flex byacc \
+            dos2unix libglew-dev libevdev-dev libcurl4-openssl-dev libpulse-dev
 ```
 
-**That list is not sufficient.** On Debian trixie the build also needed:
-
-```bash
-apt install dos2unix libglew-dev libevdev-dev libcurl4-openssl-dev libpulse-dev
-```
-
-None of these five are in upstream's instructions, and each surfaces as a
-configure or compile failure partway through rather than as an up-front check —
-so it is worth installing them before starting rather than discovering them one
-at a time. (`glew-utils` was also installed while hunting for the right GLEW
-package, but `libglew-dev` is the one that matters; the `-utils` package only
-provides the `glewinfo`/`visualinfo` binaries.)
+The last five are not in upstream's list but the build needs them on Debian
+trixie, each failing partway through the build rather than at configure time
+([upstream issue #8](https://github.com/barryw/vice-mcp/issues/8)).
 
 macOS — upstream's list, not exercised here:
 
