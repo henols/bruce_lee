@@ -33,7 +33,7 @@ Milestone: v1.0 — Pipeline Proven (Phases 1–4 of 7 total)
 Phase: 01 (recovery-provenance) — EXECUTING
 Plan: 1 of 6
 Status: Executing Phase 01
-Last activity: 2026-07-30 — Completed quick task 260730-r0u: every skill's `.mjs` modules moved into a per-skill `scripts/` directory
+Last activity: 2026-07-30 — Completed quick task 260730-ryz: `vice-session/SKILL.md` rewritten as a usage-only guide, internals moved to `INTERNALS.md`
 
 Progress (v1.0): [░░░░░░░░░░] 0% — 0/20 plans
 Progress (overall): [░░░░░░░░░░] 0% — 0/35 plans
@@ -118,6 +118,7 @@ None yet.
 | 260730-p5x | Pool discovers live instances by ping-probing at acquire time (standalone fast probe; four-question health; supervisor-vs-VICE diagnosis) | 2026-07-30 | acf0a83 | [260730-p5x-pool-discovers-live-instances-by-ping-pr](./quick/260730-p5x-pool-discovers-live-instances-by-ping-pr/) |
 | 260730-q4b | Shell scripts move to skill `resources/` and auto-install into `tools/` on any skill .mjs entry (gitignored deployment; never overwrites; `install --force` to refresh) | 2026-07-30 | e01531b | [260730-q4b-shell-scripts-move-to-skill-resources-an](./quick/260730-q4b-shell-scripts-move-to-skill-resources-an/) |
 | 260730-r0u | Every skill's `.mjs` modules now live in a per-skill `scripts/` directory (`resources/` and data files stay at skill root; two path-anchor regression tests added) | 2026-07-30 | bbb3dd7 | [260730-r0u-all-the-scripts-that-are-used-by-the-ski](./quick/260730-r0u-all-the-scripts-that-are-used-by-the-ski/) |
+| 260730-ryz | `vice-session/SKILL.md` rewritten as a usage-only guide; every internal mechanic relocated to a new `INTERNALS.md` maintainer doc | 2026-07-30 | 6341df6 | [260730-ryz-rewrite-vice-session-skill-md-as-usage-o](./quick/260730-ryz-rewrite-vice-session-skill-md-as-usage-o/) |
 
 ## Deferred Items
 
