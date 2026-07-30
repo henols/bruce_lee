@@ -33,7 +33,7 @@ Milestone: v1.0 — Pipeline Proven (Phases 1–4 of 7 total)
 Phase: 01 (recovery-provenance) — EXECUTING
 Plan: 1 of 6
 Status: Executing Phase 01
-Last activity: 2026-07-30 — Completed quick task 260730-mef: parallel VICE instance pool (launcher, registry, leases)
+Last activity: 2026-07-30 — Completed quick task 260730-nh5: vice-session skill; MCP registration removed, Node seam is now the only path to the emulator
 
 Progress (v1.0): [░░░░░░░░░░] 0% — 0/20 plans
 Progress (overall): [░░░░░░░░░░] 0% — 0/35 plans
@@ -113,6 +113,7 @@ None yet.
 | 260730-jty | Add host-side VICE crash supervision and container-side restart detection | 2026-07-30 | 6694cb1 | [260730-jty-add-host-side-vice-crash-supervision-and](./quick/260730-jty-add-host-side-vice-crash-supervision-and/) |
 | 260730-jty-fix | Fix `vice-supervisor.sh` container guard false-positiving on the host (mountinfo signal removed; `--check-container` added) | 2026-07-30 | 362a710 | — |
 | 260730-mef | Add a parallel VICE instance pool launch (shared container guard, host launcher, container-side leases, port-namespaced snapshots) | 2026-07-30 | 9ea95f9 | [260730-mef-add-a-parallel-vice-instance-pool-launch](./quick/260730-mef-add-a-parallel-vice-instance-pool-launch/) |
+| 260730-nh5 | Add `vice-session` skill and make the Node seam the only path to the emulator (`.mcp.json` emptied; session leases, TTL refresh, tool discovery) | 2026-07-30 | 3d814a4 | [260730-nh5-add-vice-session-skill-and-make-the-node](./quick/260730-nh5-add-vice-session-skill-and-make-the-node/) |
 
 ## Deferred Items
 
