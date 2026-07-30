@@ -101,7 +101,7 @@ hand, and the crash evidence is lost.
 ## 3. Wiring it into Claude Code
 
 **`.mcp.json` registers no server, on purpose.**
-[`.claude/skills/vice-session/vice.mjs`](../.claude/skills/vice-session/vice.mjs)
+[`.claude/skills/vice-session/scripts/vice.mjs`](../.claude/skills/vice-session/scripts/vice.mjs)
 is the *only* route from this container to the emulator (D-5) — every safety
 mechanism this project has built (the `vice_disk_list` deny-list, restart/
 epoch detection, pool leases) lives inside that one seam, and a direct
@@ -112,19 +112,22 @@ same emulator, so the registration was removed rather than left as an
 
 **Layout note:** `vice.mjs`, `vice-pool.mjs`, `vice-session.mjs` and their
 test file moved from this directory into
-[`.claude/skills/vice-session/`](../.claude/skills/vice-session/SKILL.md) so
+[`.claude/skills/vice-session/scripts/`](../.claude/skills/vice-session/SKILL.md) so
 the `vice-session` skill is self-contained and exportable, matching every
-other skill in this project (`acme-build/acme.mjs`,
-`devcontainer-host-path/hostpath.mjs`). The HOST-side launchers —
-`vice-supervisor.sh`, `vice-pool.sh` and `lib/container-guard.sh` — now live
+other skill in this project (`acme-build/scripts/acme.mjs`,
+`devcontainer-host-path/scripts/hostpath.mjs`) — every skill keeps its
+executable `.mjs` modules in its own `scripts/` subdirectory, with `SKILL.md`,
+data files and (for `vice-session`) `resources/` staying at the skill root.
+The HOST-side launchers —
+`vice-supervisor.sh`, `vice-pool.sh` and `lib/container-guard.sh` — live
 tracked in that same skill's
 [`resources/`](../.claude/skills/vice-session/resources/), not here:
 `tools/vice-supervisor.sh`, `tools/vice-pool.sh` and `tools/lib/container-guard.sh`
 are **gitignored, disposable deployed copies**, regenerated automatically by
 `install-resources.mjs` the first time any of the skill's `.mjs` files runs
-(`node .claude/skills/vice-session/vice.mjs ping`, `install`, or any other
+(`node .claude/skills/vice-session/scripts/vice.mjs ping`, `install`, or any other
 verb all trigger it identically). A fresh clone has no `tools/` scripts at
-all until that first run — `node .claude/skills/vice-session/vice.mjs install`
+all until that first run — `node .claude/skills/vice-session/scripts/vice.mjs install`
 is the one command that materialises them deliberately, with no other side
 effect. The reason the second TRACKED copy went away: two tracked copies of
 one script drift apart, and the drift is invisible until the host happens to
@@ -134,7 +137,7 @@ deployed copy is never overwritten automatically, whatever its contents;
 `install --force` is the only command that refreshes a copy that has been
 hand-edited. `tools/recover.mjs` (and its test file) also stayed, importing
 the moved modules via the same cross-tree path
-`devcontainer-host-path/hostpath.mjs` already used.
+`devcontainer-host-path/scripts/hostpath.mjs` already used.
 
 ```json
 {
@@ -200,12 +203,12 @@ Without it the name does not resolve and every call fails at DNS.
 ### Verify the connection
 
 ```bash
-node .claude/skills/vice-session/vice.mjs ping        # -> VICE 3.10 (C64SC) -- paused [port 6510, http://...]
+node .claude/skills/vice-session/scripts/vice.mjs ping        # -> VICE 3.10 (C64SC) -- paused [port 6510, http://...]
 ```
 
 If the host is down or unreachable, `ping` is the wrong first check — it
 touches the network and can take up to ~50s to fail through the retry
-budget. Check `node .claude/skills/vice-session/vice.mjs session status` first: it is a **pure
+budget. Check `node .claude/skills/vice-session/scripts/vice.mjs session status` first: it is a **pure
 file read**, makes no MCP call at all, and works (or reports "no active
 session") even with the host completely down. See
 [§6, Sessions](#6-sessions-and-tool-discovery) below.
@@ -226,7 +229,7 @@ curl -sS http://host.docker.internal:6510/mcp \
 
 A supervisor that silently respawns VICE would turn a loud failure into a quiet,
 wrong one.
-[`.claude/skills/vice-session/vice.mjs`](../.claude/skills/vice-session/vice.mjs)
+[`.claude/skills/vice-session/scripts/vice.mjs`](../.claude/skills/vice-session/scripts/vice.mjs)
 retries transport failures and redoes the
 MCP handshake — so after a respawn it would happily reconnect to a **brand-new,
 blank machine** (no disk attached, no checkpoints, CPU halted) and keep reading
@@ -294,7 +297,7 @@ would change how the default instance is reached.
 `vice-pool.sh` writes `<pool dir>/registry.json` atomically (temp file + `mv`)
 on the same bind mount `epoch.json` already uses — no new port, socket, or
 protocol.
-[`.claude/skills/vice-session/vice-pool.mjs`](../.claude/skills/vice-session/vice-pool.mjs)
+[`.claude/skills/vice-session/scripts/vice-pool.mjs`](../.claude/skills/vice-session/scripts/vice-pool.mjs)
 reads it, validating every port as an untrusted, host-written field (same
 posture as `readEpoch()`), and derives each instance's URL and epoch-file
 path from the **validated port only** — never from a path string read out of
@@ -304,7 +307,7 @@ the file.
 
 Two container-side processes racing for the same pool must never both get the
 same busy instance.
-[`.claude/skills/vice-session/vice-pool.mjs`](../.claude/skills/vice-session/vice-pool.mjs)'s
+[`.claude/skills/vice-session/scripts/vice-pool.mjs`](../.claude/skills/vice-session/scripts/vice-pool.mjs)'s
 `acquire()` takes
 an atomic lease (a `linkSync` of a fully-written temp file — `link` fails
 `EEXIST` if the name is taken, and never publishes a half-written lease) on
@@ -372,7 +375,7 @@ pooled instance through a `kind:"session"` lease instead — see §6 below.
 
 The agent's shell environment does not persist between separate Bash
 invocations, so a lease taken by one command is invisible to the next one —
-each `node .claude/skills/vice-session/vice.mjs ...` call is a brand-new
+each `node .claude/skills/vice-session/scripts/vice.mjs ...` call is a brand-new
 process with no memory of anything an earlier call `export`ed. A session
 solves this by living in a **file** instead: `.vice-supervisor/session.json`
 by default, or wherever `VICE_SESSION_FILE` points (set it to give two
@@ -380,9 +383,9 @@ concurrent workstreams each their own session, without stepping on each
 other).
 
 ```bash
-node .claude/skills/vice-session/vice.mjs session acquire [--ttl-min N]   # lease an instance, start a session
-node .claude/skills/vice-session/vice.mjs session status                  # read-only report, no emulator touched
-node .claude/skills/vice-session/vice.mjs session release                 # free the lease, delete the session file
+node .claude/skills/vice-session/scripts/vice.mjs session acquire [--ttl-min N]   # lease an instance, start a session
+node .claude/skills/vice-session/scripts/vice.mjs session status                  # read-only report, no emulator touched
+node .claude/skills/vice-session/scripts/vice.mjs session release                 # free the lease, delete the session file
 ```
 
 Every later `ping`/`call` invocation resolves the active session automatically
@@ -402,7 +405,7 @@ then `session acquire`).
 
 ### Two lease kinds, side by side
 
-| | `kind:"process"` (`tools/recover.mjs`) | `kind:"session"` (`.claude/skills/vice-session/vice.mjs session acquire`) |
+| | `kind:"process"` (`tools/recover.mjs`) | `kind:"session"` (`.claude/skills/vice-session/scripts/vice.mjs session acquire`) |
 |---|---|---|
 | Holder | One long-running process, alive for the whole verb | A short-lived CLI invocation that **exits** the instant `acquire` returns |
 | Reclaimed by | Same-host pid death, or `maxLeaseAgeMs` | TTL expiry (`expires_at`) **only** |
@@ -415,13 +418,13 @@ be taken the other way while it's held.
 
 Removing `.mcp.json`'s server registration (§3) also removes the typed tool
 schemas Claude Code used to read automatically.
-`.claude/skills/vice-session/vice.mjs tools` replaces that:
+`.claude/skills/vice-session/scripts/vice.mjs tools` replaces that:
 
 ```bash
-node .claude/skills/vice-session/vice.mjs tools                    # every tool: name + one-line description
-node .claude/skills/vice-session/vice.mjs tools memory              # every tool whose name contains "memory"
-node .claude/skills/vice-session/vice.mjs tools vice_memory_read    # full input schema: params, types, required, enum/default
-node .claude/skills/vice-session/vice.mjs tools --json              # the raw tools/list result
+node .claude/skills/vice-session/scripts/vice.mjs tools                    # every tool: name + one-line description
+node .claude/skills/vice-session/scripts/vice.mjs tools memory              # every tool whose name contains "memory"
+node .claude/skills/vice-session/scripts/vice.mjs tools vice_memory_read    # full input schema: params, types, required, enum/default
+node .claude/skills/vice-session/scripts/vice.mjs tools --json              # the raw tools/list result
 ```
 
 `vice_disk_list` never appears in any of these, including `--json` —

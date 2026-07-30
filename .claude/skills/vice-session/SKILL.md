@@ -6,17 +6,17 @@ description: Drive the host's VICE emulator from this container — acquire a le
 # Driving VICE from this container
 
 ```bash
-node .claude/skills/vice-session/vice.mjs session acquire        # lease an instance, start a session
-node .claude/skills/vice-session/vice.mjs ping                   # server version, machine, execution state
-node .claude/skills/vice-session/vice.mjs tools                  # every vice_* tool, one line each
-node .claude/skills/vice-session/vice.mjs tools NAME              # a tool's full input schema
-node .claude/skills/vice-session/vice.mjs call TOOL '{"k":"v"}'   # invoke any vice_* tool, print its JSON result
-node .claude/skills/vice-session/vice.mjs session status          # read-only session report, no emulator touched
-node .claude/skills/vice-session/vice.mjs session release         # free the lease, end the session
-node .claude/skills/vice-session/vice.mjs pool status             # launched/alive/leased/supervised per instance
+node .claude/skills/vice-session/scripts/vice.mjs session acquire        # lease an instance, start a session
+node .claude/skills/vice-session/scripts/vice.mjs ping                   # server version, machine, execution state
+node .claude/skills/vice-session/scripts/vice.mjs tools                  # every vice_* tool, one line each
+node .claude/skills/vice-session/scripts/vice.mjs tools NAME              # a tool's full input schema
+node .claude/skills/vice-session/scripts/vice.mjs call TOOL '{"k":"v"}'   # invoke any vice_* tool, print its JSON result
+node .claude/skills/vice-session/scripts/vice.mjs session status          # read-only session report, no emulator touched
+node .claude/skills/vice-session/scripts/vice.mjs session release         # free the lease, end the session
+node .claude/skills/vice-session/scripts/vice.mjs pool status             # launched/alive/leased/supervised per instance
 ```
 
-No `mcp__vice__*` tool is available in this project. `.claude/skills/vice-session/vice.mjs`
+No `mcp__vice__*` tool is available in this project. `.claude/skills/vice-session/scripts/vice.mjs`
 is the only route to the emulator — the deny-list, restart detection and pool
 leases all live in that one seam, and a direct MCP call would bypass every
 one of them.
@@ -25,9 +25,9 @@ one of them.
 
 This skill directory carries BOTH halves of driving VICE and can be copied
 into another project as a single unit — copying it alone is now sufficient.
-The CONTAINER half is the Node modules at the top level (`repo-root.mjs`,
-`vice.mjs`, `vice-pool.mjs`, `vice-probe.mjs`, `vice-session.mjs`,
-`vice-pool.test.mjs`, `install-resources.mjs`). The HOST half —
+The CONTAINER half is the Node modules in this skill's `scripts/` directory
+(`repo-root.mjs`, `vice.mjs`, `vice-pool.mjs`, `vice-probe.mjs`,
+`vice-session.mjs`, `vice-pool.test.mjs`, `install-resources.mjs`). The HOST half —
 `vice-supervisor.sh`, `vice-pool.sh` and `lib/container-guard.sh` — lives
 tracked in `.claude/skills/vice-session/resources/`, and is deployed automatically into `tools/` at the
 repo root the FIRST TIME any of this skill's `.mjs` files runs (`ensureResourcesInstalled()`,
@@ -35,7 +35,7 @@ triggered from `repo-root.mjs`). `tools/` holds disposable, gitignored
 deployed copies — not a second tracked copy that could drift out of sync
 with `resources/`. An existing deployed copy is **never overwritten
 automatically**, whatever its contents; run
-`node .claude/skills/vice-session/vice.mjs install` for a per-entry status
+`node .claude/skills/vice-session/scripts/vice.mjs install` for a per-entry status
 report (missing/present/diverged) with no side effects, or
 `... install --force` to deliberately restore every entry from `resources/`.
 
@@ -66,9 +66,9 @@ Removing the MCP registration removes the typed tool schemas Claude Code
 used to read automatically. Use `tools` instead:
 
 ```bash
-node .claude/skills/vice-session/vice.mjs tools           # every tool: name + one-line description
-node .claude/skills/vice-session/vice.mjs tools memory    # every tool whose name contains "memory"
-node .claude/skills/vice-session/vice.mjs tools vice_memory_read   # full input schema: params, types, required, enum/default
+node .claude/skills/vice-session/scripts/vice.mjs tools           # every tool: name + one-line description
+node .claude/skills/vice-session/scripts/vice.mjs tools memory    # every tool whose name contains "memory"
+node .claude/skills/vice-session/scripts/vice.mjs tools vice_memory_read   # full input schema: params, types, required, enum/default
 ```
 
 ## `vice_disk_list` is forbidden, always
@@ -123,7 +123,7 @@ into one:
 | SUPERVISED | that instance's own `epoch.json` (`readEpoch()`) — present/absent, and whether it has moved since a prior observation |
 
 `acquire()` probes ALIVE before leasing anything, so a registered-but-dead
-instance is skipped rather than handed out. `node .claude/skills/vice-session/vice.mjs pool status`
+instance is skipped rather than handed out. `node .claude/skills/vice-session/scripts/vice.mjs pool status`
 prints all four per instance, container-side, plus a diagnosis; run it any
 time liveness (not just launch/lease/supervision state) needs checking.
 
@@ -131,7 +131,7 @@ time liveness (not just launch/lease/supervision state) needs checking.
 
 | Symptom | Fix |
 |---|---|
-| `session ... expired at ... -- refusing to fall back to the default instance silently` | `node .claude/skills/vice-session/vice.mjs session release` then `session acquire` again. |
+| `session ... expired at ... -- refusing to fall back to the default instance silently` | `node .claude/skills/vice-session/scripts/vice.mjs session release` then `session acquire` again. |
 | `transport error` / `ECONNREFUSED` / timed out after retries | The host VICE MCP server is down or unreachable from this container. Recovery is host-side (`tools/vice-supervisor.sh`, deployed from this skill's `resources/` — see above); this container cannot restart it. |
 | `acquire: no free instance within Nms -- every candidate rejected: ...` | Read the per-candidate reasons in the message: "no answer" means dead (see the next two rows), "leased by pid ... " means busy — wait, or check `pool status`/`tools/vice-pool.sh status` for a leak. |
 | A registered instance that does not answer (`pool status` shows `alive:no`) | LAUNCHED does not imply ALIVE. `acquire()` already skips it automatically; `pool status`'s diagnosis says whether it's unsupervised, unproven, a dead supervisor, or mid-respawn — follow that fix directly rather than guessing. |
