@@ -21,8 +21,8 @@ in this project.
 
 ## Copying this skill elsewhere
 
-This skill directory is self-sufficient and can be copied into another
-project as one unit.
+This skill depends on the sibling `devcontainer-host-path` skill — copy both
+skills into another project together, not this one alone.
 
 ```bash
 node .claude/skills/vice-session/scripts/vice.mjs install          # status of the deployed host-side scripts, no changes made
