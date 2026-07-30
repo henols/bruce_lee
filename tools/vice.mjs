@@ -90,7 +90,9 @@ async function rpc(method, params, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
     if (e.name === "TimeoutError" || e.name === "AbortError") {
       throw new ViceError(
         `${method} timed out after ${timeoutMs}ms -- the host VICE MCP server may be hung or unreachable. ` +
-          `Manual recovery: a host-side VICE restart (this container cannot perform it; see recovery/*/NOTES.md).`
+          `Recovery is a HOST-SIDE restart, which this container cannot perform. Run ` +
+          `tools/vice-supervisor.sh on the HOST -- it restarts x64sc automatically and logs the crash ` +
+          `for the still-open root-cause investigation (see .planning/STATE.md).`
       );
     }
     throw new ViceError(`transport error calling ${method}: ${e.message}`);
@@ -139,7 +141,17 @@ async function ensureInitialized() {
 // The host server has been observed to drop connections and recover on its own,
 // but the outage outlasts a short backoff -- a 6s total budget was measured as
 // too short. These values give it ~50s to come back before we declare it dead
-// and ask for a manual restart.
+// and point the operator at tools/vice-supervisor.sh (host-only; this
+// container cannot restart it itself).
+//
+// IMPORTANT: under that supervisor, this retry can now SUCCEED -- against a
+// brand-new, blank machine with no disk attached and no checkpoints armed,
+// not the one this session started with. That is exactly why
+// beginSession()/assertSameMachine() exist below: a retry that starts
+// working again is no longer proof that nothing happened. Do not remove the
+// identity check while this supervisor (or any future one) exists, and do
+// not remove the supervisor without also removing the retry -- they are one
+// mitigation in two halves, not two independent features.
 const RECONNECT_ATTEMPTS = 5;
 const RECONNECT_BACKOFF_MS = [2000, 5000, 12000, 30000, 0];
 const nap = (ms) => new Promise((r) => setTimeout(r, ms));

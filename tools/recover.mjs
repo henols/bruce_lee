@@ -254,8 +254,9 @@ async function waitCheckpointHit(cpId, addr, label) {
   throw new Error(
     `waitCheckpointHit(${label} ${hex4(addr)}): checkpoint never fired within ${budgetMs / 1000}s. ` +
       `vice_run_until's cycles argument is documented as "not yet implemented" so there is no ` +
-      `server-side timeout backing this. Manual recovery: restart the host-side VICE MCP server ` +
-      `(see the release NOTES.md).`
+      `server-side timeout backing this. Recovery is a HOST-SIDE restart, which this container ` +
+      `cannot perform -- run tools/vice-supervisor.sh on the HOST; it restarts x64sc automatically ` +
+      `and logs the crash for the still-open root-cause investigation (see .planning/STATE.md).`
   );
 }
 
@@ -396,8 +397,9 @@ export async function findEntry(releaseId, { batchSize = 400, maxBatches = 150 }
   }
   throw new Error(
     `find-entry: PC/call-depth did not stabilize within ${maxBatches} batches of ${batchSize} steps -- ` +
-      `manual recovery: inspect with vice_backtrace/vice_disassemble by hand, or a host-side VICE restart ` +
-      `if execution appears hung.`
+      `inspect with vice_backtrace/vice_disassemble by hand. If execution appears hung, recovery is a ` +
+      `HOST-SIDE restart, which this container cannot perform -- run tools/vice-supervisor.sh on the ` +
+      `HOST; it restarts x64sc automatically and logs the crash as evidence.`
   );
 }
 
