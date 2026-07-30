@@ -15,7 +15,7 @@ import { dirname, join, resolve } from "node:path";
 import { call, serverInfo, beginSession, assertSameMachine, MachineRestartedError, lastToolCall, readEpoch, useInstance, activeInstance } from "../.claude/skills/vice-session/vice.mjs";
 import { acquire } from "../.claude/skills/vice-session/vice-pool.mjs";
 import { release, releaseDir, upsertRelease } from "./releases.mjs";
-import { tryHostPaths } from "../.claude/skills/devcontainer-host-path/hostpath.mjs";
+import { tryHostPaths } from "../.claude/skills/devcontainer-host-path/scripts/hostpath.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, "..");

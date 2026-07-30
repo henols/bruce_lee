@@ -8,7 +8,7 @@ description: Assemble Commodore 64 6510 assembly with the ACME cross assembler. 
 Source in, `.prg` out. Everything goes through one script:
 
 ```bash
-A=.claude/skills/acme-build/acme.mjs
+A=.claude/skills/acme-build/scripts/acme.mjs
 
 node $A new game.a          # scaffold a C64 program
 node $A build game.a        # assemble -> .prg .sym .vs .rep
@@ -148,8 +148,8 @@ data. To reassemble the listing, define the out-of-range labels it emits
 Put `acme` and `toacme` on `$PATH`. For `<...>` library includes, set `$ACME` to
 the directory holding `cbm/c64/vic.a` when calling `acme` directly.
 
-Copy `acme.mjs` and `template.a` into any project's
-`.claude/skills/acme-build/` to use this elsewhere.
+Copy `acme.mjs` into any project's `.claude/skills/acme-build/scripts/`, and
+`template.a` into `.claude/skills/acme-build/`, to use this elsewhere.
 
 ## Troubleshooting
 

@@ -8,12 +8,12 @@ description: Build the host path for a file in this workspace, so tools running 
 Translate the path first, then hand the result to the outside tool:
 
 ```bash
-node .claude/skills/devcontainer-host-path/hostpath.mjs --plain <file>   # path only
-node .claude/skills/devcontainer-host-path/hostpath.mjs <file>           # fuller report
+node .claude/skills/devcontainer-host-path/scripts/hostpath.mjs --plain <file>   # path only
+node .claude/skills/devcontainer-host-path/scripts/hostpath.mjs <file>           # fuller report
 ```
 
 ```
-$ node .claude/skills/devcontainer-host-path/hostpath.mjs --plain disks/game.d64
+$ node .claude/skills/devcontainer-host-path/scripts/hostpath.mjs --plain disks/game.d64
 /home/henrik/code/bruce_lee/disks/game.d64
 ```
 
@@ -21,13 +21,13 @@ Pass that as the tool's `path` argument. `--plain` prints one path per line, bes
 first, for feeding straight into another command:
 
 ```bash
-HP=$(node .claude/skills/devcontainer-host-path/hostpath.mjs --plain build/game.prg | head -1)
+HP=$(node .claude/skills/devcontainer-host-path/scripts/hostpath.mjs --plain build/game.prg | head -1)
 ```
 
 ## From a script
 
 ```js
-import { hostPath, tryHostPaths } from "../devcontainer-host-path/hostpath.mjs";
+import { hostPath, tryHostPaths } from "../../devcontainer-host-path/scripts/hostpath.mjs";
 
 hostPath("build/game.prg");   // the host path
 

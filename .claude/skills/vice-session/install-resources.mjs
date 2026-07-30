@@ -23,7 +23,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, copyFileSync, statSyn
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
-import { hostPath, SET_ENV_HINT } from "../devcontainer-host-path/hostpath.mjs";
+import { hostPath, SET_ENV_HINT } from "../devcontainer-host-path/scripts/hostpath.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 

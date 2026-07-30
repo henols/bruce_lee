@@ -198,7 +198,9 @@ function cmdNew(argv) {
   const path = argv[0];
   if (!path) die("usage: new <file.a>");
   if (existsSync(path)) die(`${path} already exists`);
-  writeFileSync(path, readFileSync(join(HERE, "template.a"), "utf8"));
+  // template.a lives at the skill root, one level up from scripts/, by
+  // decision (D-03): only .mjs modules move into scripts/.
+  writeFileSync(path, readFileSync(join(HERE, "..", "template.a"), "utf8"));
   console.log(`wrote ${path}`);
   console.log(`next: node ${selfPath()} build ${path}`);
 }
