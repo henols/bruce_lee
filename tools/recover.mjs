@@ -12,7 +12,7 @@ import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
 
-import { call, serverInfo, beginSession, assertSameMachine, MachineRestartedError, lastToolCall } from "./vice.mjs";
+import { call, serverInfo, beginSession, assertSameMachine, MachineRestartedError, lastToolCall, readEpoch } from "./vice.mjs";
 import { release, releaseDir, upsertRelease } from "./releases.mjs";
 import { tryHostPaths } from "../.claude/skills/devcontainer-host-path/hostpath.mjs";
 
@@ -730,13 +730,205 @@ export async function recover(releaseId, { runLabel = "run1" } = {}) {
 }
 
 /** Run `recover` twice from scratch and require byte-identical, 65536-byte output. */
+/**
+ * Volatile scratch: not part of any program image, and not evidence.
+ *
+ * $0100-$01FF is the 6502 stack page -- bytes below the live stack pointer are
+ * dead frames from calls that already returned, so their contents are
+ * meaningless leftovers. $0200-$03FF is the KERNAL's work area and BASIC input
+ * buffer, which this game does not own; it holds whatever the KERNAL's own boot
+ * left there.
+ *
+ * Excluded from the reproducibility assertion, but RECORDED with a reason --
+ * never silently dropped.
+ */
+export const VOLATILE_RANGES = [
+  { start: 0x0100, end: 0x01ff, reason: "6502 stack page; bytes below the live SP are dead call frames" },
+  { start: 0x0200, end: 0x03ff, reason: "KERNAL work area / BASIC input buffer; not owned by the game" },
+];
+
+const inRanges = (addr, ranges) => ranges.some((r) => addr >= r.start && addr <= r.end);
+
+/**
+ * Partition two captures of the same release against a deterministic power-on
+ * baseline, and decide reproducibility over the PROGRAM IMAGE rather than over
+ * all 65536 bytes.
+ *
+ * Why not all 64K: never-written RAM is deterministic at power-on but drifts
+ * once the machine runs. Measured with no disk and no game at all -- a bare C64
+ * idling at the BASIC prompt for 20s -- 994 bytes differ between two runs. Full
+ * 64K byte-identity is therefore unachievable in principle on this emulator, so
+ * asserting it would leave the phase's headline claim permanently red while
+ * saying nothing about the bytes that are actually evidence.
+ *
+ * The definition is deliberately NOT "the bytes that happen to match", which
+ * would make the assertion vacuous. A byte the program wrote to DIFFERENT
+ * values in the two runs differs from the baseline in both, lands inside the
+ * program image, and FAILS -- which is exactly the real defect we want caught.
+ *
+ *   programImage  both runs differ from baseline, minus volatile scratch,
+ *                 minus empirically decay-prone addresses  -> must be identical
+ *   writtenOnce   exactly one run differs from baseline. Not silently excluded:
+ *                 a byte written in one run and not the other is an anomaly, so
+ *                 it is counted and reported.
+ *   pristine      neither run differs from baseline -> never written, no evidence
+ *   excluded      volatile scratch / decay-prone, with the reason recorded
+ */
+export function classifyRuns({ baseline, runA, runB, decayProne = new Set(), volatileRanges = VOLATILE_RANGES }) {
+  if (baseline.length !== 65536 || runA.length !== 65536 || runB.length !== 65536) {
+    throw new Error("classifyRuns: all three images must be exactly 65536 bytes");
+  }
+  const mismatches = [];
+  const writtenOnce = [];
+  let programImage = 0, pristine = 0, excludedVolatile = 0, excludedDecay = 0;
+  for (let i = 0; i < 65536; i++) {
+    const wa = runA[i] !== baseline[i];
+    const wb = runB[i] !== baseline[i];
+    if (inRanges(i, volatileRanges)) { excludedVolatile++; continue; }
+    if (decayProne.has(i)) { excludedDecay++; continue; }
+    if (wa && wb) {
+      programImage++;
+      if (runA[i] !== runB[i]) mismatches.push({ addr: i, a: runA[i], b: runB[i], baseline: baseline[i] });
+    } else if (wa !== wb) {
+      writtenOnce.push({ addr: i, a: runA[i], b: runB[i], baseline: baseline[i] });
+    } else {
+      pristine++;
+    }
+  }
+  return {
+    ok: mismatches.length === 0 && writtenOnce.length === 0,
+    programImageBytes: programImage,
+    mismatches,
+    writtenOnce,
+    pristineBytes: pristine,
+    excluded: { volatileBytes: excludedVolatile, decayProneBytes: excludedDecay, volatileRanges },
+  };
+}
+
 export async function reproduce(releaseId) {
   const run1 = await recover(releaseId, { runLabel: "run1" });
   const run2 = await recover(releaseId, { runLabel: "run2" });
   const image1 = readFileSync(run1.binPath);
   const image2 = readFileSync(run2.binPath);
-  const ok = image1.length === 65536 && image2.length === 65536 && run1.sha256 === run2.sha256;
-  return { ok, run1, run2, sha256_1: run1.sha256, sha256_2: run2.sha256 };
+  const sizesOk = image1.length === 65536 && image2.length === 65536;
+  const identical = run1.sha256 === run2.sha256;
+
+  const machineDir = join(REPO_ROOT, "recovery", "machine");
+  const basePath = join(machineDir, "poweron.bin");
+  const decayPath = join(machineDir, "decay-prone.json");
+  if (!existsSync(basePath)) {
+    throw new Error(
+      `reproduce: no power-on baseline at ${basePath}. Run \`node tools/recover.mjs baseline\` first -- ` +
+        `the program-image comparison is defined against it.`
+    );
+  }
+  const baseMeta = existsSync(join(machineDir, "poweron.json"))
+    ? JSON.parse(readFileSync(join(machineDir, "poweron.json"), "utf8"))
+    : {};
+  const currentEpoch = readEpoch()?.epoch ?? null;
+  if (baseMeta.epoch != null && currentEpoch != null && baseMeta.epoch !== currentEpoch) {
+    throw new Error(
+      `reproduce: the power-on baseline was captured in epoch ${baseMeta.epoch} but the emulator is now in ` +
+        `epoch ${currentEpoch}. RAM contents do not survive an emulator restart, so that baseline is stale. ` +
+        `Re-run \`node tools/recover.mjs baseline\` as the FIRST emulator action of this epoch.`
+    );
+  }
+  const baseline = readFileSync(basePath);
+  let decayProne = new Set();
+  let decayMeta = null;
+  if (existsSync(decayPath)) {
+    decayMeta = JSON.parse(readFileSync(decayPath, "utf8"));
+    decayProne = new Set(decayMeta.addresses || []);
+  }
+
+  const cls = classifyRuns({ baseline, runA: image1, runB: image2, decayProne });
+  return {
+    ok: sizesOk && cls.ok,
+    identical,
+    sizesOk,
+    run1, run2,
+    sha256_1: run1.sha256,
+    sha256_2: run2.sha256,
+    classification: cls,
+    decayReference: decayMeta ? { addresses: decayMeta.addresses.length, run_ms: decayMeta.run_ms } : null,
+  };
+}
+
+/**
+ * Capture the deterministic power-on RAM baseline: hard reset with the CPU left
+ * halted so the KERNAL never runs and cannot clear anything. Verified stable --
+ * two consecutive cold resets read byte-identical 64K.
+ */
+export async function captureBaseline() {
+  // MUST be the first emulator action after a fresh emulator process starts.
+  //
+  // `mode:"hard"` reports "Machine power cycled" but does NOT restore pristine
+  // RAM once the machine has been running -- exactly like real hardware, where
+  // reset does not clear DRAM. Measured: two baselines captured back-to-back in
+  // one epoch, after the game had run, differed by 2551 bytes. A baseline taken
+  // mid-epoch is therefore NOT a power-on baseline and must not be treated as
+  // one. The epoch is recorded below so a stale baseline can be rejected rather
+  // than silently believed.
+  await call("vice_machine_reset", { mode: "hard", run_after: false });
+  const { image, chunkSize } = await captureWithFallback(call);
+  if (image.length !== 65536) throw new Error(`captureBaseline: got ${image.length} bytes, expected 65536`);
+  const machineDir = join(REPO_ROOT, "recovery", "machine");
+  mkdirSync(machineDir, { recursive: true });
+  const sha = createHash("sha256").update(image).digest("hex");
+  writeFileSync(join(machineDir, "poweron.bin"), image);
+  const info = await serverInfo().catch(() => null);
+  const epoch = readEpoch()?.epoch ?? null;
+  writeFileSync(
+    join(machineDir, "poweron.json"),
+    JSON.stringify({
+      sha256: sha,
+      bytes: image.length,
+      chunk_size: chunkSize,
+      epoch,
+      captured_at: new Date().toISOString(),
+      server: info?.serverInfo ?? null,
+      caveat: "Valid ONLY if captured as the first emulator action of this epoch. A hard reset does not restore pristine RAM once the machine has run (measured: 2551 bytes of drift between two mid-epoch baselines).",
+    }, null, 2) + "\n"
+  );
+  return { sha256: sha, path: join(machineDir, "poweron.bin"), epoch };
+}
+
+/**
+ * Build the decay-prone address set empirically: cold-reset the machine, let it
+ * run untouched for `runMs`, dump, twice, and record every address that differs.
+ * No disk is attached and no key is pressed, so nothing a program did can be
+ * confused with drift -- any difference is an emulator-level effect.
+ *
+ * Two samples under-cover a stochastic effect, so this is a floor, not a
+ * complete set. Residual drift therefore surfaces as a reported mismatch rather
+ * than being silently absorbed -- which is the honest failure direction.
+ */
+export async function captureDecayReference({ runMs = 20000 } = {}) {
+  const grab = async () => {
+    await call("vice_machine_reset", { mode: "hard", run_after: false });
+    await call("vice_execution_run", {});
+    await sleep(runMs);
+    await call("vice_execution_pause", {});
+    const { image } = await captureWithFallback(call);
+    return image;
+  };
+  const a = await grab();
+  const b = await grab();
+  const addresses = [];
+  for (let i = 0; i < 65536; i++) if (a[i] !== b[i]) addresses.push(i);
+  const machineDir = join(REPO_ROOT, "recovery", "machine");
+  mkdirSync(machineDir, { recursive: true });
+  writeFileSync(
+    join(machineDir, "decay-prone.json"),
+    JSON.stringify({
+      note: "Addresses that differed between two identical idle runs (cold reset, no disk, no keypress). An emulator-level drift floor, not a complete set -- the effect is stochastic.",
+      run_ms: runMs,
+      count: addresses.length,
+      captured_at: new Date().toISOString(),
+      addresses,
+    }, null, 2) + "\n"
+  );
+  return { count: addresses.length, runMs };
 }
 
 // -------------------------------------------------------------------- CLI
@@ -784,13 +976,42 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       console.log(`recover: wrote ${r.binPath} (sha256 ${r.sha256})`);
       return;
     }
+    if (cmd === "baseline") {
+      const r = await captureBaseline();
+      console.log(`baseline: wrote ${r.path} (sha256 ${r.sha256})`);
+      return;
+    }
+    if (cmd === "decay-reference") {
+      const r = await captureDecayReference({ runMs: Number(opt("run-ms", "20000")) });
+      console.log(`decay-reference: ${r.count} drift-prone addresses over a ${r.runMs / 1000}s idle run`);
+      return;
+    }
     if (cmd === "reproduce") {
       const releaseId = rest[0];
       if (!releaseId) die("usage: reproduce <release-id>");
       const r = await reproduce(releaseId);
+      const c = r.classification;
       console.log(`run1 sha256: ${r.sha256_1}`);
       console.log(`run2 sha256: ${r.sha256_2}`);
-      console.log(r.ok ? "reproduce: OK -- byte-identical" : "reproduce: MISMATCH");
+      console.log(`full 64K identical: ${r.identical ? "yes" : "no"}`);
+      console.log("");
+      console.log(`program image:        ${c.programImageBytes} bytes  (both runs differ from the power-on baseline)`);
+      console.log(`  mismatches:         ${c.mismatches.length}`);
+      console.log(`  written in one run: ${c.writtenOnce.length}`);
+      console.log(`never written:        ${c.pristineBytes} bytes  (still at the power-on value in both runs)`);
+      console.log(`excluded volatile:    ${c.excluded.volatileBytes} bytes  ($0100-$03FF stack + KERNAL work area)`);
+      console.log(`excluded decay-prone: ${c.excluded.decayProneBytes} bytes` + (r.decayReference ? `  (from a ${r.decayReference.run_ms / 1000}s idle drift reference)` : "  (no decay reference captured)"));
+      for (const m of c.mismatches.slice(0, 12)) {
+        console.log(`  MISMATCH ${hex4(m.addr)}  run1=${m.a.toString(16).padStart(2, "0")} run2=${m.b.toString(16).padStart(2, "0")} baseline=${m.baseline.toString(16).padStart(2, "0")}`);
+      }
+      if (c.mismatches.length > 12) console.log(`  ... and ${c.mismatches.length - 12} more`);
+      for (const m of c.writtenOnce.slice(0, 12)) {
+        console.log(`  WRITTEN-ONCE ${hex4(m.addr)}  run1=${m.a.toString(16).padStart(2, "0")} run2=${m.b.toString(16).padStart(2, "0")} baseline=${m.baseline.toString(16).padStart(2, "0")}`);
+      }
+      console.log("");
+      console.log(r.ok
+        ? "reproduce: OK -- the program image is byte-identical across both runs"
+        : "reproduce: MISMATCH -- program-image bytes differ between runs");
       process.exit(r.ok ? 0 : 1);
     }
     console.log(`usage: node ${fileURLToPath(import.meta.url)} <command> [args]

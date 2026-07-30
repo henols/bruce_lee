@@ -24,8 +24,11 @@
           {
             "address": "$0900",
             "key": "SPACE",
-            "hit_count": 2958
+            "hit_count": 872
           }
+        ],
+        "keys_held_into_capture": [
+          "SPACE"
         ]
       },
       "trigger": {
@@ -41,7 +44,7 @@
           "capture_record": "recovery/danish/dumps/danish-gameentry-run1.capture.json",
           "chip_state": null,
           "range_manifest": null,
-          "sha256": "cd51e0d501337a39f752da2cedc7606617794c1d32f14e783fbaf357e22f2fe6",
+          "sha256": "c54189cdb7035014bdd12dce71e4859e122d8455a29a28574f68eb8e41ab00f5",
           "load_event_ref": null
         },
         {
@@ -51,7 +54,7 @@
           "capture_record": "recovery/danish/dumps/danish-gameentry-run2.capture.json",
           "chip_state": null,
           "range_manifest": null,
-          "sha256": "54ce15e98fba21a9f193329cfb402ba8b79a75c105ddffca9d723b32f3356c87",
+          "sha256": "7ffe086907c9ee0168f00926aff2198f9275622e88efc7c053e0091ea8384579",
           "load_event_ref": null
         }
       ],

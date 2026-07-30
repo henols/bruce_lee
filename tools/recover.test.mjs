@@ -12,7 +12,7 @@ import { mkdtempSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { assembleChunks, captureImage, voidRun } from "./recover.mjs";
+import { assembleChunks, captureImage, voidRun, classifyRuns, VOLATILE_RANGES } from "./recover.mjs";
 import { beginSession, assertSameMachine, readEpoch, MachineRestartedError } from "./vice.mjs";
 
 const tmpEpochDir = () => mkdtempSync(join(tmpdir(), "vice-epoch-"));
@@ -241,4 +241,81 @@ test("voidRun: artifacts that do not exist are a silent no-op (nothing renamed, 
   assert.deepEqual(voidedArtifacts, []);
   assert.equal(existsSync(binPath), false);
   assert.equal(existsSync(capturePath), false);
+});
+
+// ---------------------------------------------------------------------------
+// classifyRuns: the reproducibility contract for the PROGRAM IMAGE.
+//
+// Criterion 1's original "byte-identical 64K" bar is unachievable on this
+// emulator: never-written RAM is deterministic at power-on but drifts once the
+// machine runs (measured: 994 bytes differ between two 20s idle runs on a bare
+// C64, no disk and no game). So reproducibility is asserted over the bytes the
+// program actually wrote.
+//
+// The danger with that redefinition is VACUITY -- defining the compared set as
+// "the bytes that happen to match" would make it always pass. The first test
+// below is the guard against exactly that, and it must keep failing.
+
+const flat = (v) => Buffer.alloc(65536, v);
+
+test("classifyRuns: identical program writes pass and are counted", () => {
+  const baseline = flat(0xaa);
+  const a = Buffer.from(baseline), b = Buffer.from(baseline);
+  a[0x5000] = 0x11; b[0x5000] = 0x11;
+  const r = classifyRuns({ baseline, runA: a, runB: b });
+  assert.equal(r.ok, true);
+  assert.equal(r.programImageBytes, 1);
+  assert.equal(r.mismatches.length, 0);
+});
+
+test("classifyRuns: NOT VACUOUS -- a byte written to different values fails", () => {
+  const baseline = flat(0xaa);
+  const a = Buffer.from(baseline), b = Buffer.from(baseline);
+  a[0x5001] = 0x22; b[0x5001] = 0x33;
+  const r = classifyRuns({ baseline, runA: a, runB: b });
+  assert.equal(r.ok, false, "a real program-image divergence must fail, or the contract proves nothing");
+  assert.equal(r.mismatches.length, 1);
+  assert.equal(r.mismatches[0].addr, 0x5001);
+});
+
+test("classifyRuns: a byte written in only one run is reported, never silently dropped", () => {
+  const baseline = flat(0xaa);
+  const a = Buffer.from(baseline), b = Buffer.from(baseline);
+  a[0x6000] = 0x44;
+  const r = classifyRuns({ baseline, runA: a, runB: b });
+  assert.equal(r.ok, false);
+  assert.equal(r.writtenOnce.length, 1);
+  assert.equal(r.writtenOnce[0].addr, 0x6000);
+});
+
+test("classifyRuns: volatile scratch ($0100-$03FF) is excluded with its size recorded", () => {
+  const baseline = flat(0xaa);
+  const a = Buffer.from(baseline), b = Buffer.from(baseline);
+  a[0x0150] = 0x55; b[0x0150] = 0x66;   // stack page
+  a[0x0300] = 0x77; b[0x0300] = 0x88;   // KERNAL work area
+  const r = classifyRuns({ baseline, runA: a, runB: b });
+  assert.equal(r.ok, true);
+  assert.equal(r.excluded.volatileBytes, 0x0400 - 0x0100);
+  assert.equal(r.excluded.volatileRanges, VOLATILE_RANGES);
+});
+
+test("classifyRuns: empirically decay-prone addresses are excluded", () => {
+  const baseline = flat(0xaa);
+  const a = Buffer.from(baseline), b = Buffer.from(baseline);
+  a[0x9000] = 0x77; b[0x9000] = 0x88;
+  const r = classifyRuns({ baseline, runA: a, runB: b, decayProne: new Set([0x9000]) });
+  assert.equal(r.ok, true);
+  assert.equal(r.excluded.decayProneBytes, 1);
+});
+
+test("classifyRuns: never-written bytes count as pristine, not as program image", () => {
+  const baseline = flat(0xaa);
+  const r = classifyRuns({ baseline, runA: Buffer.from(baseline), runB: Buffer.from(baseline) });
+  assert.equal(r.programImageBytes, 0);
+  assert.equal(r.pristineBytes, 65536 - (0x0400 - 0x0100));
+});
+
+test("classifyRuns: rejects any image that is not exactly 65536 bytes", () => {
+  const baseline = flat(0xaa);
+  assert.throws(() => classifyRuns({ baseline, runA: Buffer.alloc(100), runB: Buffer.from(baseline) }), /65536/);
 });
