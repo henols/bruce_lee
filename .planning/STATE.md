@@ -121,6 +121,7 @@ None yet.
 | 260730-r0u | Every skill's `.mjs` modules now live in a per-skill `scripts/` directory (`resources/` and data files stay at skill root; two path-anchor regression tests added) | 2026-07-30 | bbb3dd7 | [260730-r0u-all-the-scripts-that-are-used-by-the-ski](./quick/260730-r0u-all-the-scripts-that-are-used-by-the-ski/) |
 | 260730-ryz | `vice-session/SKILL.md` rewritten as a usage-only guide; every internal mechanic relocated to a new `INTERNALS.md` maintainer doc — **that doc was subsequently deleted in 260730-u9w (`61fa835`); do not recreate it** | 2026-07-30 | 6341df6 | [260730-ryz-rewrite-vice-session-skill-md-as-usage-o](./quick/260730-ryz-rewrite-vice-session-skill-md-as-usage-o/) |
 | 260730-u9w | Extract checkpoint-synchronization primitives into vice-session (vice-sync.mjs); durable module-leak node:test gate keeping module names out of SKILL.md; corrected the false self-sufficiency claim | 2026-07-30 | 9424395 | [260730-u9w-extract-the-checkpoint-synchronization-p](./quick/260730-u9w-extract-the-checkpoint-synchronization-p/) |
+| 260730-v6z | New `c64-ram-capture` skill holds layer B (reproducible 64K RAM capture + drift-tolerant comparison); `tools/recover.mjs` slimmed 874→422 lines to layer C only; 27-test suite moved beside the code it covers; both pending todos retired | 2026-07-30 | 4c0874d | [260730-v6z-create-the-c64-ram-capture-skill-layer-b](./quick/260730-v6z-create-the-c64-ram-capture-skill-layer-b/) |
 
 ## Deferred Items
 
@@ -132,6 +133,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-30T22:22:05.003Z
-Stopped at: Completed quick task 260730-u9w: extracted checkpoint-sync primitives into vice-session's vice-sync.mjs; durable module-leak gate in SKILL.md
+Last session: 2026-07-30T22:27:34.943Z
+Stopped at: Completed quick task 260730-v6z: layer B extracted into the new `c64-ram-capture` skill; `tools/recover.mjs` is now layer C only. A live `reproduce danish` during this task reported `MISMATCH` at `$D588` (2-bit) — the already-documented Hamming-1-too-tight edge case above, not a regression; that design gap remains open.
 Resume file: None
