@@ -5,19 +5,39 @@
 // for the caller, and hands back enough to redirect tools/vice.mjs's
 // transport seam (useInstance()) at the leased instance.
 //
-// MINIMAL slice (this file, as first written): readRegistry()/instanceFor()
-// treat the registry as untrusted host-written input, exactly like
-// tools/vice.mjs's readEpoch() already treats epoch.json (T-mef-01) -- parse
-// in try/catch, accept only integer ports in 1..65535, ignore every other
-// field, never throw. acquire() takes an atomic, exclusive lease via a
-// linkSync of a fully-written temp file (T-mef-04) and walks candidate ports
-// in DESCENDING order, so batch/harness leases drift away from 6510 and
-// leave the interactive .mcp.json instance free when possible. With no
-// registry present, or no valid port in it, acquire() returns the single
-// DEFAULT instance -- port 6510, the default endpoint, the non-port-scoped
-// epoch file under the pool dir -- with pooled:false and a no-op release():
-// exactly today's behaviour with zero configuration, and explicitly not an
-// error (D-3).
+// readRegistry()/instanceFor() treat the registry as untrusted host-written
+// input, exactly like tools/vice.mjs's readEpoch() already treats epoch.json
+// (T-mef-01) -- parse in try/catch, accept only integer ports in 1..65535,
+// ignore every other field, never throw. acquire() takes an atomic,
+// exclusive lease via a linkSync of a fully-written temp file (T-mef-04) and
+// walks candidate ports in DESCENDING order, so batch/harness leases drift
+// away from 6510 and leave the interactive .mcp.json instance free when
+// possible. With no registry present, or no valid port in it, acquire()
+// returns the single DEFAULT instance -- port 6510, the default endpoint,
+// the non-port-scoped epoch file under the pool dir -- with pooled:false and
+// a no-op release(): exactly today's behaviour with zero configuration, and
+// explicitly not an error (D-3).
+//
+// POLICY: blocking-with-timeout (chosen over fail-fast or wait-forever). A
+// capture run is long and `reproduce` is two of them back to back, so
+// failing the instant every port is busy would make routine work flaky; but
+// waiting forever would hide a leaked lease. acquire() therefore polls every
+// `pollMs` until `timeoutMs` elapses, then throws an error naming every
+// candidate port with its holder pid, host and age -- `timeoutMs: 0` fails
+// immediately, and a busy instance is never silently returned.
+//
+// CONTAINER-SIDE LIVENESS -- WHAT THIS DELIBERATELY DOES NOT DO: acquire()
+// never tests whether a supervisor is alive by pid-probing it, because a
+// supervisor pid was written on the HOST side, in a DIFFERENT pid namespace
+// from this container (T-mef-03) -- process.kill(hostPid, 0) here would be
+// testing a number that may coincidentally match an unrelated local
+// process, or may not exist at all, and either way answers nothing about
+// the host. Presence of the instance's own epoch.json is the only weak
+// liveness hint used (indirectly, by the caller after redirecting), and a
+// genuinely dead instance surfaces through the transport error and operator
+// guidance tools/vice.mjs already produces. Do not "fix" this by adding a
+// container-side pid check that appears to work against a supervisor pid --
+// it does not check what it looks like it checks.
 import { readFileSync, writeFileSync, unlinkSync, mkdirSync, linkSync, existsSync } from "node:fs";
 import { hostname } from "node:os";
 import { join, resolve } from "node:path";
@@ -113,16 +133,86 @@ function defaultInstance(dir = poolDir()) {
   };
 }
 
+const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Decide whether the lease currently occupying `lp` may be reclaimed.
+ * Treats the lease file as untrusted, exactly like registry.json:
+ *   - unparseable / not an object -> reclaim (a malformed file must not wedge
+ *     a port forever; the caller logs a loud warning).
+ *   - older than maxLeaseAgeMs -> reclaim, regardless of host or pid.
+ *   - holder_host equals THIS host AND the pid is confirmably gone
+ *     (process.kill(pid, 0) throws ESRCH) -> reclaim.
+ *   - holder_host is a DIFFERENT host -> pid is NEVER used to reclaim
+ *     (T-mef-03: a supervisor pid and a container pid live in different pid
+ *     namespaces, so pid-testing a number written on the other side of the
+ *     bind mount is meaningless and could match an unrelated local
+ *     process). Only age can reclaim a cross-host lease.
+ * Returns { reclaim, reason }.
+ */
+function isReclaimable(lp, maxLeaseAgeMs) {
+  let raw;
+  try {
+    raw = readFileSync(lp, "utf8");
+  } catch {
+    return { reclaim: true, reason: "lease file vanished mid-check" };
+  }
+  let rec;
+  try {
+    rec = JSON.parse(raw);
+  } catch {
+    return { reclaim: true, reason: "lease file is not valid JSON" };
+  }
+  if (rec === null || typeof rec !== "object") {
+    return { reclaim: true, reason: "lease file did not decode to an object" };
+  }
+  const acquiredAtMs = Date.parse(rec.acquired_at);
+  if (Number.isFinite(acquiredAtMs) && Date.now() - acquiredAtMs > maxLeaseAgeMs) {
+    return { reclaim: true, reason: `lease older than maxLeaseAgeMs (${maxLeaseAgeMs}ms)` };
+  }
+  if (rec.holder_host === hostname() && Number.isInteger(rec.holder_pid)) {
+    let alive = true;
+    try {
+      process.kill(rec.holder_pid, 0);
+    } catch (e) {
+      if (e.code === "ESRCH") alive = false;
+    }
+    if (!alive) {
+      return { reclaim: true, reason: `holder pid ${rec.holder_pid} is no longer running on this host` };
+    }
+  }
+  return { reclaim: false };
+}
+
+/** Human-readable holder description for the "every port busy" timeout error. */
+function describeHolder(port, dir) {
+  const lp = leasePath(port, dir);
+  try {
+    const rec = JSON.parse(readFileSync(lp, "utf8"));
+    const ageMs = Date.now() - Date.parse(rec.acquired_at);
+    const ageStr = Number.isFinite(ageMs) ? `${Math.round(ageMs / 1000)}s ago` : "unknown age";
+    return `port ${port}: held by pid ${rec.holder_pid} on ${rec.holder_host} (acquired ${ageStr})`;
+  } catch {
+    return `port ${port}: held (lease file unreadable)`;
+  }
+}
+
 /**
  * Take an exclusive lease on `port`: write a uniquely-named temp file in the
  * leases directory, then `linkSync` it onto `<port>.lease` -- `link` is
  * atomic and fails EEXIST if the name exists, and unlike an O_EXCL create it
  * publishes fully-written content in one step, so a concurrent reader can
- * never observe an empty lease file (T-mef-04). Returns the token on
- * success, or null on EEXIST (occupied -- caller tries the next port).
+ * never observe an empty lease file (T-mef-04). On EEXIST, decides whether
+ * the existing lease is reclaimable (see isReclaimable above); reclaiming is
+ * an unlink followed by ONE retry of the link, so two simultaneous reapers
+ * still produce exactly one winner -- if the retry also EEXISTs, another
+ * reaper won and this call reports busy for this round rather than looping.
+ * Returns `{ token }` on success, or null (occupied -- caller tries the next
+ * port, or the next poll cycle).
  */
-function tryAcquirePort(port, dir, holderPid, argv) {
+function tryAcquirePort(port, dir, holderPid, argv, maxLeaseAgeMs) {
   mkdirSync(leasesDir(dir), { recursive: true });
+  const lp = leasePath(port, dir);
   const token = randomUUID();
   const record = {
     port,
@@ -134,28 +224,89 @@ function tryAcquirePort(port, dir, holderPid, argv) {
   };
   const tmp = join(leasesDir(dir), `.tmp-${process.pid}-${token}`);
   writeFileSync(tmp, JSON.stringify(record, null, 2) + "\n");
-  try {
-    linkSync(tmp, leasePath(port, dir));
-  } catch (e) {
-    if (e.code === "EEXIST") {
-      unlinkSync(tmp);
-      return null;
+
+  const attemptLink = () => {
+    try {
+      linkSync(tmp, lp);
+      return true;
+    } catch (e) {
+      if (e.code === "EEXIST") return false;
+      try { unlinkSync(tmp); } catch { /* best effort */ }
+      throw e;
     }
-    try { unlinkSync(tmp); } catch { /* best effort */ }
-    throw e;
+  };
+
+  if (attemptLink()) {
+    try { unlinkSync(tmp); } catch { /* best effort cleanup of the now-unneeded temp name */ }
+    return { token };
   }
-  try { unlinkSync(tmp); } catch { /* best effort cleanup of the now-unneeded temp name */ }
-  return token;
+
+  const verdict = isReclaimable(lp, maxLeaseAgeMs);
+  if (!verdict.reclaim) {
+    try { unlinkSync(tmp); } catch { /* best effort */ }
+    return null; // genuinely busy
+  }
+  console.error(`warn: reclaiming lease for port ${port}: ${verdict.reason}`);
+  try { unlinkSync(lp); } catch { /* may already be gone -- fine, that's the point */ }
+
+  if (attemptLink()) {
+    try { unlinkSync(tmp); } catch { /* best effort */ }
+    return { token };
+  }
+  // Another reaper won the retry -- treat as busy for this round.
+  try { unlinkSync(tmp); } catch { /* best effort */ }
+  return null;
+}
+
+// -------------------------------------------------------- crash-safety net
+//
+// Registered ONCE (guarded by exitHandlersRegistered) rather than per-lease,
+// so acquiring many leases in one process (sequential CLI use, or this
+// module's own tests) never approaches Node's default max-listener warning
+// threshold. pendingLeases tracks every currently-held lease's path + token;
+// at exit (or SIGINT/SIGTERM) each is released synchronously and only if its
+// on-disk token still matches -- the real crash guarantee is reclaimability
+// (isReclaimable above), this is a courtesy best-effort cleanup, not the
+// mechanism the pool depends on.
+const pendingLeases = new Set(); // { leasePath, token }
+let exitHandlersRegistered = false;
+
+function releasePendingSync() {
+  for (const entry of pendingLeases) {
+    try {
+      const rec = JSON.parse(readFileSync(entry.leasePath, "utf8"));
+      if (rec.token === entry.token) unlinkSync(entry.leasePath);
+    } catch {
+      // lease already gone, unreadable, or token mismatched -- nothing to do
+    }
+  }
+  pendingLeases.clear();
+}
+
+function ensureExitHandlers() {
+  if (exitHandlersRegistered) return;
+  exitHandlersRegistered = true;
+  process.on("exit", releasePendingSync);
+  process.on("SIGINT", () => { releasePendingSync(); process.exit(130); });
+  process.on("SIGTERM", () => { releasePendingSync(); process.exit(143); });
 }
 
 /**
  * Lease an instance. With no registry (or no valid port in it), returns the
  * default instance untouched -- pooled:false, no lease file written, a no-op
  * release() -- which is exactly today's behaviour with zero configuration
- * (D-3). Otherwise walks candidate ports in DESCENDING order and returns the
- * first successfully leased one.
+ * (D-3). Otherwise walks candidate ports in DESCENDING order every
+ * `pollMs`, reclaiming stale leases as it goes, until one is free or
+ * `timeoutMs` elapses (`timeoutMs: 0` fails on the first pass, immediately).
+ * A busy instance is never returned.
  */
-export async function acquire({ dir = poolDir(), argv = process.argv.slice(2).join(" ") } = {}) {
+export async function acquire({
+  dir = poolDir(),
+  argv = process.argv.slice(2).join(" "),
+  timeoutMs = Number(process.env.VICE_POOL_ACQUIRE_TIMEOUT_MS || 120000),
+  pollMs = 500,
+  maxLeaseAgeMs = Number(process.env.VICE_POOL_LEASE_MAX_AGE_MS || 3600000),
+} = {}) {
   const reg = readRegistry(registryPath(dir));
   if (!reg.present || reg.ports.length === 0) {
     const inst = defaultInstance(dir);
@@ -163,30 +314,50 @@ export async function acquire({ dir = poolDir(), argv = process.argv.slice(2).jo
   }
 
   const candidates = [...reg.ports].sort((a, b) => b - a); // descending
-  for (const port of candidates) {
-    const token = tryAcquirePort(port, dir, process.pid, argv);
-    if (token == null) continue; // occupied -- try the next port
-    const inst = instanceFor(port, dir);
-    const lp = leasePath(port, dir);
-    let released = false;
-    return {
-      ...inst,
-      pooled: true,
-      leasePath: lp,
-      release: async () => {
-        if (released) return;
-        released = true;
-        try {
-          if (existsSync(lp)) unlinkSync(lp);
-        } catch {
-          // best effort -- see Task 2 for token-checked, crash-safe release
-        }
-      },
-    };
-  }
+  const deadline = Date.now() + timeoutMs;
 
-  throw new Error(
-    `acquire: every registered instance (${candidates.join(", ")}) is currently leased -- ` +
-      `no free instance available`
-  );
+  while (true) {
+    for (const port of candidates) {
+      const result = tryAcquirePort(port, dir, process.pid, argv, maxLeaseAgeMs);
+      if (result == null) continue; // occupied -- try the next candidate port
+
+      const inst = instanceFor(port, dir);
+      const lp = leasePath(port, dir);
+      const entry = { leasePath: lp, token: result.token };
+      pendingLeases.add(entry);
+      ensureExitHandlers();
+
+      let released = false;
+      return {
+        ...inst,
+        pooled: true,
+        leasePath: lp,
+        release: async () => {
+          if (released) return;
+          released = true;
+          pendingLeases.delete(entry);
+          try {
+            const rec = JSON.parse(readFileSync(lp, "utf8"));
+            // Token check (T-mef-04): if this lease was reaped and
+            // reacquired by someone else, the on-disk token is now theirs --
+            // deleting it would steal a live lease out from under its
+            // legitimate holder.
+            if (rec.token === result.token) unlinkSync(lp);
+          } catch {
+            // lease already gone or unreadable -- nothing to do, and nothing
+            // to warn about: this is the expected shape of an idempotent or
+            // already-reclaimed release.
+          }
+        },
+      };
+    }
+
+    if (Date.now() >= deadline) {
+      const holders = candidates.map((p) => describeHolder(p, dir)).join("; ");
+      throw new Error(
+        `acquire: no free instance within ${timeoutMs}ms -- every candidate port is held: ${holders}`
+      );
+    }
+    await sleepMs(Math.max(0, Math.min(pollMs, deadline - Date.now())));
+  }
 }
