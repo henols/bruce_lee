@@ -100,7 +100,28 @@ hand, and the crash evidence is lost.
 
 ## 3. Wiring it into Claude Code
 
-Transport is plain HTTP POST to `/mcp`. This repo's [`.mcp.json`](../.mcp.json):
+**`.mcp.json` registers no server, on purpose.** [`tools/vice.mjs`](vice.mjs)
+is the *only* route from this container to the emulator (D-5) — every safety
+mechanism this project has built (the `vice_disk_list` deny-list, restart/
+epoch detection, pool leases) lives inside that one seam, and a direct
+`mcp__vice__*` tool call bypasses every one of them completely. Registering
+the server in `.mcp.json` would hand agents a second, unguarded path to the
+same emulator, so the registration was removed rather than left as an
+"advisory only" convention.
+
+```json
+{
+  "mcpServers": {}
+}
+```
+
+This takes effect only when the MCP client reloads (restart Claude Code, or
+whatever picked up `.mcp.json` originally) — editing the file mid-session
+does not retroactively revoke a connection already established.
+
+**One-step revert**, if a future need genuinely requires the direct MCP
+route back: paste this into `.mcp.json` in place of the empty object above,
+then restart the MCP client.
 
 ```json
 {
@@ -113,7 +134,8 @@ Transport is plain HTTP POST to `/mcp`. This repo's [`.mcp.json`](../.mcp.json):
 }
 ```
 
-Two details in there are load-bearing.
+Transport is plain HTTP POST to `/mcp`. Two details in that block are
+load-bearing.
 
 ### `-mcpserverhost 0.0.0.0` is mandatory from a devcontainer
 
@@ -151,8 +173,15 @@ Without it the name does not resolve and every call fails at DNS.
 ### Verify the connection
 
 ```bash
-node tools/vice.mjs ping        # -> VICE 3.10 (C64SC) -- paused
+node tools/vice.mjs ping        # -> VICE 3.10 (C64SC) -- paused [port 6510, http://...]
 ```
+
+If the host is down or unreachable, `ping` is the wrong first check — it
+touches the network and can take up to ~50s to fail through the retry
+budget. Check `node tools/vice.mjs session status` first: it is a **pure
+file read**, makes no MCP call at all, and works (or reports "no active
+session") even with the host completely down. See
+[§6, Sessions](#6-sessions-and-tool-discovery) below.
 
 Or without the harness:
 
@@ -293,10 +322,74 @@ writes. A lease on 6510 in that mixed setup would find no epoch file at that
 path and fall back to the checkpoint-presence probe. Run either a bare
 supervisor **or** a pool, not both, to avoid this.
 
-### `.mcp.json` stays on the single default instance, on purpose
+### Interactive use reaches a pooled instance through a session, not `.mcp.json`
 
-The pool is a container-side, harness-driven concept. Claude Code's own
-interactive MCP connection (`.mcp.json`) is not repointed at a leased
-instance and is not touched by any of this — it always talks to the default
-port-6510 endpoint (D-5). Only `tools/recover.mjs`'s own CLI acquires and
-redirects a lease, for the duration of the verb it's running.
+The pool is a container-side, harness-driven concept, and (as covered in
+§3 above) `.mcp.json` no longer registers a server at all — Claude Code has
+no direct MCP connection to repoint at a leased instance in the first place.
+`tools/recover.mjs`'s own CLI acquires and redirects a `kind:"process"` lease
+for the duration of the verb it's running; **interactive** use reaches a
+pooled instance through a `kind:"session"` lease instead — see §6 below.
+
+---
+
+## 6. Sessions and tool discovery
+
+### Why a session exists
+
+The agent's shell environment does not persist between separate Bash
+invocations, so a lease taken by one command is invisible to the next one —
+each `node tools/vice.mjs ...` call is a brand-new process with no memory of
+anything an earlier call `export`ed. A session solves this by living in a
+**file** instead: `.vice-supervisor/session.json` by default, or wherever
+`VICE_SESSION_FILE` points (set it to give two concurrent workstreams each
+their own session, without stepping on each other).
+
+```bash
+node tools/vice.mjs session acquire [--ttl-min N]   # lease an instance, start a session
+node tools/vice.mjs session status                  # read-only report, no emulator touched
+node tools/vice.mjs session release                 # free the lease, delete the session file
+```
+
+Every later `ping`/`call` invocation resolves the active session automatically
+— nothing to re-specify. With **no session acquired**, everything works
+exactly as it always has, against the default port-6510 instance, zero
+configuration required.
+
+### Default TTL and refresh-on-use
+
+A session defaults to a 30-minute TTL (`VICE_SESSION_TTL_MS` to change it
+globally, `--ttl-min N` at acquire time for one session). Every successful
+resolution pushes the TTL forward to `now + ttl`, on both the lease and the
+session file — a session in continuous use never approaches its own expiry.
+An **expired** session refuses rather than silently falling back to the
+default instance; the error names both recovery verbs (`session release`
+then `session acquire`).
+
+### Two lease kinds, side by side
+
+| | `kind:"process"` (`tools/recover.mjs`) | `kind:"session"` (`tools/vice.mjs session acquire`) |
+|---|---|---|
+| Holder | One long-running process, alive for the whole verb | A short-lived CLI invocation that **exits** the instant `acquire` returns |
+| Reclaimed by | Same-host pid death, or `maxLeaseAgeMs` | TTL expiry (`expires_at`) **only** |
+| Why | The holder process dying really does mean the lease is abandoned | Pid-liveness would reclaim the lease within milliseconds of every successful acquire — the process that "holds" it is already gone by the time anyone could use it |
+
+Both kinds share one lease namespace on disk — a port leased one way cannot
+be taken the other way while it's held.
+
+### Discovering tools without the MCP registration
+
+Removing `.mcp.json`'s server registration (§3) also removes the typed tool
+schemas Claude Code used to read automatically. `tools/vice.mjs tools`
+replaces that:
+
+```bash
+node tools/vice.mjs tools                    # every tool: name + one-line description
+node tools/vice.mjs tools memory              # every tool whose name contains "memory"
+node tools/vice.mjs tools vice_memory_read    # full input schema: params, types, required, enum/default
+node tools/vice.mjs tools --json              # the raw tools/list result
+```
+
+`vice_disk_list` is always rendered `[FORBIDDEN]` here, never as a plain
+callable option — the deny-list check in `call()` and this listing are two
+independent places the same prohibition is enforced.
