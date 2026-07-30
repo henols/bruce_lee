@@ -20,14 +20,27 @@ Build it on the **host**, not in the devcontainer.
 
 ### Dependencies
 
-Debian / Ubuntu:
+Debian / Ubuntu — what upstream documents:
 
 ```bash
 apt install build-essential autoconf automake pkg-config \
             libmicrohttpd-dev libgtk-3-dev xa65 flex byacc
 ```
 
-macOS:
+**That list is not sufficient.** On Debian trixie the build also needed:
+
+```bash
+apt install dos2unix libglew-dev libevdev-dev libcurl4-openssl-dev libpulse-dev
+```
+
+None of these five are in upstream's instructions, and each surfaces as a
+configure or compile failure partway through rather than as an up-front check —
+so it is worth installing them before starting rather than discovering them one
+at a time. (`glew-utils` was also installed while hunting for the right GLEW
+package, but `libglew-dev` is the one that matters; the `-utils` package only
+provides the `glewinfo`/`visualinfo` binaries.)
+
+macOS — upstream's list, not exercised here:
 
 ```bash
 brew install autoconf automake pkg-config libmicrohttpd gtk+3 xa lame
