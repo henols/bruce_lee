@@ -5,10 +5,10 @@ milestone_name: Pipeline Proven *
 current_phase: 01
 current_phase_name: recovery-provenance
 status: executing
-stopped_at: "Completed quick task 260730-mef: parallel VICE instance pool launch"
-last_updated: "2026-07-30T16:40:57.998Z"
+stopped_at: "Completed quick task 260730-u9w: extracted checkpoint-sync primitives into vice-session's vice-sync.mjs; durable module-leak gate in SKILL.md"
+last_updated: "2026-07-30T22:22:19.954Z"
 last_activity: 2026-07-30
-last_activity_desc: "Completed quick task 260730-jty: host-side VICE crash supervision + container-side restart detection"
+last_activity_desc: "Completed quick task 260730-ryz: `vice-session/SKILL.md` rewritten as a usage-only guide, internals moved to `INTERNALS.md`"
 progress:
   total_phases: 1
   completed_phases: 0
@@ -73,6 +73,7 @@ Recent decisions affecting current work:
 - [Roadmap]: Verification harness scheduled at Phase 3, not terminal — baseline capture needs only the recovered image plus harness plumbing, so plans 03-01/03-02 run as a parallel workstream alongside Phase 2.
 - [Milestones]: Split at the Phase 4 boundary — v1.0 closes on a proven pipeline (24 reqs), v2.0 on the complete reconstruction (20 reqs). Archives and the PROJECT.md evolution review happen while context is small and after the pipeline's assumptions have been tested. Accepted cost: v1.0 is not the originally-stated deliverable; v2.0 is.
 - [Phase ?]: [quick-260730-mef]: Container guard extracted into tools/lib/container-guard.sh (sourced by both vice-supervisor.sh and vice-pool.sh) to prevent detection-logic drift; vice-pool.mjs's acquire() takes atomic linkSync-based leases, walking ports in descending order, with blocking-with-timeout semantics and hostname-gated stale-lease reclaim (cross-host pid comparison is never trusted); snapshotName() namespaces every vice_snapshot_save call by instance port unconditionally, since the host snapshot directory is shared across instances.
+- [Phase ?]: [quick-260730-u9w]: Checkpoint-synchronisation primitives (reset, readCheckpoint, waitCheckpointHit, runToCheckpoint, screenshot, addrNum, hex4, POLL_WINDOWS_MS, PING_INTERVAL_MS, armedCheckpoints) moved from tools/recover.mjs into a new sibling module .claude/skills/vice-session/scripts/vice-sync.mjs — a third structurally-isolated concern alongside vice.mjs's transport seam and vice-probe.mjs's liveness probe. armedCheckpoints became a singleton tracker (track/untrack/ids/clear) so both runToCheckpoint() and recover.mjs's hand-rolled capture() write through one door. A durable, directory-enumerating node:test gate (skill-docs.test.mjs) replaces a one-shot grep keeping module names out of SKILL.md; INTERNALS.md stays deleted and no companion maintainer document was created.
 
 ### Pending Todos
 
@@ -119,6 +120,7 @@ None yet.
 | 260730-q4b | Shell scripts move to skill `resources/` and auto-install into `tools/` on any skill .mjs entry (gitignored deployment; never overwrites; `install --force` to refresh) | 2026-07-30 | e01531b | [260730-q4b-shell-scripts-move-to-skill-resources-an](./quick/260730-q4b-shell-scripts-move-to-skill-resources-an/) |
 | 260730-r0u | Every skill's `.mjs` modules now live in a per-skill `scripts/` directory (`resources/` and data files stay at skill root; two path-anchor regression tests added) | 2026-07-30 | bbb3dd7 | [260730-r0u-all-the-scripts-that-are-used-by-the-ski](./quick/260730-r0u-all-the-scripts-that-are-used-by-the-ski/) |
 | 260730-ryz | `vice-session/SKILL.md` rewritten as a usage-only guide; every internal mechanic relocated to a new `INTERNALS.md` maintainer doc | 2026-07-30 | 6341df6 | [260730-ryz-rewrite-vice-session-skill-md-as-usage-o](./quick/260730-ryz-rewrite-vice-session-skill-md-as-usage-o/) |
+| 260730-u9w | Extract checkpoint-synchronization primitives into vice-session (vice-sync.mjs); durable module-leak node:test gate keeping module names out of SKILL.md; corrected the false self-sufficiency claim | 2026-07-30 | 9424395 | [260730-u9w-extract-the-checkpoint-synchronization-p](./quick/260730-u9w-extract-the-checkpoint-synchronization-p/) |
 
 ## Deferred Items
 
@@ -130,6 +132,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-30T16:39:36.379Z
-Stopped at: Completed quick task 260730-mef: parallel VICE instance pool launch
+Last session: 2026-07-30T22:22:05.003Z
+Stopped at: Completed quick task 260730-u9w: extracted checkpoint-sync primitives into vice-session's vice-sync.mjs; durable module-leak gate in SKILL.md
 Resume file: None
