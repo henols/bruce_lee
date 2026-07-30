@@ -188,25 +188,3 @@ So the two halves work together:
   itself.
 
 `.vice-supervisor/` is gitignored: crash logs and epochs are local machine state.
-
----
-
-## 5. Hazards
-
-**Never call `vice_disk_list`.** It crashes the host MCP server, and recovery costs
-a VICE restart. [`tools/vice.mjs`](vice.mjs) enforces this with a deny-list checked
-before any request is serialised, so no caller can reach it even indirectly. Parse
-`.d64` bytes directly in Python instead, or use `vice_disk_read_sector`.
-
-**`vice_run_until`'s `cycles` argument is documented as "not yet implemented"** in
-its own live schema — it is not a timeout and gives no protection against hanging
-on a misidentified address. Use bounded `vice_execution_step` batches instead, and
-rely on the client-side abort timeout in `vice.mjs`.
-
-**VICE is a single shared instance.** Emulator work cannot be parallelised across
-plans even when the plans themselves are marked parallel.
-
-**Crash logs are evidence.** The root cause of the outages is still unconfirmed.
-When VICE dies, `.vice-supervisor/crashes.log` and `.vice-supervisor/logs/x64sc-*.log`
-hold the exit status, signal, and final output — check them before restarting, as
-that is the data that can eventually confirm or kill the current hypothesis.
