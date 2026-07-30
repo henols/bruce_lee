@@ -18,7 +18,7 @@ import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { createServer } from "node:http";
 
-import { acquire, readRegistry, instanceFor, refreshLease, DEFAULT_PORT } from "./vice-pool.mjs";
+import { acquire, readRegistry, instanceFor, refreshLease, DEFAULT_PORT, poolHealth, diagnose, leaseInfo } from "./vice-pool.mjs";
 import { call, useInstance, formatToolsOutput } from "./vice.mjs";
 import { repoRoot } from "./repo-root.mjs";
 import { probeInstance, probeAll, PROBE_TOOL, DEFAULT_PROBE_TIMEOUT_MS } from "./vice-probe.mjs";
@@ -87,7 +87,7 @@ test("instanceFor: derives url/epochFile purely from the validated port, never f
 
 test("no registry: acquire() returns port 6510, pooled:false, the non-port-scoped default epoch file, and writes no lease file", async () => {
   const dir = tmpPoolDir();
-  const l = await acquire({ dir });
+  const l = await acquire({ dir, probe: false });
   assert.equal(l.port, DEFAULT_PORT);
   assert.equal(l.pooled, false);
   assert.equal(l.epochFile, join(dir, "epoch.json"));
@@ -111,7 +111,7 @@ test("hostile registry: malformed shapes with no valid port all degrade to the 6
   for (const body of hostileBodies) {
     const dir = tmpPoolDir();
     writeFileSync(join(dir, "registry.json"), body);
-    const l = await acquire({ dir });
+    const l = await acquire({ dir, probe: false });
     assert.equal(l.port, DEFAULT_PORT, `expected fallback for body: ${body}`);
     assert.equal(l.pooled, false);
     assert.equal(l.epochFile, join(dir, "epoch.json"));
@@ -125,7 +125,7 @@ test("hostile registry: a traversal epoch_file field is inert -- epochFile is al
     join(dir, "registry.json"),
     JSON.stringify({ instances: [{ port: 6691, epoch_file: "../../../etc/passwd" }] })
   );
-  const l = await acquire({ dir });
+  const l = await acquire({ dir, probe: false });
   assert.equal(l.port, 6691);
   assert.equal(l.pooled, true);
   assert.equal(l.epochFile, join(dir, "6691", "epoch.json"));
@@ -138,14 +138,14 @@ test("hostile registry: a traversal epoch_file field is inert -- epochFile is al
 test("in-process exclusivity: three sequential acquires against a 3-port registry return three distinct ports; a fourth with timeoutMs:0 throws naming each port and its holder pid", async () => {
   const dir = tmpPoolDir();
   writeRegistry(dir, [6710, 6711, 6712]);
-  const l1 = await acquire({ dir, timeoutMs: 0 });
-  const l2 = await acquire({ dir, timeoutMs: 0 });
-  const l3 = await acquire({ dir, timeoutMs: 0 });
+  const l1 = await acquire({ dir, timeoutMs: 0, probe: false });
+  const l2 = await acquire({ dir, timeoutMs: 0, probe: false });
+  const l3 = await acquire({ dir, timeoutMs: 0, probe: false });
   const ports = [l1.port, l2.port, l3.port];
   assert.equal(new Set(ports).size, 3);
   assert.deepEqual([...ports].sort((a, b) => a - b), [6710, 6711, 6712]);
 
-  await assert.rejects(acquire({ dir, timeoutMs: 0 }), (err) => {
+  await assert.rejects(acquire({ dir, timeoutMs: 0, probe: false }), (err) => {
     for (const p of [6710, 6711, 6712]) assert.match(err.message, new RegExp(String(p)));
     assert.match(err.message, new RegExp(String(process.pid)));
     return true;
@@ -161,8 +161,8 @@ test("in-process exclusivity: three sequential acquires against a 3-port registr
 test("blocking acquire: with timeoutMs set and a lease released mid-wait, a waiting acquire picks it up rather than failing", async () => {
   const dir = tmpPoolDir();
   writeRegistry(dir, [6720]);
-  const l1 = await acquire({ dir, timeoutMs: 0 });
-  const waiterPromise = acquire({ dir, timeoutMs: 3000, pollMs: 100 });
+  const l1 = await acquire({ dir, timeoutMs: 0, probe: false });
+  const waiterPromise = acquire({ dir, timeoutMs: 3000, pollMs: 100, probe: false });
   await new Promise((r) => setTimeout(r, 300));
   await l1.release();
   const l2 = await waiterPromise;
@@ -191,7 +191,7 @@ test("stale reclaim by pid: a hand-written lease whose holder_host matches this 
     })
   );
 
-  const l = await acquire({ dir, timeoutMs: 0 });
+  const l = await acquire({ dir, timeoutMs: 0, probe: false });
   assert.equal(l.port, 6730);
   await l.release();
 });
@@ -214,7 +214,7 @@ test("stale reclaim by age: a lease newer in pid terms but older than maxLeaseAg
     })
   );
 
-  const l = await acquire({ dir, timeoutMs: 0, maxLeaseAgeMs: 5000 });
+  const l = await acquire({ dir, timeoutMs: 0, maxLeaseAgeMs: 5000, probe: false });
   assert.equal(l.port, 6740);
   await l.release();
 });
@@ -237,7 +237,7 @@ test("cross-namespace safety: a lease whose holder_host is a DIFFERENT hostname 
     })
   );
 
-  await assert.rejects(acquire({ dir, timeoutMs: 0 }), /6750/);
+  await assert.rejects(acquire({ dir, timeoutMs: 0, probe: false }), /6750/);
 });
 
 // ------------------------------------------------------------------- malformed lease
@@ -256,7 +256,7 @@ test("malformed lease file: reclaimed, with a warning, rather than blocking the 
   };
   let l;
   try {
-    l = await acquire({ dir, timeoutMs: 0 });
+    l = await acquire({ dir, timeoutMs: 0, probe: false });
   } finally {
     console.error = originalError;
   }
@@ -270,14 +270,14 @@ test("malformed lease file: reclaimed, with a warning, rather than blocking the 
 test("token safety: release() on a lease that was reaped and reacquired by another holder leaves the new holder's lease alone; release() is idempotent", async () => {
   const dir = tmpPoolDir();
   writeRegistry(dir, [6770]);
-  const l1 = await acquire({ dir, timeoutMs: 0 });
+  const l1 = await acquire({ dir, timeoutMs: 0, probe: false });
 
   // Simulate l1 being reaped by an age-based reclaim without l1 itself ever
   // calling release(): force its own on-disk lease to look ancient.
   const rec = JSON.parse(readFileSync(l1.leasePath, "utf8"));
   writeFileSync(l1.leasePath, JSON.stringify({ ...rec, acquired_at: new Date(0).toISOString() }));
 
-  const l2 = await acquire({ dir, timeoutMs: 0, maxLeaseAgeMs: 1000 });
+  const l2 = await acquire({ dir, timeoutMs: 0, maxLeaseAgeMs: 1000, probe: false });
   assert.equal(l2.port, 6770);
 
   await l1.release(); // l1's token no longer matches what's on disk -- must be a no-op
@@ -298,7 +298,7 @@ test("cross-process exclusivity: 8 concurrent racers against a 2-port registry p
     import { acquire } from ${JSON.stringify(MODULE_URL)};
     const dir = process.env.VICE_POOL_DIR;
     try {
-      const l = await acquire({ dir, timeoutMs: 0 });
+      const l = await acquire({ dir, timeoutMs: 0, probe: false });
       console.log(JSON.stringify({ ok: true, port: l.port }));
       // Hold for the whole race window -- a fast racer's own exit-time
       // release must not hand its port to a later racer and inflate the
@@ -348,7 +348,7 @@ test("session cross-process survival (D-1, THE load-bearing test): a session acq
   const dir = tmpPoolDir();
   writeRegistry(dir, [6810]);
   const sessionFile = join(dir, "session.json");
-  const env = { ...process.env, VICE_POOL_DIR: dir, VICE_SESSION_FILE: sessionFile };
+  const env = { ...process.env, VICE_POOL_DIR: dir, VICE_SESSION_FILE: sessionFile, VICE_POOL_PROBE: "0" };
 
   const { stdout: acquireOut } = await execFileP(process.execPath, [VICE_CLI, "session", "acquire"], { env });
   const acquireMatch = acquireOut.match(/session acquired: (\S+) on port (\d+)/);
@@ -368,7 +368,7 @@ test("session lease survives its creator's exit: the lease file remains after th
   const dir = tmpPoolDir();
   writeRegistry(dir, [6811]);
   const sessionFile = join(dir, "session.json");
-  const env = { ...process.env, VICE_POOL_DIR: dir, VICE_SESSION_FILE: sessionFile };
+  const env = { ...process.env, VICE_POOL_DIR: dir, VICE_SESSION_FILE: sessionFile, VICE_POOL_PROBE: "0" };
 
   await execFileP(process.execPath, [VICE_CLI, "session", "acquire"], { env });
 
@@ -384,9 +384,9 @@ test("session lease survives its creator's exit: the lease file remains after th
 test("a second acquire() cannot take a port held by a live session lease -- session and process leases share one lease namespace", async () => {
   const dir = tmpPoolDir();
   writeRegistry(dir, [6812]);
-  const l = await acquire({ dir, kind: "session", ttlMs: 60000 });
+  const l = await acquire({ dir, kind: "session", ttlMs: 60000, probe: false });
   assert.equal(l.pooled, true);
-  await assert.rejects(acquire({ dir, timeoutMs: 0 }), /6812/);
+  await assert.rejects(acquire({ dir, timeoutMs: 0, probe: false }), /6812/);
   await l.release();
 });
 
@@ -408,13 +408,13 @@ test("session lease is NOT pid-reclaimable (D-2): a confirmably-dead holder_pid 
     expires_at: new Date(Date.now() + 60000).toISOString(),
   };
   writeFileSync(leasePathOf(dir, 6813), JSON.stringify(sessionRec));
-  await assert.rejects(acquire({ dir, timeoutMs: 0 }), /6813/, "a session lease must not be pid-reclaimed");
+  await assert.rejects(acquire({ dir, timeoutMs: 0, probe: false }), /6813/, "a session lease must not be pid-reclaimed");
 
   const processRec = { ...sessionRec, token: "dead-pid-process-token" };
   delete processRec.kind;
   delete processRec.expires_at;
   writeFileSync(leasePathOf(dir, 6813), JSON.stringify(processRec));
-  const l = await acquire({ dir, timeoutMs: 0 });
+  const l = await acquire({ dir, timeoutMs: 0, probe: false });
   assert.equal(l.port, 6813, "the same dead-pid fixture as a plain process lease must still be pid-reclaimed");
   await l.release();
 });
@@ -436,7 +436,7 @@ test("session lease outlives maxLeaseAgeMs: a two-hour-old but unexpired session
       expires_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
     })
   );
-  await assert.rejects(acquire({ dir, timeoutMs: 0, maxLeaseAgeMs: 1000 }), /6814/);
+  await assert.rejects(acquire({ dir, timeoutMs: 0, maxLeaseAgeMs: 1000, probe: false }), /6814/);
 });
 
 test("expired session lease IS reclaimed: acquire() succeeds once expires_at has passed", async () => {
@@ -456,7 +456,7 @@ test("expired session lease IS reclaimed: acquire() succeeds once expires_at has
       expires_at: new Date(Date.now() - 1000).toISOString(),
     })
   );
-  const l = await acquire({ dir, timeoutMs: 0 });
+  const l = await acquire({ dir, timeoutMs: 0, probe: false });
   assert.equal(l.port, 6815);
   await l.release();
 });
@@ -486,7 +486,7 @@ test("malformed session lease (kind session, unparseable expires_at) is reclaime
   };
   let l;
   try {
-    l = await acquire({ dir, timeoutMs: 0 });
+    l = await acquire({ dir, timeoutMs: 0, probe: false });
   } finally {
     console.error = originalError;
   }
@@ -518,7 +518,7 @@ test("session release frees the port: after the release child exits, both the le
   const dir = tmpPoolDir();
   writeRegistry(dir, [6817]);
   const sessionFile = join(dir, "session.json");
-  const env = { ...process.env, VICE_POOL_DIR: dir, VICE_SESSION_FILE: sessionFile };
+  const env = { ...process.env, VICE_POOL_DIR: dir, VICE_SESSION_FILE: sessionFile, VICE_POOL_PROBE: "0" };
 
   await execFileP(process.execPath, [VICE_CLI, "session", "acquire"], { env });
   assert.equal(existsSync(sessionFile), true);
@@ -610,7 +610,7 @@ test("TTL refreshed on each use (D-2): a session in continuous use never approac
   const dir = tmpPoolDir();
   writeRegistry(dir, [6825]);
   const sessionFile = join(dir, "session.json");
-  const env = { ...process.env, VICE_POOL_DIR: dir, VICE_SESSION_FILE: sessionFile, VICE_SESSION_TTL_MS: "1000" };
+  const env = { ...process.env, VICE_POOL_DIR: dir, VICE_SESSION_FILE: sessionFile, VICE_SESSION_TTL_MS: "1000", VICE_POOL_PROBE: "0" };
 
   await execFileP(process.execPath, [VICE_CLI, "session", "acquire"], { env });
   const leaseFirst = JSON.parse(readFileSync(leasePathOf(dir, 6825), "utf8"));
@@ -645,7 +645,7 @@ test("TTL refreshed on each use (D-2): a session in continuous use never approac
 test("refresh is token-checked (T-nh5-04): refreshLease() against a lease with a mismatched on-disk token returns false and leaves the file byte-identical", async () => {
   const dir = tmpPoolDir();
   writeRegistry(dir, [6826]);
-  const l = await acquire({ dir, kind: "session", ttlMs: 60000 });
+  const l = await acquire({ dir, kind: "session", ttlMs: 60000, probe: false });
   const before = readFileSync(l.leasePath, "utf8");
 
   const ok = refreshLease(l.leasePath, "not-the-real-token", 120000);
@@ -1201,4 +1201,197 @@ test("probeInstance: probing the real default (currently down) endpoint complete
     `expected a verdict (either way) in under 3s -- never the ~50s a retry ladder would cost, took ${elapsedMs}ms`
   );
   assert.equal(typeof verdict.alive, "boolean");
+});
+
+// ============================================================================
+// Task 2 (quick-260730-p5x): probing acquire() and poolHealth()'s four-
+// question health model. instanceFor() derives its URL from
+// VICE_MCP_HOST + the validated port, so every test here that needs a real
+// stub server to be reachable points VICE_MCP_HOST at 127.0.0.1 for the
+// duration of that test, then restores whatever was there before.
+// ============================================================================
+
+async function withMcpHostEnv(host, fn) {
+  const prev = process.env.VICE_MCP_HOST;
+  process.env.VICE_MCP_HOST = host;
+  try {
+    return await fn();
+  } finally {
+    if (prev === undefined) delete process.env.VICE_MCP_HOST;
+    else process.env.VICE_MCP_HOST = prev;
+  }
+}
+
+/** A free ephemeral port strictly greater than `minExclusive` -- used to
+ * force a "dead" candidate to sort BEFORE a "live" one in acquire()'s
+ * descending-port walk, so a test can prove probing (not just reporting)
+ * changed the selection. */
+async function greaterFreeEphemeralPort(minExclusive) {
+  for (let i = 0; i < 50; i++) {
+    const p = await freeEphemeralPort();
+    if (p > minExclusive) return p;
+  }
+  throw new Error(`could not find a free ephemeral port greater than ${minExclusive} after 50 attempts`);
+}
+
+test("acquire(): a two-port registry with only one live stub returns the LIVE port even when descending order would have preferred the dead one", async () => {
+  await withStubServer(mcpHandler(), async (livePort) => {
+    const deadPort = await greaterFreeEphemeralPort(livePort);
+    await withMcpHostEnv("127.0.0.1", async () => {
+      const dir = tmpPoolDir();
+      writeRegistry(dir, [deadPort, livePort]);
+      const l = await acquire({ dir, timeoutMs: 0, probeTimeoutMs: 500 });
+      assert.equal(l.port, livePort, "descending order would try deadPort first -- probing must skip it");
+      await l.release();
+    });
+  });
+});
+
+test("acquire(): every candidate dead rejects with a per-candidate reason naming the cause and supervision verdict for each port -- never a bare 'none free'", async () => {
+  const deadPortA = await freeEphemeralPort();
+  const deadPortB = await greaterFreeEphemeralPort(deadPortA);
+  await withMcpHostEnv("127.0.0.1", async () => {
+    const dir = tmpPoolDir();
+    writeRegistry(dir, [deadPortA, deadPortB]);
+    await assert.rejects(acquire({ dir, timeoutMs: 0, probeTimeoutMs: 500 }), (err) => {
+      for (const p of [deadPortA, deadPortB]) assert.match(err.message, new RegExp(String(p)));
+      assert.match(err.message, /no answer/);
+      assert.match(err.message, /ECONNREFUSED/);
+      assert.match(err.message, /unsupervised/);
+      assert.doesNotMatch(err.message, /none free/i);
+      return true;
+    });
+  });
+});
+
+test("acquire(): a candidate that is alive but leased is reported as LEASED, not dead -- the two rejection reasons are distinguishable (D-1)", async () => {
+  await withStubServer(mcpHandler(), async (port) => {
+    await withMcpHostEnv("127.0.0.1", async () => {
+      const dir = tmpPoolDir();
+      writeRegistry(dir, [port]);
+      const holder = await acquire({ dir, timeoutMs: 0, probeTimeoutMs: 500 });
+      assert.equal(holder.port, port);
+
+      await assert.rejects(acquire({ dir, timeoutMs: 0, probeTimeoutMs: 500 }), (err) => {
+        assert.match(err.message, new RegExp(String(port)));
+        assert.match(err.message, /held by pid/);
+        assert.doesNotMatch(err.message, /no answer/, "an alive-but-leased candidate must not be described as dead");
+        return true;
+      });
+
+      await holder.release();
+    });
+  });
+});
+
+test("acquire(): a hostile registry url field is never probed -- the target is derived from the validated port only (T-p5x-01)", async () => {
+  await withStubServer(mcpHandler(), async (port) => {
+    await withMcpHostEnv("127.0.0.1", async () => {
+      const dir = tmpPoolDir();
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(
+        join(dir, "registry.json"),
+        JSON.stringify({
+          instances: [{ port, url: "http://evil.example.invalid:1/mcp", epoch_file: "../../../etc/passwd" }],
+        })
+      );
+      const l = await acquire({ dir, timeoutMs: 0, probeTimeoutMs: 500 });
+      assert.equal(l.port, port, "probing must have reached the REAL stub, derived from the port, not the hostile url");
+      await l.release();
+    });
+  });
+});
+
+test("acquire(): zero-config path still returns port 6510 with no registry, probes it, and warns on stderr rather than failing when it is not answering (D-7)", async () => {
+  const dir = tmpPoolDir();
+  const originalError = console.error;
+  let warning = "";
+  console.error = (msg) => {
+    warning += msg;
+  };
+  let l;
+  try {
+    l = await acquire({ dir });
+  } finally {
+    console.error = originalError;
+  }
+  assert.equal(l.port, DEFAULT_PORT);
+  assert.equal(l.pooled, false);
+  assert.match(warning, /not answering/);
+  await l.release();
+});
+
+test("poolHealth(): pooled instance answers all four questions as separate fields -- launched, alive, lease, supervised (epoch)", async () => {
+  await withStubServer(mcpHandler(), async (port) => {
+    await withMcpHostEnv("127.0.0.1", async () => {
+      const dir = tmpPoolDir();
+      writeRegistry(dir, [port]);
+      writeEpochFile(join(dir, String(port), "epoch.json"), 7);
+
+      const health = await poolHealth({ dir, timeoutMs: 500 });
+      assert.equal(health.pooled, true);
+      assert.equal(health.records.length, 1);
+      const rec = health.records[0];
+      assert.equal(rec.port, port);
+      assert.equal(rec.launched, true);
+      assert.equal(rec.alive, true);
+      assert.equal(rec.lease.held, false);
+      assert.equal(rec.epoch.present, true);
+      assert.equal(rec.epoch.epoch, 7);
+      assert.match(rec.diagnosis, /alive/);
+    });
+  });
+});
+
+test("poolHealth(): with no registry, reports the single unpooled default instance with launched:null", async () => {
+  const dir = tmpPoolDir();
+  const health = await poolHealth({ dir, timeoutMs: 500 });
+  assert.equal(health.pooled, false);
+  assert.equal(health.records.length, 1);
+  assert.equal(health.records[0].port, DEFAULT_PORT);
+  assert.equal(health.records[0].launched, null);
+});
+
+test("diagnose (D-4): dead with no epoch file -- nothing is supervising this port", () => {
+  const record = { alive: false, epoch: { present: false, epoch: null } };
+  assert.match(diagnose(record, null), /nothing is supervising/);
+});
+
+test("diagnose (D-4): dead with an epoch file and no prior observation -- unproven, re-probe to settle", () => {
+  const record = { alive: false, epoch: { present: true, epoch: 3, spawned_at: "2026-01-01T00:00:00Z" } };
+  const verdict = diagnose(record, null);
+  assert.match(verdict, /unproven/i);
+  assert.match(verdict, /re-probe/);
+});
+
+test("diagnose (D-4): dead with a prior observation showing the SAME epoch -- DEAD SUPERVISOR (a live one would have bumped it)", () => {
+  const record = { alive: false, epoch: { present: true, epoch: 3 } };
+  const previous = { epoch: { present: true, epoch: 3 } };
+  const verdict = diagnose(record, previous);
+  assert.match(verdict, /DEAD SUPERVISOR/);
+});
+
+test("diagnose (D-4): dead with an ADVANCED epoch -- a supervisor is alive and respawning, wait", () => {
+  const record = { alive: false, epoch: { present: true, epoch: 5 } };
+  const previous = { epoch: { present: true, epoch: 3 } };
+  const verdict = diagnose(record, previous);
+  assert.match(verdict, /respawning/);
+  assert.match(verdict, /wait/);
+});
+
+test("poolHealth(): D-4 end-to-end -- a dead pooled instance's diagnosis moves from unproven to DEAD SUPERVISOR across two calls with the same epoch", async () => {
+  const deadPort = await freeEphemeralPort();
+  await withMcpHostEnv("127.0.0.1", async () => {
+    const dir = tmpPoolDir();
+    writeRegistry(dir, [deadPort]);
+    writeEpochFile(join(dir, String(deadPort), "epoch.json"), 2);
+
+    const first = await poolHealth({ dir, timeoutMs: 500 });
+    assert.equal(first.records[0].alive, false);
+    assert.match(first.records[0].diagnosis, /unproven/i);
+
+    const second = await poolHealth({ dir, timeoutMs: 500, previous: first });
+    assert.equal(second.records[0].alive, false);
+    assert.match(second.records[0].diagnosis, /DEAD SUPERVISOR/);
+  });
 });
