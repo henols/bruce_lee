@@ -72,18 +72,21 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. `recovery/PROVENANCE.md` assigns ORIGINAL / CRACKER-PATCH / UNKNOWN plus per-range evidence and confidence covering 100% of the canonical image, and records that the diff was run only after both images were normalised to the same fully-loaded state and base address (with the offset and load-state used stated).
   4. `recovery/PROVENANCE.md` records an explicit verdict on whether the two cracks are independent, the artifacts examined to reach it, and the confidence weight a "both releases agree" verdict therefore carries.
   5. `recovery/clean/README.md` names the canonical disassembly subject and the reason it was chosen over the other image.
-**Plans**: 5 plans
+**Plans**: 6 plans
 
 Plans:
-- [ ] 01-01: Resolve the VICE bootstrap method; boot both images by a recorded, repeatable MCP-only procedure; inspect both directories by parsing `.d64` bytes (RECOVER-01) — *strictly first; everything else in this phase depends on it*
-- [ ] 01-02: `danish.d64` — defeat the TCS-CRUNCH! loader, establish and verify a known-good dump point, bank RAM in via `$01`, capture (RECOVER-02) — *sequential (shared VICE)*
-- [ ] 01-03: `saeger.d64` — capture under the same recorded procedure (RECOVER-03) — *sequential (shared VICE); logically independent of 01-02 but must queue behind it*
-- [ ] 01-04: Post-dump play-through to detect on-demand loading; supplementary dumps; normalise both images to a common state and base (RECOVER-04, RECOVER-05) — *sequential; hard gate before 01-05*
-- [ ] 01-05: Provenance diff, three-bucket partition (loader / cracktro / game logic), ledger, crack-independence verdict, canonical designation (RECOVER-06, RECOVER-07, RECOVER-08) — *sequential; cannot start before 01-04 normalises both images*
+- [ ] 01-01: **Tracer** — one release recovered end-to-end: MCP client seam, boot, loader-done signal, bank-scoped 64K capture, byte-identical re-run proof, `RELEASES.json` registry (RECOVER-01, RECOVER-02) — *strictly first; everything else in this phase depends on it*
+- [ ] 01-02: Complete the per-dump artifact set — chip-state sidecar (D-04) and range manifest (D-02); parse both disk directories from `.d64` bytes; release-schema invariant validator (RECOVER-01, RECOVER-02) — *sequential (shared VICE)*
+- [ ] 01-03: Second release recovered by re-running the same recorded procedure, with N-readiness proven by the parameterisation gate (RECOVER-01, RECOVER-03) — *sequential (shared VICE)*
+- [ ] 01-04: Mechanical on-demand-load detector, bounded play-through, `LOADING.md` absence-as-evidence record, supplementary dumps (RECOVER-04) — *sequential; has a blocking human-verify checkpoint*
+- [ ] 01-05: Anchor-proven offset, N-way diff, gap-tolerant coalescing, three-bucket partition, `PROVENANCE.md` generated + prose tiers at 100% coverage (RECOVER-05, RECOVER-06) — *sequential; no emulator needed*
+- [ ] 01-06: Crack-independence verdict with tiered evidence; canonical designation by measured patch count; `recovery/clean/` published as a projection of the registry (RECOVER-07, RECOVER-08) — *strictly last*
+
+**Planning note (2026-07-30):** the plan set was restructured from the horizontally-sliced 5-plan breakdown originally recorded here to a **tracer-first** 6-plan shape. Plan 01-01 is now a complete end-to-end vertical slice — cold reset through boot, signal detection, capture, artifact write and determinism proof against one release — rather than a bootstrap survey that produces no dump. Reasoning, and the explicit resolution of the tension with the original breakdown, is recorded in `.planning/phases/01-recovery-provenance/01-01-PLAN.md`. Two further deviations: `RECOVER-05` (normalisation) moved from 01-04 to 01-05's first task, where it gates the diff directly; and the `$01`-write step named in the original 01-02 line is **not** performed at all — research verified live that `vice_memory_read(bank:"ram")` reaches RAM beneath ROM and I/O non-invasively, so D-08's guarded fallback stays documented and unexercised.
 
 **Parallelisation**: none. Every plan touches the single shared VICE instance or hard-depends on the prior plan's output. This phase is the project's most expensive place to be wrong — spend the time.
 
-**Decisions to resolve here**: **VICE bootstrap method** — whether an MCP attach/boot tool exists or booting must go through `snapshot_load` from a pre-captured "just booted" `.vsf`. Front-loaded here because nothing in the project can run without it. If it is `snapshot_load`, capture the snapshots once and name them explicitly (`danish_postboot_v1.vsf`, not `snapshot.vsf`) — every later phase reuses them.
+**Decisions to resolve here**: **VICE bootstrap method** — whether an MCP attach/boot tool exists or booting must go through `snapshot_load` from a pre-captured "just booted" `.vsf`. Front-loaded here because nothing in the project can run without it. *Resolved during research (2026-07-30): `vice_disk_attach` + `vice_autostart` exist and were confirmed live, so `snapshot_load` bootstrapping is not needed; whether autostart survives these disks' faked directories is the one remaining empirical test, with a keyboard `LOAD`/`RUN` fallback ready. The explicit-naming rule still applies — snapshots are recorded **by name** (`danish_gameentry_v1`), and research further established that a `.vsf` **cannot** be committed at all: `vice_snapshot_save` takes only a name, stores host-side, and no tool exports snapshot bytes into the container. See `01-01-PLAN.md` § "Research correction to D-07".*
 
 **Open question resolved here**: are the two cracks genuinely independent, or common-ancestor? Examine loader style, cracktro credits, and any surviving release text. The answer retroactively sets the weight of every "both agree" provenance verdict.
 
@@ -264,7 +267,7 @@ Two cross-phase overlaps are intended and should be honoured when scheduling wor
 
 | Milestone | Phase | Plans Complete | Status | Completed |
 |-----------|-------|----------------|--------|-----------|
-| v1.0 | 1. Recovery & Provenance | 0/5 | Not started | - |
+| v1.0 | 1. Recovery & Provenance | 0/6 | Not started | - |
 | v1.0 | 2. Coverage, Hazards & Memory Map | 0/5 | Not started | - |
 | v1.0 | 3. Verification Harness & Original Baselines | 0/4 | Not started | - |
 | v1.0 | 4. Vertical Slice — Sprite & Display Pilot | 0/5 | Not started | - |
@@ -272,7 +275,7 @@ Two cross-phase overlaps are intended and should be honoured when scheduling wor
 | v2.0 | 6. World, Audio & Shell + Data Format Validation | 0/5 | Not started | - |
 | v2.0 | 7. Complete Source Tree, Bootable Disk & Full-Suite Verification | 0/5 | Not started | - |
 
-**v1.0 progress:** 0/19 plans · **v2.0 progress:** 0/15 plans
+**v1.0 progress:** 0/20 plans · **v2.0 progress:** 0/15 plans
 
 ## Requirement Coverage
 
