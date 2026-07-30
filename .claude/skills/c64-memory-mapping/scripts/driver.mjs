@@ -20,7 +20,9 @@ import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const MEMMAP_JSON = join(HERE, "memmap.json");
+// memmap.json lives at the skill root, one level up from scripts/, by decision
+// (D-03): only .mjs modules move into scripts/, data files stay put.
+const MEMMAP_JSON = join(HERE, "..", "memmap.json");
 
 // Reference tables, merged into one address -> meaning index. `kind` selects the
 // parser; add a row here to pull in another aay page (e.g. basromma.htm for the

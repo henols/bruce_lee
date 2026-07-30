@@ -12,7 +12,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, statSync, chmodSync } from "node:fs";
 import { tmpdir, hostname } from "node:os";
-import { join, dirname } from "node:path";
+import { join, dirname, sep } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
@@ -1046,6 +1046,26 @@ test("repoRoot() ladder: a .git ancestor resolves with no env set; a containing 
   }
 });
 
+test("repoRoot() last-resort fallback (quick-260730-r0u, path-anchor regression): climbs FOUR levels from a <root>/.claude/skills/<skill>/scripts path, not three", () => {
+  // Deliberately has no .git ancestor and no CONTAINER_WORKSPACE_PATH, so the
+  // ladder falls all the way through to branch 4 -- the fixed-hop last
+  // resort this move touched. A naive move that kept the old three-level
+  // hop would land on <tmpdir>/.claude/skills/vice-session instead of
+  // <tmpdir> itself, which is exactly the silent-wrong-directory failure
+  // this file's header forbids.
+  const root = mkdtempSync(join(tmpdir(), "reporoot-fourlevel-"));
+  const scriptsDir = join(root, ".claude", "skills", "vice-session", "scripts");
+  mkdirSync(scriptsDir, { recursive: true });
+
+  const originalError = console.error;
+  console.error = () => {};
+  try {
+    assert.equal(repoRoot({ from: scriptsDir, env: {} }), root);
+  } finally {
+    console.error = originalError;
+  }
+});
+
 test("no-configuration fallback: the CLI's no-argument usage output reports port 6510 from the new .claude/skills/vice-session location", async () => {
   const dir = mkdtempSync(join(tmpdir(), "vice-noconfig-"));
   const env = { ...process.env, VICE_POOL_DIR: dir, VICE_SESSION_FILE: join(dir, "session.json") };
@@ -1570,6 +1590,27 @@ test("CLI `pool status`: prints port/alive/leased/supervised and completes in un
 // SYNTHETIC temp root (mkdtempSync) so no test ever writes into the real
 // repo's tools/ -- matching this file's own existing temp-directory idiom.
 // ============================================================================
+
+test("RESOURCES_DIR (quick-260730-r0u, path-anchor regression): points at the SKILL ROOT's resources/, not a scripts/-relative directory", () => {
+  // A wrong hop count here is SILENT, because ensureResourcesInstalled()
+  // swallows every error by contract -- see install-resources.mjs's header.
+  // Asserting the exact entry set (not just "no throw") is what makes this
+  // non-vacuous: a directory that resolves to somewhere with NO resources/
+  // subdirectory makes readdirSync() throw loudly inside resourceEntries(),
+  // so this test dies instead of quietly comparing two empty lists.
+  assert.ok(
+    RESOURCES_DIR.endsWith(join("vice-session", "resources")),
+    `expected RESOURCES_DIR to end with vice-session/resources, got ${RESOURCES_DIR}`
+  );
+  assert.ok(
+    !RESOURCES_DIR.split(sep).includes("scripts"),
+    `expected RESOURCES_DIR to NOT pass through a scripts/ segment, got ${RESOURCES_DIR}`
+  );
+  assert.deepEqual(
+    resourceEntries().sort(),
+    ["lib/container-guard.sh", "lib/repo-root.sh", "vice-pool.sh", "vice-supervisor.sh"]
+  );
+});
 
 test("installResources(): install-when-missing -- every file under resources/ lands at <root>/tools/<same relative path>", () => {
   const root = mkdtempSync(join(tmpdir(), "vice-install-missing-"));

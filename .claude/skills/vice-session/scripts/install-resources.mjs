@@ -23,13 +23,17 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, copyFileSync, statSyn
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
-import { hostPath, SET_ENV_HINT } from "../devcontainer-host-path/hostpath.mjs";
+import { hostPath, SET_ENV_HINT } from "../../devcontainer-host-path/scripts/hostpath.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
-/** This module's own sibling resources/ directory -- the tracked source of
- * truth every deployed tools/ file is copied from. */
-export const RESOURCES_DIR = join(HERE, "resources");
+/** The SKILL ROOT's resources/ directory -- one level up from this module's
+ * own scripts/ directory, NOT a sibling -- the tracked source of truth every
+ * deployed tools/ file is copied from. Getting this hop wrong is silent and
+ * total: readdirSync() throws inside resourceEntries(), but
+ * ensureResourcesInstalled() catches everything by contract (D-3 above), so
+ * every command keeps reporting success while nothing is ever deployed. */
+export const RESOURCES_DIR = join(HERE, "..", "resources");
 
 /** Where resources/ gets deployed to, for a given repo root. Always
  * `<root>/tools` -- the host's existing muscle-memory location. */

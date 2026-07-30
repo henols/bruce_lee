@@ -9,7 +9,7 @@ Look up what a C64 address means, and document a 6502 listing by resolving every
 address it touches. One script does both, offline, anywhere Node ≥18 runs:
 
 ```bash
-D=.claude/skills/c64-memory-mapping/driver.mjs   # relative to the repo root
+D=.claude/skills/c64-memory-mapping/scripts/driver.mjs   # relative to the repo root
 
 node $D lookup '$D011' '$FFD2'      # what lives at an address
 node $D annotate --file game.asm    # document a listing or .asm file

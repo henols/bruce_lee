@@ -28,15 +28,16 @@
 //      towards mechanism 1.
 //
 // Node >= 18. No dependencies, no network, nothing machine-specific: copy this
-// file into any devcontainer-based project and it works.
+// file into any devcontainer-based project's
+// .claude/skills/devcontainer-host-path/scripts/ and it works.
 
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve, relative, isAbsolute } from "node:path";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-// <workspace>/.claude/skills/devcontainer-host-path/hostpath.mjs -> <workspace>
-const WORKSPACE_ROOT = resolve(HERE, "..", "..", "..");
+// <workspace>/.claude/skills/devcontainer-host-path/scripts/hostpath.mjs -> <workspace>
+const WORKSPACE_ROOT = resolve(HERE, "..", "..", "..", "..");
 const CONTAINER_WS = process.env.CONTAINER_WORKSPACE_PATH || WORKSPACE_ROOT;
 
 // Where a bind-mount source device is *itself* mounted on the host. Ordered by

@@ -13,8 +13,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { assembleChunks, captureImage, voidRun, classifyRuns, VOLATILE_RANGES, snapshotName } from "./recover.mjs";
-import { beginSession, assertSameMachine, readEpoch, MachineRestartedError } from "../.claude/skills/vice-session/vice.mjs";
-import { DEFAULT_PORT } from "../.claude/skills/vice-session/vice-pool.mjs";
+import { beginSession, assertSameMachine, readEpoch, MachineRestartedError } from "../.claude/skills/vice-session/scripts/vice.mjs";
+import { DEFAULT_PORT } from "../.claude/skills/vice-session/scripts/vice-pool.mjs";
 
 const tmpEpochDir = () => mkdtempSync(join(tmpdir(), "vice-epoch-"));
 
