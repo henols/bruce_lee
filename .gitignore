@@ -17,8 +17,10 @@
 *.pch
 
 # Libraries
+# NB: *.a is deliberately NOT ignored here - ACME uses .a for 6502 source files
+# (see its docs: "Please use '.a' as the file name extension of ACME source
+# code files"), so ignoring it would silently drop assembly sources.
 *.lib
-*.a
 *.la
 *.lo
 
@@ -53,3 +55,6 @@ dkms.conf
 
 # debug information files
 *.dwo
+
+# Claude Code state staged for the first devcontainer rebuild (contains credentials)
+.devcontainer/.claude-seed/
