@@ -116,12 +116,24 @@ test file moved from this directory into
 the `vice-session` skill is self-contained and exportable, matching every
 other skill in this project (`acme-build/acme.mjs`,
 `devcontainer-host-path/hostpath.mjs`). The HOST-side launchers —
-`tools/vice-supervisor.sh`, `tools/vice-pool.sh` and
-`tools/lib/container-guard.sh` — deliberately **stayed here**: only the
-container-side client half of this setup is a "skill" an agent invokes;
-launching and supervising `x64sc` is a host operation with no analogue
-inside the container. `tools/recover.mjs` (and its test file) also stayed,
-importing the moved modules via the same cross-tree path
+`vice-supervisor.sh`, `vice-pool.sh` and `lib/container-guard.sh` — now live
+tracked in that same skill's
+[`resources/`](../.claude/skills/vice-session/resources/), not here:
+`tools/vice-supervisor.sh`, `tools/vice-pool.sh` and `tools/lib/container-guard.sh`
+are **gitignored, disposable deployed copies**, regenerated automatically by
+`install-resources.mjs` the first time any of the skill's `.mjs` files runs
+(`node .claude/skills/vice-session/vice.mjs ping`, `install`, or any other
+verb all trigger it identically). A fresh clone has no `tools/` scripts at
+all until that first run — `node .claude/skills/vice-session/vice.mjs install`
+is the one command that materialises them deliberately, with no other side
+effect. The reason the second TRACKED copy went away: two tracked copies of
+one script drift apart, and the drift is invisible until the host happens to
+run the stale one — keeping exactly one tracked source of truth
+(`resources/`) makes that class of bug structurally impossible. An existing
+deployed copy is never overwritten automatically, whatever its contents;
+`install --force` is the only command that refreshes a copy that has been
+hand-edited. `tools/recover.mjs` (and its test file) also stayed, importing
+the moved modules via the same cross-tree path
 `devcontainer-host-path/hostpath.mjs` already used.
 
 ```json

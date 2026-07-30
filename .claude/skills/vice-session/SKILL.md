@@ -21,26 +21,36 @@ is the only route to the emulator — the deny-list, restart detection and pool
 leases all live in that one seam, and a direct MCP call would bypass every
 one of them.
 
-## Self-contained for the container side only
+## Self-contained for both halves
 
-This skill directory (`repo-root.mjs`, `vice.mjs`, `vice-pool.mjs`,
-`vice-probe.mjs`, `vice-session.mjs`, `vice-pool.test.mjs`) is everything
-needed for the CONTAINER half of driving VICE, and can be copied into another
-project as a unit. But the HOST half — `tools/vice-supervisor.sh`, `tools/vice-pool.sh`
-and `tools/lib/container-guard.sh` — deliberately remains in `tools/` at the
-repo root, not in this directory, and **must be copied alongside this skill**
-for restart detection and the instance pool to work at all. Copying only
-this directory gets you a client with nothing to talk to.
+This skill directory carries BOTH halves of driving VICE and can be copied
+into another project as a single unit — copying it alone is now sufficient.
+The CONTAINER half is the Node modules at the top level (`repo-root.mjs`,
+`vice.mjs`, `vice-pool.mjs`, `vice-probe.mjs`, `vice-session.mjs`,
+`vice-pool.test.mjs`, `install-resources.mjs`). The HOST half —
+`vice-supervisor.sh`, `vice-pool.sh` and `lib/container-guard.sh` — lives
+tracked in `.claude/skills/vice-session/resources/`, and is deployed automatically into `tools/` at the
+repo root the FIRST TIME any of this skill's `.mjs` files runs (`ensureResourcesInstalled()`,
+triggered from `repo-root.mjs`). `tools/` holds disposable, gitignored
+deployed copies — not a second tracked copy that could drift out of sync
+with `resources/`. An existing deployed copy is **never overwritten
+automatically**, whatever its contents; run
+`node .claude/skills/vice-session/vice.mjs install` for a per-entry status
+report (missing/present/diverged) with no side effects, or
+`... install --force` to deliberately restore every entry from `resources/`.
 
 The invariant that makes the two halves work together: the shell scripts
-resolve the repo root one level up from `tools/`
-(`REPO_ROOT="$(cd "$(dirname "$SELF_PATH")/.." && pwd)"`); the Node modules
-here resolve it via `repo-root.mjs` — `CONTAINER_WORKSPACE_PATH` when it
-contains the caller, otherwise the nearest ancestor with a `.git` entry. Both
-must land on the same `.vice-supervisor` directory, or restart detection
-silently stops working with no error anywhere. `tools/vice-supervisor.sh
---print-paths` and `tools/vice-pool.sh --print-paths` print the resolved
-paths (no side effects) so this can be checked directly.
+(from EITHER `resources/` or their deployed `tools/` copy) resolve the repo
+root via `resources/lib/repo-root.sh`'s `resolve_repo_root()`; the Node
+modules resolve it via `repo-root.mjs`'s `repoRoot()`. Both follow the same
+ladder — `CONTAINER_WORKSPACE_PATH` when it contains the caller, otherwise
+the nearest ancestor with a `.git` entry, otherwise `CONTAINER_WORKSPACE_PATH`
+regardless, otherwise a location-shaped last resort — and must land on the
+same `.vice-supervisor` directory, or restart detection silently stops
+working with no error anywhere. `--print-paths` on either script, from
+either location, prints the resolved paths (no side effects) so this can be
+checked directly — `resources/vice-supervisor.sh --print-paths` and
+`tools/vice-supervisor.sh --print-paths` must always agree.
 
 ## Sessions
 
@@ -94,7 +104,10 @@ tools/vice-pool.sh status
 tools/vice-pool.sh stop
 ```
 
-These run on the host workspace, never in this container.
+These run on the host workspace, never in this container. `tools/vice-pool.sh`
+is deployed automatically from this skill's `resources/` the first time any
+`.mjs` file here runs (see "Self-contained for both halves" above) — a fresh
+clone has no `tools/` scripts until then.
 
 ## Four questions, four mechanisms
 
@@ -119,9 +132,9 @@ time liveness (not just launch/lease/supervision state) needs checking.
 | Symptom | Fix |
 |---|---|
 | `session ... expired at ... -- refusing to fall back to the default instance silently` | `node .claude/skills/vice-session/vice.mjs session release` then `session acquire` again. |
-| `transport error` / `ECONNREFUSED` / timed out after retries | The host VICE MCP server is down or unreachable from this container. Recovery is host-side (`tools/vice-supervisor.sh`); this container cannot restart it. |
+| `transport error` / `ECONNREFUSED` / timed out after retries | The host VICE MCP server is down or unreachable from this container. Recovery is host-side (`tools/vice-supervisor.sh`, deployed from this skill's `resources/` — see above); this container cannot restart it. |
 | `acquire: no free instance within Nms -- every candidate rejected: ...` | Read the per-candidate reasons in the message: "no answer" means dead (see the next two rows), "leased by pid ... " means busy — wait, or check `pool status`/`tools/vice-pool.sh status` for a leak. |
 | A registered instance that does not answer (`pool status` shows `alive:no`) | LAUNCHED does not imply ALIVE. `acquire()` already skips it automatically; `pool status`'s diagnosis says whether it's unsupervised, unproven, a dead supervisor, or mid-respawn — follow that fix directly rather than guessing. |
-| `pool status` diagnosis says `DEAD SUPERVISOR` (epoch unchanged across two probes on a dead port) | The host-side supervisor for that instance died too — a live one would have respawned VICE and bumped the epoch. Restart it on the HOST (`tools/vice-supervisor.sh`); this container cannot. |
+| `pool status` diagnosis says `DEAD SUPERVISOR` (epoch unchanged across two probes on a dead port) | The host-side supervisor for that instance died too — a live one would have respawned VICE and bumped the epoch. Restart it on the HOST (`tools/vice-supervisor.sh`, deployed from this skill's `resources/`); this container cannot. |
 | `the emulator restarted since this session was acquired -- epoch changed from X to Y` | The host respawned VICE mid-session. This session's results are suspect: `session release` then `session acquire` and redo the affected work. |
 | A session lease that nobody released | `session status` reports time-to-expiry; a session lease self-frees on TTL expiry even if nobody explicitly releases it, so a leaked one is not permanent. |
