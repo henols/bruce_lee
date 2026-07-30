@@ -116,56 +116,58 @@ Which phases cover which requirements. Populated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| RECOVER-01 | TBD | Pending |
-| RECOVER-02 | TBD | Pending |
-| RECOVER-03 | TBD | Pending |
-| RECOVER-04 | TBD | Pending |
-| RECOVER-05 | TBD | Pending |
-| RECOVER-06 | TBD | Pending |
-| RECOVER-07 | TBD | Pending |
-| RECOVER-08 | TBD | Pending |
-| MAP-01 | TBD | Pending |
-| MAP-02 | TBD | Pending |
-| MAP-03 | TBD | Pending |
-| MAP-04 | TBD | Pending |
-| MAP-05 | TBD | Pending |
-| DOCS-01 | TBD | Pending |
-| DOCS-02 | TBD | Pending |
-| DOCS-03 | TBD | Pending |
-| DOCS-04 | TBD | Pending |
-| DOCS-05 | TBD | Pending |
-| DOCS-06 | TBD | Pending |
-| DOCS-07 | TBD | Pending |
-| DOCS-08 | TBD | Pending |
-| DOCS-09 | TBD | Pending |
-| DOCS-10 | TBD | Pending |
-| DOCS-11 | TBD | Pending |
-| DATA-01 | TBD | Pending |
-| DATA-02 | TBD | Pending |
-| DATA-03 | TBD | Pending |
-| DATA-04 | TBD | Pending |
-| DATA-05 | TBD | Pending |
-| DATA-06 | TBD | Pending |
-| BUILD-01 | TBD | Pending |
-| BUILD-02 | TBD | Pending |
-| BUILD-03 | TBD | Pending |
-| BUILD-04 | TBD | Pending |
-| BUILD-05 | TBD | Pending |
-| BUILD-06 | TBD | Pending |
-| BUILD-07 | TBD | Pending |
-| VERIFY-01 | TBD | Pending |
-| VERIFY-02 | TBD | Pending |
-| VERIFY-03 | TBD | Pending |
-| VERIFY-04 | TBD | Pending |
-| VERIFY-05 | TBD | Pending |
-| VERIFY-06 | TBD | Pending |
-| VERIFY-07 | TBD | Pending |
+| RECOVER-01 | Phase 1 | Pending |
+| RECOVER-02 | Phase 1 | Pending |
+| RECOVER-03 | Phase 1 | Pending |
+| RECOVER-04 | Phase 1 | Pending |
+| RECOVER-05 | Phase 1 | Pending |
+| RECOVER-06 | Phase 1 | Pending |
+| RECOVER-07 | Phase 1 | Pending |
+| RECOVER-08 | Phase 1 | Pending |
+| MAP-01 | Phase 2 | Pending |
+| MAP-02 | Phase 2 | Pending |
+| MAP-03 | Phase 2 | Pending |
+| MAP-04 | Phase 2 | Pending |
+| MAP-05 | Phase 2 | Pending |
+| DOCS-01 | Phase 4 | Pending |
+| DOCS-02 | Phase 5 | Pending |
+| DOCS-03 | Phase 5 | Pending |
+| DOCS-04 | Phase 5 | Pending |
+| DOCS-05 | Phase 5 | Pending |
+| DOCS-06 | Phase 6 | Pending |
+| DOCS-07 | Phase 6 | Pending |
+| DOCS-08 | Phase 6 | Pending |
+| DOCS-09 | Phase 6 | Pending |
+| DOCS-10 | Phase 6 | Pending |
+| DOCS-11 | Phase 7 | Pending |
+| DATA-01 | Phase 6 | Pending |
+| DATA-02 | Phase 4 | Pending |
+| DATA-03 | Phase 6 | Pending |
+| DATA-04 | Phase 5 | Pending |
+| DATA-05 | Phase 6 | Pending |
+| DATA-06 | Phase 6 | Pending |
+| BUILD-01 | Phase 4 | Pending |
+| BUILD-02 | Phase 4 | Pending |
+| BUILD-03 | Phase 4 | Pending |
+| BUILD-04 | Phase 4 | Pending |
+| BUILD-05 | Phase 7 | Pending |
+| BUILD-06 | Phase 7 | Pending |
+| BUILD-07 | Phase 7 | Pending |
+| VERIFY-01 | Phase 3 | Pending |
+| VERIFY-02 | Phase 3 | Pending |
+| VERIFY-03 | Phase 3 | Pending |
+| VERIFY-04 | Phase 3 | Pending |
+| VERIFY-05 | Phase 4 | Pending |
+| VERIFY-06 | Phase 7 | Pending |
+| VERIFY-07 | Phase 7 | Pending |
 
 **Coverage:**
 - v1 requirements: 44 total
-- Mapped to phases: 0 ⚠️ (populated by roadmap creation)
-- Unmapped: 44 ⚠️
+- Mapped to phases: 44 ✓
+- Unmapped: 0 ✓
+
+**Per-phase totals:** Phase 1: 8 · Phase 2: 5 · Phase 3: 4 · Phase 4: 7 · Phase 5: 5 · Phase 6: 9 · Phase 7: 6
 
 ---
 *Requirements defined: 2026-07-30*
-*Last updated: 2026-07-30 after initial definition*
+*Last updated: 2026-07-30 after roadmap creation (traceability populated)*
