@@ -1,10 +1,10 @@
-// node:test coverage of tools/recover.mjs's byte-assembly contract. Drives
-// captureImage with a stub `call` so every behaviour below is proven without
-// touching the emulator -- a deliberate, recorded deviation from
-// 01-VALIDATION.md's "no test framework" line: node:test ships with Node and
-// costs nothing to adopt, and this is the one place in Phase 1 where a silent
-// bug corrupts every downstream provenance verdict rather than producing a
-// visible failure.
+// node:test coverage of ram-capture.mjs / ram-compare.mjs's byte-assembly and
+// reproducibility contract. Drives captureImage with a stub `call` so every
+// behaviour below is proven without touching the emulator -- a deliberate,
+// recorded deviation from 01-VALIDATION.md's "no test framework" line:
+// node:test ships with Node and costs nothing to adopt, and this is the one
+// place in Phase 1 where a silent bug corrupts every downstream provenance
+// verdict rather than producing a visible failure.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -12,9 +12,10 @@ import { mkdtempSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { assembleChunks, captureImage, voidRun, classifyRuns, VOLATILE_RANGES, snapshotName } from "./recover.mjs";
-import { beginSession, assertSameMachine, readEpoch, MachineRestartedError } from "../.claude/skills/vice-session/scripts/vice.mjs";
-import { DEFAULT_PORT } from "../.claude/skills/vice-session/scripts/vice-pool.mjs";
+import { assembleChunks, captureImage, voidRun, snapshotName } from "./ram-capture.mjs";
+import { classifyRuns, VOLATILE_RANGES } from "./ram-compare.mjs";
+import { beginSession, assertSameMachine, readEpoch, MachineRestartedError } from "../../vice-session/scripts/vice.mjs";
+import { DEFAULT_PORT } from "../../vice-session/scripts/vice-pool.mjs";
 
 const tmpEpochDir = () => mkdtempSync(join(tmpdir(), "vice-epoch-"));
 
