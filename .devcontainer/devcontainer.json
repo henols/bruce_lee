@@ -1,0 +1,74 @@
+// For format details, see https://aka.ms/devcontainer.json. For config options, see the
+// README at: https://github.com/devcontainers/templates/tree/main/src/debian
+{
+	"name": "Debian",
+	// Or use a Dockerfile or Docker Compose file. More info: https://containers.dev/guide/dockerfile
+	"image": "mcr.microsoft.com/devcontainers/base:trixie",
+	"features": {
+		// Needed for npx, which the MCP servers in .mcp.json are launched with.
+		"ghcr.io/devcontainers/features/node:1": {},
+		"ghcr.io/stu-bell/devcontainer-features/claude-code:0": {},
+		"ghcr.io/devcontainer-community/devcontainer-features/github.com-cli:1": {}
+	},
+
+	// Maps host.docker.internal to the Docker host so tools in here can reach
+	// services on the local computer (e.g. the VICE MCP server on :6510).
+	"runArgs": [
+		"--add-host=host.docker.internal:host-gateway"
+	],
+
+	// Keeps Claude Code's login and chat history across rebuilds. The volume holds
+	// .credentials.json, .claude.json (OAuth account + per-project state) and the
+	// transcripts in projects/. CLAUDE_CONFIG_DIR is what makes .claude.json land
+	// inside the volume instead of at $HOME/.claude.json, which is not persisted.
+	// containerEnv (not remoteEnv) so lifecycle scripts and `docker exec` see it too.
+	//
+	// The other volumes cover the rest of the state a rebuild would otherwise drop:
+	// shell history, the `gh auth login` token, and the ~100 MB the CLI downloads into
+	// .local/share/claude when it self-updates. Source code needs no volume -- the
+	// workspace is a bind mount of the repo on the host. Deliberately NOT persisted:
+	// all of $HOME (a stale volume masks what the image and features install into it)
+	// and ~/.vscode-server (the server is installed before any lifecycle script can fix
+	// the root ownership of a fresh volume, which breaks container startup).
+	//
+	// HOST_WORKSPACE_PATH / CONTAINER_WORKSPACE_PATH: the VICE emulator runs on the
+	// host, so any file path handed to it (disk images, PRGs) must be a *host* path
+	// -- a container path is rejected with "Failed to attach disk image". These two
+	// let the c64-memory-mapping driver translate between the two views of the same
+	// bind mount. containerEnv (not remoteEnv) so `docker exec` and lifecycle
+	// scripts see them too, not just VS Code terminals. Note HOST_WORKSPACE_PATH is
+	// metadata: it is NOT a usable path inside the container.
+	//
+	// ACME: where the ACME crossassembler looks for the includes a source pulls in with
+	// <...> quoting, e.g. `!src <cbm/c64/vic.a>`. install-acme.sh puts the tree there.
+	"containerEnv": {
+		"CLAUDE_CONFIG_DIR": "/home/vscode/.claude",
+		"ACME": "/usr/local/share/acme",
+		"HISTFILE": "/commandhistory/.bash_history",
+		"HOST_WORKSPACE_PATH": "${localWorkspaceFolder}",
+		"CONTAINER_WORKSPACE_PATH": "${containerWorkspaceFolder}"
+	},
+	"mounts": [
+		"source=claude-state-${devcontainerId},target=/home/vscode/.claude,type=volume",
+		"source=claude-versions-${devcontainerId},target=/home/vscode/.local/share/claude,type=volume",
+		"source=claude-history-${devcontainerId},target=/commandhistory,type=volume",
+		"source=gh-config-${devcontainerId},target=/home/vscode/.config/gh,type=volume"
+	],
+	"postCreateCommand": "bash .devcontainer/post-create.sh && bash .devcontainer/install-acme.sh",
+
+	// Extensions are reinstalled on every rebuild, so they must be declared here
+	// to survive. The claude-code feature installs only the CLI, not this extension.
+	"customizations": {
+		"vscode": {
+			"extensions": [
+				"anthropic.claude-code"
+			]
+		}
+	}
+
+	// Use 'forwardPorts' to make a list of ports inside the container available locally.
+	// "forwardPorts": [],
+
+	// Uncomment to connect as root instead. More info: https://aka.ms/dev-containers-non-root.
+	// "remoteUser": "root"
+}
