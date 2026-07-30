@@ -7,12 +7,12 @@
 // the whole path as one command; the others exist so each stage can be
 // driven and inspected independently while the procedure is being developed
 // or diagnosed.
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
 
-import { call, serverInfo } from "./vice.mjs";
+import { call, serverInfo, beginSession, assertSameMachine, MachineRestartedError, lastToolCall } from "./vice.mjs";
 import { release, releaseDir, upsertRelease } from "./releases.mjs";
 import { tryHostPaths } from "../.claude/skills/devcontainer-host-path/hostpath.mjs";
 
@@ -21,6 +21,16 @@ const REPO_ROOT = resolve(HERE, "..");
 const TOOL_VERSION = "1.0.0";
 
 const die = (m) => { console.error(`error: ${m}`); process.exit(1); };
+
+// Checkpoints the harness itself armed for its own reasons (a boot gate, the
+// dump trigger), tracked here so assertSameMachine()'s checkpoint-fallback
+// probe (D-3) has something to check when no supervisor epoch file exists --
+// the ONLY identity signal available in that case. This costs no NEW
+// checkpoints: arming a sentinel checkpoint purely for identity-probing was
+// rejected because checkpoint work is itself one of the two leading crash
+// suspects recorded in STATE.md's HAZARD CANDIDATE entry. Added on
+// vice_checkpoint_add success, removed on successful vice_checkpoint_delete.
+const armedCheckpoints = new Set();
 const hex4 = (n) => `$${addrNum(n).toString(16).toUpperCase().padStart(4, "0")}`;
 
 /**
@@ -131,6 +141,11 @@ async function captureWithFallback(callFn) {
  * enumerated and deleted individually.
  */
 export async function reset() {
+  // Any checkpoint id tracked from a PRIOR run in this same process (e.g.
+  // reproduce()'s second recover() call) is no longer valid once we're about
+  // to delete every checkpoint the server knows about -- clear it here so a
+  // later assertSameMachine() probe never gets tripped up by a stale id.
+  armedCheckpoints.clear();
   const { checkpoints } = await call("vice_checkpoint_list", {});
   for (const cp of checkpoints) {
     // Never delete a checkpoint VICE marked `temporary`: those are created and
@@ -247,10 +262,14 @@ async function waitCheckpointHit(cpId, addr, label) {
 async function runToCheckpoint(addr, label) {
   const added = await call("vice_checkpoint_add", { start: hex4(addr), exec: true, stop: true });
   const id = added.checkpoint_num ?? added.checkpoint?.checkpoint_num;
+  if (id != null) armedCheckpoints.add(id);
   // No resume here: waitCheckpointHit owns the single resume, so that the
   // vice_execution_run count stays at exactly one per wait.
   const cp = await waitCheckpointHit(id, addr, label);
-  if (id != null) await call("vice_checkpoint_delete", { checkpoint_num: id });
+  if (id != null) {
+    await call("vice_checkpoint_delete", { checkpoint_num: id });
+    armedCheckpoints.delete(id);
+  }
   return { id, hitCount: cp.hit_count };
 }
 
@@ -422,10 +441,24 @@ const PING_INTERVAL_MS = 1000;
  * Then reads the full 65536-byte RAM image and every chip-state field the
  * capture record needs.
  */
-export async function capture(releaseId, triggerAddress, { releaseKeys = [] } = {}) {
+export async function capture(releaseId, triggerAddress, { releaseKeys = [], session } = {}) {
+  // capture() starts its own session when none is passed, so the standalone
+  // `capture` CLI verb (not just `recover`) is covered by identity checking
+  // too (D-3).
+  const activeSession = session || beginSession();
+
+  // Cheap, epoch-only check BEFORE arming anything: if a restart already
+  // happened earlier in this run (reset/boot), catch it now rather than
+  // arming a checkpoint against a machine that was never verified.
+  await assertSameMachine(activeSession, {
+    where: "capture:before-arm",
+    armedCheckpoints: [...armedCheckpoints],
+  });
+
   const addr = addrNum(triggerAddress);
   const added = await call("vice_checkpoint_add", { start: hex4(addr), exec: true, stop: true });
   const cpId = added.checkpoint_num ?? added.checkpoint?.checkpoint_num;
+  if (cpId != null) armedCheckpoints.add(cpId);
   // Deliberately NOT using vice_run_until here, despite the plan's
   // "belt and suspenders" instruction. run_until creates its OWN temporary
   // checkpoint at the same address; we observed two live checkpoints at $08B1
@@ -438,6 +471,15 @@ export async function capture(releaseId, triggerAddress, { releaseKeys = [] } = 
   // return instantly and we would capture from the wrong point (or refuse).
   const cp = await waitCheckpointHit(cpId, addr, "dump trigger");
 
+  // The long wait above is where a host-server outage is most likely to have
+  // landed (D-3) -- check identity immediately, passing the still-armed
+  // trigger checkpoint id as the fallback-probe target (it isn't deleted
+  // until just below, so it's still a valid id to probe with here).
+  await assertSameMachine(activeSession, {
+    where: "capture:after-trigger-wait",
+    armedCheckpoints: [...armedCheckpoints],
+  });
+
   // Release any key boot() left held, NOW -- at the trigger, which is a program
   // event and therefore the same CPU cycle on every run. This is what makes the
   // dump reproducible: a timed release drifts, a checkpoint-gated one does not.
@@ -449,7 +491,10 @@ export async function capture(releaseId, triggerAddress, { releaseKeys = [] } = 
   }
 
   if (cpId != null) {
-    try { await call("vice_checkpoint_delete", { checkpoint_num: cpId }); }
+    try {
+      await call("vice_checkpoint_delete", { checkpoint_num: cpId });
+      armedCheckpoints.delete(cpId);
+    }
     catch (e) { console.error(`warn: could not delete trigger checkpoint ${cpId}: ${e.message}`); }
   }
 
@@ -464,6 +509,15 @@ export async function capture(releaseId, triggerAddress, { releaseKeys = [] } = 
 
   const port01 = await call("vice_memory_read", { address: "$01", size: 1, encoding: "hex" });
   const { image, chunkSize } = await captureWithFallback(call);
+
+  // The "before any dump is declared good" gate (D-3): the read above is the
+  // last thing that touches the machine before the image is trusted and
+  // handed back to the caller.
+  await assertSameMachine(activeSession, {
+    where: "capture:before-declare-good",
+    armedCheckpoints: [...armedCheckpoints],
+  });
+
   const sha256 = createHash("sha256").update(image).digest("hex");
   const info = await call("vice_ping", {});
 
@@ -483,115 +537,194 @@ export async function capture(releaseId, triggerAddress, { releaseKeys = [] } = 
 
 // ------------------------------------------------------------------ recover
 
-/** The whole path as one command. Reuses a recorded trigger when present. */
+/**
+ * Rename any artifact that exists to `<name>.VOID-<ISO timestamp>` so it can
+ * never be mistaken for a valid capture, and write a sibling `<name>.VOID.json`
+ * evidence note recording why, the baseline/observed epochs, the last tool
+ * call attempted, and when -- so a voided run is itself evidence, not just a
+ * discarded one (D-3, D-4). Missing artifacts are a silent no-op: capture()
+ * can fail before either file was ever written.
+ *
+ * Deliberately NOT a reset/reboot/resume of any kind (D-3): captures are
+ * deterministic and cheap to repeat, and a wrong dump is not something to
+ * paper over automatically.
+ */
+export function voidRun({ binPath, capturePath, reason, baselineEpoch, currentEpoch, lastToolCall: lastCall } = {}) {
+  if (!binPath && !capturePath) {
+    return { voidedArtifacts: [], notePath: null };
+  }
+  const ts = new Date().toISOString().replace(/[:.]/g, "-");
+  const voidedArtifacts = [];
+  for (const p of [binPath, capturePath]) {
+    if (!p || !existsSync(p)) continue;
+    const voidPath = `${p}.VOID-${ts}`;
+    renameSync(p, voidPath);
+    voidedArtifacts.push(voidPath);
+  }
+  const notePath = `${binPath || capturePath}.VOID.json`;
+  writeFileSync(
+    notePath,
+    JSON.stringify(
+      {
+        reason: reason ?? null,
+        baseline_epoch: baselineEpoch ?? null,
+        current_epoch: currentEpoch ?? null,
+        last_tool_call: lastCall ?? lastToolCall(),
+        voided_artifacts: voidedArtifacts,
+        voided_at: new Date().toISOString(),
+      },
+      null,
+      2
+    ) + "\n"
+  );
+  return { voidedArtifacts, notePath };
+}
+
+/**
+ * The whole path as one command. Reuses a recorded trigger when present.
+ *
+ * beginSession() runs before reset(), so the baseline epoch is captured
+ * before the machine is touched at all, and the resulting session is
+ * threaded into capture() -- the identity check spans the whole recovery
+ * procedure, not just the final capture stage.
+ *
+ * If a MachineRestartedError surfaces anywhere in this procedure, the run is
+ * voided (see voidRun() above) and a wrapping error is thrown. This function
+ * NEVER auto-resets, auto-reboots or auto-resumes after a detected restart
+ * (D-3) -- the caller re-runs `recover` from a clean state instead.
+ */
 export async function recover(releaseId, { runLabel = "run1" } = {}) {
-  await reset();
-  let booted = await boot(releaseId);
-
-  const rel = release(releaseId);
-  let triggerAddress;
-  let howLocated;
-  if (rel.trigger && rel.trigger.address != null) {
-    triggerAddress = rel.trigger.address;
-    howLocated = rel.trigger.how_located;
-  } else {
-    const found = await findEntry(releaseId);
-    triggerAddress = found.address;
-    howLocated = found.howLocated;
-    upsertRelease(releaseId, (r) => ({
-      ...r,
-      trigger: { kind: "pc-exec-checkpoint", address: triggerAddress, how_located: howLocated },
-    }));
-    // findEntry already consumed the keypress and stepped past the gate, so
-    // the checkpoint we're about to arm in capture() would never re-fire in
-    // *this* run (we're already past it). Re-run from a clean boot so the
-    // checkpoint/run_until path -- the one `reproduce` will use every time
-    // -- is exercised for real, not skipped on the discovery run.
-    await reset();
-    booted = await boot(releaseId);
-  }
-
-  // Hand capture() the keys boot() left held so it can drop them at the
-  // trigger -- a program event, hence the same cycle every run.
-  const cap = await capture(releaseId, triggerAddress, { releaseKeys: booted.heldKeys ?? [] });
-
-  // Per-run name: vice_snapshot_save REFUSES to overwrite an existing name and
-  // the tool surface has no snapshot_delete, so a fixed name makes the second
-  // run of `reproduce` fail. Still explicit and never "snapshot.vsf".
-  const snapshotName = `${releaseId}_gameentry_${runLabel}`;
-  let snapshotSaved = true;
-  let snapshotNote = null;
-  try {
-    await call("vice_snapshot_save", {
-      name: snapshotName,
-      description: `${releaseId}: paused at the recorded game-entry trigger ${hex4(triggerAddress)}, post-decrunch`,
-    });
-  } catch (e) {
-    // The snapshot is a HOST-SIDE CONVENIENCE ONLY (see the D-07 correction:
-    // its bytes cannot be exported into this container and it is not a
-    // committed artifact). Reproducibility runs through the recorded
-    // procedure, not through this blob -- so a snapshot failure must never
-    // discard an otherwise-good 64K capture.
-    snapshotSaved = false;
-    snapshotNote = e.message;
-    console.error(`warn: snapshot "${snapshotName}" not saved (capture is unaffected): ${e.message}`);
-  }
-  let hostSnapshotDir = null;
-  try {
-    ({ directory: hostSnapshotDir } = await call("vice_snapshot_list", {}));
-  } catch (e) {
-    console.error(`warn: could not read snapshot directory: ${e.message}`);
-  }
-
+  const session = beginSession();
   const dumpsDir = join(releaseDir(releaseId), "dumps");
-  mkdirSync(dumpsDir, { recursive: true });
   const binPath = join(dumpsDir, `${releaseId}-gameentry-${runLabel}.bin`);
   const capturePath = join(dumpsDir, `${releaseId}-gameentry-${runLabel}.capture.json`);
 
-  writeFileSync(binPath, cap.image);
-  const captureRecord = {
-    release: releaseId,
-    run_label: runLabel,
-    trigger_kind: "pc-exec-checkpoint",
-    trigger_address: hex4(triggerAddress),
-    how_located: howLocated,
-    port01_value: cap.port01Value,
-    ranges: cap.ranges,
-    chunk_size: cap.chunkSize,
-    bytes_read: cap.bytesRead,
-    sha256: cap.sha256,
-    snapshot_name: snapshotName,
-    snapshot_saved: snapshotSaved,
-    snapshot_note: snapshotNote,
-    host_snapshot_dir: hostSnapshotDir,
-    vice_server_version: cap.viceServerVersion,
-    machine: cap.machine,
-    video_standard: cap.videoStandard,
-    captured_at: new Date().toISOString(),
-    tool_version: TOOL_VERSION,
-    ram_vs_rom_e000: cap.ramVsRomE000,
-  };
-  writeFileSync(capturePath, JSON.stringify(captureRecord, null, 2) + "\n");
+  try {
+    await reset();
+    let booted = await boot(releaseId);
 
-  upsertRelease(releaseId, (r) => ({
-    ...r,
-    dumps: [
-      ...r.dumps.filter((d) => d.label !== runLabel),
-      {
-        label: runLabel,
-        kind: "gameentry",
-        bin: `recovery/${releaseId}/dumps/${releaseId}-gameentry-${runLabel}.bin`,
-        capture_record: `recovery/${releaseId}/dumps/${releaseId}-gameentry-${runLabel}.capture.json`,
-        chip_state: null,
-        range_manifest: null,
-        sha256: cap.sha256,
-        load_event_ref: null,
-      },
-    ],
-    snapshot_names: [...new Set([...(r.snapshot_names || []), snapshotName])],
-  }));
+    const rel = release(releaseId);
+    let triggerAddress;
+    let howLocated;
+    if (rel.trigger && rel.trigger.address != null) {
+      triggerAddress = rel.trigger.address;
+      howLocated = rel.trigger.how_located;
+    } else {
+      const found = await findEntry(releaseId);
+      triggerAddress = found.address;
+      howLocated = found.howLocated;
+      upsertRelease(releaseId, (r) => ({
+        ...r,
+        trigger: { kind: "pc-exec-checkpoint", address: triggerAddress, how_located: howLocated },
+      }));
+      // findEntry already consumed the keypress and stepped past the gate, so
+      // the checkpoint we're about to arm in capture() would never re-fire in
+      // *this* run (we're already past it). Re-run from a clean boot so the
+      // checkpoint/run_until path -- the one `reproduce` will use every time
+      // -- is exercised for real, not skipped on the discovery run.
+      await reset();
+      booted = await boot(releaseId);
+    }
 
-  return { binPath, capturePath, sha256: cap.sha256, triggerAddress };
+    // Hand capture() the keys boot() left held so it can drop them at the
+    // trigger -- a program event, hence the same cycle every run. Also hand
+    // it this run's session, so capture()'s three identity gates compare
+    // against the epoch this procedure started with, not a fresh one.
+    const cap = await capture(releaseId, triggerAddress, { releaseKeys: booted.heldKeys ?? [], session });
+
+    // Per-run name: vice_snapshot_save REFUSES to overwrite an existing name and
+    // the tool surface has no snapshot_delete, so a fixed name makes the second
+    // run of `reproduce` fail. Still explicit and never "snapshot.vsf".
+    const snapshotName = `${releaseId}_gameentry_${runLabel}`;
+    let snapshotSaved = true;
+    let snapshotNote = null;
+    try {
+      await call("vice_snapshot_save", {
+        name: snapshotName,
+        description: `${releaseId}: paused at the recorded game-entry trigger ${hex4(triggerAddress)}, post-decrunch`,
+      });
+    } catch (e) {
+      // The snapshot is a HOST-SIDE CONVENIENCE ONLY (see the D-07 correction:
+      // its bytes cannot be exported into this container and it is not a
+      // committed artifact). Reproducibility runs through the recorded
+      // procedure, not through this blob -- so a snapshot failure must never
+      // discard an otherwise-good 64K capture.
+      snapshotSaved = false;
+      snapshotNote = e.message;
+      console.error(`warn: snapshot "${snapshotName}" not saved (capture is unaffected): ${e.message}`);
+    }
+    let hostSnapshotDir = null;
+    try {
+      ({ directory: hostSnapshotDir } = await call("vice_snapshot_list", {}));
+    } catch (e) {
+      console.error(`warn: could not read snapshot directory: ${e.message}`);
+    }
+
+    mkdirSync(dumpsDir, { recursive: true });
+
+    writeFileSync(binPath, cap.image);
+    const captureRecord = {
+      release: releaseId,
+      run_label: runLabel,
+      trigger_kind: "pc-exec-checkpoint",
+      trigger_address: hex4(triggerAddress),
+      how_located: howLocated,
+      port01_value: cap.port01Value,
+      ranges: cap.ranges,
+      chunk_size: cap.chunkSize,
+      bytes_read: cap.bytesRead,
+      sha256: cap.sha256,
+      snapshot_name: snapshotName,
+      snapshot_saved: snapshotSaved,
+      snapshot_note: snapshotNote,
+      host_snapshot_dir: hostSnapshotDir,
+      vice_server_version: cap.viceServerVersion,
+      machine: cap.machine,
+      video_standard: cap.videoStandard,
+      captured_at: new Date().toISOString(),
+      tool_version: TOOL_VERSION,
+      ram_vs_rom_e000: cap.ramVsRomE000,
+    };
+    writeFileSync(capturePath, JSON.stringify(captureRecord, null, 2) + "\n");
+
+    upsertRelease(releaseId, (r) => ({
+      ...r,
+      dumps: [
+        ...r.dumps.filter((d) => d.label !== runLabel),
+        {
+          label: runLabel,
+          kind: "gameentry",
+          bin: `recovery/${releaseId}/dumps/${releaseId}-gameentry-${runLabel}.bin`,
+          capture_record: `recovery/${releaseId}/dumps/${releaseId}-gameentry-${runLabel}.capture.json`,
+          chip_state: null,
+          range_manifest: null,
+          sha256: cap.sha256,
+          load_event_ref: null,
+        },
+      ],
+      snapshot_names: [...new Set([...(r.snapshot_names || []), snapshotName])],
+    }));
+
+    return { binPath, capturePath, sha256: cap.sha256, triggerAddress };
+  } catch (e) {
+    if (e instanceof MachineRestartedError) {
+      voidRun({
+        binPath,
+        capturePath,
+        reason: e.message,
+        baselineEpoch: e.baselineEpoch,
+        currentEpoch: e.currentEpoch,
+        lastToolCall: e.lastToolCall,
+      });
+      throw new Error(
+        `recover(${releaseId}, run-label ${runLabel}): the emulator restarted mid-capture -- this run is ` +
+          `VOID. Nothing was reset, rebooted or resumed automatically; re-run ` +
+          `\`node tools/recover.mjs recover ${releaseId} --run-label ${runLabel}\` from a clean state once ` +
+          `the emulator is stable. (${e.message})`
+      );
+    }
+    throw e;
+  }
 }
 
 /** Run `recover` twice from scratch and require byte-identical, 65536-byte output. */
