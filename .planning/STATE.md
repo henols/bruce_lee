@@ -33,7 +33,7 @@ Milestone: v1.0 — Pipeline Proven (Phases 1–4 of 7 total)
 Phase: 01 (recovery-provenance) — EXECUTING
 Plan: 1 of 6
 Status: Executing Phase 01
-Last activity: 2026-07-30 — Completed quick task 260730-p5x: pool now ping-probes for live instances instead of trusting the registry
+Last activity: 2026-07-30 — Completed quick task 260730-q4b: vice-session skill is now fully self-contained; host launchers auto-deploy from resources/
 
 Progress (v1.0): [░░░░░░░░░░] 0% — 0/20 plans
 Progress (overall): [░░░░░░░░░░] 0% — 0/35 plans
@@ -116,6 +116,7 @@ None yet.
 | 260730-nh5 | Add `vice-session` skill and make the Node seam the only path to the emulator (`.mcp.json` emptied; session leases, TTL refresh, tool discovery) | 2026-07-30 | 3d814a4 | [260730-nh5-add-vice-session-skill-and-make-the-node](./quick/260730-nh5-add-vice-session-skill-and-make-the-node/) |
 | 260730-oga | Move vice Node modules into the `vice-session` skill so it is self-contained (shared `repo-root.mjs`; shell/Node path-agreement test) | 2026-07-30 | c31b07d | [260730-oga-move-vice-node-modules-into-the-vice-ses](./quick/260730-oga-move-vice-node-modules-into-the-vice-ses/) |
 | 260730-p5x | Pool discovers live instances by ping-probing at acquire time (standalone fast probe; four-question health; supervisor-vs-VICE diagnosis) | 2026-07-30 | acf0a83 | [260730-p5x-pool-discovers-live-instances-by-ping-pr](./quick/260730-p5x-pool-discovers-live-instances-by-ping-pr/) |
+| 260730-q4b | Shell scripts move to skill `resources/` and auto-install into `tools/` on any skill .mjs entry (gitignored deployment; never overwrites; `install --force` to refresh) | 2026-07-30 | e01531b | [260730-q4b-shell-scripts-move-to-skill-resources-an](./quick/260730-q4b-shell-scripts-move-to-skill-resources-an/) |
 
 ## Deferred Items
 
