@@ -1,19 +1,27 @@
 #!/usr/bin/env bash
-# tools/vice-pool.sh
+# .claude/skills/vice-session/resources/vice-pool.sh
+#
+# This is the TRACKED source of truth. It runs unchanged from either this
+# location or its deployed copy at <repo>/tools/vice-pool.sh -- the skill's
+# install-resources.mjs (triggered from any of the skill's .mjs entry points)
+# copies it there automatically the first time it is missing.
+# `tools/vice-pool.sh` is gitignored: it is a disposable deployment target,
+# never hand-edited and never a second tracked copy that could drift out of
+# sync with this file.
 #
 # HOST-ONLY. Do not run this inside the devcontainer -- it will refuse, on
-# purpose (see the shared container guard, tools/lib/container-guard.sh).
-# x64sc, its windows, and its MCP listeners all live on the HOST.
+# purpose (see the shared container guard, lib/container-guard.sh). x64sc,
+# its windows, and its MCP listeners all live on the HOST.
 #
-# What this adds on top of tools/vice-supervisor.sh: that script already
+# What this adds on top of vice-supervisor.sh: that script already
 # supervises ONE x64sc instance on one port. This script launches N of them
 # in parallel, each its own supervised instance with its own port, supervisor
 # dir (epoch file, logs, crash log), and coordinates with container-side
 # code (.claude/skills/vice-session/vice-pool.mjs) via a registry.json file written on the same
-# bind mount tools/vice-supervisor.sh's epoch.json already uses (D-2) --
+# bind mount vice-supervisor.sh's epoch.json already uses (D-2) --
 # deliberately NOT a new port, socket, or IPC mechanism.
 #
-# Run it from the HOST workspace, e.g.:
+# Run the DEPLOYED copy from the HOST workspace, e.g.:
 #   /home/henrik/dev/henrik/git/bruce_lee/tools/vice-pool.sh start 3
 # i.e. <host workspace>/tools/vice-pool.sh -- never from inside `docker exec`
 # or a devcontainer terminal.
@@ -27,9 +35,28 @@
 set -euo pipefail
 
 SELF_PATH="${BASH_SOURCE[0]}"
-REPO_ROOT="$(cd "$(dirname "$SELF_PATH")/.." && pwd)"
+SELF_DIR="$(cd "$(dirname "$SELF_PATH")" && pwd)"
+
+# resolve_repo_root() (lib/repo-root.sh) replaces this script's old fixed
+# `".."` hop: that fixed count was correct only from `tools/` and would have
+# silently resolved to `.claude/skills/.vice-supervisor` from `resources/`,
+# with no error anywhere (see that file's header). Sourced ABOVE the
+# container guard below and above --print-paths -- it defines a function
+# only, spawns nothing and writes no state, so this does not disturb the
+# "--print-paths needs no escape hatch" property; the guard's own `source`
+# line stays exactly where it was, further down.
+source "$SELF_DIR/lib/repo-root.sh"
+REPO_ROOT="$(resolve_repo_root "$SELF_DIR")"
+
 HOST_EXAMPLE_PATH="/home/henrik/dev/henrik/git/bruce_lee/tools/vice-pool.sh"
-SUPERVISOR_SCRIPT="$REPO_ROOT/tools/vice-supervisor.sh"
+
+# Resolved as a SIBLING of this running script ($SELF_DIR), NOT
+# $REPO_ROOT/tools/vice-supervisor.sh (D-6): a pool started from resources/
+# must supervise with the resources/ copy, not silently reach across to a
+# deployed tools/ copy that may be stale or hand-edited. A pool started from
+# the deployed tools/ copy correctly supervises with the deployed
+# tools/vice-supervisor.sh, since that is this script's own sibling there too.
+SUPERVISOR_SCRIPT="$SELF_DIR/vice-supervisor.sh"
 
 # Hoisted here, ABOVE the container guard below, so --print-paths (which must
 # run before the guard -- see that check below) can report the values this
@@ -40,7 +67,12 @@ REGISTRY_PATH="$VICE_POOL_DIR/registry.json"
 
 usage() {
   cat <<USAGE
-usage: tools/vice-pool.sh <start [N] [--dry-run] | stop | status> [--help|-h] [--check-container] [--print-paths]
+usage: vice-pool.sh <start [N] [--dry-run] | stop | status> [--help|-h] [--check-container] [--print-paths]
+
+Runs identically from either this skill's resources/ (the tracked source of
+truth) or its deployed copy at tools/vice-pool.sh (gitignored, regenerated
+automatically -- see the header comment). Type this on the HOST as:
+tools/vice-pool.sh <subcommand> [...].
 
 HOST-ONLY. Launches, tracks, and tears down N supervised x64sc MCP instances
 in parallel (D-1), coordinating with container-side harness code
@@ -162,10 +194,13 @@ fi
 
 # ---------------------------------------------------------------- container guard
 #
-# Shared with tools/vice-supervisor.sh via tools/lib/container-guard.sh so
-# the two scripts can never drift apart on what counts as "inside a
-# container" (D-1's anti-drift requirement).
-source "$(dirname "${BASH_SOURCE[0]}")/lib/container-guard.sh"
+# Shared with vice-supervisor.sh via this script's own sibling
+# lib/container-guard.sh (from whichever location both scripts are running)
+# so the two scripts can never drift apart on what counts as "inside a
+# container" (D-1's anti-drift requirement). Uses $SELF_DIR, computed at the
+# top of this file, for consistency with lib/repo-root.sh's own sourcing
+# above.
+source "$SELF_DIR/lib/container-guard.sh"
 
 # --check-container reports and exits, without spawning or writing anything,
 # and works standalone with no subcommand. It deliberately ignores
@@ -177,10 +212,10 @@ if [ "$CHECK_CONTAINER" -eq 1 ]; then
 fi
 
 # Everything else (start/stop/status) enforces the guard first, with the
-# same VICE_SUPERVISOR_ALLOW_CONTAINER escape hatch tools/vice-supervisor.sh
+# same VICE_SUPERVISOR_ALLOW_CONTAINER escape hatch vice-supervisor.sh
 # uses -- so 'start' inside the container exits 2, matching that script's
 # behaviour exactly.
-container_guard_enforce "tools/vice-pool.sh" "$HOST_EXAMPLE_PATH"
+container_guard_enforce "vice-pool.sh" "$HOST_EXAMPLE_PATH"
 
 # ---------------------------------------------------------------- configuration
 VICE_POOL_SIZE="${VICE_POOL_SIZE:-3}"

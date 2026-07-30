@@ -74,3 +74,14 @@ recovery/*/dumps/probe-*.png
 # the restart epoch file, regenerated fresh on every supervisor start -- not
 # a project artifact, just evidence for the current debugging session.
 .vice-supervisor/
+
+# deployed copies of .claude/skills/vice-session/resources/ -- the tracked
+# source of truth lives in the skill; these are regenerated automatically by
+# install-resources.mjs the first time any vice-session .mjs entry point
+# runs, and are disposable: never hand-edit them here (edit resources/
+# instead), and a real host setup keeps working exactly as before because
+# they still land at these same paths.
+/tools/vice-supervisor.sh
+/tools/vice-pool.sh
+/tools/lib/container-guard.sh
+/tools/lib/repo-root.sh

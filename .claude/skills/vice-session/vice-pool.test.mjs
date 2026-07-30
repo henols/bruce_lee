@@ -22,6 +22,15 @@ import { acquire, readRegistry, instanceFor, refreshLease, DEFAULT_PORT, poolHea
 import { call, useInstance, formatToolsOutput, serverInfo } from "./vice.mjs";
 import { repoRoot } from "./repo-root.mjs";
 import { probeInstance, probeAll, PROBE_TOOL, DEFAULT_PROBE_TIMEOUT_MS } from "./vice-probe.mjs";
+import {
+  RESOURCES_DIR,
+  installTargetDir,
+  resourceEntries,
+  resourcesStatus,
+  installResources,
+  hostLaunchInstructions,
+  ensureResourcesInstalled,
+} from "./install-resources.mjs";
 
 const execFileP = promisify(execFile);
 const MODULE_URL = new URL("./vice-pool.mjs", import.meta.url).href;
@@ -912,14 +921,26 @@ function parseKeyValueLines(text) {
   return out;
 }
 
-test("path agreement (D-3, THE regression this task exists to catch): supervisor_dir === pool_dir === supervisorDir() === dirname(EPOCH_FILE) === poolDir() === dirname(sessionFilePath()), and the agreed path is not under .claude", async () => {
+test("path agreement (D-3, D-6, THE regression this task exists to catch): supervisor_dir === pool_dir === supervisorDir() === dirname(EPOCH_FILE) === poolDir() === dirname(sessionFilePath()), the resources/ and tools/ copies of both scripts agree with each other, and the agreed path is not under .claude", async () => {
+  // Self-sufficient about the deployed copies (quick-260730-q4b): this makes
+  // the test pass in a fresh clone that has never run any skill .mjs file,
+  // rather than depending on whether the runner happened to set
+  // VICE_SKIP_RESOURCE_INSTALL=1 first. installResources() never overwrites
+  // an already-present target, so calling it here is safe even when the real
+  // tools/ copies already exist (and were hand-verified moments ago).
+  installResources({ root: repoRoot() });
+
   // Resolved through repoRoot() itself -- a missing script here means
   // repoRoot() picked the wrong repo root, not a false pass; existsSync
   // makes that loud (ENOENT-shaped) rather than a silent script-not-found.
   const supervisorScript = join(repoRoot(), "tools", "vice-supervisor.sh");
   const poolScript = join(repoRoot(), "tools", "vice-pool.sh");
+  const resourcesSupervisorScript = join(repoRoot(), ".claude", "skills", "vice-session", "resources", "vice-supervisor.sh");
+  const resourcesPoolScript = join(repoRoot(), ".claude", "skills", "vice-session", "resources", "vice-pool.sh");
   assert.ok(existsSync(supervisorScript), `expected ${supervisorScript} to exist (resolved via repoRoot())`);
   assert.ok(existsSync(poolScript), `expected ${poolScript} to exist (resolved via repoRoot())`);
+  assert.ok(existsSync(resourcesSupervisorScript), `expected ${resourcesSupervisorScript} to exist (resolved via repoRoot())`);
+  assert.ok(existsSync(resourcesPoolScript), `expected ${resourcesPoolScript} to exist (resolved via repoRoot())`);
 
   // Strip every VICE_* env var so neither the shell scripts nor the Node
   // child below can be pointed anywhere by a sibling test's leftover
@@ -931,8 +952,17 @@ test("path agreement (D-3, THE regression this task exists to catch): supervisor
 
   const { stdout: supOut } = await execFileP("bash", [supervisorScript, "--print-paths"], { env: cleanEnv });
   const { stdout: poolOut } = await execFileP("bash", [poolScript, "--print-paths"], { env: cleanEnv });
+  const { stdout: resourcesSupOut } = await execFileP("bash", [resourcesSupervisorScript, "--print-paths"], { env: cleanEnv });
+  const { stdout: resourcesPoolOut } = await execFileP("bash", [resourcesPoolScript, "--print-paths"], { env: cleanEnv });
   const supVals = parseKeyValueLines(supOut);
   const poolVals = parseKeyValueLines(poolOut);
+
+  // D-6: the resources/ copy (the tracked source of truth) and the deployed
+  // tools/ copy must print byte-identical --print-paths output per script --
+  // the regression a repo-root derivation that is wrong from one of the two
+  // locations would introduce.
+  assert.equal(resourcesSupOut, supOut, "resources/vice-supervisor.sh and tools/vice-supervisor.sh --print-paths must be byte-identical");
+  assert.equal(resourcesPoolOut, poolOut, "resources/vice-pool.sh and tools/vice-pool.sh --print-paths must be byte-identical");
 
   // Node-side values computed in a FRESH child process, not via this test
   // file's own already-imported modules -- immune to env mutation or
@@ -966,6 +996,22 @@ test("path agreement (D-3, THE regression this task exists to catch): supervisor
     !supVals.supervisor_dir.includes(".claude"),
     `the agreed directory must not sit under .claude -- got ${supVals.supervisor_dir} (the exact regression a naive move would introduce)`
   );
+});
+
+test("path agreement without CONTAINER_WORKSPACE_PATH (D-6): the .git-walk branch -- the ONLY branch that ever runs on the real host -- still agrees between resources/ and tools/", async () => {
+  const resourcesSupervisorScript = join(repoRoot(), ".claude", "skills", "vice-session", "resources", "vice-supervisor.sh");
+  const supervisorScript = join(repoRoot(), "tools", "vice-supervisor.sh");
+
+  const hostEnv = { ...process.env };
+  for (const k of Object.keys(hostEnv)) {
+    if (k.startsWith("VICE_")) delete hostEnv[k];
+  }
+  delete hostEnv.CONTAINER_WORKSPACE_PATH;
+
+  const { stdout: resourcesOut } = await execFileP("bash", [resourcesSupervisorScript, "--print-paths"], { env: hostEnv });
+  const { stdout: toolsOut } = await execFileP("bash", [supervisorScript, "--print-paths"], { env: hostEnv });
+  assert.equal(resourcesOut, toolsOut, "with CONTAINER_WORKSPACE_PATH unset, resources/ and tools/ must still agree via the .git walk");
+  assert.match(parseKeyValueLines(resourcesOut).repo_root, /bruce_lee$/, "the .git walk must still land on the real repo root");
 });
 
 test("repoRoot() ladder: a .git ancestor resolves with no env set; a containing CONTAINER_WORKSPACE_PATH wins over a NEARER .git; a non-containing CONTAINER_WORKSPACE_PATH loses to the .git walk", () => {

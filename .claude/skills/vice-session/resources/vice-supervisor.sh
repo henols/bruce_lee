@@ -1,5 +1,13 @@
 #!/usr/bin/env bash
-# tools/vice-supervisor.sh
+# .claude/skills/vice-session/resources/vice-supervisor.sh
+#
+# This is the TRACKED source of truth. It runs unchanged from either this
+# location or its deployed copy at <repo>/tools/vice-supervisor.sh -- the
+# skill's install-resources.mjs (triggered from any of the skill's .mjs
+# entry points) copies it there automatically the first time it is missing.
+# `tools/vice-supervisor.sh` is gitignored: it is a disposable deployment
+# target, never hand-edited and never a second tracked copy that could drift
+# out of sync with this file.
 #
 # HOST-ONLY. Do not run this inside the devcontainer -- it will refuse, on
 # purpose (see the container guard below). x64sc, its window and its MCP
@@ -11,7 +19,7 @@
 # container already has everything it needs to read a file and nothing it
 # needs to open a new listener.
 #
-# Run it from the HOST workspace, e.g.:
+# Run the DEPLOYED copy from the HOST workspace, e.g.:
 #   /home/henrik/dev/henrik/git/bruce_lee/tools/vice-supervisor.sh
 # i.e. <host workspace>/tools/vice-supervisor.sh -- never from inside
 # `docker exec` or a devcontainer terminal.
@@ -30,7 +38,18 @@
 set -euo pipefail
 
 SELF_PATH="${BASH_SOURCE[0]}"
-REPO_ROOT="$(cd "$(dirname "$SELF_PATH")/.." && pwd)"
+SELF_DIR="$(cd "$(dirname "$SELF_PATH")" && pwd)"
+
+# resolve_repo_root() (lib/repo-root.sh) replaces this script's old fixed
+# `".."` hop: that fixed count was correct only from `tools/` and would have
+# silently resolved to `.claude/skills/.vice-supervisor` from `resources/`,
+# with no error anywhere (see that file's header). Sourced ABOVE the
+# container guard below and above --print-paths -- it defines a function
+# only, spawns nothing and writes no state, so this does not disturb the
+# "--print-paths needs no escape hatch" property; the guard's own `source`
+# line stays exactly where it was, further down.
+source "$SELF_DIR/lib/repo-root.sh"
+REPO_ROOT="$(resolve_repo_root "$SELF_DIR")"
 
 # Hoisted here, ABOVE the container guard below, so --print-paths (which must
 # run before the guard -- see that check below) can report the value this
@@ -41,7 +60,12 @@ VICE_SUPERVISOR_DIR="${VICE_SUPERVISOR_DIR:-$REPO_ROOT/.vice-supervisor}"
 
 usage() {
   cat <<USAGE
-usage: tools/vice-supervisor.sh [--dry-run] [--check-container] [--print-paths] [--help|-h]
+usage: vice-supervisor.sh [--dry-run] [--check-container] [--print-paths] [--help|-h]
+
+Runs identically from either this skill's resources/ (the tracked source of
+truth) or its deployed copy at tools/vice-supervisor.sh (gitignored,
+regenerated automatically -- see the header comment). Type this on the HOST
+as: tools/vice-supervisor.sh [...].
 
 HOST-ONLY. Launches and supervises x64sc's MCP server, restarting it on
 crash with backoff, collecting crash evidence, and recording a restart
@@ -125,10 +149,11 @@ for arg in "$@"; do
 done
 
 # --print-paths reports the resolved paths and exits, BEFORE the container
-# guard below is even sourced -- spawns nothing, writes nothing (no mkdir, no
-# epoch record), so there is no reason to make anyone set
-# VICE_SUPERVISOR_ALLOW_CONTAINER=1 just to ask this script which directory
-# it will use.
+# GUARD below is even sourced (lib/repo-root.sh, sourced above for REPO_ROOT,
+# is a pure path resolver with no container-detection concern of its own) --
+# spawns nothing, writes nothing (no mkdir, no epoch record), so there is no
+# reason to make anyone set VICE_SUPERVISOR_ALLOW_CONTAINER=1 just to ask
+# this script which directory it will use.
 if [ "$PRINT_PATHS" -eq 1 ]; then
   echo "repo_root=$REPO_ROOT"
   echo "supervisor_dir=$VICE_SUPERVISOR_DIR"
@@ -140,12 +165,14 @@ fi
 #
 # Load-bearing (D-2): this check runs before ANY state is written and before
 # ANY process is spawned. The guard itself -- signal collection, the
-# --check-container report, and enforcement -- lives in
-# tools/lib/container-guard.sh so tools/vice-pool.sh shares the exact same
-# code rather than a second, hand-maintained copy that could drift out of
-# sync. See that file for the removed-mountinfo-signal history (do not re-add
-# it) and the full signal list.
-source "$(dirname "${BASH_SOURCE[0]}")/lib/container-guard.sh"
+# --check-container report, and enforcement -- lives in this script's own
+# sibling lib/container-guard.sh so vice-pool.sh shares the exact same code
+# (from whichever location both scripts are running) rather than a second,
+# hand-maintained copy that could drift out of sync. See that file for the
+# removed-mountinfo-signal history (do not re-add it) and the full signal
+# list. Uses $SELF_DIR, computed at the top of this file, for consistency
+# with lib/repo-root.sh's own sourcing above.
+source "$SELF_DIR/lib/container-guard.sh"
 
 # --check-container reports and exits, without spawning or writing anything.
 # It deliberately ignores VICE_SUPERVISOR_ALLOW_CONTAINER: its job is to say
@@ -155,7 +182,7 @@ if [ "$CHECK_CONTAINER" -eq 1 ]; then
   exit "$rc"
 fi
 
-container_guard_enforce "tools/vice-supervisor.sh" "/home/henrik/dev/henrik/git/bruce_lee/tools/vice-supervisor.sh"
+container_guard_enforce "vice-supervisor.sh" "/home/henrik/dev/henrik/git/bruce_lee/tools/vice-supervisor.sh"
 
 # ---------------------------------------------------------------- configuration
 #
