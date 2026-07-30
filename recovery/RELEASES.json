@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "releases": [
+    {
+      "id": "danish",
+      "disk_image": "disks/danish.d64",
+      "disk_sha256": "1a9d294e07f9593ba59d878423d157bacfe6c6902d3a52ef6ac96512a15fb6c5",
+      "canonical": false,
+      "boot": null,
+      "trigger": null,
+      "dumps": [],
+      "snapshot_names": [],
+      "tier1_evidence": [],
+      "tier2_evidence": [],
+      "independence": null,
+      "notes": null
+    },
+    {
+      "id": "saeger",
+      "disk_image": "disks/saeger.d64",
+      "disk_sha256": "b45e53e602fe94654934beffaa483f59989a6d3973ef054afaeea4ea4bc2b8f5",
+      "canonical": false,
+      "boot": null,
+      "trigger": null,
+      "dumps": [],
+      "snapshot_names": [],
+      "tier1_evidence": [],
+      "tier2_evidence": [],
+      "independence": null,
+      "notes": null
+    }
+  ]
+}
