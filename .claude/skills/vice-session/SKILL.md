@@ -21,36 +21,15 @@ is the only route to the emulator — the deny-list, restart detection and pool
 leases all live in that one seam, and a direct MCP call would bypass every
 one of them.
 
-## Self-contained for both halves
+## Copying this skill elsewhere
 
-This skill directory carries BOTH halves of driving VICE and can be copied
-into another project as a single unit — copying it alone is now sufficient.
-The CONTAINER half is the Node modules in this skill's `scripts/` directory
-(`repo-root.mjs`, `vice.mjs`, `vice-pool.mjs`, `vice-probe.mjs`,
-`vice-session.mjs`, `vice-pool.test.mjs`, `install-resources.mjs`). The HOST half —
-`vice-supervisor.sh`, `vice-pool.sh` and `lib/container-guard.sh` — lives
-tracked in `.claude/skills/vice-session/resources/`, and is deployed automatically into `tools/` at the
-repo root the FIRST TIME any of this skill's `.mjs` files runs (`ensureResourcesInstalled()`,
-triggered from `repo-root.mjs`). `tools/` holds disposable, gitignored
-deployed copies — not a second tracked copy that could drift out of sync
-with `resources/`. An existing deployed copy is **never overwritten
-automatically**, whatever its contents; run
-`node .claude/skills/vice-session/scripts/vice.mjs install` for a per-entry status
-report (missing/present/diverged) with no side effects, or
-`... install --force` to deliberately restore every entry from `resources/`.
+This skill directory is self-sufficient and can be copied into another
+project as one unit.
 
-The invariant that makes the two halves work together: the shell scripts
-(from EITHER `resources/` or their deployed `tools/` copy) resolve the repo
-root via `resources/lib/repo-root.sh`'s `resolve_repo_root()`; the Node
-modules resolve it via `repo-root.mjs`'s `repoRoot()`. Both follow the same
-ladder — `CONTAINER_WORKSPACE_PATH` when it contains the caller, otherwise
-the nearest ancestor with a `.git` entry, otherwise `CONTAINER_WORKSPACE_PATH`
-regardless, otherwise a location-shaped last resort — and must land on the
-same `.vice-supervisor` directory, or restart detection silently stops
-working with no error anywhere. `--print-paths` on either script, from
-either location, prints the resolved paths (no side effects) so this can be
-checked directly — `resources/vice-supervisor.sh --print-paths` and
-`tools/vice-supervisor.sh --print-paths` must always agree.
+```bash
+node .claude/skills/vice-session/scripts/vice.mjs install          # status of the deployed host-side scripts, no changes made
+node .claude/skills/vice-session/scripts/vice.mjs install --force  # restore them
+```
 
 ## Sessions
 
@@ -106,8 +85,7 @@ tools/vice-pool.sh stop
 
 These run on the host workspace, never in this container. `tools/vice-pool.sh`
 is deployed automatically from this skill's `resources/` the first time any
-`.mjs` file here runs (see "Self-contained for both halves" above) — a fresh
-clone has no `tools/` scripts until then.
+`.mjs` file here runs — a fresh clone has no `tools/` scripts until then.
 
 ## Four questions, four mechanisms
 
