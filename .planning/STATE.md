@@ -31,12 +31,12 @@ See: .planning/PROJECT.md (updated 2026-07-30)
 
 Milestone: v1.0 — Pipeline Proven (Phases 1–4 of 7 total)
 Phase: 1 of 7 overall — 1 of 4 in this milestone (Recovery & Provenance)
-Plan: 0 of 5 in current phase
+Plan: 0 of 6 in current phase
 Status: Ready to execute
-Last activity: 2026-07-30 — Milestone split applied at the Phase 4 boundary
+Last activity: 2026-07-30 — Phase 1 planned (6 plans, tracer-first)
 
-Progress (v1.0): [░░░░░░░░░░] 0% — 0/19 plans
-Progress (overall): [░░░░░░░░░░] 0% — 0/34 plans
+Progress (v1.0): [░░░░░░░░░░] 0% — 0/20 plans
+Progress (overall): [░░░░░░░░░░] 0% — 0/35 plans
 
 **Milestone roadmap:** v1.0 = Phases 1–4 (proven pipeline) · v2.0 = Phases 5–7 (complete reconstruction, where "fully documented and recompiled" is met) · v3.0 = round-trip assets + editor, not yet phased.
 
