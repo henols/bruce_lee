@@ -1,69 +1,43 @@
 ---
 name: vice-session
-description: Drive the host's VICE emulator from this container — acquire a leased session, discover and call the vice_* tools, inspect C64 memory and machine state. Use for any emulator, VICE, x64sc, C64 debugging, memory-inspection, checkpoint or snapshot task, and whenever a vice_* tool is needed.
+description: Drive the host's VICE emulator from this container — start a session, discover and call the vice_* tools, inspect C64 memory and machine state. Use for any emulator, VICE, x64sc, C64 debugging, memory-inspection, checkpoint or snapshot task, and whenever a vice_* tool is needed.
 ---
 
 # Driving VICE from this container
 
 ```bash
-node .claude/skills/vice-session/scripts/vice.mjs session acquire        # lease an instance, start a session
-node .claude/skills/vice-session/scripts/vice.mjs ping                   # server version, machine, execution state
-node .claude/skills/vice-session/scripts/vice.mjs tools                  # every vice_* tool, one line each
-node .claude/skills/vice-session/scripts/vice.mjs tools NAME              # a tool's full input schema
-node .claude/skills/vice-session/scripts/vice.mjs call TOOL '{"k":"v"}'   # invoke any vice_* tool, print its JSON result
-node .claude/skills/vice-session/scripts/vice.mjs session status          # read-only session report, no emulator touched
-node .claude/skills/vice-session/scripts/vice.mjs session release         # free the lease, end the session
-node .claude/skills/vice-session/scripts/vice.mjs pool status             # launched/alive/leased/supervised per instance
+node .claude/skills/vice-session/scripts/vice.mjs session acquire --ttl-min 30   # lease an instance and start a session (override the lease length with --ttl-min N)
+node .claude/skills/vice-session/scripts/vice.mjs ping                            # server version, machine, execution state
+node .claude/skills/vice-session/scripts/vice.mjs tools                           # every vice_* tool, one line each
+node .claude/skills/vice-session/scripts/vice.mjs tools NAME                      # a tool's full input schema
+node .claude/skills/vice-session/scripts/vice.mjs call TOOL '{"k":"v"}'           # invoke any vice_* tool, print its JSON result
+node .claude/skills/vice-session/scripts/vice.mjs session status                  # this session's instance, port and expiry
+node .claude/skills/vice-session/scripts/vice.mjs session release                 # free the lease, end the session
+node .claude/skills/vice-session/scripts/vice.mjs pool status                     # launched/alive/leased/supervised per instance
 ```
 
-No `mcp__vice__*` tool is available in this project. `.claude/skills/vice-session/scripts/vice.mjs`
-is the only route to the emulator — the deny-list, restart detection and pool
-leases all live in that one seam, and a direct MCP call would bypass every
-one of them.
+Every emulator call goes through this script — there is no `mcp__vice__*` tool
+in this project.
 
-## Self-contained for both halves
+## Copying this skill elsewhere
 
-This skill directory carries BOTH halves of driving VICE and can be copied
-into another project as a single unit — copying it alone is now sufficient.
-The CONTAINER half is the Node modules in this skill's `scripts/` directory
-(`repo-root.mjs`, `vice.mjs`, `vice-pool.mjs`, `vice-probe.mjs`,
-`vice-session.mjs`, `vice-pool.test.mjs`, `install-resources.mjs`). The HOST half —
-`vice-supervisor.sh`, `vice-pool.sh` and `lib/container-guard.sh` — lives
-tracked in `.claude/skills/vice-session/resources/`, and is deployed automatically into `tools/` at the
-repo root the FIRST TIME any of this skill's `.mjs` files runs (`ensureResourcesInstalled()`,
-triggered from `repo-root.mjs`). `tools/` holds disposable, gitignored
-deployed copies — not a second tracked copy that could drift out of sync
-with `resources/`. An existing deployed copy is **never overwritten
-automatically**, whatever its contents; run
-`node .claude/skills/vice-session/scripts/vice.mjs install` for a per-entry status
-report (missing/present/diverged) with no side effects, or
-`... install --force` to deliberately restore every entry from `resources/`.
+This skill directory is self-sufficient and can be copied into another
+project as one unit.
 
-The invariant that makes the two halves work together: the shell scripts
-(from EITHER `resources/` or their deployed `tools/` copy) resolve the repo
-root via `resources/lib/repo-root.sh`'s `resolve_repo_root()`; the Node
-modules resolve it via `repo-root.mjs`'s `repoRoot()`. Both follow the same
-ladder — `CONTAINER_WORKSPACE_PATH` when it contains the caller, otherwise
-the nearest ancestor with a `.git` entry, otherwise `CONTAINER_WORKSPACE_PATH`
-regardless, otherwise a location-shaped last resort — and must land on the
-same `.vice-supervisor` directory, or restart detection silently stops
-working with no error anywhere. `--print-paths` on either script, from
-either location, prints the resolved paths (no side effects) so this can be
-checked directly — `resources/vice-supervisor.sh --print-paths` and
-`tools/vice-supervisor.sh --print-paths` must always agree.
+```bash
+node .claude/skills/vice-session/scripts/vice.mjs install          # status of the deployed host-side scripts, no changes made
+node .claude/skills/vice-session/scripts/vice.mjs install --force  # restore them
+```
 
 ## Sessions
 
-Acquire a session at the start of emulator work, release it at the end. The
-session lives in a **file**, not the shell, so it survives across separate
-commands — a shell's environment does not persist between Bash invocations,
-but a file does. With no session acquired, every command still works
-against the default instance; acquiring one is optional, not required.
+Acquire a session at the start of emulator work, release it at the end. It
+survives across separate Bash calls, so a later command finds it without
+re-acquiring. It is optional — every command works without one. `session
+acquire` and `session status` both print the instance's port and the
+expiry.
 
-## Discovering tools
-
-Removing the MCP registration removes the typed tool schemas Claude Code
-used to read automatically. Use `tools` instead:
+## Finding a tool
 
 ```bash
 node .claude/skills/vice-session/scripts/vice.mjs tools           # every tool: name + one-line description
@@ -71,32 +45,36 @@ node .claude/skills/vice-session/scripts/vice.mjs tools memory    # every tool w
 node .claude/skills/vice-session/scripts/vice.mjs tools vice_memory_read   # full input schema: params, types, required, enum/default
 ```
 
-## `vice_disk_list` is forbidden, always
+Add `--json` to any of these for machine-readable output.
 
-It crashes the shared host VICE MCP server, and recovery costs a host-side
-restart. Two independent layers keep it out of reach: `tools` never lists it
-(`serverInfo()` strips it from discovery), and `call()` refuses it before a
-request is serialised. Never reach for it by name anyway — not to test the
-guard, not "just to check". Read `.d64` bytes directly, or use
-`vice_disk_read_sector`.
+## Calling a tool
 
-## Every state-reading call pauses the machine
+`call` takes a tool name and a JSON argument object, and prints the JSON
+result:
 
-`vice_registers_get`, `vice_checkpoint_list`, and every other state-reading
-call **pauses the emulator and does not resume it**. `vice_ping` is the one
-exception — measured non-pausing. A poll/wait loop that reads state
-repeatedly without re-resuming will crawl to a fraction of real speed; write
-it as read → `vice_execution_run` → wait, not read → wait → read.
+```bash
+node .claude/skills/vice-session/scripts/vice.mjs call vice_memory_read '{"address":"$0400","length":40}'
+```
 
-## Snapshot names carry the instance's port
+## Polling while the machine runs
 
-`vice_snapshot_save` takes only a `name`, not a path, and writes into a
-**shared host directory** — two instances saving the same run label would
-silently overwrite each other. Prefix every snapshot name with the leased
-instance's port, unconditionally, the same way `tools/recover.mjs`'s
-`snapshotName(port, releaseId, runLabel)` already does.
+State-reading calls stop the machine, so write a wait loop as read →
+`vice_execution_run` → wait — never read → wait → read. Use `vice_ping` for
+the waiting step, since it reports state without stopping the machine. A
+loop written this way runs the machine at full speed.
 
-## Pool commands (host-only)
+## Naming snapshots
+
+`vice_snapshot_save` takes a name, not a path, and every instance writes
+into the same host directory. Prefix each name with the active instance's
+port — `session acquire`/`session status` printed it.
+
+## Reading a disk
+
+To inspect a disk's contents, parse the `.d64` bytes directly, or call
+`vice_disk_read_sector` for the emulated drive's own view.
+
+## Running several instances
 
 ```bash
 tools/vice-pool.sh start 3      # HOST-ONLY -- launch N supervised instances
@@ -104,37 +82,25 @@ tools/vice-pool.sh status
 tools/vice-pool.sh stop
 ```
 
-These run on the host workspace, never in this container. `tools/vice-pool.sh`
-is deployed automatically from this skill's `resources/` the first time any
-`.mjs` file here runs (see "Self-contained for both halves" above) — a fresh
-clone has no `tools/` scripts until then.
+These run on the host workspace, never in this container. If `tools/vice-pool.sh`
+is not present yet, `vice.mjs install` puts it there.
 
-## Four questions, four mechanisms
-
-"The registry says this port exists" is not the same as "this port is
-usable right now" — a pool answers four SEPARATE questions, never collapsed
-into one:
-
-| Question | Answered by |
-|---|---|
-| LAUNCHED | `registry.json` (written by `tools/vice-pool.sh start`, host-only) |
-| ALIVE | a real `vice_ping` this instant (`vice-probe.mjs`'s `probeAll()`) — never assumed from LAUNCHED |
-| FREE | the instance's lease file (`leaseInfo()`) — an instance can be alive-but-leased, which is not the same as dead |
-| SUPERVISED | that instance's own `epoch.json` (`readEpoch()`) — present/absent, and whether it has moved since a prior observation |
-
-`acquire()` probes ALIVE before leasing anything, so a registered-but-dead
-instance is skipped rather than handed out. `node .claude/skills/vice-session/scripts/vice.mjs pool status`
-prints all four per instance, container-side, plus a diagnosis; run it any
-time liveness (not just launch/lease/supervision state) needs checking.
+`node .claude/skills/vice-session/scripts/vice.mjs pool status` is the
+container-side view: it reports launched/alive/leased/supervised per
+instance plus a diagnosis line — run it whenever an instance's usability is
+in question.
 
 ## Troubleshooting
 
 | Symptom | Fix |
 |---|---|
-| `session ... expired at ... -- refusing to fall back to the default instance silently` | `node .claude/skills/vice-session/scripts/vice.mjs session release` then `session acquire` again. |
-| `transport error` / `ECONNREFUSED` / timed out after retries | The host VICE MCP server is down or unreachable from this container. Recovery is host-side (`tools/vice-supervisor.sh`, deployed from this skill's `resources/` — see above); this container cannot restart it. |
-| `acquire: no free instance within Nms -- every candidate rejected: ...` | Read the per-candidate reasons in the message: "no answer" means dead (see the next two rows), "leased by pid ... " means busy — wait, or check `pool status`/`tools/vice-pool.sh status` for a leak. |
-| A registered instance that does not answer (`pool status` shows `alive:no`) | LAUNCHED does not imply ALIVE. `acquire()` already skips it automatically; `pool status`'s diagnosis says whether it's unsupervised, unproven, a dead supervisor, or mid-respawn — follow that fix directly rather than guessing. |
-| `pool status` diagnosis says `DEAD SUPERVISOR` (epoch unchanged across two probes on a dead port) | The host-side supervisor for that instance died too — a live one would have respawned VICE and bumped the epoch. Restart it on the HOST (`tools/vice-supervisor.sh`, deployed from this skill's `resources/`); this container cannot. |
-| `the emulator restarted since this session was acquired -- epoch changed from X to Y` | The host respawned VICE mid-session. This session's results are suspect: `session release` then `session acquire` and redo the affected work. |
-| A session lease that nobody released | `session status` reports time-to-expiry; a session lease self-frees on TTL expiry even if nobody explicitly releases it, so a leaked one is not permanent. |
+| Session-expired refusal message | `node .claude/skills/vice-session/scripts/vice.mjs session release`, then `session acquire` again. |
+| `transport error` / `ECONNREFUSED` / timed out after retries | The host emulator is not reachable from this container; restart it on the host, then retry. |
+| `acquire: no free instance` message | Read the per-candidate reason it prints (`no answer` = not running, `leased by pid ...` = busy); wait and retry, or run `pool status`. |
+| `pool status` reports an instance as not alive | Follow the fix in its diagnosis line; `session acquire` already skips unusable instances on its own, so no action is needed to keep working. |
+| The mid-session restart message (`... since this session was acquired`) | `session release`, then `session acquire`, then redo the affected work. |
+| A session nobody released | `session status` prints time to expiry; it frees itself, so nothing to clean up. |
+
+Running the script with no command prints the full usage, including the
+environment variables that override the endpoint, the timeout and the
+session TTL.
