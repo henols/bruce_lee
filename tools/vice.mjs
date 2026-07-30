@@ -44,7 +44,30 @@ export const EPOCH_FILE = process.env.VICE_EPOCH_FILE
 // readEpoch()'s default path, beginSession()'s default path).
 let activeUrl = DEFAULT_ENDPOINT;
 let activeEpochFile = EPOCH_FILE;
-let activePort = null; // null until a lease sets it -- no pool, no port identity
+// Derived from DEFAULT_ENDPOINT rather than hardcoded or left null: with no
+// lease ever taken (no pool, or a programmatic caller that never calls
+// acquire()/useInstance()), this is still a real port identity -- e.g. for
+// tools/recover.mjs's snapshotName(), which namespaces by port
+// UNCONDITIONALLY (D-4) and must never produce a "no port" name just because
+// nothing redirected the seam. Falls back to 6510 only if the URL has no
+// parseable port at all.
+let activePort = (() => {
+  try {
+    const p = Number(new URL(DEFAULT_ENDPOINT).port);
+    return Number.isInteger(p) && p > 0 ? p : 6510;
+  } catch {
+    return 6510;
+  }
+})();
+// Not part of the seam redirect itself (rpc()/readEpoch() never consult
+// this) -- carried purely as identity metadata so a caller like
+// tools/recover.mjs's capture record can note whether a dump came from a
+// pooled instance or the unpooled default, without needing its own separate
+// channel back to whatever acquired the lease. Extra, optional field on
+// useInstance()'s object arg -- a caller passing only {port,url,epochFile}
+// (the documented minimum) still works exactly as before, defaulting to
+// false.
+let activePooled = false;
 
 /**
  * Redirect the transport seam to a specific pooled (or fallback) instance.
@@ -55,7 +78,7 @@ let activePort = null; // null until a lease sets it -- no pool, no port identit
  * if called while a session is already open against the previous instance,
  * since that is a real behaviour change the caller should notice.
  */
-export function useInstance({ port, url, epochFile } = {}) {
+export function useInstance({ port, url, epochFile, pooled = false } = {}) {
   if (initialized) {
     console.error(
       `warn: useInstance(port ${port}) called while a session was already open against ` +
@@ -65,12 +88,13 @@ export function useInstance({ port, url, epochFile } = {}) {
   activeUrl = url;
   activeEpochFile = epochFile;
   activePort = port;
+  activePooled = pooled;
   initialized = false;
 }
 
 /** Read-only accessor: the instance the seam is currently pointed at. */
 export function activeInstance() {
-  return { port: activePort, url: activeUrl, epochFile: activeEpochFile };
+  return { port: activePort, url: activeUrl, epochFile: activeEpochFile, pooled: activePooled };
 }
 
 // Forbidden tool names.  Checked by exact string match before any network

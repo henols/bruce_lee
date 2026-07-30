@@ -12,7 +12,8 @@ import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
 
-import { call, serverInfo, beginSession, assertSameMachine, MachineRestartedError, lastToolCall, readEpoch } from "./vice.mjs";
+import { call, serverInfo, beginSession, assertSameMachine, MachineRestartedError, lastToolCall, readEpoch, useInstance, activeInstance } from "./vice.mjs";
+import { acquire } from "./vice-pool.mjs";
 import { release, releaseDir, upsertRelease } from "./releases.mjs";
 import { tryHostPaths } from "../.claude/skills/devcontainer-host-path/hostpath.mjs";
 
@@ -52,6 +53,20 @@ function addrNum(a) {
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Namespace a snapshot name by the instance PORT that produced it (D-4).
+ * `vice_snapshot_save` accepts only a name, not a path, and writes into a
+ * SHARED host directory (`~/.config/vice/mcp_snapshots/`) with no
+ * overwrite-safe alternative -- N instances saving under the same name would
+ * silently clobber each other's snapshots. Applied UNCONDITIONALLY, including
+ * the port-6510 fallback: a conditional prefix would mean the same run
+ * produces a different name depending on whether a pool happened to be
+ * running, defeating the point of an unambiguous host-side name.
+ */
+export function snapshotName(port, releaseId, runLabel) {
+  return `p${port}_${releaseId}_gameentry_${runLabel}`;
+}
 
 // ------------------------------------------------------------- byte assembly
 
@@ -636,13 +651,18 @@ export async function recover(releaseId, { runLabel = "run1" } = {}) {
 
     // Per-run name: vice_snapshot_save REFUSES to overwrite an existing name and
     // the tool surface has no snapshot_delete, so a fixed name makes the second
-    // run of `reproduce` fail. Still explicit and never "snapshot.vsf".
-    const snapshotName = `${releaseId}_gameentry_${runLabel}`;
+    // run of `reproduce` fail. Still explicit and never "snapshot.vsf". Namespaced
+    // by the LEASED instance's port (D-4), unconditionally -- vice_snapshot_save
+    // writes into a shared host directory with no path argument, so two
+    // instances saving the same run label would otherwise silently overwrite
+    // each other.
+    const instancePort = activeInstance().port;
+    const snapName = snapshotName(instancePort, releaseId, runLabel);
     let snapshotSaved = true;
     let snapshotNote = null;
     try {
       await call("vice_snapshot_save", {
-        name: snapshotName,
+        name: snapName,
         description: `${releaseId}: paused at the recorded game-entry trigger ${hex4(triggerAddress)}, post-decrunch`,
       });
     } catch (e) {
@@ -653,7 +673,7 @@ export async function recover(releaseId, { runLabel = "run1" } = {}) {
       // discard an otherwise-good 64K capture.
       snapshotSaved = false;
       snapshotNote = e.message;
-      console.error(`warn: snapshot "${snapshotName}" not saved (capture is unaffected): ${e.message}`);
+      console.error(`warn: snapshot "${snapName}" not saved (capture is unaffected): ${e.message}`);
     }
     let hostSnapshotDir = null;
     try {
@@ -676,7 +696,9 @@ export async function recover(releaseId, { runLabel = "run1" } = {}) {
       chunk_size: cap.chunkSize,
       bytes_read: cap.bytesRead,
       sha256: cap.sha256,
-      snapshot_name: snapshotName,
+      instance_port: instancePort,
+      pooled: activeInstance().pooled,
+      snapshot_name: snapName,
       snapshot_saved: snapshotSaved,
       snapshot_note: snapshotNote,
       host_snapshot_dir: hostSnapshotDir,
@@ -704,7 +726,7 @@ export async function recover(releaseId, { runLabel = "run1" } = {}) {
           load_event_ref: null,
         },
       ],
-      snapshot_names: [...new Set([...(r.snapshot_names || []), snapshotName])],
+      snapshot_names: [...new Set([...(r.snapshot_names || []), snapName])],
     }));
 
     return { binPath, capturePath, sha256: cap.sha256, triggerAddress };
@@ -910,7 +932,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     return i === -1 ? fallback : rest[i + 1];
   };
 
-  async function main() {
+  async function runCommand() {
     if (cmd === "reset") {
       await reset();
       console.log("reset: checkpoints cleared, disks detached, hard reset done");
@@ -977,7 +999,12 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       console.log(r.ok
         ? "reproduce: OK -- program image byte-identical; all remaining diffs are single-bit RAM drift"
         : "reproduce: MISMATCH -- multi-bit differences found in the program image");
-      process.exit(r.ok ? 0 : 1);
+      // Set exitCode rather than calling process.exit() (which would skip
+      // main()'s `finally` below and leak the lease): exitCode lets the
+      // event loop drain normally, running the release, and the process
+      // still exits with this code once nothing else is pending.
+      process.exitCode = r.ok ? 0 : 1;
+      return;
     }
     console.log(`usage: node ${fileURLToPath(import.meta.url)} <command> [args]
 
@@ -987,7 +1014,27 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   capture <release> --trigger <addr>      arm the checkpoint and capture the image
   recover <release> [--run-label L]       the whole path as one command
   reproduce <release>                     run recover twice, require byte-identical output`);
-    process.exit(cmd ? 1 : 0);
+    process.exitCode = cmd ? 1 : 0;
+  }
+
+  /**
+   * Acquire a lease once at the CLI entry point (D-4, D-5) -- NOT inside the
+   * exported functions above, so programmatic callers (and the test suite)
+   * never trigger a lease/registry lookup they didn't ask for. One lease
+   * spans the WHOLE verb, including both recover() calls inside
+   * `reproduce`: that is required, not incidental, since the two runs must
+   * execute on the same machine for the epoch identity check
+   * (assertSameMachine) to mean anything. Released in `finally` so it runs
+   * whether the verb succeeded, threw, or merely set process.exitCode.
+   */
+  async function main() {
+    const lease = await acquire();
+    useInstance(lease);
+    try {
+      await runCommand();
+    } finally {
+      await lease.release();
+    }
   }
 
   main().catch((e) => die(e.message));

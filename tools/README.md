@@ -188,3 +188,115 @@ So the two halves work together:
   itself.
 
 `.vice-supervisor/` is gitignored: crash logs and epochs are local machine state.
+
+---
+
+## 5. Running a pool of instances
+
+### Why a pool exists
+
+Every state-reading `vice_*` call **pauses the emulator and does not resume it**
+(see `.planning/STATE.md`'s pause-on-read finding). A poll/wait loop that keeps
+re-resuming sustains close to full PAL speed; one that doesn't drops to roughly
+**0.7% duty cycle**. Either way, the bottleneck is MCP round-trip latency, not
+host CPU — the emulated CPU is idle almost the entire time waiting on the
+network round trip. That means N instances interleave with near-linear
+scaling: running three captures "in parallel" costs roughly the same wall time
+as one, because none of them are CPU-bound against each other.
+
+The other motivation is crash isolation. Six host VICE MCP outages happened in
+one session (see STATE.md's HOST INSTABILITY entry); with a single instance,
+every emulator task blocks on that one process. A pool means losing or killing
+one instance never disturbs the others.
+
+### `start` / `stop` / `status`
+
+```bash
+tools/vice-pool.sh start 3      # launch 3 supervised instances: 6510, 6511, 6512
+tools/vice-pool.sh status       # per-instance port, pid liveness, epoch, lease
+tools/vice-pool.sh stop         # SIGTERM every instance (identity-checked), clear the registry
+```
+
+Like `vice-supervisor.sh`, this is **host-only** and refuses to run inside the
+container:
+
+```bash
+tools/vice-pool.sh --check-container   # exit 0 on a host, 3 in a container
+tools/vice-pool.sh --help              # all env overrides and exit codes
+```
+
+Instance *i* gets port `VICE_POOL_BASE_PORT + i` (default base port **6510**),
+so instance 0 is always the same port the single-instance workflow and
+[`.mcp.json`](../.mcp.json) already use — starting a pool never breaks the
+existing interactive setup, and stopping a pool leaves nothing behind that
+would change how the default instance is reached.
+
+### The registry: the host→container channel
+
+`vice-pool.sh` writes `<pool dir>/registry.json` atomically (temp file + `mv`)
+on the same bind mount `epoch.json` already uses — no new port, socket, or
+protocol. [`tools/vice-pool.mjs`](vice-pool.mjs) reads it, validating every
+port as an untrusted, host-written field (same posture as `readEpoch()`), and
+derives each instance's URL and epoch-file path from the **validated port
+only** — never from a path string read out of the file.
+
+### Leases: one instance, one caller, at a time
+
+Two container-side processes racing for the same pool must never both get the
+same busy instance. [`tools/vice-pool.mjs`](vice-pool.mjs)'s `acquire()` takes
+an atomic lease (a `linkSync` of a fully-written temp file — `link` fails
+`EEXIST` if the name is taken, and never publishes a half-written lease) on
+the **highest free port**, so batch/harness leases drift away from 6510 and
+leave the interactive instance free when possible.
+
+The policy is **blocking with a timeout**, not fail-fast and not wait-forever:
+a capture run is long, and `reproduce` is two of them back to back, so failing
+the instant every instance is busy would make routine work flaky — but waiting
+forever would hide a leaked lease. `acquire()` polls until a port frees up or
+the timeout elapses, then throws an error naming every port's holder pid, host
+and age.
+
+```
+VICE_POOL_ACQUIRE_TIMEOUT_MS   how long to wait for a free instance (default 120000)
+VICE_POOL_LEASE_MAX_AGE_MS     a lease older than this is reclaimed regardless of holder (default 3600000)
+```
+
+A lease held by a pid on **this same host** that's confirmably dead is also
+reclaimed. A lease held on a *different* host is never pid-reclaimed — a
+supervisor pid (written on the host) and a container pid live in different pid
+namespaces, so comparing them is meaningless and could match an unrelated
+local process; only age can reclaim a cross-host lease.
+
+With **no pool running at all**, `acquire()` returns the single default
+instance — port 6510, the default endpoint, the same non-port-scoped epoch
+file as always — with no lease file written. This is not a fallback path
+bolted on afterward; it's the same code path a pooled acquire takes, just with
+nothing to lease. `node tools/recover.mjs recover danish` behaves exactly as
+it always has, with zero configuration.
+
+### Snapshot names carry their instance's port
+
+`vice_snapshot_save` takes only a `name`, not a path, and writes into a
+**shared host directory** (`~/.config/vice/mcp_snapshots/`) — so two instances
+saving a snapshot under the same run label would silently overwrite each
+other. `tools/recover.mjs`'s `snapshotName(port, releaseId, runLabel)` prefixes
+every name with `p<port>_`, **unconditionally** — including the port-6510
+fallback — so a name never depends on whether a pool happened to be running.
+
+### One caveat: don't run both a bare supervisor and a pool on 6510
+
+A plain `tools/vice-supervisor.sh` (no pool involved) writes its epoch to the
+non-port-scoped `.vice-supervisor/epoch.json`. If a pool is *also* running and
+something leases port 6510 from it, that lease's epoch path is the *pooled*
+`.vice-supervisor/6510/epoch.json` instead — which the bare supervisor never
+writes. A lease on 6510 in that mixed setup would find no epoch file at that
+path and fall back to the checkpoint-presence probe. Run either a bare
+supervisor **or** a pool, not both, to avoid this.
+
+### `.mcp.json` stays on the single default instance, on purpose
+
+The pool is a container-side, harness-driven concept. Claude Code's own
+interactive MCP connection (`.mcp.json`) is not repointed at a leased
+instance and is not touched by any of this — it always talks to the default
+port-6510 endpoint (D-5). Only `tools/recover.mjs`'s own CLI acquires and
+redirects a lease, for the duration of the verb it's running.
