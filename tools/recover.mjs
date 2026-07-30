@@ -189,51 +189,66 @@ async function screenshot(containerPath) {
  * re-armed, and success criterion 1's byte-identical claim depends on the stop
  * point being re-armable.
  */
+async function readCheckpoint(cpId, addr) {
+  const { checkpoints } = await call("vice_checkpoint_list", {});
+  return checkpoints.find((c) => c.checkpoint_num === cpId) ||
+         checkpoints.find((c) => addrNum(c.start) === addr);
+}
+
 /**
- * Poll until checkpoint `cpId` reports hit_count >= 1.
+ * Wait for a checkpoint using exactly ONE resume.
  *
- * Waiting on `vice_ping`'s execution == "paused" is WRONG and was the original
- * bug: the machine is frequently already paused when we arm (every checkpoint
- * stop leaves it paused), so a paused-poll returns instantly without any
- * transition having happened, and the caller then reads hit_count 0. The hit
- * count is the actual event, and it is monotonic, so polling it is immune to
- * that race.
+ * `vice_execution_run` is the call this host server dies on -- six outages in
+ * one session, the last three all on that call -- so the resume count is the
+ * risk we minimise. The lever is a measurement from the speed trials:
+ * `vice_ping` does NOT pause the machine (ping-polling sustained 986,693
+ * cycles/s against 991,569 for a completely quiet machine), whereas
+ * `vice_checkpoint_list` does. So we can watch progress with ping, for free,
+ * and resume only once instead of once per window -- an ~8x cut in the
+ * offending call.
+ *
+ * Order matters and is the fix for an earlier bug: check hit_count BEFORE
+ * resuming (the machine is often already stopped on the checkpoint, and blindly
+ * resuming would run straight past the dump point), then resume, then wait for
+ * `paused`, then CONFIRM via hit_count that the stop was actually this
+ * checkpoint rather than something else.
  */
 async function waitCheckpointHit(cpId, addr, label) {
-  for (let i = 0; i < POLL_MAX_ATTEMPTS; i++) {
-    const { checkpoints } = await call("vice_checkpoint_list", {});
-    const cp = checkpoints.find((c) => c.checkpoint_num === cpId) ||
-               checkpoints.find((c) => addrNum(c.start) === addr);
+  // Already fired? Then we are standing on the trigger -- never resume past it.
+  const pre = await readCheckpoint(cpId, addr);
+  if (pre && pre.hit_count >= 1) return pre;
+
+  await call("vice_execution_run", {}); // the single resume
+  const budgetMs = POLL_WINDOWS_MS.reduce((a, b) => a + b, 0);
+  const deadline = Date.now() + budgetMs;
+  while (Date.now() < deadline) {
+    await sleep(PING_INTERVAL_MS);
+    const p = await call("vice_ping", {}); // does not pause the machine
+    if (p.execution !== "paused") continue;
+    const cp = await readCheckpoint(cpId, addr);
     if (cp && cp.hit_count >= 1) return cp;
-    // TRANSPORT CONSTRAINT, measured on this server: every state-reading MCP
-    // call enters the monitor, which PAUSES the machine and does not resume
-    // it. The checkpoint_list poll above therefore stopped the CPU. Without an
-    // explicit resume here the machine advances ~0 cycles per poll and the
-    // checkpoint never fires -- which is exactly the bug this comment exists
-    // to stop someone reintroducing. Measured: with a resume + quiet interval
-    // the machine sustains ~991k cycles/s (100% of PAL); without it, ~6k/s.
-    //
-    // The interval is deliberately COARSE. Two reasons: (1) every extra call
-    // is another monitor pause/resume transition, and the host server has
-    // dropped its connection repeatedly under call churn; (2) a stop:true
-    // checkpoint sitting inside a tight loop re-fires the instant we resume,
-    // so fine-grained polling burns round-trips for almost no forward
-    // progress (we measured hit_count 1790 on one such gate).
+    // Paused for some other reason: resume and keep waiting. Rare, and we
+    // deliberately do not treat a bare pause as the trigger.
     await call("vice_execution_run", {});
-    await sleep(POLL_WINDOWS_MS[i]);
   }
+  // Deadline passed -- one last read before giving up, in case the checkpoint
+  // fired between the final ping and now.
+  const last = await readCheckpoint(cpId, addr);
+  if (last && last.hit_count >= 1) return last;
+
   throw new Error(
-    `waitCheckpointHit(${label} ${hex4(addr)}): checkpoint never fired within ` +
-      `${POLL_WINDOWS_MS.reduce((a, b) => a + b, 0) / 1000}s. vice_run_until's cycles argument is ` +
-      `documented as "not yet implemented" so there is no server-side timeout backing this. ` +
-      `Manual recovery: restart the host-side VICE MCP server (see the release NOTES.md).`
+    `waitCheckpointHit(${label} ${hex4(addr)}): checkpoint never fired within ${budgetMs / 1000}s. ` +
+      `vice_run_until's cycles argument is documented as "not yet implemented" so there is no ` +
+      `server-side timeout backing this. Manual recovery: restart the host-side VICE MCP server ` +
+      `(see the release NOTES.md).`
   );
 }
 
 async function runToCheckpoint(addr, label) {
   const added = await call("vice_checkpoint_add", { start: hex4(addr), exec: true, stop: true });
   const id = added.checkpoint_num ?? added.checkpoint?.checkpoint_num;
-  await call("vice_execution_run", {});
+  // No resume here: waitCheckpointHit owns the single resume, so that the
+  // vice_execution_run count stays at exactly one per wait.
   const cp = await waitCheckpointHit(id, addr, label);
   if (id != null) await call("vice_checkpoint_delete", { checkpoint_num: id });
   return { id, hitCount: cp.hit_count };
@@ -284,26 +299,27 @@ export async function boot(releaseId) {
   // Walk the crack's input gates, each one checkpoint-gated.
   const gates = rel.boot?.gates ?? [];
   const gatesWalked = [];
+  const heldKeys = [];
   for (const g of gates) {
     const addr = addrNum(g.address);
     const hit = await runToCheckpoint(addr, `gate ${g.note || g.key}`);
-    // The machine is PAUSED here (that is what a checkpoint stop means), so a
-    // hold_ms auto-release would tick away in real time while zero emulated
-    // frames pass and the poll would never see the key. Hold it explicitly,
-    // advance the CPU with a bounded step batch so the crack's $DC00/$DC01
-    // poll actually observes it, then release.
-    // Deliver the key over a FIXED INSTRUCTION COUNT, not a wall-clock window.
-    // This is the difference between a reproducible dump and an unreproducible
-    // one: with `execution_run` + sleep(300ms) the release lands on a
-    // different CPU cycle every run, which shifts every downstream cycle --
-    // measured as 264 differing bytes between two runs, including the live
-    // game counter at $0049 that the trigger routine itself reads. A fixed
-    // step count is cycle-identical across runs. Stepping advances the machine
-    // normally (frames included), so the crack's $DC00/$DC01 poll still sees
-    // the key.
+    // Press and HOLD -- do not release here, and do not time the release.
+    //
+    // Two delivery mechanisms were measured, and neither works alone:
+    //   execution_run + sleep(300ms) -- the crack DOES see the key, but the
+    //     release lands on a different CPU cycle every run. Measured cost: 264
+    //     of 65536 bytes differing between two runs, including $0049, the very
+    //     byte the trigger routine reads, plus the whole stack page.
+    //   execution_step(fixed count)  -- cycle-identical, but the crack NEVER
+    //     sees the key (verified: the machine sat at $0900 for 150s). Stepping
+    //     does not deliver a held matrix key on this server.
+    //
+    // So: hold the key and let the RELEASE be gated on a program event rather
+    // than on elapsed time. The trigger checkpoint is already such an event, so
+    // the key is released there, immediately before any memory is read (see
+    // capture()'s releaseKeys). Nothing in this path measures time.
     await call("vice_keyboard_matrix", { key: g.key, pressed: true });
-    await call("vice_execution_step", { count: g.deliver_steps ?? 200000 }, { timeoutMs: 120000 });
-    await call("vice_keyboard_matrix", { key: g.key, pressed: false });
+    heldKeys.push(g.key);
     gatesWalked.push({ address: hex4(addr), key: g.key, hit_count: hit.hitCount });
   }
 
@@ -319,10 +335,11 @@ export async function boot(releaseId) {
       fallback_used: fallbackUsed,
       screenshot_host_path: shotHost,
       gates_walked: gatesWalked,
+      keys_held_into_capture: heldKeys,
     },
   }));
 
-  return { method, fallbackUsed, hostPath, gatesWalked };
+  return { method, fallbackUsed, hostPath, gatesWalked, heldKeys };
 }
 
 // -------------------------------------------------------------- find-entry
@@ -384,7 +401,9 @@ export async function findEntry(releaseId, { batchSize = 400, maxBatches = 150 }
 // risk factor we control. This schedule spans ~150s of emulated running in 8
 // round-trips instead of ~60.
 const POLL_WINDOWS_MS = [3000, 6000, 12000, 20000, 25000, 28000, 28000, 28000];
-const POLL_MAX_ATTEMPTS = POLL_WINDOWS_MS.length;
+// How often to ask `vice_ping` whether the machine has stopped yet. Ping is
+// free (it does not pause the machine), so this only costs a round-trip.
+const PING_INTERVAL_MS = 1000;
 
 // NOTE: a `waitPaused()` helper used to live here, polling vice_ping until
 // execution reported "paused". It is deliberately DELETED, not kept "just in
@@ -403,7 +422,7 @@ const POLL_MAX_ATTEMPTS = POLL_WINDOWS_MS.length;
  * Then reads the full 65536-byte RAM image and every chip-state field the
  * capture record needs.
  */
-export async function capture(releaseId, triggerAddress) {
+export async function capture(releaseId, triggerAddress, { releaseKeys = [] } = {}) {
   const addr = addrNum(triggerAddress);
   const added = await call("vice_checkpoint_add", { start: hex4(addr), exec: true, stop: true });
   const cpId = added.checkpoint_num ?? added.checkpoint?.checkpoint_num;
@@ -418,6 +437,17 @@ export async function capture(releaseId, triggerAddress) {
   // the machine is usually already paused when we arm, so a paused-poll would
   // return instantly and we would capture from the wrong point (or refuse).
   const cp = await waitCheckpointHit(cpId, addr, "dump trigger");
+
+  // Release any key boot() left held, NOW -- at the trigger, which is a program
+  // event and therefore the same CPU cycle on every run. This is what makes the
+  // dump reproducible: a timed release drifts, a checkpoint-gated one does not.
+  // Doing it before any memory read also means the captured image has no key
+  // artificially held down in the CIA state.
+  for (const k of releaseKeys) {
+    try { await call("vice_keyboard_matrix", { key: k, pressed: false }); }
+    catch (e) { console.error(`warn: could not release held key ${k}: ${e.message}`); }
+  }
+
   if (cpId != null) {
     try { await call("vice_checkpoint_delete", { checkpoint_num: cpId }); }
     catch (e) { console.error(`warn: could not delete trigger checkpoint ${cpId}: ${e.message}`); }
@@ -456,7 +486,7 @@ export async function capture(releaseId, triggerAddress) {
 /** The whole path as one command. Reuses a recorded trigger when present. */
 export async function recover(releaseId, { runLabel = "run1" } = {}) {
   await reset();
-  await boot(releaseId);
+  let booted = await boot(releaseId);
 
   const rel = release(releaseId);
   let triggerAddress;
@@ -478,10 +508,12 @@ export async function recover(releaseId, { runLabel = "run1" } = {}) {
     // checkpoint/run_until path -- the one `reproduce` will use every time
     // -- is exercised for real, not skipped on the discovery run.
     await reset();
-    await boot(releaseId);
+    booted = await boot(releaseId);
   }
 
-  const cap = await capture(releaseId, triggerAddress);
+  // Hand capture() the keys boot() left held so it can drop them at the
+  // trigger -- a program event, hence the same cycle every run.
+  const cap = await capture(releaseId, triggerAddress, { releaseKeys: booted.heldKeys ?? [] });
 
   // Per-run name: vice_snapshot_save REFUSES to overwrite an existing name and
   // the tool surface has no snapshot_delete, so a fixed name makes the second
