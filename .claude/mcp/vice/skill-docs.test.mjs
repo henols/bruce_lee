@@ -46,7 +46,7 @@ import { fileURLToPath } from "node:url";
 // a separate, deferred todo. Retire this gate together with that SKILL.md
 // when that todo lands.
 const MODULE_DIR = dirname(fileURLToPath(import.meta.url));
-const SKILL_MD = join(MODULE_DIR, "..", "..", "skills", "vice-mcp-selector", "SKILL.md");
+const SKILL_MD = join(MODULE_DIR, "..", "..", "skills/vice-mcp-selector", "SKILL.md");
 const TOOL_PREFIX = "mcp__vice__";
 
 function scriptModules() {

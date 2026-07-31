@@ -200,7 +200,7 @@ function isReclaimable(lp, maxLeaseAgeMs) {
 
   // SESSION LEASES (D-2) -- evaluated BEFORE the age branch and BEFORE the pid
   // branch below, deliberately. A session's holder is a short-lived
-  // `node .claude/skills/vice-mcp-selector/scripts/vice.mjs session acquire` process that EXITS the instant the
+  // `node .claude/mcp/vice/vice.mjs session acquire` process that EXITS the instant the
   // command returns -- its pid is gone within milliseconds of a successful
   // acquire, so pid-liveness would reclaim a live, actively-used session out
   // from under itself almost immediately. maxLeaseAgeMs is wrong for the same

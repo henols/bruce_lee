@@ -1,4 +1,4 @@
-# .claude/skills/vice-mcp-selector/resources/lib/repo-root.sh
+# .claude/mcp/vice/resources/lib/repo-root.sh
 #
 # Shared repo-root resolution for vice-supervisor.sh and vice-pool.sh,
 # mirroring repo-root.mjs's documented ladder (D-6) so the shell and Node
@@ -9,7 +9,7 @@
 # (`REPO_ROOT="$(cd "$(dirname "$SELF_PATH")/.." && pwd)"`) was correct only
 # from `tools/` -- one level up from `tools/` IS the repo root. From
 # `resources/` (three levels deeper than `tools/`, at
-# `.claude/skills/vice-mcp-selector/resources/`) that same fixed hop count would
+# `.claude/mcp/vice/resources/`) that same fixed hop count would
 # have resolved to `.claude/skills/.vice-supervisor`, a directory nothing
 # else ever writes to. NOTHING would have errored: the container would just
 # read a permanently-empty epoch/registry file forever, and restart
@@ -52,7 +52,7 @@ _REPO_ROOT_WARNED_NO_MARKER=0
 #      prevent, so this path emits a one-time stderr note naming both paths.
 #   4. Otherwise, a location-shaped last resort, also with a one-time stderr
 #      note: FOUR levels up when <absolute-dir>'s own directory is named
-#      `resources` (matching `<root>/.claude/skills/vice-mcp-selector/resources`),
+#      `resources` (matching `<root>/.claude/mcp/vice/resources`),
 #      ONE level up otherwise (matching `<root>/tools`).
 resolve_repo_root() {
   local from="$1" dir parent base
