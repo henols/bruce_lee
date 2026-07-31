@@ -309,6 +309,21 @@ test("tracer: request -> grant -> forward -> SIGINT release -> teardown, end to 
     assert.equal(existsSync(join(dir, "requests")), false, "initialize+tools/list must create no requests directory");
     assert.equal(existsSync(join(dir, "leases")), false, "initialize+tools/list must create no leases directory");
 
+    // A live broker must be observable BEFORE the first forwarded call. Plan
+    // 01.2-03's criterion C10 makes ensureBrokerLease() classify broker
+    // liveness *first*: never_started and stale both return their diagnostic
+    // message immediately, writing neither a request nor a lease. Without a
+    // broker.json carrying a fresh heartbeat_at, this tracer would exercise
+    // the never-started path and no request would ever appear. Same fixture
+    // the acquireLeaseViaBroker() helper in vice-proxy.test.mjs writes, for
+    // the same reason. Deliberately written after the C3 assertions above so
+    // those still prove acquisition is deferred past the handshake.
+    writeFileSync(
+      join(dir, "broker.json"),
+      JSON.stringify({ version: 1, pid: process.pid, heartbeat_at: new Date().toISOString() }),
+      "utf8"
+    );
+
     // The first forwarded tools/call -- this is what acquires an instance.
     proxy.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
 
