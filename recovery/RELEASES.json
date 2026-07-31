@@ -17,14 +17,14 @@
           }
         ],
         "program": null,
-        "host_path_used": "/home/henrik/dev/henrik/git/bruce_lee/disks/danish.d64",
+        "host_path_used": "/home/henrik/dev/henrik/git/bruce_lee/.claude/worktrees/agent-ac0be0be787edbdcd/disks/danish.d64",
         "fallback_used": false,
-        "screenshot_host_path": "/home/henrik/dev/henrik/git/bruce_lee/recovery/danish/dumps/danish-boot.png",
+        "screenshot_host_path": "/home/henrik/dev/henrik/git/bruce_lee/.claude/worktrees/agent-ac0be0be787edbdcd/recovery/danish/dumps/danish-boot.png",
         "gates_walked": [
           {
             "address": "$0900",
             "key": "SPACE",
-            "hit_count": 629
+            "hit_count": 630
           }
         ],
         "keys_held_into_capture": [
@@ -42,9 +42,9 @@
           "kind": "gameentry",
           "bin": "recovery/danish/dumps/danish-gameentry-run1.bin",
           "capture_record": "recovery/danish/dumps/danish-gameentry-run1.capture.json",
-          "chip_state": null,
-          "range_manifest": null,
-          "sha256": "138350968375fcd502c76bb219c996ecaf052158670ba0166f6722dddfab70e5",
+          "chip_state": "recovery/danish/dumps/danish-gameentry-run1.state.json",
+          "range_manifest": "recovery/danish/dumps/danish-gameentry-run1.map.json",
+          "sha256": "e1b8428c55bc7606b7e77846e8928bff23e9cf0c8241da479aadc1bc092faa26",
           "load_event_ref": null
         },
         {
@@ -52,9 +52,9 @@
           "kind": "gameentry",
           "bin": "recovery/danish/dumps/danish-gameentry-run2.bin",
           "capture_record": "recovery/danish/dumps/danish-gameentry-run2.capture.json",
-          "chip_state": null,
-          "range_manifest": null,
-          "sha256": "0d21fb071e63df8540db829628c904fe21d263c67c62a6fde674bed3dbe5aeb2",
+          "chip_state": "recovery/danish/dumps/danish-gameentry-run2.state.json",
+          "range_manifest": "recovery/danish/dumps/danish-gameentry-run2.map.json",
+          "sha256": "741213dcd1beb548b8896737f9f07e867c718dabeb56238862b9f3020e4902d2",
           "load_event_ref": null
         },
         {
@@ -62,9 +62,9 @@
           "kind": "gameentry",
           "bin": "recovery/danish/dumps/danish-gameentry-run3.bin",
           "capture_record": "recovery/danish/dumps/danish-gameentry-run3.capture.json",
-          "chip_state": null,
-          "range_manifest": null,
-          "sha256": "969c878b4564d659aa25ac8db1fb8afa469adb1532a26b4ebd42510912676755",
+          "chip_state": "recovery/danish/dumps/danish-gameentry-run3.state.json",
+          "range_manifest": "recovery/danish/dumps/danish-gameentry-run3.map.json",
+          "sha256": "ee3813322127b7bedf97abf3dd6ffcebb80c937f8b75dfe471c886fb36975573",
           "load_event_ref": null
         }
       ],
