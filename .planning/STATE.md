@@ -2,41 +2,43 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: Pipeline Proven *
-current_phase: 01.1
-current_phase_name: tool-mediated-emulator-access
-status: executing
-stopped_at: "Completed quick task 260730-u9w: extracted checkpoint-sync primitives into vice-session's vice-sync.mjs; durable module-leak gate in SKILL.md"
-last_updated: "2026-07-31T16:14:27.946Z"
+current_phase: 01.2
+current_phase_name: on demand broker and per session leasing
+status: planning
+stopped_at: "Completed quick task 260730-v6z: layer B extracted into the new `c64-ram-capture` skill; `tools/recover.mjs` is now layer C only. A live `reproduce danish` during this task reported `MISMATCH` at `$D588` (2-bit) — the already-documented Hamming-1-too-tight edge case above, not a regression; that design gap remains open."
+last_updated: "2026-07-31T18:04:07.533Z"
 last_activity: 2026-07-31
-last_activity_desc: Phase 01.1 execution resumed (wave continue)
+last_activity_desc: Phase 01.1 complete, transitioned to Phase 01.2
 progress:
   total_phases: 3
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 10
-  completed_plans: 6
-  percent: 0
+  completed_plans: 7
+  percent: 33
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-07-30)
+See: .planning/PROJECT.md (updated 2026-07-31)
 
 **Core value:** An ACME source tree that rebuilds a Bruce Lee which plays identically to the original, where every gameplay system is explained well enough that someone could change it.
 **Current milestone:** v1.0 — Pipeline Proven (Phases 1–4, 24 requirements)
-**Current focus:** Phase 01.1 — tool-mediated-emulator-access
+**Current focus:** Phase 01.2 — on-demand broker and per-session leasing
 
 ## Current Position
 
 Milestone: v1.0 — Pipeline Proven (Phases 1–4 of 7 total)
-Phase: 01.1 (tool-mediated-emulator-access) — EXECUTING
-Plan: 1 of 4
-Status: Executing Phase 01.1
-Last activity: 2026-07-31 — Phase 01.1 execution resumed (wave continue)
+Phase: 01.2 — on demand broker and per session leasing
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-07-31 — Phase 01.1 complete, transitioned to Phase 01.2
 
-Progress (v1.0): [░░░░░░░░░░] 0% — 0/20 plans
-Progress (overall): [░░░░░░░░░░] 0% — 0/35 plans
+Progress (v1.0): [████░░░░░░] 35% — 7/20 plans
+Progress (overall): [██░░░░░░░░] 20% — 7/35 plans
+
+<sub>Phases currently on disk: [██████████████░░░░░░] 7/10 plans (70%). The 20/35 denominators are v1.0's and the project's *projected* plan counts; phases 2–7 are not yet broken into plans.</sub>
 
 **Milestone roadmap:** v1.0 = Phases 1–4 (proven pipeline) · v2.0 = Phases 5–7 (complete reconstruction, where "fully documented and recompiled" is met) · v3.0 = round-trip assets + editor, not yet phased.
 
@@ -44,7 +46,7 @@ Progress (overall): [░░░░░░░░░░] 0% — 0/35 plans
 
 **Velocity:**
 
-- Total plans completed: 0
+- Total plans completed: 4
 - Average duration: —
 - Total execution time: 0.0 hours
 
@@ -52,7 +54,7 @@ Progress (overall): [░░░░░░░░░░] 0% — 0/35 plans
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| - | - | - | - |
+| 01.1 | 4 | - | - |
 
 **Recent Trend:**
 
@@ -73,6 +75,9 @@ Recent decisions affecting current work:
 - [Roadmap]: Verification harness scheduled at Phase 3, not terminal — baseline capture needs only the recovered image plus harness plumbing, so plans 03-01/03-02 run as a parallel workstream alongside Phase 2.
 - [Milestones]: Split at the Phase 4 boundary — v1.0 closes on a proven pipeline (24 reqs), v2.0 on the complete reconstruction (20 reqs). Archives and the PROJECT.md evolution review happen while context is small and after the pipeline's assumptions have been tested. Accepted cost: v1.0 is not the originally-stated deliverable; v2.0 is.
 - [Phase ?]: [quick-260730-mef]: Container guard extracted into tools/lib/container-guard.sh (sourced by both vice-supervisor.sh and vice-pool.sh) to prevent detection-logic drift; vice-pool.mjs's acquire() takes atomic linkSync-based leases, walking ports in descending order, with blocking-with-timeout semantics and hostname-gated stale-lease reclaim (cross-host pid comparison is never trusted); snapshotName() namespaces every vice_snapshot_save call by instance port unconditionally, since the host snapshot directory is shared across instances.
+- [Phase 01.1]: **Emulator access is now tool-mediated.** One static `.mcp.json` `vice` entry runs `vice-proxy.mjs` (stdio MCP), which re-exposes the host surface as 64 `mcp__vice__*` tools. `initialize`/`tools/list` are answered from a committed manifest with zero host I/O, so tool discovery works with the emulator down. The four hazards are properties of the seam now, not things to remember: three-layer `vice_disk_list` deny-list off one `DENY_LIST` definition, epoch re-check before *and* after every forwarded call, a 500 000-char output ceiling that chunks rather than truncates, and structural container→host path translation with an out-of-workspace refusal. Enumerated in `COVERAGE.md`; 19 threats closed in `01.1-SECURITY.md`.
+- [Phase 01.1]: **`vice-session` retired, transport relocated to `.claude/skills/vice-mcp-selector/scripts/`.** The module tree moved unchanged (including `resources/` and `install-resources.mjs` as a unit, so the deployed host shell scripts are not orphaned); all five consumers repointed. Durable directory-enumerating tests keep any document from telling an agent to reach the emulator from a shell, keep the retired path out of every import specifier, and close the `hostpath.mjs` consumer set to four traced modules. `devcontainer-host-path` deliberately stays — the proxy is a third consumer, not a replacement.
+- [Phase 01.1]: **Static proxy first; broker and leasing are Phase 01.2.** No leasing, no broker, one fixed port — deliberately immune to every unverified assumption about host lifecycle, so tool-mediated access could not be blocked by a lifecycle unknown.
 - [Phase ?]: [quick-260730-u9w]: Checkpoint-synchronisation primitives (reset, readCheckpoint, waitCheckpointHit, runToCheckpoint, screenshot, addrNum, hex4, POLL_WINDOWS_MS, PING_INTERVAL_MS, armedCheckpoints) moved from tools/recover.mjs into a new sibling module .claude/skills/vice-session/scripts/vice-sync.mjs — a third structurally-isolated concern alongside vice.mjs's transport seam and vice-probe.mjs's liveness probe. armedCheckpoints became a singleton tracker (track/untrack/ids/clear) so both runToCheckpoint() and recover.mjs's hand-rolled capture() write through one door. A durable, directory-enumerating node:test gate (skill-docs.test.mjs) replaces a one-shot grep keeping module names out of SKILL.md; INTERNALS.md stays deleted and no companion maintainer document was created.
 
 ### Pending Todos
@@ -99,11 +104,14 @@ None yet.
 
 - [Phase 1]: **Recon finding to re-verify, not to trust** — before the outage, the executor traced `danish.d64` to a title-screen dispatcher at **$08B1**, reached via `JSR` from `$0711` and distinct from the loader's own `$0900` polling loop (confirmed by `vice_disassemble` + `vice_backtrace`). This is a strong D-06 trigger candidate. `recovery/RELEASES.json`'s `trigger` field is deliberately still `null` — the recorded value must come from the tool running live, not from these notes.
 - [Phase 1]: **`vice_run_until` returns immediately/asynchronously** — confirmed live, consistent with its schema's "timeout, not yet implemented" note on `cycles`. Synchronisation needs a poll-until-paused loop plus a client-side `AbortSignal.timeout`, or a wrong target address hangs with no safety net.
-- [Phase 1]: `vice_disk_list` crashes the host MCP server and needs a manual host-side VICE restart. Never call it; parse `.d64` bytes directly.
+- [Phase 1]: `vice_disk_list` crashes the host MCP server and needs a manual host-side VICE restart. Never call it; parse `.d64` bytes directly. **Now enforced in code, not just remembered (Phase 01.1):** stripped from the committed manifest, re-filtered from `tools/list`, and refused at `tools/call` *and* as the first statement of `call()` before request serialisation — three layers off one `DENY_LIST` definition, each with a guard-removal-sensitive test. The tool is absent from a real client's discovery layer, so it cannot be called by accident. The hazard itself is unchanged; only the chance of tripping it is.
 - [Phase 1]: VICE bootstrap — **tool question resolved** by Phase 1 research (verified live against the host MCP endpoint): `vice_disk_attach` and `vice_autostart` both exist, so booting does *not* require `snapshot_load` from a pre-captured `.vsf`. **Still open:** whether `autostart` actually defeats each crack's faked directory — plan 01-01 settles that empirically, with `disk_attach` + a recorded `LOAD"*",8,1` sequence as the fallback.
 - [Phase 1]: `vice_snapshot_save` takes only a `name`, not a `path`; snapshots are written host-side to `~/.config/vice/mcp_snapshots/` and there is **no tool to export their bytes into this container**. A `.vsf` therefore cannot be committed as a project artifact — supersedes CONTEXT.md D-07's original wording. Snapshots are recorded by name only; reproducibility runs through the recorded procedure instead.
 - [Phase 1]: `vice_run_until`'s `cycles` parameter is documented in its own live schema as "timeout, not yet implemented" — there is no safety net against hanging on a misidentified target address. Every run-to-checkpoint task needs a stated manual-recovery path.
 - [Phase 3]: `.d64` writing tool unresolved (`c1541` standalone vs custom writer). If a `.prg` cannot be injected directly over MCP, this becomes a hard blocker on Phase 4, not Phase 7.
+- **[Phase 01.1, 2026-07-31]: the manifest's "63 tools" figure is not 63 *emulator* tools.** Four entries (`initialize`, `notifications_initialized`, `tools_list`, `tools_call`) are MCP lifecycle methods the host also exposes as callable tools, so only **59** are real `vice_*` tools. `COVERAGE.md` records this per-row. Correct it before the "exact 63-tool surface… matches tool-for-tool" line in CLAUDE.md is cited again as ground truth. Carried from `01.1-REVIEW.md` WR-01, which remains open by design along with WR-02 and WR-03.
+- **[Phase 01.1, 2026-07-31]: `protocolVersion` sent by the client at `initialize` is not captured** — `handleInitialize()` echoes the client's requested value but never persists it, and the proxy has no log file or debug hook, so it is unrecoverable after the handshake. Accepted as a deferred note at the criterion-3 UAT sign-off, not a blocker. Closing it costs one line plus a fresh session to observe a handshake.
+- **[Phase 01.1, 2026-07-31]: path translation deliberately leaves *relative* paths byte-identical.** A relative-looking string is indistinguishable from a non-path argument (a tool name, `$0400`, a label) without guessing, and rewriting a non-path argument is a worse failure than leaving a relative path unresolved. Pass **absolute** container paths to emulator tools. If a later phase starts passing relative paths, this becomes live.
 - [All phases, CORRECTED 2026-07-31]: VICE is a **pool of supervised instances**, not a single shared one — `tools/vice-pool.sh start N` on the host, verified 3/3 alive and free (epoch 3) during plan 01-02. `vice.mjs session acquire` takes an atomic lease and skips unusable instances, so concurrent emulator work is safe and *does* parallelise up to the pool size. This supersedes the earlier claim that "VICE steps serialise" — that was written before the pool existed and would needlessly serialise Phase 3's replay harness and the Phase 5/6 parallel plans. Two real constraints remain: snapshot names must be prefixed with the instance port (one shared host snapshot directory), and plan `depends_on` chains still serialise regardless of pool size — which is why Phase 1 ran one plan per wave.
 - **[MAJOR FINDING — Phase 1, 2026-07-31, plan 01-02]: PROJECT.md's "faked directories" claim is REFUTED for both releases.** PROJECT.md's Context section states *"Both have faked directories — 0-block BRUCE LEE PRG entries pointing at bogus track/sector."* Direct byte-level parsing (`tools/d64-parse.mjs`) shows neither entry is faked: `danish.d64` = `PRG (closed)`, `BRUCE LEE   (DC)`, first T/S **17/0**, **178 blocks**; `saeger.d64` = `PRG (closed)`, `BRUCE LEE`, first T/S **1/0**, **186 blocks**. Three independent evidence lines per disk: (1) block count is not 0 and the suspicious-entry detector — proven to fire against a synthetic defect in `d64-parse.test.mjs` — stays silent; (2) each entry's own sector chain walks cleanly and terminates on exactly its stated block count, matching the BAM's independent per-track free counts (danish interleave-10 t17→t9; saeger interleave-1 t1→t9); (3) the pointed-to sector is the documented BASIC stub byte-for-byte — danish t17/s0 holds load address `$0801` + tokenized `SYS 2073` + `TCS-CRUNCH!`, at exactly the track/sector PROJECT.md's own boot-stub table cites. **PROJECT.md was deliberately NOT edited** — the correction is a provenance decision for 01-05/01-06, and is flagged for human confirmation as coverage item D5 in `01-02-SUMMARY.md`. Anyone writing `PROVENANCE.md` inherits the corrected picture.
 - **[PROCESS — Phase 1, 2026-07-31]: an executor can die silently with no completion signal.** Plan 01-02's executor committed tasks 1–2, wrote `tools/recovery-schema.mjs`, then died at ~06:10Z before committing it or writing SUMMARY.md; the harness never reported a failure, so the orchestrator waited ~20 min past the 10-minute stall threshold believing it was still working. **`/tmp` file metadata is NOT a usable liveness signal here** — `stat` reported 128 bytes for a file `cat` showed as 900KB. Uncommitted worktree files are lost on cleanup (#2070), so rescue before any `worktree remove`. Recovery used was "close out manually": rescue the file, verify it against the plan's own `<automated>` gate *before* trusting it, commit, orchestrator authors SUMMARY.md.
@@ -142,6 +150,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-30T22:27:34.943Z
-Stopped at: Completed quick task 260730-v6z: layer B extracted into the new `c64-ram-capture` skill; `tools/recover.mjs` is now layer C only. A live `reproduce danish` during this task reported `MISMATCH` at `$D588` (2-bit) — the already-documented Hamming-1-too-tight edge case above, not a regression; that design gap remains open.
+Last session: 2026-07-31T18:10:00Z
+Stopped at: Phase 01.1 complete, ready to plan Phase 01.2. UAT passed (1/1 — criterion-3 human sign-off), verification `passed`, security verified (19 threats, `threats_open: 0`), `COVERAGE.md` matrix added (65 capabilities, 1 opt-out). Note Phase 1 itself is NOT complete — plans 01-04/01-05/01-06 remain unexecuted; 01.1 was an inserted phase.
 Resume file: None

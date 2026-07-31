@@ -98,6 +98,10 @@ Driver 1 sets documentation depth. Driver 2 sets source structure and pushes the
 | Read-only asset extraction before v3.0 | Round-trip converters are wanted later; deferring them keeps the reconstruction focused while the format specs still get written and validated by round-trip. | — Pending |
 | Milestone split at the Phase 4 boundary | v1.0 closes on a proven pipeline rather than a complete reconstruction, so the archive/evolution review happens while context is still small and the pipeline's assumptions have been tested. Accepted cost: v1.0 is not the deliverable originally asked for; v2.0 is. | — Pending |
 | Emit both `.prg` and `.d64` | `.prg` gives fast build/test iteration; `.d64` is the deliverable that boots like the original. | — Pending |
+| Emulator access is tool-mediated, not shell-mediated (Phase 01.1) | A `Bash`-driven transport module leaves every hazard as something an agent must *remember* from documentation. Moving it behind one static `.mcp.json` stdio proxy makes the deny-list, epoch re-check, output ceiling and path translation properties of the seam that every call must pass. | ✓ Shipped — Phase 01.1; 19 threats closed, 26/26 tests green |
+| Hazards enforced in code, with guard-removal-sensitive tests | A documented prohibition regresses silently; a test that only passes while the guard exists cannot. `vice_disk_list` is refused at three independent layers off one `DENY_LIST` definition. | ✓ Shipped — Phase 01.1 |
+| Path translation lives in the proxy seam, not in callers (Phase 01.1) | Container→host path correctness applied per-caller is a discipline that a fifth caller breaks. Applied structurally at the one place that sees every forwarded call, it holds by construction — and the `devcontainer-host-path` skill stays, since the proxy is a third consumer rather than a replacement. | ✓ Shipped — Phase 01.1; residual: relative paths deliberately untranslated |
+| Static proxy first; broker and leasing deferred to Phase 01.2 | Phase 01.1 is deliberately immune to every unverified assumption about host lifecycle — no leasing, no broker, one fixed port. Concurrency is a separate, gated phase so a lifecycle unknown cannot block tool-mediated access. | ✓ Shipped — Phase 01.1; Phase 01.2 gated by the lifecycle spike |
 
 ## Evolution
 
@@ -117,4 +121,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-07-30 after initialization*
+*Last updated: 2026-07-31 after Phase 01.1*
