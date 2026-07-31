@@ -14,8 +14,8 @@ value ships without waiting on the part carrying risk.
 | | Phase 1.1 — Tool-Mediated Access | Phase 1.2 — Broker & Leasing | Seed — Instance handles |
 |---|---|---|---|
 | Scope | Diagnose the current failure, remove `vice-session`, one static `.mcp.json` entry, stdio proxy forwarding to a **fixed** host port, hazards enforced in code, three-state diagnostics | Host broker daemon, request/grant/lease protocol, on-demand launch, kill-on-release, N warm spares under a ceiling, TTL sweeper | Multiple concurrent emulators per session, addressed by handle |
-| Depends on unverified findings? | **No** | Yes — 4, 5, 7, 8 | Yes — 5 |
-| Gated by the spike? | No | **Yes** | — |
+| Depends on unverified findings? | **No** | ~~Yes — 4, 5, 7, 8~~ **Findings 4, 5 and 8 are now measured; 8 was corrected** | ~~Yes — 5~~ **5 is now measured** |
+| Gated by the spike? | No | ~~**Yes**~~ **Gate cleared 2026-07-31** — see `.planning/spikes/` | — |
 | Changes the reset ritual? | No | Yes, narrows it | No |
 
 **Why 1.1 is immune.** Without leasing, it does not matter how many subprocesses exist per session,
@@ -123,18 +123,41 @@ be remembered rather than enforced. A proxy converts them into code.
 
 ## Shutdown: what the handler can and cannot do
 
-Session end closes the proxy's stdin, then SIGTERM, then SIGKILL, with short grace periods between
-steps. A handler on stdin `end`/`close` plus `process.on('SIGTERM')` does run on that path.
+**Measured 2026-07-31 by spike 002** (`.planning/spikes/002-shutdown-grace-window/`), which replaced
+the guesses this section previously carried. There are **two** teardown paths, they fire **different**
+handlers, and they are the opposite way round from what was assumed.
 
-**Hard constraint: release must be one synchronous local filesystem operation.** `unlinkSync` on a
-lease file — never an `await fetch(...)`. The grace window is on the order of a second, and an async
-network round-trip in a shutdown handler is exactly what gets SIGKILLed halfway. Anything requiring
-host action (actually stopping `x64sc`) **cannot happen in the handler at all** — the proxy marks
-the lease released and the broker, which outlives it, does the teardown.
+| Ending | Trigger the proxy sees | Budget | Ends how |
+|---|---|---|---|
+| Print mode; stdin closed; client SIGTERMed | **SIGINT**, then SIGTERM +100ms | **~490ms** to SIGKILL | killed; exit handler never runs |
+| Client SIGKILLed (crash, killed window) | **`stdin_end` → `stdin_close`** (the pipe closes) | **unbounded** | normal exit, code 0 |
 
-**The SIGKILL path gets nothing.** With a fixed pool that leaked a lease file. With on-demand launch
-it leaks an orphaned `x64sc` eating host RAM, so the host-side sweeper is mandatory rather than
-hygiene. Only the host can kill host processes, which is another reason the broker must exist.
+**Release must be wired to both `SIGINT`/`SIGTERM` and stdin `end`/`close`.** This is the correction
+with the most direct effect on implementation. A graceful ending never closes stdin, and an abrupt one
+never signals — so a handler on stdin alone (what this section used to describe first) would miss
+*every* graceful shutdown, and a signals-only handler would miss every abrupt one. **`SIGINT` must be
+treated as a teardown trigger, not ignored as a user Ctrl-C**: it is the first signal every graceful
+teardown delivers, and ignoring it burns 100ms of a 490ms budget.
+
+**Hard constraint, unchanged and now quantified: release must be one synchronous local filesystem
+operation.** `unlinkSync` on a lease file — never an `await fetch(...)`. Measured cost of the unlink:
+**0.065–0.171ms** against the ~490ms window, roughly 3000× inside budget. The window is about half the
+"order of a second" previously assumed, which is still ample for one syscall and still rules out a
+network round trip. Anything requiring host action (actually stopping `x64sc`) **cannot happen in the
+handler at all** — the proxy marks the lease released and the broker, which outlives it, does the
+teardown.
+
+**~~The SIGKILL path gets nothing.~~ Wrong — it is the best-case path.** When the client is SIGKILLed
+the pipe closes, the proxy observes `stdin_end`, releases the lease, and exits normally with no
+deadline at all (8000ms of synchronous work completed in the test). A killed VS Code window does not
+leak a lease.
+
+**The host-side sweeper is still mandatory, for different reasons.** Not abrupt client death, which is
+now covered. What remains uncovered: the **proxy itself** being SIGKILLed (which happens ~490ms into
+every graceful teardown — after its chance, but fatal to a proxy that blocked on something else);
+container or host death, where nothing in-process runs; and a proxy wedged with a blocked event loop,
+where neither handler ever fires. Only the host can kill host processes, which is still a reason the
+broker must exist.
 
 ## The broker protocol: files on the shared bind mount
 
@@ -191,11 +214,16 @@ half-written file. The pool already writes `registry.json` atomically, so the id
 4. **Proxy** reads the grant, connects to the port, forwards the pending call.
 5. **Steady state** — proxy touches `leases/<id>` on every call *and* on an interval timer. The
    timer matters: touch-on-call alone would let a session that is merely thinking look abandoned.
-6. **Session end** — `unlinkSync(leases/<id>)` in the shutdown handler. One syscall, nothing awaited.
+6. **Session end** — `unlinkSync(leases/<id>)` in the shutdown handler, wired to **both** `SIGINT`/
+   `SIGTERM` **and** stdin `end`/`close` (spike 002: each ending fires only one of the two). One
+   syscall, nothing awaited, ~0.1ms of a ~490ms window.
 7. **Broker** notices the lease is gone, kills that `x64sc` by the pid it recorded (identity-verified,
    never a name match — the existing `stop` path already does this), removes the grant.
-8. **Crash** — the lease file survives but its mtime stops advancing; the broker sweeps it on TTL and
-   runs *the same teardown as step 7*.
+8. **Client crash / killed window** — *measured to take step 6's path, not this one.* The pipe closes,
+   the proxy sees `stdin_end`, and it releases and exits normally with no deadline. The lease does
+   **not** leak. **What actually reaches the TTL sweeper:** the proxy itself being killed, container or
+   host death, or a proxy wedged with a blocked event loop. In those cases the lease file survives with
+   a frozen mtime and the broker sweeps it, running *the same teardown as step 7*.
 
 ### Why release is a delete, not a write
 
@@ -334,22 +362,29 @@ on it.
 
 ## Researched Claude Code mechanics (two rounds, 2026-07-31)
 
-These are the facts the design rests on. Confidence tags are the researcher's.
+These are the facts the design rests on. Confidence tags were originally the researcher's. Rows marked
+**MEASURED** were verified first-hand by the lifecycle spike set (`.planning/spikes/`, 2026-07-31) and
+carry an observation instead of a citation. **Two rows were corrected rather than confirmed — 8 and
+12 — and rows 13–15 are new.** Findings 1, 2, 3, 9, 10 and 11 were outside the spike's scope and keep
+their original tags.
 
 | # | Finding | Confidence |
 |---|---|---|
 | 1 | MCP server definitions are read **once at session start**. A running session cannot load a newly-added server; `/mcp` only reconnects/authenticates already-loaded ones — there is no "add" flow | HIGH |
 | 2 | Per-session config is possible only via `claude --mcp-config <file> --strict-mcp-config` at launch | HIGH |
 | 3 | The **VS Code extension cannot pass those flags**. Its settings control extension behaviour, not CLI flags into the session. No documented escape hatch | HIGH |
-| 4 | Stdio MCP servers are spawned as **one subprocess per session**. Two concurrent sessions in one project → two subprocesses. No daemon, no multiplexing | HIGH |
-| 5 | **Subagents spawn no new subprocess.** They are additional model loops in the same session process; their MCP calls route over the parent's already-initialised connections. `isolation: "worktree"` swaps the filesystem view, not the MCP wiring. Nested subagents follow the same rule | HIGH |
-| 6 | Spawn is **eager**, at session start — not lazy on first tool call | HIGH |
-| 7 | Stdio servers are **not auto-reconnected** if they die mid-session. HTTP/SSE reconnect with backoff; stdio stays dead | HIGH |
-| 8 | Termination ladder is stdin EOF → SIGTERM → SIGKILL with short grace periods. Graceful cleanup runs; abrupt client death (killed window, crash) gets **no** cleanup | MEDIUM |
+| 4 | Stdio MCP servers are spawned as **one subprocess per session**. Two concurrent sessions in one project → two subprocesses. No daemon, no multiplexing | **MEASURED** (spike 001 e2: 2 concurrent sessions → 2 pids, 2 distinct session ids) |
+| 5 | **Subagents spawn no new subprocess.** They are additional model loops in the same session process; their MCP calls route over the parent's already-initialised connections. `isolation: "worktree"` swaps the filesystem view, not the MCP wiring. Nested subagents follow the same rule | **MEASURED** (spike 001 e3: 1 pid, 2 calls; e4b: a worktree agent reported cwd `.claude/worktrees/agent-…` while sharing the parent's single pid). Nested subagents were *not* tested |
+| 6 | Spawn is **eager**, at session start — not lazy on first tool call | **MEASURED** (spike 001 e1: full `spawn → initialize → tools/list` with zero tool calls) |
+| 7 | Stdio servers are **not auto-reconnected** if they die mid-session. HTTP/SSE reconnect with backoff; stdio stays dead | HIGH (not directly tested; spike 003 g1 corroborates the *consequence* — a proxy that hit `EPIPE` survived only because of its never-throw handler) |
+| 8 | ~~Termination ladder is stdin EOF → SIGTERM → SIGKILL with short grace periods. Graceful cleanup runs; abrupt client death gets **no** cleanup~~ **CORRECTED.** There are **two** ladders, and they fire *different* handlers. **Graceful** (print mode, stdin closed, or client SIGTERMed): **SIGINT** → SIGTERM +100ms → SIGKILL at **~490ms**; stdin is **never** closed, and the exit handler never runs. **Abrupt client death (SIGKILL):** no signal at all — the pipe closes, so `stdin_end`/`stdin_close` fire, and the proxy has **unbounded** time and exits normally | **MEASURED** (spike 002 f1–f6; 490ms reproduced 3/3, 8000ms of work completed on the abrupt path) |
 | 9 | `${VAR}`/`${VAR:-default}` expansion is documented for `.mcp.json` `command`/`args`; **undocumented for `url`** | MEDIUM |
 | 10 | Project-scope servers need approval; `enableAllProjectMcpServers` / `enabledMcpjsonServers` / `disabledMcpjsonServers` control it. Changing a `url` invalidates prior approval | HIGH |
 | 11 | Plugin-bundled MCP servers get the longer `mcp__plugin_<plugin>_<server>__*` prefix — visible in this repo's own agent definitions, which list both `mcp__context7__*` and `mcp__plugin_context7_context7__*` | MEDIUM |
-| 12 | No documented tool-count or proxy-specific limits. `MCP_TIMEOUT`, `MCP_TOOL_TIMEOUT`, `MAX_MCP_OUTPUT_TOKENS` exist; responses over ~25K tokens spill to disk | MEDIUM |
+| 12 | ~~responses over ~25K tokens spill to disk~~ **CORRECTED — the threshold is about half that.** The inline ceiling is between **40KB and 60KB** of text (~10–15K tokens): 40KB arrives whole, 60KB spills. Crossing it is **never silent** — an explicit `Error: result (N characters …) exceeds maximum allowed tokens. Output has been saved to <path>` and the spilled file is **byte-complete**. `MAX_MCP_OUTPUT_TOKENS` **does** govern the threshold; `MCP_TOOL_TIMEOUT` **does** cut a call short and reports it cleanly to the model | **MEASURED** (spike 004 h1/h2) |
+| 13 | **The client exports its own identity into every MCP server's environment**: `CLAUDE_CODE_SESSION_ID` (distinct per session), `CLAUDE_PID`, `CLAUDE_PROJECT_DIR`, `CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_EFFORT` | **MEASURED** (spike 001, new finding) |
+| 14 | **A slow handshake costs turns, not the session.** There is no client-side startup timeout that drops a server: a proxy that took 10s to answer `initialize` was still asked for `tools/list` and its tool was called successfully on the *next* turn of the same session. `MCP_TIMEOUT` did **not** change this. In print mode the session simply ends after one turn, which makes a slow start *look* like a ~3.5s timeout that does not exist | **MEASURED** (spike 003 g1/g1b/g1c/g1d, new finding) |
+| 15 | **The default tool-call budget is ≥150s.** Calls blocked for 30s, 90s and 150s all returned real results | **MEASURED** (spike 003 g2, new finding) |
 
 ### What each finding forces
 
@@ -362,22 +397,42 @@ These are the facts the design rests on. Confidence tags are the researcher's.
   key "must be session ID, not process ID," fearing release at first subagent exit — but by its own
   finding (5) nothing exits when a subagent finishes. One process per session, subagents ride it, so
   process identity *is* session identity. Record a session id in the lease as diagnostic metadata
-  ("who holds 6511"), not as the key.
+  ("who holds 6511"), not as the key. **(13) makes that metadata trivial** — the client hands the
+  proxy `CLAUDE_CODE_SESSION_ID` and `CLAUDE_PID` in its environment, so "who holds this instance" is
+  two `process.env` reads rather than a guess.
 - **(5) also creates the parallelism problem** that instance handles solve, above.
 - **(6) requires deferred acquisition.** Eager spawn means a proxy that requests an emulator on
   startup launches one for every session, including sessions that never touch VICE. Enumerate tools
   without an emulator (from a manifest, or a schema baked in at build time); request on first
   `tools/call`.
-- **(6)+(12) would put cold start on the first tool call** — `x64sc` launch + C64 boot + MCP-ready is
-  seconds, and because acquisition is deferred past `initialize`, the wait lands against
-  `MCP_TOOL_TIMEOUT` rather than the startup timeout. **Warm spares move it off that path**; see
-  below. The cold path still needs an explicit "warming, retry" rather than a silent hang, but it is
-  no longer the common case.
+- **(6)+(15) put cold start on the first tool call, with far more room than feared.** `x64sc` launch +
+  C64 boot + MCP-ready is seconds, and because acquisition is deferred past `initialize`, the wait
+  lands against `MCP_TOOL_TIMEOUT` — measured at **≥150s by default** (15). Warm spares are therefore
+  a latency optimisation, **not** a correctness requirement: even a fully cold launch fits the budget
+  with two orders of magnitude to spare. The cold path still needs an explicit "warming, retry" rather
+  than a silent hang, and `MCP_TOOL_TIMEOUT` is confirmed as the lever that sets that threshold.
+- **(14) removes the startup-timeout worry entirely.** There is no client-side deadline on the
+  handshake, and a late-initialising server is used normally on a later turn. Answering `initialize`
+  and `tools/list` from a manifest is still right — a first turn without tools is a real cost — but it
+  is no longer load-bearing for *session* correctness.
 - **(7) makes "never throw" a hard requirement.** The proxy must catch everything and always answer
-  in MCP frames. A crashed proxy is unrecoverable for the rest of the session.
-- **(8) makes the host sweeper mandatory** — see the shutdown section.
-- **(12) puts chunking at the proxy.** A 64K RAM read is exactly the shape that trips the output
-  limit.
+  in MCP frames. A crashed proxy is unrecoverable for the rest of the session. **Corroborated in
+  practice:** a proxy in spike 003 hit `write EPIPE` when the client hung up mid-handshake, and only
+  its `uncaughtException` handler kept it alive to log the fact.
+- **(8) forces release to be wired to BOTH signals and stdin, and keeps the sweeper mandatory for
+  different reasons than first thought.** Graceful teardown arrives as **SIGINT** and never closes
+  stdin; abrupt client death closes stdin and never signals. A handler on only one of those misses an
+  entire class of ending. The window on the graceful path is **~490ms**, and `unlinkSync` uses ~0.1ms
+  of it, so release-on-session-end is safe. Abrupt client death is now the *best* case — unbounded
+  time, clean exit — so it is no longer the sweeper's justification. What still needs the sweeper: the
+  proxy itself being SIGKILLed, container or host death, and a wedged event loop where no handler
+  runs. See the corrected shutdown section.
+- **(12) puts chunking at the proxy**, and sizes it: a 64K RAM read is ~192KB as hex, against a
+  measured **40–60KB** inline ceiling. **32KB chunks** leave headroom across the whole bracket. Not
+  because spill loses data (it does not — the file is byte-complete) but because the spill path is
+  unusable as transport: the proxy cannot predict the path, the agent cannot easily consume a 192KB
+  file, and the model retries the oversized call in the meantime — each retry being a real forwarded
+  emulator call.
 
 ## Open questions for the implementing phase
 
@@ -406,6 +461,10 @@ These are the facts the design rests on. Confidence tags are the researcher's.
   proxy resolves that seed's *blocker* for free (the single shared `session.json` that made actor #2
   fail instantly stops existing), and on-demand launch makes its cap question mostly moot. Its
   actor-class analysis needed correcting against finding (5); the correction is appended there.
-- `.planning/todos/pending/spike-stdio-mcp-proxy-lifecycle.md` — the echo-proxy spike that promotes
-  findings 8 and 12 from MEDIUM before any of this is built.
+- `.planning/spikes/` — **the echo-proxy spike set, run 2026-07-31, which closes this note's gate on
+  Phase 1.2.** Four spikes: 001 process identity and spawn timing, 002 the shutdown grace window
+  (the design-critical one), 003 timeout budgets, 004 output limits. Findings 8 and 12 were
+  **corrected**, not merely promoted; 4, 5, 6 confirmed; 13, 14, 15 are new. `MANIFEST.md` carries the
+  requirements that emerged, `CONVENTIONS.md` the method. The originating todo is in
+  `.planning/todos/completed/`.
 - `WINDOWS.md` window #1 — the unverified host-side multi-instance launch.

@@ -49,6 +49,13 @@ Design decisions that emerged during spiking. Non-negotiable for the Phase 01.2 
   exports it (plus `CLAUDE_PID`) into the MCP server's environment. It is not the lease *key* — one
   subprocess per session means process identity already is session identity — but it makes "who holds
   this instance" answerable.
+- **A forwarded memory read is chunked at 32KB by the proxy.** Spike 004 measured the inline ceiling at
+  40–60KB, about half the design note's assumed ~100KB, and a 64K RAM read is ~192KB as hex. Oversized
+  results are never silently truncated, but the client's spill-to-disk path is unusable as transport.
+- **`MAX_MCP_OUTPUT_TOKENS` and `MCP_TOOL_TIMEOUT` are set explicitly, not inherited.** Both were
+  measured to genuinely govern their thresholds (spikes 003/004), which turns two client-version-
+  dependent surprises into known constants that chunk size and the "warming, retry" threshold can be
+  derived from. `MCP_TIMEOUT` was measured *not* to govern the startup handshake — do not rely on it.
 
 ## Spikes
 
@@ -57,4 +64,4 @@ Design decisions that emerged during spiking. Non-negotiable for the Phase 01.2 
 | 001 | echo-proxy-lifecycle-harness | standard | Given an instrumented echo proxy in a scratch `--strict-mcp-config`, when two concurrent sessions run and one spawns a subagent and a `worktree`-isolated agent, then the log shows exactly one pid per session, no additional pid for subagents or worktree agents, and a spawn line before any `tools/call` | **VALIDATED** ✓ | mcp, lifecycle, harness, process-identity |
 | 002 | shutdown-grace-window | standard | Given a shutdown handler that busy-writes 10ms progress markers, when a session ends gracefully and when it is killed abruptly, then the log yields the real signal order and the number of ms of synchronous work that completes before death — proving or refuting that a synchronous `unlinkSync` release lands | **VALIDATED** ✓ | mcp, lifecycle, shutdown, leasing, design-critical |
 | 003 | timeout-budgets | standard | Given handlers that sleep in increasing increments, when `initialize` and `tools/call` are delayed and a session sits idle past 30 minutes, then the log shows where the startup and tool-call budgets cut off and whether anything reaps an idle proxy | PENDING | mcp, lifecycle, timeouts |
-| 004 | large-response-chunking | standard | Given a tool returning a payload over ~25K tokens, when a session calls it, then the observed truncation/spill behaviour decides whether chunking must live in the proxy for 64K RAM reads | PENDING | mcp, output-limits, chunking |
+| 004 | large-response-chunking | standard | Given a tool returning a payload over the client's output limit, when a session calls it, then the observed truncation/spill behaviour decides whether chunking must live in the proxy for 64K RAM reads | **VALIDATED** ✓ | mcp, output-limits, chunking, memory-read |
