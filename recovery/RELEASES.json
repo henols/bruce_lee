@@ -50,11 +50,6 @@
           "note": "cracktro 'hit any key' poll loop -- also the registered boot gate address (danish/NOTES.md §1, §5; recovery/RELEASES.json boot.gates)"
         },
         {
-          "start": "$08F5",
-          "end": "$08F7",
-          "note": "cracktro animation phase observed executing immediately post-gate (danish/NOTES.md §1 'How $08B1 was located')"
-        },
-        {
           "start": "$0D64",
           "end": "$0D82",
           "note": "cracktro animation phase observed executing during the sign-off sequence (danish/NOTES.md §1 'How $08B1 was located')"
@@ -78,15 +73,7 @@
           "reason": "cracktro 'hit any key' poll loop -- also the registered boot gate address (danish/NOTES.md §1, §5; recovery/RELEASES.json boot.gates)"
         },
         {
-          "name": "loader-reentry-3-08F5",
-          "kind": "loader-reentry",
-          "type": "exec",
-          "start": "$08F5",
-          "end": "$08F7",
-          "reason": "cracktro animation phase observed executing immediately post-gate (danish/NOTES.md §1 'How $08B1 was located')"
-        },
-        {
-          "name": "loader-reentry-4-0D64",
+          "name": "loader-reentry-3-0D64",
           "kind": "loader-reentry",
           "type": "exec",
           "start": "$0D64",
