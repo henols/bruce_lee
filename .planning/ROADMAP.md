@@ -142,14 +142,14 @@ Plans:
   8. Agent-facing `Bash`-mediated emulator access is retired: no remaining skill, agent definition, or document instructs an agent to reach the emulator through `Bash`. Removal lands only after criterion 3 passes — retiring access before the replacement is proven would strand the emulator. Two things this criterion is **not**: it is not a bare `rm -rf` of `.claude/skills/vice-session/` (its transport module is imported as a *library* by `tools/recover.mjs`, `tools/chip-state.mjs`, `tools/watch-loads.mjs` and `c64-ram-capture`, entirely outside the MCP layer — those call sites must be relocated and repointed, not broken), and it does not touch host-side launch machinery (`vice-pool.sh` / `vice-supervisor.sh`), which still serves the fixed port 1.1 forwards to.
   9. **Container→host path translation happens in the proxy, not in every caller that goes through it.** Any path argument on a forwarded call that names a location inside the container workspace is rewritten to its host equivalent before the host emulator sees it — because VICE runs on the host, a container path is never correct there, and today a wrong one fails *silently*. A test proves an untranslated container path cannot reach the host. This is the same conversion as criterion 5: a rule that had to be remembered becomes a rule enforced at the one seam that sees every call. **The `devcontainer-host-path` skill is NOT retired by this**, and the plan must not try — its consumers were traced by hand in `01.1-PATTERNS.md`: `install-resources.mjs` uses it to print a host path for a *human* (nothing to do with tool calls), and `vice-sync.mjs`'s `screenshot()` plus `c64-ram-capture`'s `attachAndStart()` hand paths to VICE only through `tools/recover.mjs`'s standalone Bash-invoked pipeline, which criterion 8 deliberately preserves outside the MCP layer. The proxy becomes a **third consumer** of `hostpath.mjs`, not a replacement for it. What the phase retires is the *manual discipline* on the MCP-mediated path, not the module.
 
-**Plans**: 3/4 plans executed
+**Plans**: 4/4 plans executed
 
 Plans:
 
 - [x] 01.1-01-PLAN.md — Diagnosis (criterion 1), the tracer proxy proving one real tool call end-to-end, and the one static `.mcp.json` entry resolving D-5 (criteria 1, 2, tracer scope of 4)
 - [x] 01.1-02-PLAN.md — `tools/list` from a committed snapshot with its refresh script, plus all three hazards enforced in code with per-layer tests (criteria 4, 5)
 - [x] 01.1-03-PLAN.md — Never-throw hardening, fail-fast three-state diagnostics, proxy-owned path translation (criteria 6, 7, 9 proxy-side)
-- [ ] 01.1-04-PLAN.md — Blocking fresh-session proof, then the transport-module relocation and retirement of the documented Bash path (criteria 3, 8, 9 caller-side) — *has a blocking human-verify checkpoint*
+- [x] 01.1-04-PLAN.md — Blocking fresh-session proof, then the transport-module relocation and retirement of the documented Bash path (criteria 3, 8, 9 caller-side) — *has a blocking human-verify checkpoint*
 
 **Wave 1** — 01.1-01 · **Wave 2** — 01.1-02 · **Wave 3** — 01.1-03 · **Wave 4** — 01.1-04. Strictly sequential: every plan after the first modifies `vice-proxy.mjs` and its test file, so same-wave parallelism is impossible by file ownership, independently of the criterion ordering.
 
@@ -372,7 +372,7 @@ Two cross-phase overlaps are intended and should be honoured when scheduling wor
 | Milestone | Phase | Plans Complete | Status | Completed |
 |-----------|-------|----------------|--------|-----------|
 | v1.0 | 1. Recovery & Provenance | 3/6 | In Progress|  |
-| v1.0 | 01.1. Tool-Mediated Emulator Access (INSERTED) | 3/4 | In Progress|  |
+| v1.0 | 01.1. Tool-Mediated Emulator Access (INSERTED) | 4/4 | In Progress|  |
 | v1.0 | 01.2. On-Demand Broker & Leasing (INSERTED) | 0/5 | Not started | - |
 | v1.0 | 2. Coverage, Hazards & Memory Map | 0/5 | Not started | - |
 | v1.0 | 3. Verification Harness & Original Baselines | 0/4 | Not started | - |
