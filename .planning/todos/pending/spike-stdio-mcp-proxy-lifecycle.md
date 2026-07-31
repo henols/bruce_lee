@@ -31,6 +31,12 @@ untouched.
 | Cleanup on abrupt death? | Close the VS Code window / `kill -9` the session; check whether cleanup ran | Confirms the TTL sweeper is mandatory, not optional |
 | Startup timeout budget | Have the proxy sleep N seconds before answering `initialize`; find where it is dropped | The real upstream-connect budget, vs the unconfirmed `MCP_TIMEOUT` default |
 | Large-response handling | Return a >25K-token payload | Whether chunking must live in the proxy for 64K RAM reads |
+| **How long is the shutdown grace window really?** | Have the handler write a marker, then busy-wait in ~100ms increments writing progress lines, and see how far it gets before SIGKILL | Whether a synchronous `unlinkSync` release reliably completes. If the window is shorter than assumed, release has to be even cheaper — or become sweeper-only |
+| **First-call latency budget** | Have the tool handler sleep in increasing increments and find where `MCP_TOOL_TIMEOUT` cuts it off | Whether an `x64sc` cold start fits inside one tool call, or the first call must return "warming, retry" |
+
+Two of these were added after the design shifted from a fixed pre-launched pool to an on-demand
+host broker (see the design note). They are the two that decide whether automatic release and
+launch-on-first-use are viable at all, so treat them as the highest-value rows in the table.
 
 ## Done when
 
