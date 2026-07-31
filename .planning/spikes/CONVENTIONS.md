@@ -3,6 +3,12 @@
 Patterns and stack choices established across spike sessions. New spikes follow these unless the
 question requires otherwise.
 
+**Wrapped as of 2026-07-31:** spikes 001–004 are packaged into
+`.claude/skills/spike-findings-bruce-lee/`. Their *findings* live there (five reference blueprints, plus
+the sources); this file stays the record of *how we spike*. The reusable rig is documented as a recipe in
+that skill's `references/measuring-claude-code-behaviour.md` — reach for it before rebuilding a probe.
+The conventions below were derived from these same four spikes, so the wrap-up added no new patterns.
+
 ## Stack
 
 **Node ESM `.mjs`, stdlib only.** No package.json, no dependencies, no build step in any spike so far.
