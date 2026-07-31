@@ -4,15 +4,15 @@ milestone: v1.0
 milestone_name: Pipeline Proven *
 current_phase: 01.2
 current_phase_name: on demand broker and per session leasing
-status: planning
+status: executing
 stopped_at: "Completed quick task 260730-v6z: layer B extracted into the new `c64-ram-capture` skill; `tools/recover.mjs` is now layer C only. A live `reproduce danish` during this task reported `MISMATCH` at `$D588` (2-bit) — the already-documented Hamming-1-too-tight edge case above, not a regression; that design gap remains open."
-last_updated: "2026-07-31T18:04:07.533Z"
+last_updated: "2026-07-31T21:28:35.452Z"
 last_activity: 2026-07-31
-last_activity_desc: Phase 01.1 complete, transitioned to Phase 01.2
+last_activity_desc: "Completed quick task 260731-p8a: moved the vice MCP implementation to `.claude/mcp/vice/`"
 progress:
   total_phases: 3
   completed_phases: 1
-  total_plans: 10
+  total_plans: 15
   completed_plans: 7
   percent: 33
 ---
@@ -32,7 +32,7 @@ See: .planning/PROJECT.md (updated 2026-07-31)
 Milestone: v1.0 — Pipeline Proven (Phases 1–4 of 7 total)
 Phase: 01.2 — on demand broker and per session leasing
 Plan: Not started
-Status: Ready to plan
+Status: Ready to execute
 Last activity: 2026-07-31 — Completed quick task 260731-p8a: moved the vice MCP implementation to `.claude/mcp/vice/`
 
 Progress (v1.0): [████░░░░░░] 35% — 7/20 plans
