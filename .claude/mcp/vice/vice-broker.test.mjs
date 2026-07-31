@@ -13,7 +13,17 @@ import assert from "node:assert/strict";
 import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createServer } from "node:http";
-import { mkdtempSync, writeFileSync, readFileSync, readdirSync, existsSync, statSync, rmSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  readdirSync,
+  existsSync,
+  statSync,
+  rmSync,
+  utimesSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -159,6 +169,113 @@ function runBrokerOnceDryRun(dir, basePort) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Plan 02 (Task 1: single teardown path; Task 2: kill-never-recycle + id
+// parity) test helpers. These bypass the request->grant round trip where a
+// test only needs to exercise the teardown/sweep pass in isolation --
+// writing a grant (and optionally a lease) directly mirrors exactly the
+// shape resources/vice-broker.sh itself writes, so the pass under test
+// cannot tell the difference from a grant it wrote moments earlier.
+
+/** Runs `vice-broker.sh --once [--dry-run]` with the given pool dir/env
+ * overrides, mirroring runBrokerOnceDryRun() above but with knobs for TTL
+ * and non-dry-run opt-out (dry-run is the default -- no real x64sc is ever
+ * needed by this file's own tests). */
+function runBrokerOnce(dir, { basePort = 7000, ttlS, dryRun = true } = {}) {
+  const env = {
+    ...process.env,
+    VICE_SUPERVISOR_ALLOW_CONTAINER: "1",
+    VICE_POOL_DIR: dir,
+    VICE_BROKER_BASE_PORT: String(basePort),
+    VICE_BROKER_SPARES: "0",
+  };
+  if (ttlS !== undefined) env.VICE_BROKER_TTL_S = String(ttlS);
+  const args = ["--once"];
+  if (dryRun) args.push("--dry-run");
+  return execFileP("bash", [BROKER_SCRIPT, ...args], { env });
+}
+
+/** Writes grants/<id>.json directly, in the exact shape vice-broker.sh's own
+ * process_requests() writes -- lets a test set up a teardown/sweep scenario
+ * without needing a live proxy to have requested it first. */
+function writeGrantFile(dir, id, { port = 7000, supervisorPid = null, dryRun = true, launchedAt = null } = {}) {
+  const gdir = join(dir, "grants");
+  mkdirSync(gdir, { recursive: true });
+  const record = {
+    version: 1,
+    id,
+    port,
+    url: `http://127.0.0.1:${port}/mcp`,
+    epoch_file: join(dir, String(port), "epoch.json"),
+    supervisor_dir: join(dir, String(port)),
+    supervisor_pid: supervisorPid,
+    granted_at: new Date().toISOString(),
+    dry_run: dryRun,
+    ...(launchedAt !== null ? { launched_at: launchedAt } : {}),
+  };
+  const p = join(gdir, `${id}.json`);
+  writeFileSync(p, JSON.stringify(record, null, 2) + "\n");
+  return p;
+}
+
+/** Writes leases/<id> directly -- existence is the claim, mtime is the
+ * heartbeat, removal is the release (per this phase's own must_haves). */
+function writeLeaseFile(dir, id) {
+  const ldir = join(dir, "leases");
+  mkdirSync(ldir, { recursive: true });
+  const p = join(ldir, id);
+  writeFileSync(p, JSON.stringify({ version: 1, id, created_at: new Date().toISOString() }) + "\n");
+  return p;
+}
+
+/** Rewinds a lease file's mtime to simulate staleness (secondsAgo > 0) or
+ * refreshes it to "now" (secondsAgo === 0), without touching its content --
+ * only the mtime is the sweeper's own signal. */
+function ageLeaseFile(leasePath, secondsAgo) {
+  const t = new Date(Date.now() - secondsAgo * 1000);
+  utimesSync(leasePath, t, t);
+}
+
+/** Writes requests/<id>.json in the exact shape vice-broker-client.mjs's own
+ * writeRequest() produces, for tests that exercise the real request scan
+ * rather than a directly-planted grant. */
+function writeRequestFile(dir, id, { proxyPid = process.pid } = {}) {
+  const rdir = join(dir, "requests");
+  mkdirSync(rdir, { recursive: true });
+  const record = {
+    version: 1,
+    id,
+    op: "acquire",
+    proxy_pid: proxyPid,
+    session_id: null,
+    client_pid: null,
+    created_at: new Date().toISOString(),
+  };
+  writeFileSync(join(rdir, `${id}.json`), JSON.stringify(record, null, 2) + "\n");
+}
+
+/** Recursively lists every file under `dir` -- used by the id-pattern parity
+ * test to prove no path-traversal-shaped file was ever created anywhere,
+ * across the whole rejected-id corpus, not just at one predicted location. */
+function listAllFilesRecursive(dir) {
+  const out = [];
+  function walk(d) {
+    let entries;
+    try {
+      entries = readdirSync(d, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      const full = join(d, e.name);
+      if (e.isDirectory()) walk(full);
+      else out.push(full);
+    }
+  }
+  walk(dir);
+  return out;
+}
+
 test("tracer: request -> grant -> forward -> SIGINT release -> teardown, end to end", async () => {
   const dir = tmpPoolDir();
   const { server, requests } = startStandInServer();
@@ -281,6 +398,300 @@ test("tracer: request -> grant -> forward -> SIGINT release -> teardown, end to 
       /* already exited -- fine */
     }
     await new Promise((resolveClose) => server.close(resolveClose));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Task 1: one teardown() reached by two triggers (released, swept-stale),
+// the daemon lifecycle (start/stop/status), and the identity-verified kill.
+
+test("teardown: a grant whose lease is absent is torn down and logged as released", async () => {
+  const dir = tmpPoolDir();
+  try {
+    const id = "req-1-1000-aaaaaaaa";
+    const grantPath = writeGrantFile(dir, id, { port: 7100 });
+    const { stdout } = await runBrokerOnce(dir, { basePort: 7100 });
+    assert.equal(existsSync(grantPath), false, "the grant must be removed once its lease is absent");
+    assert.match(stdout, new RegExp(`${id}.*released`), "the pass must log this id's reason as released");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("teardown: a grant with a fresh lease survives the pass untouched", async () => {
+  const dir = tmpPoolDir();
+  try {
+    const id = "req-2-2000-bbbbbbbb";
+    const grantPath = writeGrantFile(dir, id, { port: 7101 });
+    writeLeaseFile(dir, id);
+    await runBrokerOnce(dir, { basePort: 7101 });
+    assert.equal(existsSync(grantPath), true, "a fresh lease must survive the pass");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("teardown: released and swept-stale leave IDENTICAL resulting state, differing only in the logged reason", async () => {
+  const releasedDir = tmpPoolDir();
+  const sweptDir = tmpPoolDir();
+  try {
+    const idReleased = "req-3-3000-cccccccc";
+    const idSwept = "req-3-3001-dddddddd";
+
+    writeGrantFile(releasedDir, idReleased, { port: 7102 });
+    // No lease at all for idReleased -- the "released" trigger.
+
+    writeGrantFile(sweptDir, idSwept, { port: 7102 });
+    const leasePath = writeLeaseFile(sweptDir, idSwept);
+    ageLeaseFile(leasePath, 999); // far older than the tiny TTL used below
+
+    const releasedResult = await runBrokerOnce(releasedDir, { basePort: 7102 });
+    const sweptResult = await runBrokerOnce(sweptDir, { basePort: 7102, ttlS: 1 });
+
+    const grantsReleased = existsSync(join(releasedDir, "grants"))
+      ? readdirSync(join(releasedDir, "grants")).filter((f) => f.endsWith(".json"))
+      : [];
+    const grantsSwept = existsSync(join(sweptDir, "grants"))
+      ? readdirSync(join(sweptDir, "grants")).filter((f) => f.endsWith(".json"))
+      : [];
+    assert.deepEqual(grantsReleased, [], "the released case must remove the grant");
+    assert.deepEqual(grantsSwept, [], "the swept case must remove the grant");
+    assert.equal(
+      existsSync(join(sweptDir, "leases", idSwept)),
+      false,
+      "the sweep converts stale-but-present into missing BEFORE calling the shared teardown -- the lease itself must be gone too"
+    );
+
+    assert.match(releasedResult.stdout, new RegExp(`${idReleased}.*released`));
+    assert.match(sweptResult.stdout, /swept \(stale \d+s, ttl 1s\)/, "the swept reason must be the only observable difference");
+  } finally {
+    rmSync(releasedDir, { recursive: true, force: true });
+    rmSync(sweptDir, { recursive: true, force: true });
+  }
+});
+
+test("teardown: a supervisor pid whose ps output does not name the supervisor script is refused, not signalled -- the grant is still removed", async () => {
+  const dir = tmpPoolDir();
+  try {
+    const id = "req-4-4000-eeeeeeee";
+    // process.pid (this very test runner) is a REAL, ALIVE pid whose own
+    // `ps` args do not mention vice-supervisor.sh -- exactly the "possible
+    // pid reuse" shape teardown() must refuse to signal.
+    const grantPath = writeGrantFile(dir, id, { port: 7103, supervisorPid: process.pid });
+    const { stderr } = await runBrokerOnce(dir, { basePort: 7103 });
+    assert.equal(existsSync(grantPath), false, "the grant must still be removed even when the kill is refused");
+    assert.match(stderr, new RegExp(`refusing to signal pid ${process.pid}`));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("teardown: a lease refreshed to now survives at least three consecutive --once passes", async () => {
+  const dir = tmpPoolDir();
+  try {
+    const id = "req-5-5000-ffffffff";
+    const grantPath = writeGrantFile(dir, id, { port: 7104 });
+    const leasePath = writeLeaseFile(dir, id);
+    for (let i = 0; i < 3; i++) {
+      ageLeaseFile(leasePath, 0); // refresh to "now" before each pass, like a heartbeat
+      await runBrokerOnce(dir, { basePort: 7104 });
+      assert.equal(existsSync(grantPath), true, `grant must survive pass ${i + 1}`);
+      assert.equal(existsSync(leasePath), true, `lease must survive pass ${i + 1}`);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("broker.json and broker-instances.json are created with owner-only (0600) permissions", async () => {
+  const dir = tmpPoolDir();
+  try {
+    await runBrokerOnce(dir, { basePort: 7105 });
+    const brokerMode = statSync(join(dir, "broker.json")).mode & 0o777;
+    assert.equal(brokerMode, 0o600, "broker.json must be owner-only");
+    const instancesMode = statSync(join(dir, "broker-instances.json")).mode & 0o777;
+    assert.equal(instancesMode, 0o600, "broker-instances.json must be owner-only, matching registry.json's own posture");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("status: prints the broker's own liveness line plus one line per broker-instances.json entry, naming its port", async () => {
+  const dir = tmpPoolDir();
+  try {
+    const idA = "req-6-6000-11111111";
+    const idB = "req-6-6001-22222222";
+    writeGrantFile(dir, idA, { port: 7200 });
+    writeLeaseFile(dir, idA);
+    writeGrantFile(dir, idB, { port: 7201 });
+    writeLeaseFile(dir, idB);
+    // One pass regenerates broker-instances.json as a projection of the
+    // (still-live, both leased) grants above.
+    await runBrokerOnce(dir, { basePort: 7200 });
+
+    const { stdout } = await execFileP("bash", [BROKER_SCRIPT, "status"], {
+      env: { ...process.env, VICE_SUPERVISOR_ALLOW_CONTAINER: "1", VICE_POOL_DIR: dir },
+    });
+    assert.match(stdout, /7200/, "the first instance's port must be reported");
+    assert.match(stdout, /7201/, "the second instance's port must be reported");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("stop: with no broker.json present, exits 0 with a plain message that there is nothing to stop", async () => {
+  const dir = tmpPoolDir();
+  try {
+    const { stderr } = await execFileP("bash", [BROKER_SCRIPT, "stop"], {
+      env: { ...process.env, VICE_SUPERVISOR_ALLOW_CONTAINER: "1", VICE_POOL_DIR: dir },
+    });
+    assert.match(stderr, /nothing to stop/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Task 2: kill-never-recycle, and the request-id pattern parity between the
+// shell script's own validation and vice-broker-client.mjs's isValidRequestId().
+
+test("kill-never-recycle: a torn-down instance is never re-granted -- the next grant on that port is a distinct, freshly launched instance", async () => {
+  const dir = tmpPoolDir();
+  try {
+    const id1 = "req-7-7000-abcdef01";
+    writeRequestFile(dir, id1);
+    // createLease() runs BEFORE pollGrant() in vice-proxy.mjs's own
+    // ensureBrokerLease() (see vice-proxy.mjs:696-699) -- a lease already
+    // exists by the time the broker's own pass would grant this request, so
+    // mirror that ordering here rather than granting into an immediate
+    // same-pass sweep.
+    writeLeaseFile(dir, id1);
+    await runBrokerOnce(dir, { basePort: 7300 });
+
+    const grant1Path = join(dir, "grants", `${id1}.json`);
+    assert.ok(existsSync(grant1Path), "the first request must be granted");
+    const grant1 = JSON.parse(readFileSync(grant1Path, "utf8"));
+    assert.equal(grant1.dry_run, true);
+
+    // Release: the lease goes away, exactly as releaseLease() (SIGINT) does.
+    rmSync(join(dir, "leases", id1));
+    await runBrokerOnce(dir, { basePort: 7300 }); // sweep pass tears the first grant down
+    assert.equal(existsSync(grant1Path), false, "the released grant must be torn down");
+
+    // A second request lands, deliberately targeting the SAME base port
+    // range -- proving the port itself is not what makes an instance
+    // grantable again.
+    const id2 = "req-7-7001-abcdef02";
+    writeRequestFile(dir, id2);
+    writeLeaseFile(dir, id2);
+    await runBrokerOnce(dir, { basePort: 7300 });
+
+    const grant2Path = join(dir, "grants", `${id2}.json`);
+    assert.ok(existsSync(grant2Path), "the second request must be granted");
+    const grant2 = JSON.parse(readFileSync(grant2Path, "utf8"));
+
+    assert.notEqual(
+      grant2.supervisor_pid,
+      grant1.supervisor_pid,
+      "a torn-down instance's synthetic launch id must never reappear for a later grant -- a CONSTANT dry-run value here would make this assertion pass vacuously"
+    );
+    assert.ok(
+      grant2.launched_at > grant1.launched_at,
+      "the second grant's launched_at must be strictly later than the first, proving a fresh launch rather than a reused record"
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+const ID_CORPUS = [
+  { id: "req-1000-1700000000000-01234567", valid: true },
+  { id: "req-1-1-abcdef01", valid: true },
+  { id: "req-1000-1700000000000-../../etc", valid: false }, // ".." plus a separator
+  { id: "/etc/passwd", valid: false }, // absolute-looking name
+  { id: "", valid: false }, // empty id
+  { id: "req-1000-1700000000000-ABCDEF01", valid: false }, // uppercase hex
+  { id: "req-1000-1700000000000-01234567-extra", valid: false }, // extra trailing segment
+];
+
+test("parity: the shell script's own id validation and isValidRequestId() agree on every corpus entry", async () => {
+  const dir = tmpPoolDir();
+  try {
+    const jsVerdicts = ID_CORPUS.map((c) => isValidRequestId(c.id));
+    assert.deepEqual(
+      jsVerdicts,
+      ID_CORPUS.map((c) => c.valid),
+      "sanity: the corpus's own expected verdicts must match isValidRequestId() before comparing against the shell side"
+    );
+
+    // Each candidate id is planted inside a SAFELY-NAMED request file's own
+    // "id" JSON field -- several corpus entries (the ".." + separator case,
+    // the absolute-looking name, the empty id) cannot themselves be real
+    // filenames, so this drives the validation under test (the id CHECK)
+    // rather than the filesystem's own separate restrictions, per this
+    // task's own instruction.
+    let i = 0;
+    for (const { id } of ID_CORPUS) {
+      writeRequestFileRaw(dir, `probe-${i}`, id);
+      i++;
+    }
+
+    await runBrokerOnce(dir, { basePort: 7400 });
+
+    const shellVerdicts = ID_CORPUS.map(({ id }) => existsSync(join(dir, "grants", `${id}.json`)));
+    assert.deepEqual(
+      shellVerdicts,
+      ID_CORPUS.map((c) => c.valid),
+      "the shell script's own request-scan verdicts must match isValidRequestId() for the same corpus"
+    );
+
+    // No file whose name contains ".." must ever be created anywhere under
+    // the temp directory, across the WHOLE rejected-id corpus -- not just at
+    // one predicted (and never-taken) path.
+    const allFiles = listAllFilesRecursive(dir);
+    assert.ok(
+      allFiles.every((f) => !f.includes("..")),
+      "no path segment containing .. may ever be created from a rejected id"
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+/** Writes a request file under a SAFE outer filename (`${safeName}.json`)
+ * whose JSON body's own "id" field is the (possibly filename-unsafe)
+ * candidate -- the parity test's own vehicle for driving the shell script's
+ * id CHECK independently of the filesystem's own path restrictions. */
+function writeRequestFileRaw(dir, safeName, candidateId) {
+  const rdir = join(dir, "requests");
+  mkdirSync(rdir, { recursive: true });
+  const record = {
+    version: 1,
+    id: candidateId,
+    op: "acquire",
+    proxy_pid: 1,
+    session_id: null,
+    client_pid: null,
+    created_at: new Date().toISOString(),
+  };
+  writeFileSync(join(rdir, `${safeName}.json`), JSON.stringify(record, null, 2) + "\n");
+}
+
+test("a malformed request body is skipped with a logged reason while a well-formed request in the same pass is still granted", async () => {
+  const dir = tmpPoolDir();
+  try {
+    const rdir = join(dir, "requests");
+    mkdirSync(rdir, { recursive: true });
+    writeFileSync(join(rdir, "garbage.json"), "not json at all {{{\n");
+
+    const goodId = "req-8-8000-cafebabe";
+    writeRequestFileRaw(dir, "good", goodId);
+
+    const { stderr } = await runBrokerOnce(dir, { basePort: 7500 });
+    assert.match(stderr, /skipping request garbage\.json/);
+    assert.ok(existsSync(join(dir, "grants", `${goodId}.json`)), "a well-formed request in the same pass must still be granted");
+  } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });
