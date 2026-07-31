@@ -16,19 +16,35 @@
 // never-cache-a-negative-result property, lives in the "never-throw"/
 // "never-cache" tests further down this file (plan 01.1-03 task 1) -- this
 // section EXTENDS the harness rather than duplicating it.
+//
+// Coverage note for plan 01.2-01 (broker teardown task): every `finally`
+// block's cleanup call is `proxy.child.kill("SIGKILL")`, not a bare
+// `kill()` -- a NON-assertion change, made necessary by this task's own
+// change to vice-proxy.mjs. Registering `process.on("SIGTERM", ...)` (this
+// task's teardown handler) suppresses Node's default SIGTERM-terminates
+// behaviour, and the handler itself deliberately never calls
+// `process.exit()` (see that handler's own comment in vice-proxy.mjs) --
+// in production the client's own ladder escalates to an unhandleable
+// SIGKILL ~490ms after the first signal, and a plain `kill()` in a test's
+// cleanup has to play that same role or the child is left running,
+// hanging the file on a dangling stdio pipe. No assertion anywhere in
+// this file was altered by this change.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { createServer } from "node:http";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { mkdtempSync, writeFileSync, rmSync, readFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, readFileSync, readdirSync, existsSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { hostPath } from "../../skills/devcontainer-host-path/scripts/hostpath.mjs";
 import { repoRoot } from "./repo-root.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PROXY_PATH = join(HERE, "vice-proxy.mjs");
+const BROKER_SCRIPT = join(HERE, "resources", "vice-broker.sh");
+const execFileP = promisify(execFile);
 
 /**
  * A minimal in-process stand-in for the host VICE MCP server. Answers
@@ -224,7 +240,7 @@ test("tracer: one real tool call round-trips end to end", async () => {
     assert.equal(proxy.child.exitCode, null, "the proxy process must still be running");
     assert.equal(proxy.child.killed, false);
   } finally {
-    proxy.child.kill();
+    proxy.child.kill("SIGKILL");
     await new Promise((resolve) => server.close(resolve));
   }
 });
@@ -280,7 +296,7 @@ test("stdout carries only valid JSON-RPC messages", async () => {
       assert.equal(msg.jsonrpc, "2.0", `message missing/wrong jsonrpc field: ${JSON.stringify(msg)}`);
     }
   } finally {
-    proxy.child.kill();
+    proxy.child.kill("SIGKILL");
     await new Promise((resolve) => server.close(resolve));
   }
 });
@@ -350,7 +366,7 @@ test("tools/list reads the committed snapshot with no emulator", async () => {
 
     assert.equal(requests.length, 0, "tools/list must make ZERO requests to the stand-in host");
   } finally {
-    proxy.child.kill();
+    proxy.child.kill("SIGKILL");
     await new Promise((resolve) => server.close(resolve));
     rmSync(dir, { recursive: true, force: true });
   }
@@ -410,7 +426,7 @@ test("tools/list survives a missing or corrupt snapshot", async () => {
         assert.equal(proxy.child.exitCode, null, "the proxy process must still be running");
         assert.equal(proxy.child.killed, false);
       } finally {
-        proxy.child.kill();
+        proxy.child.kill("SIGKILL");
       }
     }
     assert.equal(requests.length, 0, "no manifest-read path may ever reach the stand-in host");
@@ -455,7 +471,7 @@ test("vice_disk_list is refused at tools/call with no request made", async () =>
     assert.match(resp.result.content[0].text, /host-side restart|host VICE MCP server/i);
     assert.equal(requests.length, 0, "the stand-in server's request counter must be unchanged");
   } finally {
-    proxy.child.kill();
+    proxy.child.kill("SIGKILL");
     await new Promise((resolve) => server.close(resolve));
   }
 });
@@ -499,7 +515,7 @@ test("vice_disk_list is absent from tools/list", async () => {
     assert.ok(names.includes("vice_ping"), "the other fixture tool must still be present");
     assert.ok(!names.includes("vice_disk_list"), "vice_disk_list must be filtered out even from a manifest that names it");
   } finally {
-    proxy.child.kill();
+    proxy.child.kill("SIGKILL");
     await new Promise((resolve) => server.close(resolve));
     rmSync(dir, { recursive: true, force: true });
   }
@@ -557,7 +573,7 @@ test("epoch drift is reported loudly and not cached", async () => {
     assert.equal(third.result.isError, false, "the proxy must re-baseline, not cache the restart report");
     assert.equal(requests.filter((r) => r && r.method === "tools/call").length, 4);
   } finally {
-    proxy.child.kill();
+    proxy.child.kill("SIGKILL");
     await new Promise((resolve) => server.close(resolve));
     rmSync(dir, { recursive: true, force: true });
   }
@@ -600,7 +616,7 @@ test("a missing epoch file is not a restart", async () => {
     // vice_ping, plus the real forwarded call -- plan 01.1-03 task 2).
     assert.equal(requests.filter((r) => r && r.method === "tools/call").length, 6);
   } finally {
-    proxy.child.kill();
+    proxy.child.kill("SIGKILL");
     await new Promise((resolve) => server.close(resolve));
     rmSync(dir, { recursive: true, force: true });
   }
@@ -742,7 +758,7 @@ test("an oversized result is recoverable in full across continuations", async ()
       "vice_result_continue must never appear in a request the stand-in server receives"
     );
   } finally {
-    proxy.child.kill();
+    proxy.child.kill("SIGKILL");
     await new Promise((resolve) => server.close(resolve));
   }
 });
@@ -794,7 +810,7 @@ test("an exhausted continuation token fails loudly", async () => {
     assert.match(exhausted.result.content[0].text, /narrower range/);
     assert.equal(proxy.child.exitCode, null, "the proxy must still be alive after an exhausted-token error");
   } finally {
-    proxy.child.kill();
+    proxy.child.kill("SIGKILL");
     await new Promise((resolve) => server.close(resolve));
   }
 });
@@ -830,7 +846,7 @@ test("tools/list declares the same cap it enforces", async () => {
       "vice_result_continue's inputSchema must require token"
     );
   } finally {
-    proxy.child.kill();
+    proxy.child.kill("SIGKILL");
     await new Promise((resolve) => server.close(resolve));
   }
 });
@@ -895,7 +911,7 @@ test("never-throw: malformed and hostile input is answered, not fatal", async ()
     assert.equal(proxy.child.exitCode, null, "the proxy must still be running throughout");
     assert.equal(proxy.child.killed, false);
   } finally {
-    proxy.child.kill();
+    proxy.child.kill("SIGKILL");
     await new Promise((resolve) => server.close(resolve));
   }
 });
@@ -931,7 +947,7 @@ test("never-throw: a notification draws no response", async () => {
     // notification produced a line of its own.
     assert.equal(proxy.messages.length, 2, "the two notifications must not have produced any stdout lines");
   } finally {
-    proxy.child.kill();
+    proxy.child.kill("SIGKILL");
     await new Promise((resolve) => server.close(resolve));
   }
 });
@@ -995,7 +1011,7 @@ test("never-cache: host down then up succeeds without a restart", async () => {
     assert.equal(proxy.child.pid, pidBefore, "both calls must have gone through the same child process -- no restart");
     assert.equal(proxy.child.exitCode, null);
   } finally {
-    proxy.child.kill();
+    proxy.child.kill("SIGKILL");
     if (server) await new Promise((resolve) => server.close(resolve));
   }
 });
@@ -1043,7 +1059,7 @@ test("never-throw: a broken stdout pipe does not kill the process", async () => 
       "vice-proxy.mjs must register an 'error' listener on process.stdout"
     );
   } finally {
-    proxy.child.kill();
+    proxy.child.kill("SIGKILL");
     await new Promise((resolve) => server.close(resolve));
   }
 });
@@ -1088,7 +1104,7 @@ test("three states: each unreachable shape gets its own message and fix", async 
       `the never-started diagnosis must be fail-fast, not the ~50s reconnect ladder -- took ${elapsedMs}ms`
     );
   } finally {
-    proxy1.child.kill();
+    proxy1.child.kill("SIGKILL");
   }
 
   // ---- Dead or hung: refused, but a restart-epoch record DOES exist. ----
@@ -1116,7 +1132,7 @@ test("three states: each unreachable shape gets its own message and fix", async 
     assert.match(deadOrHungText, /dead or hung/i);
     assert.match(deadOrHungText, /4242/, "the pid read from the epoch file must appear in the dead-or-hung message");
   } finally {
-    proxy2.child.kill();
+    proxy2.child.kill("SIGKILL");
   }
 
   // ---- Alive, but the operation itself failed. ----
@@ -1203,7 +1219,7 @@ test("three states: each unreachable shape gets its own message and fix", async 
       "the alive-but-failed message must NOT carry a host-restart instruction"
     );
   } finally {
-    proxy3.child.kill();
+    proxy3.child.kill("SIGKILL");
     await new Promise((resolve) => aliveServer.close(resolve));
   }
 
@@ -1324,7 +1340,7 @@ test("path translation: container paths cannot reach the host", async () => {
     assert.equal(lastForwarded.params.arguments.relpath, "recovery/danish/dump.bin", "a relative path must not be touched");
     assert.equal(lastForwarded.params.arguments.count, 42, "a non-string value must not be touched");
   } finally {
-    proxy.child.kill();
+    proxy.child.kill("SIGKILL");
     await new Promise((resolve) => server.close(resolve));
   }
 });
@@ -1404,7 +1420,297 @@ test("path translation: a lexical .. cannot escape the workspace, and one that r
       "the host must never be handed a path still carrying a .. segment"
     );
   } finally {
-    proxy.child.kill();
+    proxy.child.kill("SIGKILL");
     await new Promise((resolve) => server.close(resolve));
   }
+});
+
+// -----------------------------------------------------------------------
+// Plan 01.2-01 task 2: every session-ending path releases the lease, an
+// idle session keeps it alive via the unref'd heartbeat, and the deferred-
+// acquisition property (C3) has its own dedicated regression guard. Every
+// test in this section that needs a REAL lease drives one forwarded
+// tools/call through the full broker round trip (request -> grant ->
+// forward) via acquireLeaseViaBroker() below, since ensureBrokerLease()
+// only creates a lease on the FIRST forwarded call.
+// -----------------------------------------------------------------------
+
+function runBrokerOnceDryRun(dir, basePort, extraEnv = {}) {
+  return execFileP("bash", [BROKER_SCRIPT, "--once", "--dry-run"], {
+    env: {
+      ...process.env,
+      VICE_SUPERVISOR_ALLOW_CONTAINER: "1",
+      VICE_POOL_DIR: dir,
+      VICE_BROKER_BASE_PORT: String(basePort),
+      VICE_BROKER_SPARES: "0",
+      ...extraEnv,
+    },
+  });
+}
+
+/** Poll `predicate` to a bounded deadline rather than sleeping a fixed
+ * duration -- this task's own convention for waiting on a filesystem
+ * effect. Returns predicate()'s truthy result, or null on timeout. */
+async function waitForCondition(predicate, { timeoutMs = 8000, pollMs = 20 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const result = predicate();
+    if (result) return result;
+    await new Promise((r) => setTimeout(r, pollMs));
+  }
+  return null;
+}
+
+function initThenListParams() {
+  return { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } };
+}
+
+async function handshake(proxy) {
+  proxy.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: initThenListParams() });
+  await proxy.nextMessage();
+  proxy.send({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} });
+  await proxy.nextMessage();
+}
+
+/** Drives ONE forwarded tools/call through the full request -> grant ->
+ * forward round trip, returning the request/lease id and its lease path
+ * once the call has resolved. Shared by every test below that needs a REAL
+ * lease held before it can meaningfully assert that ending the session
+ * releases it. */
+async function acquireLeaseViaBroker(proxy, dir, port, callId) {
+  proxy.send({ jsonrpc: "2.0", id: callId, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
+
+  const reqDir = join(dir, "requests");
+  const reqFiles = await waitForCondition(() => {
+    if (!existsSync(reqDir)) return null;
+    const files = readdirSync(reqDir).filter((f) => f.endsWith(".json"));
+    return files.length > 0 ? files : null;
+  });
+  assert.ok(reqFiles, "a request file must appear before the broker has run");
+  const id = reqFiles[0].replace(/\.json$/, "");
+
+  await runBrokerOnceDryRun(dir, port);
+  await proxy.nextMessage(); // the forwarded call's own response
+
+  const leasePath = join(dir, "leases", id);
+  assert.ok(existsSync(leasePath), "a lease file must exist once the call has resolved");
+  return { id, leasePath };
+}
+
+const ENDING_TRIGGERS = [
+  { name: "SIGINT", end: (proxy) => proxy.child.kill("SIGINT") },
+  { name: "SIGTERM", end: (proxy) => proxy.child.kill("SIGTERM") },
+  { name: "SIGHUP", end: (proxy) => proxy.child.kill("SIGHUP") },
+  { name: "stdin end", end: (proxy) => proxy.child.stdin.end() },
+  { name: "stdin close", end: (proxy) => proxy.child.stdin.destroy() },
+];
+
+for (const trigger of ENDING_TRIGGERS) {
+  test(`ending path releases the lease: ${trigger.name}`, async () => {
+    const dir = mkdtempSync(join(tmpdir(), "vice-proxy-ending-"));
+    const { server } = startStandInServer();
+    const port = await listen(server);
+    const proxy = startProxy({
+      VICE_POOL_DIR: dir,
+      VICE_BROKER_BASE_PORT: String(port),
+      VICE_EPOCH_FILE: join(dir, "epoch.json"),
+    });
+    try {
+      await handshake(proxy);
+      const { leasePath } = await acquireLeaseViaBroker(proxy, dir, port, 3);
+
+      trigger.end(proxy);
+
+      const gone = await waitForCondition(() => !existsSync(leasePath));
+      assert.ok(gone, `${trigger.name} must release the lease`);
+    } finally {
+      proxy.child.kill("SIGKILL");
+      await new Promise((resolve) => server.close(resolve));
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+}
+
+test("idempotency: SIGINT followed by SIGTERM ~50ms later releases exactly once", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vice-proxy-idem-"));
+  const { server } = startStandInServer();
+  const port = await listen(server);
+  const proxy = startProxy({
+    VICE_POOL_DIR: dir,
+    VICE_BROKER_BASE_PORT: String(port),
+    VICE_EPOCH_FILE: join(dir, "epoch.json"),
+  });
+  try {
+    await handshake(proxy);
+    const { leasePath } = await acquireLeaseViaBroker(proxy, dir, port, 3);
+
+    proxy.child.kill("SIGINT");
+    const gone = await waitForCondition(() => !existsSync(leasePath));
+    assert.ok(gone, "SIGINT must release the lease");
+
+    await new Promise((r) => setTimeout(r, 50));
+    // A sentinel written at the SAME path a second trigger arriving after
+    // teardown has already run must NEVER touch -- onTeardown's own guard
+    // means releaseLeaseNow isn't even called a second time, not merely
+    // that a second unlink against an absent file happens to be harmless.
+    writeFileSync(leasePath, JSON.stringify({ version: 1, id: "sentinel" }));
+    proxy.child.kill("SIGTERM");
+    await new Promise((r) => setTimeout(r, 200));
+    assert.ok(
+      existsSync(leasePath),
+      "a second ending trigger after teardown has already run must be a complete no-op -- the sentinel must survive"
+    );
+    assert.equal(proxy.child.exitCode, null, "the process stays alive throughout (no process.exit anywhere in the handler)");
+  } finally {
+    proxy.child.kill("SIGKILL");
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a lease already removed out from under the proxy: teardown does not throw, process stays observable", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vice-proxy-already-removed-"));
+  const { server } = startStandInServer();
+  const port = await listen(server);
+  const proxy = startProxy({
+    VICE_POOL_DIR: dir,
+    VICE_BROKER_BASE_PORT: String(port),
+    VICE_EPOCH_FILE: join(dir, "epoch.json"),
+  });
+  try {
+    await handshake(proxy);
+    const { leasePath } = await acquireLeaseViaBroker(proxy, dir, port, 3);
+
+    // Simulate the broker's own sweep (or an operator) removing the lease
+    // out from under the still-running proxy, BEFORE any ending trigger.
+    rmSync(leasePath, { force: true });
+
+    proxy.child.kill("SIGINT");
+    await new Promise((r) => setTimeout(r, 300));
+
+    assert.equal(
+      proxy.child.exitCode,
+      null,
+      "the process must still be alive/observable after teardown against an already-gone lease"
+    );
+  } finally {
+    proxy.child.kill("SIGKILL");
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("heartbeat: with a short interval and no further tool calls, the lease's mtime advances at least twice", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vice-proxy-heartbeat-"));
+  const { server } = startStandInServer();
+  const port = await listen(server);
+  const proxy = startProxy({
+    VICE_POOL_DIR: dir,
+    VICE_BROKER_BASE_PORT: String(port),
+    VICE_EPOCH_FILE: join(dir, "epoch.json"),
+    VICE_BROKER_HEARTBEAT_MS: "150",
+  });
+  try {
+    await handshake(proxy);
+    const { leasePath } = await acquireLeaseViaBroker(proxy, dir, port, 3);
+
+    const mtime0 = statSync(leasePath).mtimeMs;
+    // No further tool calls issued from here on -- only the unref'd
+    // heartbeat timer should touch the lease.
+    const mtime1 = await waitForCondition(
+      () => {
+        const m = statSync(leasePath).mtimeMs;
+        return m > mtime0 ? m : null;
+      },
+      { timeoutMs: 4000 }
+    );
+    assert.ok(mtime1, "the lease's mtime must advance at least once via the heartbeat with no further tool calls");
+
+    const mtime2 = await waitForCondition(
+      () => {
+        const m = statSync(leasePath).mtimeMs;
+        return m > mtime1 ? m : null;
+      },
+      { timeoutMs: 4000 }
+    );
+    assert.ok(mtime2, "the lease's mtime must advance a SECOND time -- proving a repeating timer, not a one-off touch");
+  } finally {
+    proxy.child.kill("SIGKILL");
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("heartbeat timer is unref'd: the child exits after stdin closes, even with a lease held", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vice-proxy-heartbeat-unref-"));
+  const { server } = startStandInServer();
+  const port = await listen(server);
+  const proxy = startProxy({
+    VICE_POOL_DIR: dir,
+    VICE_BROKER_BASE_PORT: String(port),
+    VICE_EPOCH_FILE: join(dir, "epoch.json"),
+    VICE_BROKER_HEARTBEAT_MS: "100",
+  });
+  try {
+    await handshake(proxy);
+    await acquireLeaseViaBroker(proxy, dir, port, 3);
+
+    const exitPromise = new Promise((resolveExit) => {
+      proxy.child.once("exit", (code, signal) => resolveExit({ code, signal }));
+    });
+    proxy.child.stdin.end(); // the abrupt-ending path -- no signal, stdin closes
+    const result = await Promise.race([exitPromise, new Promise((r) => setTimeout(() => r(null), 5000))]);
+    assert.ok(result, "the child must exit naturally within 5s of stdin closing -- the heartbeat timer must not hold it open");
+  } finally {
+    proxy.child.kill("SIGKILL");
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("C3 regression guard: initialize + tools/list alone write no request and no lease, ever", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vice-proxy-c3-"));
+  const { server, requests } = startStandInServer();
+  const port = await listen(server);
+  const proxy = startProxy({
+    VICE_POOL_DIR: dir,
+    VICE_BROKER_BASE_PORT: String(port),
+    VICE_EPOCH_FILE: join(dir, "epoch.json"),
+  });
+  try {
+    await handshake(proxy);
+
+    assert.equal(existsSync(join(dir, "requests")), false, "no requests directory may exist after handshake alone");
+    assert.equal(existsSync(join(dir, "leases")), false, "no leases directory may exist after handshake alone");
+    assert.equal(requests.length, 0, "the stand-in host must never have been contacted by the handshake alone");
+    assert.equal(proxy.child.exitCode, null, "the proxy must still be alive");
+  } finally {
+    proxy.child.kill("SIGKILL");
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("teardown region: no promise-awaiting construct, and releaseLease() called exactly once, between its markers", () => {
+  const source = readFileSync(PROXY_PATH, "utf8");
+  const beginIdx = source.indexOf("TEARDOWN-REGION-BEGIN");
+  const endIdx = source.indexOf("TEARDOWN-REGION-END");
+  assert.ok(beginIdx !== -1, "TEARDOWN-REGION-BEGIN marker must be present in vice-proxy.mjs");
+  assert.ok(endIdx !== -1 && endIdx > beginIdx, "TEARDOWN-REGION-END marker must be present after the begin marker");
+  const region = source.slice(beginIdx, endIdx);
+
+  // No promise-awaiting construct anywhere in the region -- scoped to this
+  // slice only, since the whole-file forwarding path (call(), pollGrant())
+  // is legitimately asynchronous and would trip a whole-file scan.
+  assert.doesNotMatch(region, /\bawait\b/, "the teardown region must contain no await");
+  assert.doesNotMatch(region, /\.then\s*\(/, "the teardown region must contain no .then(");
+  assert.doesNotMatch(region, /\basync\s+function\b|\basync\s*\(/, "the teardown region must define no async function");
+
+  // Exactly one filesystem call: releaseLease() (vice-broker-client.mjs) IS
+  // that one synchronous fs operation (an attempted unlinkSync) -- this
+  // region calls INTO it rather than performing the unlink itself, so
+  // asserting the call site appears exactly once is this region's own
+  // version of "exactly one filesystem call".
+  const releaseLeaseCalls = region.match(/releaseLease\(/g) || [];
+  assert.equal(releaseLeaseCalls.length, 1, "the teardown region must call releaseLease() exactly once");
 });

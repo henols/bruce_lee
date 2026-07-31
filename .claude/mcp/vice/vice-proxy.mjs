@@ -13,7 +13,7 @@
 //
 // Sibling import, no longer cross-skill: `vice-session` has been retired
 // (plan 01.1-04) and its transport module tree lives here now.
-import { call, activeInstance, DENY_LIST, readEpoch, beginSession, MachineRestartedError } from "./vice.mjs";
+import { call, activeInstance, useInstance, DENY_LIST, readEpoch, beginSession, MachineRestartedError } from "./vice.mjs";
 // Sibling import, same relocation as above. probeInstance() is the
 // deliberately-fragile liveness check (see that file's own header): one
 // 1500ms-budget round trip, no retry, no dependency on vice.mjs's resilient
@@ -21,6 +21,20 @@ import { call, activeInstance, DENY_LIST, readEpoch, beginSession, MachineRestar
 import { probeInstance } from "./vice-probe.mjs";
 import { repoRoot } from "./repo-root.mjs";
 import { hostPath, SET_ENV_HINT } from "../../skills/devcontainer-host-path/scripts/hostpath.mjs";
+// The container-side half of the on-demand broker protocol (Phase 01.2).
+// This module deliberately does NOT import hostpath.mjs itself -- the
+// host-path consumer set stays closed to four production modules
+// (vice-mcp-selector-docs.test.mjs's assertion 4), and this file is already
+// on that list, so any broker-related host path text is built HERE.
+import {
+  newRequestId,
+  writeRequest,
+  createLease,
+  touchLease,
+  releaseLease,
+  pollGrant,
+  startHeartbeat,
+} from "./vice-broker-client.mjs";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
@@ -37,9 +51,14 @@ const HERE_DIR = dirname(fileURLToPath(import.meta.url));
 // which already executed by the time this file's own body starts, but every
 // subsequent async operation this file performs is covered.
 //
-// The one correct exit path is stdin `end`/`close` -- normal session
-// shutdown -- handled separately below. Never `process.exit()` from either
-// handler here.
+// There are TWO correct exit paths, not one (spike-findings-bruce-lee
+// skill, shutdown-and-lease-release.md): a graceful client shutdown
+// delivers SIGINT first (then SIGTERM ~100ms later, then SIGKILL at
+// ~490ms) and never closes stdin; an abrupt client death closes stdin
+// (`end` then `close`) and never signals. Both are handled separately
+// below, by the teardown handler near the bottom of this file. Never
+// `process.exit()` from any handler here or there -- see that handler's own
+// comment for why nothing needs it.
 process.on("uncaughtException", (err) => {
   console.error(`vice-proxy: uncaughtException (ignored, staying alive): ${err && err.stack ? err.stack : err}`);
 });
@@ -346,6 +365,31 @@ function supervisorHostPath() {
   }
 }
 
+/** Same shape as supervisorHostPath(), for the broker launcher instead of
+ * the supervisor. Recomputed fresh every call -- never cached. */
+function brokerHostPath() {
+  const target = join(repoRoot(), "tools", "vice-broker.sh");
+  try {
+    return hostPath(target);
+  } catch {
+    return `${target}\n  (host path could not be determined -- ${SET_ENV_HINT})`;
+  }
+}
+
+/** A single, undifferentiated broker-unavailable message (plan 04 splits
+ * this into brokerNeverStartedMessage()/brokerDeadOrHungMessage()/
+ * brokerLaunchFailedMessage(), mirroring the three-state diagnostics already
+ * built for the supervisor above) -- this task only needs a well-formed
+ * error naming the host launch path and the reason pollGrant() gave up. */
+function brokerUnavailableMessage(reason) {
+  return (
+    `vice-proxy: could not acquire a broker-granted VICE instance -- ${reason}. Start the broker on ` +
+    `the host with:\n` +
+    `  ${brokerHostPath()}\n` +
+    ONLY_ROUTE_NOTE
+  );
+}
+
 // A causeCode-shaped reason string (e.g. "ECONNREFUSED", "ECONNRESET") is
 // exactly what probeInstance() returns for a connection actively refused --
 // see its own fallback `causeCode || e.message`. A timeout, an HTTP error
@@ -610,6 +654,71 @@ function handleResultContinue(args) {
   };
 }
 
+// -------------------------------------------------------------- broker lease
+//
+// On-demand acquisition (Phase 01.2): deferred to the FIRST forwarded
+// tools/call, never to initialize/tools/list, matching the measured "spawn
+// is eager, acquisition must not be" finding (spike-findings-bruce-lee
+// skill, proxy-lifecycle-and-process-identity.md) -- a session that never
+// forwards a call never asks the broker for anything (C3).
+//
+// brokerLeaseId is the request id this session's lease (if any) is keyed
+// by -- the PRIMARY noun of the protocol (assumption-delta decision:
+// promoted from port to request id, since ports are recycled across
+// sessions under on-demand launch). null means either no lease has been
+// acquired yet, or VICE_MCP_URL overrides the broker entirely.
+let brokerLeaseId = null;
+let brokerHeartbeatTimer = null;
+
+/**
+ * Acquire a broker-granted instance for this session, once. Returns
+ * immediately (no broker traffic at all) when a lease is already held, and
+ * immediately when VICE_MCP_URL is set -- an explicit endpoint override
+ * means the caller already chose an instance, which is both the principled
+ * rule and what keeps every pre-existing proxy test passing with no edit.
+ *
+ * Ordering is load-bearing: the lease is created BEFORE awaiting the grant,
+ * not after. This is what makes the broker's own teardown logic safe --
+ * process_teardowns() only tears a grant down when its lease is ABSENT, and
+ * if the lease were created only after a grant arrived, a broker pass
+ * landing in that narrow window would see a grant with no lease yet and
+ * tear it down out from under this very acquisition.
+ */
+async function ensureBrokerLease() {
+  if (brokerLeaseId) return { ok: true };
+  if (process.env.VICE_MCP_URL) return { ok: true }; // explicit override -- broker never contacted
+
+  const id = newRequestId();
+  const sessionId = process.env.CLAUDE_CODE_SESSION_ID || null;
+  const clientPidRaw = Number(process.env.CLAUDE_PID);
+  const clientPid = Number.isFinite(clientPidRaw) ? clientPidRaw : null;
+
+  writeRequest({ id, sessionId, clientPid });
+  createLease({ id, sessionId, clientPid }); // BEFORE pollGrant() -- see comment above
+
+  const result = await pollGrant(id);
+  if (!result.granted) {
+    try {
+      releaseLease(id); // no grant is coming for this id -- release the lease we already created
+    } catch {
+      /* best effort -- the lease may already be gone */
+    }
+    return { ok: false, message: brokerUnavailableMessage(result.reason || "no grant or denial received") };
+  }
+
+  brokerLeaseId = id;
+  const grant = result.grant;
+  useInstance({ port: grant.port, url: grant.url, epochFile: grant.epoch_file, pooled: true });
+  viceSession = null; // re-baseline: the next ensureViceSession() reads the GRANTED instance's own epoch file
+  // startHeartbeat() (vice-broker-client.mjs) returns an unref'd interval
+  // timer -- unref'd so the TIMER never holds this process alive past its
+  // natural lifetime; stdin being open is what does that. Keeping the timer
+  // handle here is only so a future stop-the-heartbeat path has something to
+  // clear; nothing currently reads it back.
+  brokerHeartbeatTimer = startHeartbeat(id);
+  return { ok: true };
+}
+
 async function handleToolsCall(params) {
   const name = params && params.name;
   if (!name || typeof name !== "string") {
@@ -631,6 +740,14 @@ async function handleToolsCall(params) {
       `${name} is permanently forbidden -- it is known to crash the shared host VICE MCP server. ` +
         `Recovery requires a manual, host-side restart. This refusal is permanent; retrying will not help.`
     );
+  }
+
+  const leaseResult = await ensureBrokerLease();
+  if (!leaseResult.ok) {
+    return isErrorText(leaseResult.message);
+  }
+  if (brokerLeaseId) {
+    touchLease(brokerLeaseId); // touch-on-every-forwarded-call (C6), in addition to the heartbeat timer
   }
 
   ensureViceSession();
@@ -817,20 +934,62 @@ process.stdin.on("data", (chunk) => {
   }
 });
 
-// The one exit path that IS correct: stdin end/close is normal session
-// shutdown (Claude Code's termination ladder is stdin EOF -> SIGTERM ->
-// SIGKILL). "Never exits" means never on an error path, not never at all.
+// -------------------------------------------------------------- teardown
 //
-// A single shared `shutdown()` function is the ONLY place `process.exit(`
-// appears in this file -- both listeners call it rather than each carrying
-// their own `process.exit(0)` literal, so the source assertion this task's
-// acceptance criteria specify ("excluding comment lines, vice-proxy.mjs
-// contains exactly one `process.exit(` occurrence, and it is on the stdin
-// end/close path") stays true even though there are two listeners.
-function shutdown() {
-  process.exit(0);
+// TWO ladders, not one, firing DIFFERENT handlers (spike-findings-bruce-lee
+// skill, shutdown-and-lease-release.md -- measured, not assumed): a
+// graceful client ending delivers SIGINT first, then SIGTERM ~100ms later,
+// then SIGKILL at ~490ms total, and NEVER closes stdin. Abrupt client death
+// closes stdin (`end` then `close`) and NEVER signals. Each family covers
+// exactly the ending the other misses, so both are wired below; SIGINT is a
+// teardown trigger here, not a user Ctrl-C to ignore -- it is the FIRST
+// signal of every graceful ending.
+//
+// The measured numbers this depends on: ~490ms from the first signal to
+// SIGKILL, ~0.1ms for the lease's unlinkSync -- roughly three orders of
+// magnitude of headroom. The entire handler body below is ONE synchronous
+// filesystem operation and awaits nothing (C5): introducing anything
+// asynchronous here (an await, a fetch, a child process, a call to the
+// broker) reintroduces leaked leases silently, since there would be no time
+// left for it to complete before SIGKILL cuts the process off.
+//
+// This removes the file's only explicit process.exit( call: nothing needs
+// it any more. The graceful path is killed by SIGKILL ~490ms after the
+// first signal regardless of anything this process does, and the abrupt
+// path exits naturally once stdin is gone and nothing else is listening.
+//
+// TEARDOWN-REGION-BEGIN -- vice-proxy.test.mjs's source assertion slices
+// the file between this marker and its closing counterpart further below,
+// and asserts that slice contains no promise-awaiting construct and calls
+// the broker client's release function exactly once. Do not move either
+// marker away from the code each one bounds.
+let teardownRan = false;
+
+function releaseLeaseNow(trigger) {
+  if (!brokerLeaseId) return;
+  try {
+    releaseLease(brokerLeaseId);
+  } catch (err) {
+    console.error(`vice-proxy: lease_unlink_failed trigger=${trigger}: ${err && err.message ? err.message : err}`);
+  }
 }
-process.stdin.on("end", shutdown);
-process.stdin.on("close", shutdown);
+
+function onTeardown(trigger) {
+  if (teardownRan) return; // idempotent -- SIGINT then SIGTERM ~100ms later both call in
+  teardownRan = true;
+  releaseLeaseNow(trigger);
+}
+
+process.stdin.on("end", () => onTeardown("stdin_end"));
+process.stdin.on("close", () => onTeardown("stdin_close"));
+// Registered as three explicit calls, not a loop over an array, so a
+// durable source-grep for "is SIGINT/SIGTERM/SIGHUP each really wired"
+// (this task's own acceptance criteria) has a literal string to find for
+// each one -- SIGINT first, since it is the first signal of every graceful
+// ending and must never be mistaken for a plain user Ctrl-C to ignore.
+process.on("SIGINT", () => onTeardown("SIGINT"));
+process.on("SIGTERM", () => onTeardown("SIGTERM"));
+process.on("SIGHUP", () => onTeardown("SIGHUP"));
+// TEARDOWN-REGION-END
 
 console.error(`vice-proxy: ready, forwarding to ${activeInstance().url} (port ${activeInstance().port})`);
