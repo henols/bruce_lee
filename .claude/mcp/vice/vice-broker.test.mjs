@@ -10,7 +10,7 @@
 // neither file exports its internal test helpers).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { spawn, execFile } from "node:child_process";
+import { spawn, execFile, execFileSync } from "node:child_process";
 import { promisify } from "node:util";
 import { createServer } from "node:http";
 import {
@@ -23,6 +23,8 @@ import {
   statSync,
   rmSync,
   utimesSync,
+  chmodSync,
+  symlinkSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -181,15 +183,17 @@ function runBrokerOnceDryRun(dir, basePort) {
  * overrides, mirroring runBrokerOnceDryRun() above but with knobs for TTL
  * and non-dry-run opt-out (dry-run is the default -- no real x64sc is ever
  * needed by this file's own tests). */
-function runBrokerOnce(dir, { basePort = 7000, ttlS, dryRun = true } = {}) {
+function runBrokerOnce(dir, { basePort = 7000, ttlS, dryRun = true, spares = 0, max, probeCmd } = {}) {
   const env = {
     ...process.env,
     VICE_SUPERVISOR_ALLOW_CONTAINER: "1",
     VICE_POOL_DIR: dir,
     VICE_BROKER_BASE_PORT: String(basePort),
-    VICE_BROKER_SPARES: "0",
+    VICE_BROKER_SPARES: String(spares),
   };
   if (ttlS !== undefined) env.VICE_BROKER_TTL_S = String(ttlS);
+  if (max !== undefined) env.VICE_BROKER_MAX = String(max);
+  if (probeCmd !== undefined) env.VICE_BROKER_PROBE_CMD = probeCmd;
   const args = ["--once"];
   if (dryRun) args.push("--dry-run");
   return execFileP("bash", [BROKER_SCRIPT, ...args], { env });
@@ -234,6 +238,97 @@ function writeLeaseFile(dir, id) {
 function ageLeaseFile(leasePath, secondsAgo) {
   const t = new Date(Date.now() - secondsAgo * 1000);
   utimesSync(leasePath, t, t);
+}
+
+function writeSpareFile(
+  dir,
+  port,
+  { state = "launching", reason = "spare", dryRun = true, launchedAt = null, readyAt = null, supervisorPid = null } = {}
+) {
+  const sdir = join(dir, "spares");
+  mkdirSync(sdir, { recursive: true });
+  const record = {
+    version: 1,
+    port,
+    url: `http://127.0.0.1:${port}/mcp`,
+    epoch_file: join(dir, String(port), "epoch.json"),
+    supervisor_dir: join(dir, String(port)),
+    supervisor_pid: supervisorPid,
+    launched_at: launchedAt !== null ? launchedAt : Date.now() * 1e6,
+    ready_at: readyAt,
+    state,
+    reason,
+    dry_run: dryRun,
+  };
+  const p = join(sdir, `${port}.json`);
+  writeFileSync(p, JSON.stringify(record, null, 2) + "\n");
+  return p;
+}
+
+/** Writes a stub executable script into its OWN fresh temp dir, chmod +x --
+ * the VICE_BROKER_PROBE_CMD injectable seam, invoked by vice-broker.sh as
+ * `"$VICE_BROKER_PROBE_CMD" "$port"`. Returns the script's absolute path;
+ * the caller is responsible for `rmSync(dirname(path), {recursive:true})`
+ * once done. Using a FRESH tmp dir per stub (rather than a shared one) means
+ * a stateful stub's own counter file (see failNTimesThenSucceedProbe below)
+ * never collides across tests. */
+function makeProbeStub(script) {
+  const dir = mkdtempSync(join(tmpdir(), "vice-broker-probe-"));
+  const p = join(dir, "probe.sh");
+  writeFileSync(p, `#!/usr/bin/env bash\n${script}\n`);
+  chmodSync(p, 0o755);
+  return p;
+}
+
+const alwaysSucceedProbe = () => makeProbeStub("exit 0");
+const alwaysFailProbe = () => makeProbeStub("exit 1");
+
+/** A stub whose own persistent counter file (sitting next to the script, in
+ * the same per-stub temp dir) fails the first `n` invocations and succeeds
+ * on every one after -- deterministic across separate `--once` subprocess
+ * invocations, which each start a brand-new bash process with no shared
+ * in-memory state of their own. */
+function failNTimesThenSucceedProbe(n) {
+  return makeProbeStub(`
+COUNTER_FILE="$(dirname "$0")/counter"
+count=0
+if [ -f "$COUNTER_FILE" ]; then count=$(cat "$COUNTER_FILE"); fi
+count=$((count + 1))
+echo "$count" > "$COUNTER_FILE"
+if [ "$count" -le ${n} ]; then exit 1; else exit 0; fi
+`);
+}
+
+/** Builds a curated PATH directory containing symlinks to every coreutil
+ * vice-broker.sh itself needs (bash, awk, grep, sed, mkdir, mv, ps, kill,
+ * date, mktemp, stat, ...) but DELIBERATELY OMITTING curl -- the only way to
+ * exercise the "no readiness mechanism available at all" degradation
+ * (VICE_BROKER_PROBE_CMD unset AND curl not found) without actually
+ * uninstalling curl from this container, which is genuinely present here
+ * (`command -v curl` succeeds) and needed by the rest of the suite. */
+function pathWithoutCurl() {
+  const dir = mkdtempSync(join(tmpdir(), "vice-broker-nocurl-"));
+  const tools = [
+    "bash", "sh", "awk", "basename", "cat", "chmod", "date", "dirname", "grep", "head", "id",
+    "kill", "mkdir", "mktemp", "mv", "nohup", "printf", "ps", "pwd", "rm", "sed", "sleep",
+    "stat", "env", "true", "false", "ln", "readlink", "test", "uname",
+  ];
+  for (const t of tools) {
+    let real = null;
+    try {
+      real = execFileSync("bash", ["-c", `command -v ${t}`]).toString().trim();
+    } catch {
+      real = null;
+    }
+    if (real) {
+      try {
+        symlinkSync(real, join(dir, t));
+      } catch {
+        /* already linked, or unavailable -- fine either way */
+      }
+    }
+  }
+  return dir;
 }
 
 /** Writes requests/<id>.json in the exact shape vice-broker-client.mjs's own
@@ -717,4 +812,194 @@ test("a malformed request body is skipped with a logged reason while a well-form
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("maintain_spares: with VICE_BROKER_SPARES=2 and an always-succeeding probe, two passes bring broker-instances.json to exactly two ready entries", async () => {
+  const dir = tmpPoolDir();
+  const probe = alwaysSucceedProbe();
+  try {
+    await runBrokerOnce(dir, { basePort: 7700, spares: 2, probeCmd: probe });
+    let files = existsSync(join(dir, "spares")) ? readdirSync(join(dir, "spares")).filter((f) => f.endsWith(".json")) : [];
+    assert.equal(files.length, 2, "pass 1 must launch exactly VICE_BROKER_SPARES=2 spares");
+    for (const f of files) {
+      const rec = JSON.parse(readFileSync(join(dir, "spares", f), "utf8"));
+      assert.equal(rec.state, "launching", "an instance launched in THIS pass must not already be ready in this same pass");
+    }
+
+    await runBrokerOnce(dir, { basePort: 7700, spares: 2, probeCmd: probe });
+    files = readdirSync(join(dir, "spares")).filter((f) => f.endsWith(".json"));
+    assert.equal(files.length, 2, "no additional spares beyond the target once ready");
+    for (const f of files) {
+      const rec = JSON.parse(readFileSync(join(dir, "spares", f), "utf8"));
+      assert.equal(rec.state, "ready", "pass 2 must promote both entries to ready");
+      assert.ok(rec.ready_at, "a promoted entry must record ready_at");
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(dirname(probe), { recursive: true, force: true });
+  }
+});
+
+test("maintain_spares: with a never-succeeding probe, no grant is ever issued and every entry remains in state launching", async () => {
+  const dir = tmpPoolDir();
+  const probe = alwaysFailProbe();
+  try {
+    const port = 7710;
+    writeSpareFile(dir, port, { state: "launching" });
+    for (let i = 0; i < 3; i++) {
+      await runBrokerOnce(dir, { basePort: port, spares: 0, probeCmd: probe });
+    }
+    const rec = JSON.parse(readFileSync(join(dir, "spares", `${port}.json`), "utf8"));
+    assert.equal(rec.state, "launching", "must remain launching across repeated passes");
+    // grants/ itself is unconditionally mkdir -p'd on every pass (matching
+    // requests/denials/leases/spares) regardless of whether anything is ever
+    // written into it -- the real assertion is that it holds NO FILES.
+    const grantFiles = existsSync(join(dir, "grants")) ? readdirSync(join(dir, "grants")).filter((f) => f.endsWith(".json")) : [];
+    assert.deepEqual(grantFiles, [], "no grant can ever come from an entry that never becomes ready");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(dirname(probe), { recursive: true, force: true });
+  }
+});
+
+test("maintain_spares: with a probe that fails twice then succeeds, the entry transitions launching -> ready on the third pass and not before", async () => {
+  const dir = tmpPoolDir();
+  const probe = failNTimesThenSucceedProbe(2);
+  try {
+    const port = 7720;
+    writeSpareFile(dir, port, { state: "launching" });
+
+    await runBrokerOnce(dir, { basePort: port, spares: 0, probeCmd: probe });
+    assert.equal(
+      JSON.parse(readFileSync(join(dir, "spares", `${port}.json`), "utf8")).state,
+      "launching",
+      "pass 1 (probe fails) must not promote"
+    );
+
+    await runBrokerOnce(dir, { basePort: port, spares: 0, probeCmd: probe });
+    assert.equal(
+      JSON.parse(readFileSync(join(dir, "spares", `${port}.json`), "utf8")).state,
+      "launching",
+      "pass 2 (probe still fails) must not promote"
+    );
+
+    await runBrokerOnce(dir, { basePort: port, spares: 0, probeCmd: probe });
+    assert.equal(
+      JSON.parse(readFileSync(join(dir, "spares", `${port}.json`), "utf8")).state,
+      "ready",
+      "pass 3 (probe now succeeds) must promote"
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(dirname(probe), { recursive: true, force: true });
+  }
+});
+
+// The leased/total/ready table from 01.2-04-PLAN.md's own <behavior> block
+// (and the design note's "What N means" table it reproduces), each row
+// planted as an ALREADY-CONVERGED steady state -- this proves the invariant
+// HOLDS (is not disturbed by a further pass), which is the property
+// maintain_spares() exists to maintain, not the separate bootstrap-from-zero
+// convergence already covered by the always-succeeding-probe test above.
+const INVARIANT_TABLE = [
+  { leased: 0, sparesTarget: 3, max: 16, expectTotal: 3, expectReady: 3 },
+  { leased: 2, sparesTarget: 3, max: 16, expectTotal: 5, expectReady: 3 },
+  { leased: 13, sparesTarget: 3, max: 16, expectTotal: 16, expectReady: 3 },
+  { leased: 16, sparesTarget: 3, max: 16, expectTotal: 16, expectReady: 0 },
+  { leased: 3, sparesTarget: 3, max: 4, expectTotal: 4, expectReady: 1 },
+];
+
+test("the leased/total/ready invariant table is reproduced exactly, and holds under a further pass", async () => {
+  const probe = alwaysSucceedProbe();
+  try {
+    for (const row of INVARIANT_TABLE) {
+      const dir = tmpPoolDir();
+      try {
+        let port = 8000;
+        for (let i = 0; i < row.leased; i++) {
+          writeGrantFile(dir, `req-inv-${port}`, { port });
+          writeLeaseFile(dir, `req-inv-${port}`);
+          port++;
+        }
+        for (let i = 0; i < row.expectReady; i++) {
+          writeSpareFile(dir, port, { state: "ready", readyAt: Date.now() * 1e6 });
+          port++;
+        }
+
+        const { stdout } = await runBrokerOnce(dir, {
+          basePort: port,
+          spares: row.sparesTarget,
+          max: row.max,
+          probeCmd: probe,
+        });
+
+        const spareFiles = existsSync(join(dir, "spares")) ? readdirSync(join(dir, "spares")).filter((f) => f.endsWith(".json")) : [];
+        const grantFiles = existsSync(join(dir, "grants")) ? readdirSync(join(dir, "grants")).filter((f) => f.endsWith(".json")) : [];
+        const totalNow = spareFiles.length + grantFiles.length;
+        const readyNow = spareFiles.filter(
+          (f) => JSON.parse(readFileSync(join(dir, "spares", f), "utf8")).state === "ready"
+        ).length;
+
+        assert.equal(totalNow, row.expectTotal, `leased=${row.leased}, max=${row.max}: total must stay ${row.expectTotal}`);
+        assert.equal(readyNow, row.expectReady, `leased=${row.leased}, max=${row.max}: ready must stay ${row.expectReady}`);
+        assert.doesNotMatch(
+          stdout,
+          /vice-broker: launched port/,
+          `leased=${row.leased}, max=${row.max}: an already-converged invariant must not trigger a further launch`
+        );
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  } finally {
+    rmSync(dirname(probe), { recursive: true, force: true });
+  }
+});
+
+
+test("structural: maintain_spares has exactly one definition and one call site", () => {
+  const src = readFileSync(BROKER_SCRIPT, "utf8");
+  // Deliberately stricter than a bare substring count: the usage() heredoc's
+  // own prose mentions "maintain_spares()" (with parens, inside a sentence)
+  // several times as documentation, which is neither a definition nor a bare
+  // call site. A definition line looks like `maintain_spares() {` with no
+  // leading whitespace (top-level function); the one real call site is a
+  // BARE name on its own line inside broker_once() (no parens, no trailing
+  // text) -- neither shape occurs anywhere in the usage prose.
+  const defs = (src.match(/^maintain_spares\(\)\s*\{/gm) || []).length;
+  const callSites = (src.match(/^\s*maintain_spares\s*$/gm) || []).length;
+  assert.equal(defs, 1, `expected exactly one maintain_spares() definition, found ${defs}`);
+  assert.equal(callSites, 1, `expected exactly one bare maintain_spares call site, found ${callSites}`);
+});
+
+test("structural: port_in_use is never called inside probe_ready", () => {
+  const src = readFileSync(BROKER_SCRIPT, "utf8");
+  const probeReadyStart = src.indexOf("probe_ready() {");
+  const probeReadyEnd = src.indexOf("\n}\n", probeReadyStart);
+  assert.ok(probeReadyStart > 0 && probeReadyEnd > probeReadyStart, "probe_ready() must be found in the source");
+  const probeReadyBody = src.slice(probeReadyStart, probeReadyEnd);
+  assert.doesNotMatch(probeReadyBody, /port_in_use/, "probe_ready() must never reuse port_in_use() -- a TCP accept is not readiness");
+});
+
+test("structural: VICE_BROKER_PROBE_CMD is invoked with the port as a positional argument, never interpolated into a command string", () => {
+  const src = readFileSync(BROKER_SCRIPT, "utf8");
+  assert.match(src, /"\$VICE_BROKER_PROBE_CMD"\s+"\$port"/, "must invoke as two separate quoted arguments, not a single interpolated string");
+});
+
+test("structural: bash -n exits 0; start still refuses in-container with exit 2; --check-container still exits 3", async () => {
+  await execFileP("bash", ["-n", BROKER_SCRIPT]); // rejects (throws) on a non-zero exit
+
+  await assert.rejects(
+    execFileP("bash", [BROKER_SCRIPT, "start", "--once", "--dry-run"], {
+      env: { ...process.env, VICE_POOL_DIR: tmpPoolDir(), VICE_SUPERVISOR_ALLOW_CONTAINER: undefined },
+    }),
+    (err) => err.code === 2,
+    "start must refuse with exit 2 without the escape hatch, inside this devcontainer"
+  );
+
+  await assert.rejects(
+    execFileP("bash", [BROKER_SCRIPT, "--check-container"]),
+    (err) => err.code === 3,
+    "--check-container must exit 3 inside a container"
+  );
 });
