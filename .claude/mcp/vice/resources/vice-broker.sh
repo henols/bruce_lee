@@ -13,6 +13,20 @@
 # purpose (see the shared container guard, lib/container-guard.sh). x64sc,
 # its windows, and its MCP listeners all live on the HOST.
 #
+# PRECONDITION -- uid parity (D-1.2-D): this script's own protocol files
+# (broker.json, broker-instances.json, grants/, denials/, leases/) keep the
+# SAME owner-only (0600) posture registry.json already has. That posture is
+# safe ONLY because the container's `vscode` user and the host's own user
+# are BOTH uid 1000 on this real ext4 bind mount -- either side can create
+# and unlink the other's files as a direct result. This is written down HERE,
+# not merely true today: if this script is ever run as a host user with a
+# DIFFERENT uid than the container's, every file it writes becomes unreadable
+# to the proxy, and every acquisition silently times out waiting on a grant
+# that was written but could never be seen. Widening the mode defensively for
+# a multi-user scenario that does not exist here would hide this precondition
+# instead of stating it -- so the mode stays 0600 and the precondition is
+# named here instead.
+#
 # What this adds on top of vice-pool.sh (launches a FIXED N instances once
 # and returns) and vice-supervisor.sh (supervises ONE already-launched
 # instance): this script launches instances ON DEMAND, one per container-side
@@ -25,16 +39,22 @@
 # proxy's session ending) is observed on this script's NEXT pass, which then
 # tears the corresponding instance down.
 #
-# THIS TASK'S SCOPE (Phase 01.2 plan 01, the tracer): exactly ONE pass of the
-# request -> grant -> forward -> release -> teardown seam, invoked with
-# --once. No warm spares, no TTL sweep, no long-lived loop, no denial
-# handling beyond reading a denial file if one happens to be there -- those
-# are plans 02, 03 and 04. `start` in this task performs exactly one
-# broker_once pass and returns; the long-lived loop that keeps `start`
-# running (and that spares/TTL logic hangs off of) is plan 02's job.
+# THIS SCRIPT'S SCOPE AS OF PHASE 01.2 PLAN 02: `start` runs as a real,
+# long-lived daemon (a `while true` loop with a signal trap and a
+# consecutive-failure backoff, exactly like vice-supervisor.sh's own respawn
+# loop) instead of plan 01's single pass. `--once` short-circuits the loop to
+# exactly one pass and returns -- the seam every test in this file's sibling
+# *.test.mjs drives. A released lease and a lease swept for staleness (past
+# VICE_BROKER_TTL_S) now converge on the SAME tear-down function (below)
+# -- the two differ only in which branch removed the lease file,
+# never in what happens to the instance afterward. A released instance's
+# grant entry is removed, never reset to a re-grantable state
+# (kill-never-recycle): the only way an instance becomes grantable again is a
+# fresh launch. Warm spares and plan 04's three-state diagnostics remain out
+# of THIS script's scope.
 #
 # Run the DEPLOYED copy from the HOST workspace, e.g.:
-#   /home/henrik/dev/henrik/git/bruce_lee/tools/vice-broker.sh --once
+#   /home/henrik/dev/henrik/git/bruce_lee/tools/vice-broker.sh start
 # i.e. <host workspace>/tools/vice-broker.sh -- never from inside
 # `docker exec` or a devcontainer terminal.
 set -euo pipefail
@@ -86,29 +106,40 @@ tools/vice-broker.sh <subcommand> [...].
 HOST-ONLY. Reads request files a container-side proxy writes, allocates a
 port, launches (or, under --dry-run, records without launching) a supervised
 x64sc MCP instance, and writes a grant file back -- then, on a later pass,
-tears down any granted instance whose lease has been released.
+tears down any granted instance whose lease has been released OR has gone
+stale past its TTL, both through the SAME tear-down code path.
 
 Subcommands:
-  start [N]     Perform broker passes. In THIS version, always performs
-                exactly ONE pass and returns (the long-lived loop that keeps
-                this running between passes is a later addition) -- --once
-                is accepted for forward compatibility with that loop and has
-                no additional effect here. [N] is an optional spares-target
-                positional, validated as an integer 1..16 exactly like
-                vice-pool.sh's own start [N]; it is not yet consumed by any
-                spares logic in this version (no warm spares exist yet).
-  stop          Best-effort stop of a long-lived broker process recorded in
-                broker.json, if one exists and its pid's identity checks out
-                via ps.
-  status        Prints broker.json verbatim, if it exists.
+  start [N]     Runs as a long-lived daemon: writes broker.json once (fixed
+                started_at, pid $$), then loops forever refreshing
+                broker.json's heartbeat_at, running one broker pass (grant
+                pending requests, tear down released/stale grants), and
+                sleeping VICE_BROKER_POLL_MS -- with the same
+                consecutive-failure backoff shape vice-supervisor.sh's own
+                respawn loop already uses. A signal trap (SIGINT/SIGTERM)
+                removes broker.json and exits 0 cleanly, leaving any granted
+                instances running untouched -- the broker stopping is not
+                the same event as a session ending. [N] is an optional
+                spares-target positional, validated as an integer 1..16
+                exactly like vice-pool.sh's own start [N]; it is not yet
+                consumed by any spares logic in this version (no warm spares
+                exist yet).
+  stop          Best-effort stop of the long-lived broker process recorded
+                in broker.json, if one exists and its pid's identity checks
+                out via ps. Exits 0 with a plain message if there is nothing
+                to stop.
+  status        Prints the broker's own liveness line (pid, heartbeat age)
+                followed by one line per broker-instances.json entry naming
+                its port, state and lease id.
 
 Flags:
-  --once        Accepted alongside (or in place of) 'start': performs a
-                single broker pass. May be given with no subcommand at all,
+  --once        Runs exactly ONE broker pass and returns instead of looping
+                forever -- the seam this file's own *.test.mjs suite drives
+                for every assertion. May be given with no subcommand at all,
                 in which case 'start' is implied.
   --dry-run     Every grant records dry_run:true and spawns nothing -- exists
-                so the request/grant/teardown contract can be exercised from
-                inside the devcontainer, where x64sc does not exist to
+                so the request/grant/tear-down contract can be exercised
+                from inside the devcontainer, where x64sc does not exist to
                 actually launch, mirroring vice-supervisor.sh's own
                 --dry-run rationale.
   --check-container
@@ -128,16 +159,18 @@ Configuration (all environment-overridable):
                             (default: 3) -- not yet enforced in this version.
   VICE_BROKER_MAX          Max instances recorded into broker.json
                             (default: 16) -- not yet enforced in this version.
-  VICE_BROKER_TTL_S        TTL seconds recorded into broker.json
-                            (default: 180) -- the sweeper is a later addition.
+  VICE_BROKER_TTL_S        TTL seconds a lease may go unrefreshed before the
+                            sweeper reclaims its grant (default: 180 -- three
+                            times the 60s heartbeat interval, D-1.2-G; a
+                            reasoned default, not a measured constant -- see
+                            the reversibility note in 01.2-02-PLAN.md).
   VICE_BROKER_BASE_PORT    First candidate port a granted instance is
                             allocated at (default: 6510); the next free port
                             at or above this value is chosen per request.
   VICE_BROKER_MCP_HOST     -mcpserverhost value passed to every spawned
                             instance (default: 0.0.0.0)
-  VICE_BROKER_POLL_MS      Recorded into broker.json for a future long-lived
-                            loop's poll interval (default: 500) -- unused by
-                            the single-pass behaviour in this version.
+  VICE_BROKER_POLL_MS      The long-lived loop's own sleep interval between
+                            passes (default: 500).
   VICE_POOL_DIR             Where requests/, grants/, denials/, leases/,
                             broker.json and broker-instances.json live
                             (default: <repo>/.vice-supervisor)
@@ -319,12 +352,18 @@ json_escape() {
 }
 
 # Single atomic-write choke point (T-01.2-03): every protocol file this
-# script writes -- broker.json, grants/<id>.json, denials/<id>.json -- goes
-# through here, so there is exactly one place the tmp-then-mv atomicity rule
-# lives. $1 = final path, $2 = fully-rendered content.
+# script writes -- broker.json, broker-instances.json, grants/<id>.json,
+# denials/<id>.json -- goes through here, so there is exactly one place the
+# tmp-then-mv atomicity rule lives. $1 = final path, $2 = fully-rendered
+# content. `mktemp` already creates its file mode 0600 regardless of umask
+# (GNU coreutils); the explicit chmod below is a second, self-documenting
+# guarantee of the uid-parity precondition's owner-only posture (D-1.2-D),
+# not a defensive widening -- it keeps the mode correct even if this script
+# is ever run against a `mktemp` implementation with a looser default.
 write_json_atomic() {
   local final_path="$1" content="$2" tmp
   tmp="$(mktemp "$VICE_POOL_DIR/.broker.XXXXXX")"
+  chmod 600 "$tmp"
   printf '%s\n' "$content" >"$tmp"
   mv "$tmp" "$final_path"
 }
@@ -333,21 +372,46 @@ is_valid_request_id() {
   [[ "$1" =~ $REQUEST_ID_PATTERN ]]
 }
 
+# GNU `stat -c %Y`, with a BSD/macOS `stat -f %m` fallback -- this script
+# runs on the HOST, which may be either, so both forms are tried in order.
+# Returns the file's mtime as epoch seconds, or nothing (and a non-zero
+# status) if the file cannot be stat'd at all.
+file_mtime_epoch() {
+  stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null
+}
+
+# Compares a lease's mtime against now; prints the observed staleness in
+# seconds and returns 0 when the lease is older than ttl_seconds, otherwise
+# returns 1 and prints nothing. The caller captures both the boolean (via
+# exit status, inside an `if`) and the age (via command substitution) in one
+# call: `if age="$(lease_is_stale "$lease" "$ttl")"; then ...`.
+lease_is_stale() {
+  local lease_path="$1" ttl_seconds="$2" mtime now age
+  mtime="$(file_mtime_epoch "$lease_path")" || return 1
+  [ -n "$mtime" ] || return 1
+  now="$(date -u +%s)"
+  age=$((now - mtime))
+  if [ "$age" -gt "$ttl_seconds" ]; then
+    printf '%s\n' "$age"
+    return 0
+  fi
+  return 1
+}
+
 # ---------------------------------------------------------------- request scan
 #
-# Lists candidate request ids by filename only (the request file's basename
-# minus .json) -- read_registry_ports/read_registry_pids's own
-# grep-against-known-shape idiom, no jq. Each id is validated by
-# is_valid_request_id() before it is EVER used to build a further path (grant,
-# denial, lease) -- see process_requests() below.
-list_request_ids() {
-  local f
-  if [ -d "$REQUESTS_DIR" ]; then
-    for f in "$REQUESTS_DIR"/*.json; do
-      [ -e "$f" ] || continue
-      basename "$f" .json
-    done
-  fi
+# Extracts the "id" JSON field's value from a request file -- the OPERATIVE
+# id used everywhere below is this body field, NEVER the filename (T-01.2-01,
+# task 2's own id-pattern parity test drives this specific extraction path).
+# Matches a single quoted "id" value with no jq; a request whose body cannot
+# even be parsed this far yields an empty string, which is_valid_request_id()
+# below always rejects. `|| true` is load-bearing under this script's own
+# `set -e -o pipefail`: grep exits 1 on no match (a malformed/garbage body,
+# exactly the case this function exists to handle gracefully), and pipefail
+# would otherwise propagate that as this function's own exit status, aborting
+# the ENTIRE broker pass rather than skipping one bad request (T-01.2-14).
+extract_id_field() {
+  grep -o '"id": *"[^"]*"' "$1" 2>/dev/null | head -1 | sed 's/.*"id": *"//; s/"$//' || true
 }
 
 # Next free port at or above VICE_BROKER_BASE_PORT, "free" meaning not
@@ -377,7 +441,15 @@ next_free_port() {
   done
 }
 
+# $1 = started_at (fixed across every loop pass of ONE daemon lifetime --
+# the caller holds this in a shell variable across the whole invocation, so
+# it is never re-derived from a file read). heartbeat_at is always "now" at
+# call time -- must_haves C1/C10 input: refreshed on every loop pass, so a
+# reader (cmd_status, or the container-side readBrokerLiveness()) can
+# distinguish never-started (no file) from dead-or-hung (file present, but
+# heartbeat_at stopped advancing).
 write_broker_json() {
+  local started_at="$1"
   local now dry_run_field
   now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   dry_run_field="false"
@@ -388,11 +460,12 @@ write_broker_json() {
   "version": 1,
   "written_by": "vice-broker.sh",
   "pid": $$,
-  "started_at": "$now",
+  "started_at": "$started_at",
   "heartbeat_at": "$now",
   "spares_target": $VICE_BROKER_SPARES,
   "max_instances": $VICE_BROKER_MAX,
   "ttl_seconds": $VICE_BROKER_TTL_S,
+  "poll_ms": $VICE_BROKER_POLL_MS,
   "dry_run": $dry_run_field
 }
 JSON
@@ -400,23 +473,95 @@ JSON
   write_json_atomic "$BROKER_JSON" "$content"
 }
 
+# Rebuilds broker-instances.json entirely from the CURRENT grants/ directory
+# every pass -- this file is a PROJECTION of live grants, never independently
+# maintained state. A torn-down grant (removed by the tear-down function
+# below) simply stops appearing on the very next write, with no separate
+# "mark reusable" step for kill-never-recycle (task 2) to accidentally skip
+# (T-01.2-10). No jq: same grep-against-known-shape idiom as
+# next_free_port() above.
+write_instances() {
+  local f id port supervisor_pid launched_at dry_run_field first=1 body=""
+  if [ -d "$GRANTS_DIR" ]; then
+    for f in "$GRANTS_DIR"/*.json; do
+      [ -e "$f" ] || continue
+      id="$(extract_id_field "$f")"
+      [ -n "$id" ] || id="$(basename "$f" .json)" # defensive only -- this script's own writes always carry a matching id
+      port="$(grep -o '"port": *[0-9]\+' "$f" 2>/dev/null | head -1 | grep -o '[0-9]\+$' || true)"
+      supervisor_pid="$(grep -o '"supervisor_pid": *\(null\|[0-9]\+\)' "$f" 2>/dev/null | sed 's/.*: *//' || true)"
+      launched_at="$(grep -o '"launched_at": *[0-9]\+' "$f" 2>/dev/null | head -1 | grep -o '[0-9]\+$' || true)"
+      dry_run_field="$(grep -o '"dry_run": *\(true\|false\)' "$f" 2>/dev/null | sed 's/.*: *//' || true)"
+      if [ "$first" -eq 1 ]; then first=0; else body+=","; fi
+      body+="$(cat <<JSON
+
+    {
+      "id": "$(json_escape "$id")",
+      "port": ${port:-null},
+      "supervisor_pid": ${supervisor_pid:-null},
+      "launched_at": ${launched_at:-null},
+      "dry_run": ${dry_run_field:-false}
+    }
+JSON
+)"
+    done
+  fi
+  local content
+  content="$(cat <<JSON
+{
+  "version": 1,
+  "instances": [$body
+  ]
+}
+JSON
+)"
+  write_json_atomic "$INSTANCES_JSON" "$content"
+}
+
+# Generic reader for broker-instances.json fields, mirroring
+# read_registry_ports/read_registry_pids's own grep-against-known-shape
+# idiom (vice-pool.sh) -- no jq assumed. $1 = field name. Returns one value
+# per line, in file order. "id" is special-cased (quoted string); every
+# other field here is a bare JSON scalar (number/bool/null).
+read_instance_field() {
+  local field="$1"
+  [ -f "$INSTANCES_JSON" ] || return 0
+  case "$field" in
+    id)
+      grep -o '"id": *"[^"]*"' "$INSTANCES_JSON" 2>/dev/null | sed 's/.*"id": *"//; s/"$//' || true
+      ;;
+    port)
+      grep -o '"port": *[0-9]\+' "$INSTANCES_JSON" 2>/dev/null | grep -o '[0-9]\+$' || true
+      ;;
+    *)
+      grep -o "\"$field\": *[^,}]*" "$INSTANCES_JSON" 2>/dev/null | sed "s/.*\"$field\": *//" || true
+      ;;
+  esac
+}
+
 # For each well-formed requests/*.json: allocate the next free port, and
 # under --dry-run record dry_run:true with no spawn at all (under a real
 # run, spawn vice-supervisor.sh detached exactly as vice-pool.sh's own
-# cmd_start does); write grants/<id>.json and unlink the request. Reads the
-# request directory ONCE per pass (list_request_ids() is called once, at the
-# top of the loop construct below) and acts on that snapshot -- a request
-# that appears mid-pass waits for the NEXT pass, never this one.
+# cmd_start does); write grants/<id>.json and unlink the request. The
+# OPERATIVE id for every request is its own body's "id" field
+# (extract_id_field), never the filename -- validated against
+# is_valid_request_id() BEFORE it is EVER used to build a grant/lease/denial
+# path (T-01.2-01). A request whose id fails that check, or whose body
+# cannot even be parsed far enough to yield one, is skipped with a logged
+# reason and writes NO file anywhere -- one bad request must never stall the
+# rest of the pass (T-01.2-14). Reads the request directory ONCE per pass
+# (the for-loop's own glob) and acts on that snapshot -- a request that
+# appears mid-pass waits for the NEXT pass, never this one.
 process_requests() {
-  local id req_file port now dir epoch_file resolved_args supervisor_pid_field dry_run_field spawned_pid grant_content
-  while IFS= read -r id; do
-    [ -z "$id" ] && continue
-    if ! is_valid_request_id "$id"; then
-      echo "vice-broker: skipping malformed request id: $id" >&2
+  local req_file id port now dir epoch_file resolved_args supervisor_pid_field dry_run_field spawned_pid grant_content launch_id
+  [ -d "$REQUESTS_DIR" ] || return 0
+  for req_file in "$REQUESTS_DIR"/*.json; do
+    [ -e "$req_file" ] || continue
+
+    id="$(extract_id_field "$req_file")"
+    if [ -z "$id" ] || ! is_valid_request_id "$id"; then
+      echo "vice-broker: skipping request $(basename "$req_file") -- invalid or missing id: \"$id\"" >&2
       continue
     fi
-    req_file="$REQUESTS_DIR/$id.json"
-    [ -e "$req_file" ] || continue # vanished between listing and processing
 
     port="$(next_free_port)"
     now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -425,7 +570,16 @@ process_requests() {
     mkdir -p "$dir"
 
     if [ "$DRY_RUN" -eq 1 ]; then
-      supervisor_pid_field="null"
+      # No real x64sc launches under --dry-run, so there is no real pid to
+      # prove "this is a fresh launch, not a recycled one"
+      # (kill-never-recycle). A CONSTANT placeholder (e.g. "null" for every
+      # dry-run grant) would make that property untestable -- pass
+      # vacuously no matter what the code actually does -- so this uses a
+      # nanosecond-epoch timestamp instead: monotonically increasing and
+      # virtually guaranteed distinct between any two separate grants
+      # (different process invocations, different wall-clock instants).
+      launch_id="$(date +%s%N)"
+      supervisor_pid_field="$launch_id"
       dry_run_field="true"
     else
       resolved_args="-mcpserver -mcpserverhost $VICE_BROKER_MCP_HOST -mcpserverport $port"
@@ -434,6 +588,7 @@ process_requests() {
       spawned_pid=$!
       disown "$spawned_pid" 2>/dev/null || true
       supervisor_pid_field="$spawned_pid"
+      launch_id="$(date +%s%N)"
       dry_run_field="false"
       echo "vice-broker: spawned supervisor for port $port (pid $spawned_pid), request $id"
     fi
@@ -447,6 +602,7 @@ process_requests() {
   "epoch_file": "$(json_escape "$epoch_file")",
   "supervisor_dir": "$(json_escape "$dir")",
   "supervisor_pid": $supervisor_pid_field,
+  "launched_at": $launch_id,
   "granted_at": "$now",
   "dry_run": $dry_run_field
 }
@@ -455,17 +611,56 @@ JSON
     write_json_atomic "$GRANTS_DIR/$id.json" "$grant_content"
     rm -f "$req_file"
     echo "vice-broker: granted request $id -> port $port"
-  done < <(list_request_ids)
+  done
 }
 
-# For each grants/<id>.json whose leases/<id> is absent: teardown -- verify
-# the recorded supervisor pid's `ps -o args=` output names $SUPERVISOR_SCRIPT
-# before signalling it (refusing loudly and skipping when it does not,
-# mirroring vice-pool.sh's own cmd_stop), then remove the grant. Reads each
-# lease's existence ONCE per grant and acts on that snapshot, never
-# re-checking mid-action (T-01.2-12).
-process_teardowns() {
-  local f id supervisor_pid args
+# The SINGLE implementation both triggers below converge on (must_haves C7):
+# a released lease (missing) and a stale lease (present past TTL, converted
+# to missing by the caller just before this call -- see sweep_grants() below)
+# reach IDENTICAL code here, differing only in the reason string logged.
+# Reads the grant's recorded supervisor pid ONCE, verifies identity via
+# `ps -o args=` before ever signalling (mirrors vice-pool.sh's own
+# cmd_stop), and removes the grant on BOTH the matched-and-signalled path
+# and the refused-mismatch path -- a stale entry that cannot be killed must
+# not wedge the protocol forever, and the refusal is already logged loudly.
+# $1 = id, $2 = reason (e.g. "released", or "swept (stale 42s, ttl 180s)").
+teardown() {
+  local id="$1" reason="$2"
+  local f="$GRANTS_DIR/$id.json"
+  [ -e "$f" ] || return 0
+  local supervisor_pid args
+  supervisor_pid="$(grep -o '"supervisor_pid": *\(null\|[0-9]\+\)' "$f" 2>/dev/null | sed 's/.*: *//' || true)"
+  if [ -n "$supervisor_pid" ] && [ "$supervisor_pid" != "null" ]; then
+    args="$(ps -o args= -p "$supervisor_pid" 2>/dev/null || true)"
+    case "$args" in
+      *"$SUPERVISOR_SCRIPT"*)
+        kill -TERM "$supervisor_pid" 2>/dev/null || true
+        ;;
+      *)
+        if [ -n "$args" ]; then
+          echo "vice-broker: refusing to signal pid $supervisor_pid for $id -- ps reports \"$args\", which does not match $SUPERVISOR_SCRIPT (possible pid reuse)" >&2
+        fi
+        ;;
+    esac
+  fi
+  # Removed UNCONDITIONALLY (matched-kill or refused-mismatch alike): this IS
+  # the kill-never-recycle structural guarantee (task 2), not an
+  # optimisation -- the only way an instance becomes grantable again is a
+  # fresh launch recorded by process_requests() above, never a reset of this
+  # entry.
+  rm -f "$f"
+  echo "vice-broker: $id -- $reason"
+}
+
+# One pass over every live grant: lease absent -> tear down as "released";
+# lease present but past VICE_BROKER_TTL_S -> the lease itself is removed
+# FIRST (converting stale-but-present into missing), THEN the exact same
+# tear-down function runs -- this conversion is what makes "exactly one
+# tear-down path" true rather than merely asserted (RESEARCH.md Pattern 2,
+# implemented literally). Reads each lease's existence/mtime ONCE per grant
+# and acts on that snapshot, never re-checking mid-action (T-01.2-12).
+sweep_grants() {
+  local f id lease age
   [ -d "$GRANTS_DIR" ] || return 0
   for f in "$GRANTS_DIR"/*.json; do
     [ -e "$f" ] || continue
@@ -473,45 +668,83 @@ process_teardowns() {
     if ! is_valid_request_id "$id"; then
       continue
     fi
-    if [ -e "$LEASES_DIR/$id" ]; then
-      continue # lease still held -- nothing to tear down this pass
+    lease="$LEASES_DIR/$id"
+    if [ ! -e "$lease" ]; then
+      teardown "$id" "released"
+    elif age="$(lease_is_stale "$lease" "$VICE_BROKER_TTL_S")"; then
+      rm -f "$lease"
+      teardown "$id" "swept (stale ${age}s, ttl ${VICE_BROKER_TTL_S}s)"
     fi
-    supervisor_pid="$(grep -o '"supervisor_pid": *\(null\|[0-9]\+\)' "$f" 2>/dev/null | sed 's/.*: *//')"
-    if [ -n "$supervisor_pid" ] && [ "$supervisor_pid" != "null" ]; then
-      args="$(ps -o args= -p "$supervisor_pid" 2>/dev/null || true)"
-      case "$args" in
-        *"$SUPERVISOR_SCRIPT"*)
-          echo "vice-broker: tearing down $id -- stopping supervisor pid $supervisor_pid"
-          kill -TERM "$supervisor_pid" 2>/dev/null || true
-          ;;
-        *)
-          if [ -n "$args" ]; then
-            echo "vice-broker: refusing to signal pid $supervisor_pid for $id -- ps reports \"$args\", which does not match $SUPERVISOR_SCRIPT (possible pid reuse)" >&2
-          fi
-          ;;
-      esac
-    fi
-    rm -f "$f"
-    echo "vice-broker: removed grant $id (lease released)"
   done
 }
 
-# One pass, in this fixed order: write broker.json; grant every well-formed
-# pending request; tear down every grant whose lease is gone. Each step reads
-# its own facts once and acts on that snapshot -- the long-lived loop that
-# repeats this indefinitely is plan 02's job.
+# One pass, in this fixed order: grant every well-formed pending request;
+# tear down every grant whose lease is gone or stale; rebuild
+# broker-instances.json as a projection of whatever grants remain. Each step
+# reads its own facts once and acts on that snapshot. write_broker_json() is
+# NOT called here -- it is the caller's job (cmd_start), since started_at
+# must stay fixed across every pass of one daemon lifetime, not be
+# rewritten by broker_once() itself.
 broker_once() {
-  write_broker_json
   process_requests
-  process_teardowns
+  sweep_grants
+  write_instances
 }
 
+# Runs as a real, long-lived daemon (must_haves C1): writes broker.json once
+# with a FIXED started_at, then loops forever refreshing heartbeat_at,
+# running one broker_once() pass, and sleeping VICE_BROKER_POLL_MS -- with
+# the same consecutive-failure backoff shape vice-supervisor.sh's own
+# respawn loop already uses, so a transient filesystem error slows the loop
+# rather than killing it. --once short-circuits to exactly one pass (the
+# seam every test in this file's own *.test.mjs drives).
 cmd_start() {
-  # This version always performs exactly one pass, whether or not --once was
-  # given -- there is no long-lived loop yet for --once to interrupt. The
-  # flag is accepted now so plan 02's loop can distinguish "run once" from
-  # "run forever" with no CLI change.
-  broker_once
+  local started_at
+  started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+  # Removes broker.json and exits 0, leaving any granted instances running
+  # UNTOUCHED: the broker stopping is a DIFFERENT event from a session
+  # ending, and killing live sessions' emulators on an operator's Ctrl-C
+  # would be a surprise no one asked for.
+  cleanup() {
+    rm -f "$BROKER_JSON"
+    echo "vice-broker: caught signal, removed $BROKER_JSON (granted instances left running)" >&2
+    exit 0
+  }
+  trap cleanup INT TERM
+
+  if [ "$ONCE" -eq 1 ]; then
+    write_broker_json "$started_at"
+    broker_once
+    return 0
+  fi
+
+  local consecutive_failures=0 backoff=1
+  while true; do
+    write_broker_json "$started_at"
+    if broker_once; then
+      consecutive_failures=0
+      backoff=1
+    else
+      consecutive_failures=$((consecutive_failures + 1))
+      echo "vice-broker: pass failed ($consecutive_failures consecutive) -- backing off ${backoff}s" >&2
+      sleep "$backoff"
+      backoff=$((backoff * 2))
+      [ "$backoff" -gt 30 ] && backoff=30
+      continue
+    fi
+    sleep_ms "$VICE_BROKER_POLL_MS"
+  done
+}
+
+# Sleeps a millisecond duration using only bash arithmetic (no bc/awk
+# assumed) -- GNU `sleep` accepts fractional seconds, and this script's
+# HOST-ONLY scope means GNU coreutils is the target, not BSD/macOS sleep.
+sleep_ms() {
+  local ms="$1" whole frac
+  whole=$((ms / 1000))
+  frac=$((ms % 1000))
+  sleep "${whole}.$(printf '%03d' "$frac")"
 }
 
 cmd_stop() {
@@ -525,10 +758,6 @@ cmd_stop() {
     echo "vice-broker: $BROKER_JSON has no pid recorded -- nothing to stop" >&2
     exit 0
   fi
-  if [ "$pid" = "$$" ]; then
-    echo "vice-broker: broker.json's pid is this one-shot invocation's own pid -- there is no long-lived process to stop yet (the persistent loop is a later addition)" >&2
-    exit 0
-  fi
   args="$(ps -o args= -p "$pid" 2>/dev/null || true)"
   case "$args" in
     *"vice-broker.sh"*)
@@ -536,7 +765,12 @@ cmd_stop() {
       kill -TERM "$pid" 2>/dev/null || true
       ;;
     *)
-      echo "vice-broker: refusing to signal pid $pid -- ps reports \"$args\", which does not match vice-broker.sh (possible pid reuse)" >&2
+      if [ -n "$args" ]; then
+        echo "vice-broker: refusing to signal pid $pid -- ps reports \"$args\", which does not match vice-broker.sh (possible pid reuse)" >&2
+      else
+        echo "vice-broker: pid $pid from $BROKER_JSON is not running -- nothing to stop (removing the stale broker.json)" >&2
+        rm -f "$BROKER_JSON"
+      fi
       ;;
   esac
 }
@@ -546,7 +780,19 @@ cmd_status() {
     echo "vice-broker: no $BROKER_JSON -- broker has never run" >&2
     exit 1
   fi
-  cat "$BROKER_JSON"
+  local pid hb_epoch now_epoch age
+  pid="$(grep -o '"pid": *[0-9]\+' "$BROKER_JSON" 2>/dev/null | head -1 | grep -o '[0-9]\+$' || true)"
+  hb_epoch="$(file_mtime_epoch "$BROKER_JSON")"
+  now_epoch="$(date -u +%s)"
+  age=$((now_epoch - hb_epoch))
+  echo "vice-broker: broker pid ${pid:-?}, heartbeat ${age}s ago"
+
+  local ids ports i
+  mapfile -t ids < <(read_instance_field id)
+  mapfile -t ports < <(read_instance_field port)
+  for ((i = 0; i < ${#ids[@]}; i++)); do
+    echo "vice-broker: instance ${ids[$i]}  port ${ports[$i]:-?}  state granted"
+  done
 }
 
 case "$SUBCOMMAND" in
