@@ -33,7 +33,7 @@ Milestone: v1.0 — Pipeline Proven (Phases 1–4 of 7 total)
 Phase: 01.2 — on demand broker and per session leasing
 Plan: Not started
 Status: Ready to plan
-Last activity: 2026-07-31 — Phase 01.1 complete, transitioned to Phase 01.2
+Last activity: 2026-07-31 — Completed quick task 260731-p8a: moved the vice MCP implementation to `.claude/mcp/vice/`
 
 Progress (v1.0): [████░░░░░░] 35% — 7/20 plans
 Progress (overall): [██░░░░░░░░] 20% — 7/35 plans
@@ -139,6 +139,7 @@ None yet.
 | 260730-ryz | `vice-session/SKILL.md` rewritten as a usage-only guide; every internal mechanic relocated to a new `INTERNALS.md` maintainer doc — **that doc was subsequently deleted in 260730-u9w (`61fa835`); do not recreate it** | 2026-07-30 | 6341df6 | [260730-ryz-rewrite-vice-session-skill-md-as-usage-o](./quick/260730-ryz-rewrite-vice-session-skill-md-as-usage-o/) |
 | 260730-u9w | Extract checkpoint-synchronization primitives into vice-session (vice-sync.mjs); durable module-leak node:test gate keeping module names out of SKILL.md; corrected the false self-sufficiency claim | 2026-07-30 | 9424395 | [260730-u9w-extract-the-checkpoint-synchronization-p](./quick/260730-u9w-extract-the-checkpoint-synchronization-p/) |
 | 260730-v6z | New `c64-ram-capture` skill holds layer B (reproducible 64K RAM capture + drift-tolerant comparison); `tools/recover.mjs` slimmed 874→422 lines to layer C only; 27-test suite moved beside the code it covers; both pending todos retired | 2026-07-30 | 4c0874d | [260730-v6z-create-the-c64-ram-capture-skill-layer-b](./quick/260730-v6z-create-the-c64-ram-capture-skill-layer-b/) |
+| 260731-p8a | Vice MCP implementation relocated out of the `vice-mcp-selector` skill into a non-skill `.claude/mcp/vice/` (18 files via `git mv`, history preserved); `.gitignore` gained `!.claude/mcp/`; skill dir reduced to `SKILL.md` alone — **`.mcp.json`'s `args[0]` changed; whether that re-prompts project-scope MCP approval is UNVERIFIED** | 2026-07-31 | bdd1040 | [260731-p8a-move-vice-mcp-scripts-out-of-the-vice-mc](./quick/260731-p8a-move-vice-mcp-scripts-out-of-the-vice-mc/) |
 
 ## Deferred Items
 

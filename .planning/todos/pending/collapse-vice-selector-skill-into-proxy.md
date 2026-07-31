@@ -19,7 +19,7 @@ state-reading calls stop the machine and `ping` reports state without stopping i
 the wrong way runs at a small fraction of full speed and **emits no error** — which is why this one
 genuinely cannot just be deleted.
 
-The seam already exists. `handleToolsList()` at `.claude/skills/vice-mcp-selector/scripts/vice-proxy.mjs:202`
+The seam already exists. `handleToolsList()` at `.claude/mcp/vice/vice-proxy.mjs:202`
 already maps every manifest tool to inject `_meta`, and each of the 63 manifest entries already
 carries a `description` string. Add a third read-time transform appending the contract to the
 descriptions of `execution_run` and `ping`.
@@ -64,21 +64,26 @@ Two things do break and must move in the same change:
   the skills elsewhere. That instruction is still *true* about the scripts — reword it to point at
   the implementation directory, don't just drop it.
 
-## Scoping constraint — do not delete the directory
+## Scoping constraint — RESOLVED by quick task 260731-p8a
 
-`.claude/skills/vice-mcp-selector/` is load-bearing implementation, not just a skill:
+This section originally warned that `.claude/skills/vice-mcp-selector/` could not be deleted
+because it held the load-bearing implementation. **That is no longer true.** Quick task
+`260731-p8a` (commits `b26970c`, `2fdb168`, `bdd1040`) relocated all 18 implementation files to
+`.claude/mcp/vice/` via `git mv`, and `.mcp.json` now points at
+`.claude/mcp/vice/vice-proxy.mjs`.
 
-- `.mcp.json:5` → `scripts/vice-proxy.mjs`
-- `tools/chip-state.mjs:32-34` imports `vice.mjs`, `vice-pool.mjs`, `vice-sync.mjs`
-- `.gitignore:78-80` references its `resources/`
-- `tools/README.md` links into it in at least four places
+`.claude/skills/vice-mcp-selector/` now holds `SKILL.md` and nothing else. Deleting it is
+therefore a plain `git rm` of one file plus the reference cleanup listed above — no implementation
+moves left to untangle.
 
-Removing `SKILL.md` is what un-declares the skill. **Relocating the scripts is a separate decision
-and should not be bundled in** — changing `.mcp.json`'s `args[0]` alters the server definition, and
-whether that re-triggers project-scope MCP approval is unverified. The test at
-`vice-mcp-selector-docs.test.mjs:96-98` reasons about approval invalidation for a changing `url`;
-whether an `args` path change behaves the same way is exactly the kind of thing that needs checking
-before it is assumed. Keeping the scripts in place costs nothing and risks nothing.
+Two things that came out of that move and still bear on this todo:
+
+- **Unverified:** whether the changed `.mcp.json` `args[0]` re-triggers project-scope MCP
+  approval. Observe it on the next fresh session; do not design around it either way.
+- `skill-docs.test.mjs` now lives in `.claude/mcp/vice/` while the `SKILL.md` it guards lives in
+  `.claude/skills/vice-mcp-selector/` — the gate spans two trees. Its header carries a note saying
+  the gate should be retired together with that `SKILL.md`. **Retiring that gate is part of this
+  todo**, not a separate one.
 
 ## Done when
 
