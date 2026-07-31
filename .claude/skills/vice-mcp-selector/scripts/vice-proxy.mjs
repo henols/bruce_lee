@@ -132,6 +132,28 @@ const OUTPUT_CHAR_CAP = (() => {
   return Number.isFinite(n) && n > 0 ? n : 500000;
 })();
 
+// The synthetic continuation tool (task 3, decision D-E): served entirely
+// inside this proxy, NEVER forwarded to the host, and advertised in every
+// tools/list response exactly like a real tool so an agent can discover it
+// the same way it discovers everything else.
+const RESULT_CONTINUE_TOOL = {
+  name: "vice_result_continue",
+  description:
+    "Retrieve the next chunk of an oversized tools/call result that vice-proxy split across a " +
+    "continuation sequence. Served entirely inside this proxy -- never forwarded to the host VICE " +
+    "MCP server, and has no counterpart there.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      token: {
+        type: "string",
+        description: "the continuation token named in the previous chunk's trailing marker",
+      },
+    },
+    required: ["token"],
+  },
+};
+
 function manifestPath() {
   return process.env.VICE_TOOLS_MANIFEST
     ? resolve(process.env.VICE_TOOLS_MANIFEST)
@@ -182,7 +204,7 @@ function handleToolsList() {
   //      tool, not a curated subset -- the host's tool set is not this
   //      repo's to enumerate.
   const manifestTools = readManifestTools().filter((t) => !DENY_LIST.includes(t.name));
-  const tools = manifestTools.map((t) => ({
+  const tools = [...manifestTools, RESULT_CONTINUE_TOOL].map((t) => ({
     ...t,
     _meta: { ...(t._meta || {}), "anthropic/maxResultSizeChars": OUTPUT_CHAR_CAP },
   }));
@@ -271,12 +293,124 @@ function isErrorText(text) {
   return { content: [{ type: "text", text }], isError: true };
 }
 
+// ------------------------------------------------------- oversized results
+//
+// Decision D-E: the `_meta["anthropic/maxResultSizeChars"]` declaration
+// above raises the real limit far past the 25,000-token default, but a
+// second, proxy-side cap catches whatever still overruns it (a 64K RAM read
+// in any plausible encoding, per ROADMAP criterion 5). Nothing on this path
+// may silently shorten a payload -- there is no truncation branch. An
+// oversized result is split and served in full across an explicit
+// continuation sequence via one synthetic tool (`vice_result_continue`,
+// declared above), so the caller can always reassemble the whole payload.
+//
+// The store is bounded so a long session cannot grow it without limit: at
+// most MAX_CONTINUATIONS outstanding sequences, oldest evicted first (a
+// `Map` preserves insertion order, so its first key is always the oldest).
+// An evicted or exhausted token fails loudly with advice to narrow the
+// original call rather than resume it -- there is nothing left to resume.
+const CONTINUATION_STORE = new Map(); // token -> { chunks: string[], nextIndex: number, totalChunks: number, totalChars: number }
+const MAX_CONTINUATIONS = 5;
+let continuationCounter = 0;
+
+function nextContinuationToken() {
+  continuationCounter += 1;
+  return `cont-${process.pid}-${Date.now()}-${continuationCounter}`;
+}
+
+function chunkMarkerText({ chunkIndex, totalChunks, totalChars, token }) {
+  if (chunkIndex >= totalChunks) {
+    return (
+      `vice-proxy: chunk ${chunkIndex} of ${totalChunks} (last chunk) -- ${totalChars} total characters ` +
+      `served across this continuation sequence.`
+    );
+  }
+  return (
+    `vice-proxy: chunk ${chunkIndex} of ${totalChunks} -- ${totalChars} total characters. Call ` +
+    `vice_result_continue with arguments {"token":"${token}"} to retrieve the next chunk.`
+  );
+}
+
+/**
+ * Wrap a successful call's serialised text, splitting it across a
+ * continuation sequence if (and only if) it exceeds OUTPUT_CHAR_CAP. Under
+ * the cap, behaves exactly as an unchunked result always has: a single
+ * `content` item, nothing else appended. Over the cap, the FIRST content
+ * item is the pure payload chunk -- byte-for-byte, no marker text mixed in,
+ * so reassembly is a plain concatenation -- and a SECOND content item
+ * carries the marker, naming the exact next call to make.
+ */
+function wrapPossiblyChunked(text) {
+  if (text.length <= OUTPUT_CHAR_CAP) {
+    return { content: [{ type: "text", text }], isError: false };
+  }
+
+  const totalChars = text.length;
+  const pieces = [];
+  for (let i = 0; i < text.length; i += OUTPUT_CHAR_CAP) {
+    pieces.push(text.slice(i, i + OUTPUT_CHAR_CAP));
+  }
+  const totalChunks = pieces.length;
+  const [first, ...remaining] = pieces;
+
+  const token = nextContinuationToken();
+  while (CONTINUATION_STORE.size >= MAX_CONTINUATIONS) {
+    const oldestToken = CONTINUATION_STORE.keys().next().value;
+    CONTINUATION_STORE.delete(oldestToken);
+  }
+  CONTINUATION_STORE.set(token, { chunks: remaining, nextIndex: 2, totalChunks, totalChars });
+
+  return {
+    content: [
+      { type: "text", text: first },
+      { type: "text", text: chunkMarkerText({ chunkIndex: 1, totalChunks, totalChars, token }) },
+    ],
+    isError: false,
+  };
+}
+
+/** Handles `vice_result_continue` -- served entirely inside this proxy;
+ * NEVER reaches `call()` or the network. */
+function handleResultContinue(args) {
+  const token = args && typeof args.token === "string" ? args.token : null;
+  if (!token || !CONTINUATION_STORE.has(token)) {
+    return isErrorText(
+      `vice-proxy: continuation token "${token}" is unknown or has already expired. Re-issue the ` +
+        `original tools/call with a narrower range instead of resuming.`
+    );
+  }
+  const entry = CONTINUATION_STORE.get(token);
+  const chunk = entry.chunks.shift();
+  const chunkIndex = entry.nextIndex;
+  entry.nextIndex += 1;
+  const isLast = entry.chunks.length === 0;
+  if (isLast) {
+    CONTINUATION_STORE.delete(token);
+  }
+  return {
+    content: [
+      { type: "text", text: chunk },
+      {
+        type: "text",
+        text: chunkMarkerText({ chunkIndex, totalChunks: entry.totalChunks, totalChars: entry.totalChars, token }),
+      },
+    ],
+    isError: false,
+  };
+}
+
 async function handleToolsCall(params) {
   const name = params && params.name;
   if (!name || typeof name !== "string") {
     throw new ProtocolError(-32602, "tools/call requires params.name to be a non-empty string");
   }
   const args = params && typeof params.arguments === "object" && params.arguments !== null ? params.arguments : {};
+
+  // The synthetic continuation tool: entirely a proxy-local concern, served
+  // before any deny-list or epoch logic and NEVER forwarded to the host.
+  if (name === "vice_result_continue") {
+    return handleResultContinue(args);
+  }
 
   // Layer 1: call-time deny-list refusal, before any forwarding logic and
   // before any network attempt. Independent from handleToolsList()'s
@@ -327,7 +461,7 @@ async function handleToolsCall(params) {
   }
 
   const text = typeof payload === "string" ? payload : JSON.stringify(payload);
-  return { content: [{ type: "text", text }], isError: false };
+  return wrapPossiblyChunked(text);
 }
 
 // ---------------------------------------------------------- message dispatch
