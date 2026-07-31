@@ -7,21 +7,25 @@
 // STATE.md HARD BLOCKER history for why that property matters here
 // specifically.
 //
-// Coverage note for plan 01.1-03 (never-throw hardening task): NEITHER test
-// below directly triggers `process.on('uncaughtException', ...)` or an
-// EPIPE on `process.stdout`'s `'error'` listener -- both handlers are
-// installed in vice-proxy.mjs and exercised only incidentally (by staying
-// silent) in this file. Plan 01.1-03 task 1 is where dedicated tests for
-// those two handlers land; this comment exists so that work EXTENDS this
-// file rather than duplicating its harness.
+// Coverage note for plan 01.1-03 (never-throw hardening task): the two
+// tracer-era tests immediately below do NOT directly trigger
+// `process.on('uncaughtException', ...)` or an EPIPE on `process.stdout`'s
+// `'error'` listener -- both handlers are installed in vice-proxy.mjs and
+// exercised only incidentally (by staying silent) here. Dedicated coverage
+// for those two handlers, plus the full JSON-RPC error-code matrix and the
+// never-cache-a-negative-result property, lives in the "never-throw"/
+// "never-cache" tests further down this file (plan 01.1-03 task 1) -- this
+// section EXTENDS the harness rather than duplicating it.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { hostPath } from "../../devcontainer-host-path/scripts/hostpath.mjs";
+import { repoRoot } from "../../vice-session/scripts/repo-root.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PROXY_PATH = join(HERE, "vice-proxy.mjs");
@@ -202,9 +206,17 @@ test("tracer: one real tool call round-trips end to end", async () => {
     const payload = JSON.parse(callResp.result.content[0].text);
     assert.equal(payload.version, "3.10", "the stand-in server's own payload must round-trip back out");
 
+    // Two tools/call requests reach the stand-in server, not one: plan
+    // 01.1-03's pre-flight liveness probe (probeInstance()) does its own
+    // vice_ping round trip BEFORE the real forwarded call -- see that
+    // plan's SUMMARY for the coverage-affecting change this represents.
     const toolCallsSeen = requests.filter((r) => r && r.method === "tools/call");
-    assert.equal(toolCallsSeen.length, 1, "the stand-in server must have received exactly one tools/call");
-    assert.equal(toolCallsSeen[0].params.name, "vice_ping");
+    assert.equal(
+      toolCallsSeen.length,
+      2,
+      "the stand-in server must have received the liveness probe's ping plus the one real forwarded tools/call"
+    );
+    assert.ok(toolCallsSeen.every((r) => r.params.name === "vice_ping"));
 
     // 5. The proxy process must still be alive and answering -- this is the
     //    whole point of the never-throw discipline (finding 7: a dead stdio
@@ -512,15 +524,21 @@ test("epoch drift is reported loudly and not cached", async () => {
     await proxy.nextMessage();
 
     // Call 1: establishes the baseline (epoch 1) and forwards normally.
+    // Each SUCCESSFUL forwarded call now costs TWO "tools/call" requests at
+    // the stand-in server, not one: the pre-flight liveness probe's own
+    // vice_ping round trip, plus the real forwarded call (plan 01.1-03 task
+    // 2) -- a refused-before-forwarding call (call 2 below) still costs
+    // zero, since the epoch check runs BEFORE the probe.
     proxy.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
     const first = await proxy.nextMessage();
     assert.equal(first.result.isError, false);
-    assert.equal(requests.filter((r) => r && r.method === "tools/call").length, 1);
+    assert.equal(requests.filter((r) => r && r.method === "tools/call").length, 2);
 
     // Epoch changes underneath the proxy -- a restart happened.
     writeFileSync(epochFile, JSON.stringify({ epoch: 2, pid: 222, spawned_at: "2026-07-31T00:05:00.000Z" }), "utf8");
 
-    // Call 2: refused BEFORE forwarding -- no new request reaches the host.
+    // Call 2: refused BEFORE forwarding -- no new request reaches the host,
+    // and no probe fires either (the epoch check precedes the probe).
     proxy.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
     const second = await proxy.nextMessage();
     assert.equal(second.result.isError, true, "an epoch change must refuse the call");
@@ -528,15 +546,16 @@ test("epoch drift is reported loudly and not cached", async () => {
     assert.match(second.result.content[0].text, /2/);
     assert.equal(
       requests.filter((r) => r && r.method === "tools/call").length,
-      1,
-      "the drifting call must NOT have reached the stand-in server"
+      2,
+      "the drifting call must NOT have reached the stand-in server (no probe, no forward)"
     );
 
-    // Call 3: the re-baseline took effect -- forwards normally again.
+    // Call 3: the re-baseline took effect -- forwards normally again, at
+    // the cost of two more "tools/call" requests (probe + real).
     proxy.send({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
     const third = await proxy.nextMessage();
     assert.equal(third.result.isError, false, "the proxy must re-baseline, not cache the restart report");
-    assert.equal(requests.filter((r) => r && r.method === "tools/call").length, 2);
+    assert.equal(requests.filter((r) => r && r.method === "tools/call").length, 4);
   } finally {
     proxy.child.kill();
     await new Promise((resolve) => server.close(resolve));
@@ -576,7 +595,10 @@ test("a missing epoch file is not a restart", async () => {
     proxy.send({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
     const third = await proxy.nextMessage();
     assert.equal(third.result.isError, false, "absent -> present must not be reported as a restart");
-    assert.equal(requests.filter((r) => r && r.method === "tools/call").length, 3);
+    // Three successful forwarded calls, each costing two "tools/call"
+    // requests at the stand-in server (the pre-flight liveness probe's own
+    // vice_ping, plus the real forwarded call -- plan 01.1-03 task 2).
+    assert.equal(requests.filter((r) => r && r.method === "tools/call").length, 6);
   } finally {
     proxy.child.kill();
     await new Promise((resolve) => server.close(resolve));
@@ -591,12 +613,17 @@ test("a missing epoch file is not a restart", async () => {
 // -----------------------------------------------------------------------
 
 /**
- * A stand-in server that answers `initialize` normally and ANY `tools/call`
- * with the same fixed text payload -- unlike startStandInServer() above,
- * this one does not special-case a tool name, since this section drives
- * calls purely to exercise the size cap, not any particular tool's shape.
+ * A stand-in server that answers `initialize` normally, `vice_ping`
+ * specifically with a small, recognisable ping payload, and `targetTool`
+ * with the oversized `payloadText` fixture. `vice_ping` MUST be answered
+ * distinctly from `targetTool`: plan 01.1-03 task 2's pre-flight liveness
+ * probe always calls `vice_ping` before any real forwarded call, and if it
+ * received the same oversized non-JSON blob the target tool returns, it
+ * would fail probeInstance()'s "recognisable ping result" check and report
+ * the host unreachable -- short-circuiting every test in this section
+ * before the oversized-result logic is ever exercised.
  */
-function startBigPayloadServer(payloadText) {
+function startBigPayloadServer(payloadText, { targetTool = "vice_memory_read" } = {}) {
   const requests = [];
   const server = createServer((req, res) => {
     let body = "";
@@ -622,7 +649,14 @@ function startBigPayloadServer(payloadText) {
         );
         return;
       }
-      if (msg && msg.method === "tools/call") {
+      if (msg && msg.method === "tools/call" && msg.params && msg.params.name === "vice_ping") {
+        const pingPayload = { version: "3.10", machine: "C64SC", execution: "paused" };
+        const result = { content: [{ type: "text", text: JSON.stringify(pingPayload) }] };
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result }));
+        return;
+      }
+      if (msg && msg.method === "tools/call" && msg.params && msg.params.name === targetTool) {
         const result = { content: [{ type: "text", text: payloadText }] };
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result }));
@@ -658,7 +692,7 @@ test("an oversized result is recoverable in full across continuations", async ()
     });
     await proxy.nextMessage();
 
-    proxy.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
+    proxy.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "vice_memory_read", arguments: {} } });
     const first = await proxy.nextMessage();
     assert.equal(first.result.isError, false);
     assert.equal(first.result.content.length, 2, "an oversized result carries a chunk item plus a marker item");
@@ -688,10 +722,20 @@ test("an oversized result is recoverable in full across continuations", async ()
     assert.match(nextMarker, /\(last chunk\)/, "the sequence must terminate with a last-chunk marker");
 
     assert.equal(reassembled, bigPayload, "reassembly must equal the original payload BYTE FOR BYTE");
+    // Two "tools/call" requests reach the host, not one: the pre-flight
+    // liveness probe's own vice_ping round trip, plus the one real forwarded
+    // vice_memory_read call (plan 01.1-03 task 2) -- every continuation
+    // chunk after that is served entirely from the proxy's local store.
+    const toolCallsSeen = requests.filter((r) => r && r.method === "tools/call");
     assert.equal(
-      requests.filter((r) => r && r.method === "tools/call").length,
-      1,
-      "continuations must be served from the proxy's store, never re-forwarded -- exactly one host request total"
+      toolCallsSeen.length,
+      2,
+      "continuations must be served from the proxy's store, never re-forwarded -- exactly the probe plus one real host request"
+    );
+    assert.ok(toolCallsSeen.some((r) => r.params.name === "vice_ping"), "the liveness probe's own ping must have reached the host");
+    assert.ok(
+      toolCallsSeen.some((r) => r.params.name === "vice_memory_read"),
+      "the real oversized call must have reached the host exactly once"
     );
     assert.ok(
       !requests.some((r) => r && r.method === "tools/call" && r.params && r.params.name === "vice_result_continue"),
@@ -718,7 +762,7 @@ test("an exhausted continuation token fails loudly", async () => {
     });
     await proxy.nextMessage();
 
-    proxy.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
+    proxy.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "vice_memory_read", arguments: {} } });
     const first = await proxy.nextMessage();
     const tokenMatch = first.result.content[1].text.match(/"token":"([^"]+)"/);
     const token = tokenMatch[1];
@@ -785,6 +829,500 @@ test("tools/list declares the same cap it enforces", async () => {
       Array.isArray(continueTool.inputSchema.required) && continueTool.inputSchema.required.includes("token"),
       "vice_result_continue's inputSchema must require token"
     );
+  } finally {
+    proxy.child.kill();
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+// -----------------------------------------------------------------------
+// Plan 01.1-03 task 1: nothing can kill the proxy, and nothing it does may
+// cache a negative ("the host is down") result. Every hostile-input shape
+// gets a well-formed JSON-RPC response, never a crash and never silence
+// when the caller expected an answer.
+// -----------------------------------------------------------------------
+
+test("never-throw: malformed and hostile input is answered, not fatal", async () => {
+  const { server } = startStandInServer();
+  const port = await listen(server);
+  const proxy = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${port}/mcp` });
+
+  try {
+    proxy.send({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } },
+    });
+    await proxy.nextMessage();
+
+    // 1. Raw non-JSON text -- JSON-RPC parse error, id: null.
+    proxy.sendRaw("this is not { json at all");
+    const parseErr = await proxy.nextMessage();
+    assert.equal(parseErr.error && parseErr.error.code, -32700, "malformed JSON must yield -32700");
+    assert.equal(parseErr.id, null);
+    assert.equal(proxy.child.exitCode, null, "still alive after a malformed line");
+
+    // 2. Valid JSON that is not an object at all (a bare number) -- Invalid
+    //    Request. There is no id to trust, so this must still be ANSWERED
+    //    (never silently dropped as if it were a notification).
+    proxy.sendRaw(JSON.stringify(42));
+    const bareNumberErr = await proxy.nextMessage();
+    assert.equal(bareNumberErr.error && bareNumberErr.error.code, -32600, "a non-object JSON value must yield -32600");
+
+    // 3. A well-formed object with no "method" at all.
+    proxy.send({ jsonrpc: "2.0", id: 10, params: {} });
+    const noMethodErr = await proxy.nextMessage();
+    assert.equal(noMethodErr.error && noMethodErr.error.code, -32600, 'an object with no "method" must yield -32600');
+    assert.equal(noMethodErr.id, 10, "the id, when present, must still be echoed on an Invalid Request error");
+
+    // 4. An unknown (unimplemented) method name.
+    proxy.send({ jsonrpc: "2.0", id: 11, method: "something/unimplemented", params: {} });
+    const unknownErr = await proxy.nextMessage();
+    assert.equal(unknownErr.error && unknownErr.error.code, -32601, "an unrecognised method must yield -32601");
+
+    // 5. tools/call with params but no name.
+    proxy.send({ jsonrpc: "2.0", id: 12, method: "tools/call", params: { arguments: {} } });
+    const noNameErr = await proxy.nextMessage();
+    assert.equal(noNameErr.error && noNameErr.error.code, -32602, "tools/call with no params.name must yield -32602");
+
+    // 6. Finally: a genuinely valid tools/call, proving the process is
+    //    still fully functional after five consecutive hostile inputs.
+    proxy.send({ jsonrpc: "2.0", id: 13, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
+    const okResp = await proxy.nextMessage();
+    assert.equal(okResp.result.isError, false, "a valid call after five hostile inputs must still succeed");
+
+    assert.equal(proxy.child.exitCode, null, "the proxy must still be running throughout");
+    assert.equal(proxy.child.killed, false);
+  } finally {
+    proxy.child.kill();
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("never-throw: a notification draws no response", async () => {
+  const { server } = startStandInServer();
+  const port = await listen(server);
+  const proxy = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${port}/mcp` });
+
+  try {
+    proxy.send({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } },
+    });
+    await proxy.nextMessage();
+
+    // Two notification-shaped messages -- valid method, no `id` at all.
+    proxy.send({ jsonrpc: "2.0", method: "notifications/initialized" });
+    proxy.send({ jsonrpc: "2.0", method: "notifications/some-other-thing", params: { x: 1 } });
+
+    // A subsequent real request must still get exactly its own response,
+    // correlated by id -- proving neither notification ate it or produced a
+    // stray response of its own.
+    proxy.send({ jsonrpc: "2.0", id: 42, method: "tools/list", params: {} });
+    const listResp = await proxy.nextMessage();
+    assert.equal(listResp.id, 42, "the response after two notifications must be correlated to the real request's id");
+    assert.ok(Array.isArray(listResp.result.tools));
+
+    // Exactly two stdout messages total across this whole session: the
+    // initial initialize response and this tools/list response -- neither
+    // notification produced a line of its own.
+    assert.equal(proxy.messages.length, 2, "the two notifications must not have produced any stdout lines");
+  } finally {
+    proxy.child.kill();
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+/** Reserve a free TCP port and release it immediately, so a proxy can be
+ * pointed at "nothing listening here yet" before something real starts. */
+function reserveFreePort() {
+  return new Promise((resolvePort, reject) => {
+    const probe = createServer();
+    probe.on("error", reject);
+    probe.listen(0, "127.0.0.1", () => {
+      const { port } = probe.address();
+      probe.close(() => resolvePort(port));
+    });
+  });
+}
+
+test("never-cache: host down then up succeeds without a restart", async () => {
+  const port = await reserveFreePort();
+  // Nothing is listening on `port` yet -- the very first call must observe
+  // a refused connection, not a cached assumption from some earlier check.
+  const proxy = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${port}/mcp` });
+  let server;
+
+  try {
+    proxy.send({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } },
+    });
+    await proxy.nextMessage();
+
+    const pidBefore = proxy.child.pid;
+
+    // Call 1: nothing listening -- must come back as a well-formed
+    // isError:true RESULT (Pattern 2's two-category model: a failed tool
+    // call is still an answer, never a crash and never a JSON-RPC error
+    // object). Generous timeout: with no pre-flight probe yet in place this
+    // exhausts the full ~50s reconnect ladder before failing; once task 2's
+    // probe lands this same assertion resolves in about a second instead --
+    // either way it must eventually come back as isError:true.
+    proxy.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
+    const down = await proxy.nextMessage(65000);
+    assert.equal(down.result.isError, true, "a call against nothing listening must fail as isError:true, not crash");
+
+    // Now start the real stand-in server ON THE SAME PORT.
+    const standIn = startStandInServer();
+    server = standIn.server;
+    await new Promise((resolveListen, rejectListen) => {
+      server.listen(port, "127.0.0.1", resolveListen);
+      server.once("error", rejectListen);
+    });
+
+    // Call 2, same child process, no restart: must succeed now, proving the
+    // previous failure was never cached anywhere in the proxy.
+    proxy.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
+    const up = await proxy.nextMessage(15000);
+    assert.equal(up.result.isError, false, "the very next call on the SAME process must succeed once the host is up");
+
+    assert.equal(proxy.child.pid, pidBefore, "both calls must have gone through the same child process -- no restart");
+    assert.equal(proxy.child.exitCode, null);
+  } finally {
+    proxy.child.kill();
+    if (server) await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("never-throw: a broken stdout pipe does not kill the process", async () => {
+  const { server } = startStandInServer();
+  const port = await listen(server);
+  const proxy = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${port}/mcp` });
+
+  try {
+    proxy.send({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } },
+    });
+    await proxy.nextMessage();
+
+    // Destroy the PARENT's read end of the child's stdout pipe. On this
+    // platform/runtime this is expected to make the child's NEXT
+    // process.stdout.write() fail with EPIPE -- exactly the filed
+    // typescript-sdk#1564 failure class this task hardens against.
+    proxy.child.stdout.destroy();
+    await new Promise((r) => setTimeout(r, 200));
+
+    // Ask for something that would normally produce a response line. We can
+    // no longer read the response (the read end is destroyed), so the
+    // PRIMARY signal is process liveness, not stdout content.
+    proxy.sendRaw(JSON.stringify({ jsonrpc: "2.0", id: 99, method: "tools/list", params: {} }));
+    await new Promise((r) => setTimeout(r, 300));
+
+    assert.equal(proxy.child.exitCode, null, "a broken stdout pipe must not kill the process");
+    assert.equal(proxy.child.signalCode, null, "the process must not have been signalled");
+
+    // Belt-and-suspenders source assertion, per this task's own documented
+    // escape hatch: EPIPE-inducibility via destroy() can vary across
+    // Node/platform combinations, so this independently confirms the actual
+    // defensive code the plan requires is present, regardless of whether
+    // this particular runtime reproduced a real EPIPE just now. See
+    // 01.1-03-SUMMARY.md's coverage note for this substitution.
+    const source = readFileSync(PROXY_PATH, "utf8");
+    assert.match(
+      source,
+      /process\.stdout\.on\(\s*["']error["']/,
+      "vice-proxy.mjs must register an 'error' listener on process.stdout"
+    );
+  } finally {
+    proxy.child.kill();
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+// -----------------------------------------------------------------------
+// Plan 01.1-03 task 2: an unreachable emulator produces one of exactly three
+// distinct, evidence-carrying diagnoses within about a second -- never a
+// blocking wait on withReconnect()'s ~50s ladder, never a generic message
+// that sends the reader to the wrong fix.
+// -----------------------------------------------------------------------
+
+test("three states: each unreachable shape gets its own message and fix", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vice-proxy-3states-"));
+
+  // ---- Never started: refused, and no restart-epoch record exists at all. ----
+  const neverStartedEpochFile = join(dir, "never-written-epoch.json"); // deliberately never written
+  const refusedPort1 = await reserveFreePort();
+  const proxy1 = startProxy({
+    VICE_MCP_URL: `http://127.0.0.1:${refusedPort1}/mcp`,
+    VICE_EPOCH_FILE: neverStartedEpochFile,
+  });
+  let neverStartedText;
+  try {
+    proxy1.send({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } },
+    });
+    await proxy1.nextMessage();
+
+    const startedAt = Date.now();
+    proxy1.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
+    const resp = await proxy1.nextMessage(10000);
+    const elapsedMs = Date.now() - startedAt;
+
+    assert.equal(resp.result.isError, true, "an unreachable host must fail as isError:true");
+    neverStartedText = resp.result.content[0].text;
+    assert.match(neverStartedText, /never.*started/i, "the never-started shape must say the emulator was never started");
+    assert.ok(
+      elapsedMs < 10000,
+      `the never-started diagnosis must be fail-fast, not the ~50s reconnect ladder -- took ${elapsedMs}ms`
+    );
+  } finally {
+    proxy1.child.kill();
+  }
+
+  // ---- Dead or hung: refused, but a restart-epoch record DOES exist. ----
+  const deadOrHungEpochFile = join(dir, "epoch.json");
+  writeFileSync(deadOrHungEpochFile, JSON.stringify({ epoch: 5, pid: 4242, spawned_at: "2026-07-31T00:00:00.000Z" }), "utf8");
+  const refusedPort2 = await reserveFreePort();
+  const proxy2 = startProxy({
+    VICE_MCP_URL: `http://127.0.0.1:${refusedPort2}/mcp`,
+    VICE_EPOCH_FILE: deadOrHungEpochFile,
+  });
+  let deadOrHungText;
+  try {
+    proxy2.send({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } },
+    });
+    await proxy2.nextMessage();
+
+    proxy2.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
+    const resp = await proxy2.nextMessage(10000);
+    assert.equal(resp.result.isError, true);
+    deadOrHungText = resp.result.content[0].text;
+    assert.match(deadOrHungText, /dead or hung/i);
+    assert.match(deadOrHungText, /4242/, "the pid read from the epoch file must appear in the dead-or-hung message");
+  } finally {
+    proxy2.child.kill();
+  }
+
+  // ---- Alive, but the operation itself failed. ----
+  function startAliveButFailingServer() {
+    const requests = [];
+    const server = createServer((req, res) => {
+      let body = "";
+      req.setEncoding("utf8");
+      req.on("data", (c) => (body += c));
+      req.on("end", () => {
+        let msg;
+        try {
+          msg = JSON.parse(body);
+        } catch {
+          msg = null;
+        }
+        requests.push(msg);
+        if (msg && msg.method === "initialize") {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: msg.id,
+              result: { protocolVersion: "2024-11-05", capabilities: {}, serverInfo: { name: "stand-in", version: "0" } },
+            })
+          );
+          return;
+        }
+        if (msg && msg.method === "tools/call" && msg.params && msg.params.name === "vice_ping") {
+          const payload = { version: "3.10", machine: "C64SC", execution: "paused" };
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(
+            JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: JSON.stringify(payload) }] } })
+          );
+          return;
+        }
+        if (msg && msg.method === "tools/call") {
+          // Any OTHER tool call is rejected with a genuine JSON-RPC error --
+          // "reachable, but this particular request failed".
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: msg.id,
+              error: { code: -32000, message: "no such memory range mapped: $FFFF-$FFFF" },
+            })
+          );
+          return;
+        }
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({ jsonrpc: "2.0", id: msg && "id" in msg ? msg.id : null, error: { code: -32601, message: "unsupported" } })
+        );
+      });
+    });
+    return { server, requests };
+  }
+
+  const { server: aliveServer } = startAliveButFailingServer();
+  const alivePort = await listen(aliveServer);
+  const proxy3 = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${alivePort}/mcp` });
+  let aliveButFailedText;
+  try {
+    proxy3.send({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } },
+    });
+    await proxy3.nextMessage();
+
+    proxy3.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "vice_memory_read", arguments: {} } });
+    const resp = await proxy3.nextMessage(10000);
+    assert.equal(resp.result.isError, true);
+    aliveButFailedText = resp.result.content[0].text;
+    assert.match(
+      aliveButFailedText,
+      /no such memory range mapped: \$FFFF-\$FFFF/,
+      "the host's own error text must be relayed verbatim, not paraphrased"
+    );
+    assert.doesNotMatch(
+      aliveButFailedText,
+      /restart/i,
+      "the alive-but-failed message must NOT carry a host-restart instruction"
+    );
+  } finally {
+    proxy3.child.kill();
+    await new Promise((resolve) => aliveServer.close(resolve));
+  }
+
+  // ---- Cross-cutting assertions across all three shapes. ----
+  assert.notEqual(neverStartedText, deadOrHungText, "never-started and dead-or-hung messages must be pairwise distinct");
+  assert.notEqual(neverStartedText, aliveButFailedText, "never-started and alive-but-failed messages must be pairwise distinct");
+  assert.notEqual(deadOrHungText, aliveButFailedText, "dead-or-hung and alive-but-failed messages must be pairwise distinct");
+
+  for (const text of [neverStartedText, deadOrHungText, aliveButFailedText]) {
+    assert.match(text, /(^|\s)\/\S+/, "every unreachable-adjacent message must quote an absolute path");
+    assert.match(text, /only route/i, "every unreachable-adjacent message must state this is the only route");
+  }
+
+  rmSync(dir, { recursive: true, force: true });
+});
+
+// -----------------------------------------------------------------------
+// Plan 01.1-03 task 3: an absolute container path inside the workspace
+// reaches the host only in its translated host form; an absolute path
+// outside the workspace is refused before any forwarding; a non-path
+// argument (an address, a relative path, a plain number) passes through
+// byte-identical -- devcontainer-host-path itself is never modified by
+// this plan (verified separately, outside this file, via `git diff
+// --name-only -- .claude/skills/devcontainer-host-path`).
+// -----------------------------------------------------------------------
+
+test("path translation: container paths cannot reach the host", async () => {
+  const { server, requests } = startStandInServer();
+  const port = await listen(server);
+  const proxy = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${port}/mcp` });
+
+  try {
+    proxy.send({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } },
+    });
+    await proxy.nextMessage();
+
+    const root = repoRoot();
+    const containerPath = join(root, "CLAUDE.md"); // a real, stable, repo-relative file
+    const expectedHostPath = hostPath(containerPath);
+    assert.notEqual(
+      expectedHostPath,
+      containerPath,
+      "hostPath() must actually translate in this environment for this test to be meaningful"
+    );
+
+    // Translated case: a top-level path, one nested inside an object, and
+    // one nested inside an array, all in the SAME call.
+    proxy.send({
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tools/call",
+      params: {
+        name: "vice_ping",
+        arguments: {
+          path: containerPath,
+          nested: { inner: containerPath },
+          list: ["ok", containerPath],
+        },
+      },
+    });
+    const resp = await proxy.nextMessage();
+    assert.equal(resp.result.isError, false);
+
+    const forwarded = requests.find(
+      (r) => r && r.method === "tools/call" && r.params && r.params.arguments && Object.prototype.hasOwnProperty.call(r.params.arguments, "path")
+    );
+    assert.ok(forwarded, "the stand-in server must have received the forwarded call carrying the translated path");
+    assert.equal(forwarded.params.arguments.path, expectedHostPath, "a top-level path must be translated to hostPath(containerPath)");
+    assert.notEqual(forwarded.params.arguments.path, containerPath, "the container path must NOT reach the host untranslated");
+    assert.equal(forwarded.params.arguments.nested.inner, expectedHostPath, "a path nested inside an object must be translated");
+    assert.equal(forwarded.params.arguments.list[1], expectedHostPath, "a path nested inside an array must be translated");
+    assert.equal(forwarded.params.arguments.list[0], "ok", "a non-path element alongside a translated one is untouched");
+
+    // Out-of-workspace case: refused before the SENSITIVE path ever reaches
+    // the host. (The pre-flight liveness probe still runs -- it always
+    // does, for every non-deny-listed call -- so this asserts that no
+    // request carrying "/etc/passwd" appears, rather than a raw
+    // before/after request-count delta that the probe's own harmless ping
+    // traffic would spuriously fail.)
+    proxy.send({
+      jsonrpc: "2.0",
+      id: 3,
+      method: "tools/call",
+      params: { name: "vice_ping", arguments: { path: "/etc/passwd" } },
+    });
+    const refused = await proxy.nextMessage();
+    assert.equal(refused.result.isError, true, "an out-of-workspace absolute path must be refused");
+    assert.match(refused.result.content[0].text, /arguments\.path/, "the refusal must name the argument position");
+    assert.ok(
+      refused.result.content[0].text.includes(root),
+      "the refusal must name the workspace root"
+    );
+    assert.ok(
+      !requests.some((r) => r && r.method === "tools/call" && r.params && r.params.arguments && r.params.arguments.path === "/etc/passwd"),
+      "the refusal must happen before forwarding -- /etc/passwd must never reach the stand-in server"
+    );
+
+    // Pass-through case: a hex address, a relative path, and an integer all
+    // arrive at the host byte-identical -- the structural rule never
+    // touches a non-absolute-path string or a non-string value.
+    proxy.send({
+      jsonrpc: "2.0",
+      id: 4,
+      method: "tools/call",
+      params: { name: "vice_ping", arguments: { address: "$0400", relpath: "recovery/danish/dump.bin", count: 42 } },
+    });
+    const passthrough = await proxy.nextMessage();
+    assert.equal(passthrough.result.isError, false);
+    const lastForwarded = requests.find(
+      (r) => r && r.method === "tools/call" && r.params && r.params.arguments && r.params.arguments.address === "$0400"
+    );
+    assert.ok(lastForwarded, "the pass-through call must have reached the host");
+    assert.equal(lastForwarded.params.arguments.address, "$0400", "a hex-address-shaped string must not be touched");
+    assert.equal(lastForwarded.params.arguments.relpath, "recovery/danish/dump.bin", "a relative path must not be touched");
+    assert.equal(lastForwarded.params.arguments.count, 42, "a non-string value must not be touched");
   } finally {
     proxy.child.kill();
     await new Promise((resolve) => server.close(resolve));

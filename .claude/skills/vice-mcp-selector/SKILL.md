@@ -18,6 +18,16 @@ State-reading calls stop the machine, so write a wait loop as read →
 stopping the machine. A loop written this way runs the machine at full
 speed; one that doesn't drops to a small fraction of that.
 
+## Paths
+
+Pass absolute container paths to `mcp__vice__*` tools — the translation to
+host form happens automatically, before the call reaches the host. An
+absolute path outside this workspace is refused, with the reason and the
+argument's position named in the refusal. A relative path is forwarded as
+written and will not resolve on the host — it looks identical to a
+non-path argument (a tool name, a hex address) from where the translation
+happens, so it is never rewritten.
+
 ## Known hazards enforced in code, not by memory
 
 - `vice_disk_list` crashes the shared host MCP server. It is refused before

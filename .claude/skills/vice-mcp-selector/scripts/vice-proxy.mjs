@@ -16,6 +16,14 @@
 // this is the same cross-skill shape `c64-ram-capture/scripts/ram-capture.mjs`
 // already uses for `devcontainer-host-path`.
 import { call, activeInstance, DENY_LIST, readEpoch, beginSession, MachineRestartedError } from "../../vice-session/scripts/vice.mjs";
+// Same temporary cross-skill shape as the import above -- plan 01.1-04
+// relocates vice-probe.mjs alongside vice.mjs and rewrites this to a local
+// import. probeInstance() is the deliberately-fragile liveness check (see
+// that file's own header): one 1500ms-budget round trip, no retry, no
+// dependency on vice.mjs's resilient reconnect ladder.
+import { probeInstance } from "../../vice-session/scripts/vice-probe.mjs";
+import { repoRoot } from "../../vice-session/scripts/repo-root.mjs";
+import { hostPath, SET_ENV_HINT } from "../../devcontainer-host-path/scripts/hostpath.mjs";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
@@ -240,6 +248,18 @@ function handleToolsList() {
 //      evidence-carrying error naming both epoch values, then adopts the new
 //      value as the baseline so the SESSION stays usable -- a restart report
 //      is never cached, per criterion 6.
+// NEVER-CACHE-A-NEGATIVE-RESULT INVARIANT (plan 01.1-03 task 1, criterion 6):
+// nothing below this line may memoise "the host is down" as a fact that
+// outlives a single tools/call. There is no cached probe verdict, no sticky
+// "last known unreachable" flag, and no early-return short-circuit keyed off
+// a PREVIOUS failure -- every forwarded tools/call re-evaluates reachability
+// from scratch (the epoch check below reads the file fresh every time; the
+// liveness probe added in task 2 does its own fresh network round trip every
+// time; task 3's translation runs fresh every time). This is deliberate and
+// easy to break by a later, performance-minded edit ("let's skip the probe
+// if we just failed one 200ms ago") -- don't. A cached negative here is
+// exactly the "quiet wrong answer" failure class this codebase rejects
+// elsewhere (MachineRestartedError, the epoch re-check itself).
 let viceSession = null; // beginSession()'s return value, set lazily on the first forwarded call
 let epochBaseline = null; // the rolling comparison point; updated on every re-baseline
 
@@ -291,6 +311,175 @@ function checkEpochAndRebaseline(when) {
 
 function isErrorText(text) {
   return { content: [{ type: "text", text }], isError: true };
+}
+
+// --------------------------------------------------- unreachable diagnostics
+//
+// Plan 01.1-03 task 2 / ROADMAP criterion 7. Blocking on withReconnect()'s
+// ~50s ladder turns a clear diagnosis into an opaque tool timeout, so every
+// forwarded tools/call gets a pre-flight `probeInstance()` check FIRST (one
+// 1500ms-budget round trip, no retry -- see vice-probe.mjs's own header for
+// why reusing the resilient ladder here would be wrong). When the probe
+// reports the emulator unreachable, this classifies the failure into exactly
+// one of three states, each with its own message and its own fix, each
+// quoting an absolute host path, each closing off the "just run the
+// transport module from a shell instead" workaround explicitly.
+//
+// This MCP tool surface is the only route to the emulator -- never named
+// together with a CLI verb here, since plan 01.1-04 installs a durable gate
+// matching exactly that pattern in documentation.
+const ONLY_ROUTE_NOTE =
+  "This MCP tool surface is the only route to the emulator. The correct action is to stop and ask " +
+  "the human to start it on the host -- falling back to a direct shell invocation of the underlying " +
+  "transport is not an available workaround.";
+
+/** The absolute path of the command a human should run on the HOST to
+ * start/restart the emulator -- computed via hostPath() over the deployed
+ * supervisor's container path, degrading to the container path plus
+ * SET_ENV_HINT exactly as vice-session's hostLaunchInstructions() does, so a
+ * translation failure still yields something to act on rather than an empty
+ * message. Recomputed fresh every call -- never cached (see the
+ * never-cache-a-negative-result invariant above ensureViceSession()). */
+function supervisorHostPath() {
+  const target = join(repoRoot(), "tools", "vice-supervisor.sh");
+  try {
+    return hostPath(target);
+  } catch {
+    return `${target}\n  (host path could not be determined -- ${SET_ENV_HINT})`;
+  }
+}
+
+// A causeCode-shaped reason string (e.g. "ECONNREFUSED", "ECONNRESET") is
+// exactly what probeInstance() returns for a connection actively refused --
+// see its own fallback `causeCode || e.message`. A timeout, an HTTP error
+// status, or "didn't decode to a recognisable ping" all produce prose
+// instead, never a bare all-caps E-code, which is what keeps this predicate
+// precise rather than a loose substring guess.
+function isConnectionRefusedReason(reason) {
+  return typeof reason === "string" && /^E[A-Z]+$/.test(reason);
+}
+
+function neverStartedMessage(probe) {
+  return (
+    `vice-proxy: the host VICE MCP server has never been started at this configured path -- no ` +
+    `restart-epoch record exists, and the connection was refused (${probe.reason}). Start it on the host with:\n` +
+    `  ${supervisorHostPath()}\n` +
+    ONLY_ROUTE_NOTE
+  );
+}
+
+function deadOrHungMessage(probe, epoch) {
+  const pidNote =
+    epoch && epoch.present && epoch.pid != null
+      ? ` (pid ${epoch.pid}${epoch.spawned_at ? `, spawned_at ${epoch.spawned_at}` : ""})`
+      : "";
+  return (
+    `vice-proxy: the host VICE MCP server appears to be dead or hung${pidNote} -- ${probe.reason}. ` +
+    `Restart it on the host with:\n` +
+    `  ${supervisorHostPath()}\n` +
+    ONLY_ROUTE_NOTE
+  );
+}
+
+/** Reached only when the pre-flight probe found the host alive but the
+ * forwarded call itself failed (a transport error the retry ladder gave up
+ * on, or a genuine RPC error). Relays the host's own message VERBATIM --
+ * never paraphrased -- and deliberately carries no restart instruction,
+ * since restarting a live, correctly-answering host is the wrong fix for a
+ * rejected tool call. Still names an absolute path and the only-route note
+ * (both required of every unreachable-adjacent message this proxy emits),
+ * worded so as never to suggest the action a restart message would. */
+function aliveButFailedMessage(errMessage) {
+  const hostRef = supervisorHostPath().split("\n")[0];
+  return (
+    `vice-proxy: the host VICE MCP server (reachable via the host-side launcher at ${hostRef}) rejected ` +
+    `this call: ${errMessage} ${ONLY_ROUTE_NOTE}`
+  );
+}
+
+// ------------------------------------------------------------ path rewriting
+//
+// Decision D-G (plan 01.1-03 task 3 / criterion 9): container->host path
+// translation moves from every caller's own discipline into this one seam,
+// which sees every forwarded call. The structural rule: any string argument
+// value beginning with "/" is an absolute filesystem path. One that resolves
+// inside the mounted workspace is rewritten to its host form via
+// hostPath() -- the host emulator can only ever be handed a HOST path,
+// since it runs on the host, not in this container. One that resolves
+// outside the workspace is refused outright, before any forwarding, because
+// a container path is never correct on the host: forwarding it untouched
+// can only produce a wrong answer with no error, which is exactly the
+// silent-failure class this criterion exists to eliminate.
+//
+// STATED RESIDUAL, deliberately not papered over: a RELATIVE path string
+// (no leading "/", e.g. "recovery/danish/dump.bin") is left byte-identical.
+// A relative-looking string is indistinguishable from a non-path argument
+// (a tool name, a hex address like "$0400", an arbitrary label) without
+// guessing, and rewriting a non-path argument would be a strictly worse
+// failure than leaving a relative path unresolved on the host. SKILL.md's
+// "Paths" section tells callers to pass absolute container paths for
+// exactly this reason.
+const PATH_REWRITE_MAX_DEPTH = 10; // bounded so pathological nesting is left alone rather than looping forever
+
+class PathOutOfWorkspaceError extends Error {}
+class PathTranslationError extends Error {}
+
+function isInsideWorkspace(absPath, root) {
+  return absPath === root || absPath.startsWith(root.endsWith("/") ? root : root + "/");
+}
+
+/**
+ * Recursively walk `value`, applying decision D-G's structural rule to
+ * every string found. Objects and arrays are walked (bounded by
+ * PATH_REWRITE_MAX_DEPTH); numbers, booleans, null, and non-absolute
+ * strings are returned byte-identical. `argPath` accumulates a
+ * human-readable position (e.g. "arguments.path" or "arguments.files[2]")
+ * used in a refusal message so the caller can find exactly which argument
+ * was the problem.
+ */
+function rewritePathsIn(value, argPath, root, depth) {
+  if (depth > PATH_REWRITE_MAX_DEPTH) return value;
+  if (typeof value === "string") {
+    if (!value.startsWith("/")) return value; // the stated residual: relative strings untouched
+    if (!isInsideWorkspace(value, root)) {
+      throw new PathOutOfWorkspaceError(
+        `vice-proxy: ${argPath} is an absolute path (${value}) outside the mounted workspace (${root}). ` +
+          `The host emulator can only be handed paths that live inside the mounted workspace -- move the ` +
+          `artifact inside the workspace and call again.`
+      );
+    }
+    try {
+      return hostPath(value);
+    } catch (e) {
+      throw new PathTranslationError(
+        `vice-proxy: ${argPath} (${value}) could not be translated to a host path: ${e.message}\n  ${SET_ENV_HINT}`
+      );
+    }
+  }
+  if (Array.isArray(value)) {
+    return value.map((v, i) => rewritePathsIn(v, `${argPath}[${i}]`, root, depth + 1));
+  }
+  if (value && typeof value === "object") {
+    const out = {};
+    for (const [k, v] of Object.entries(value)) {
+      out[k] = rewritePathsIn(v, `${argPath}.${k}`, root, depth + 1);
+    }
+    return out;
+  }
+  return value; // numbers, booleans, null -- byte-identical, never touched
+}
+
+/** Rewrite every absolute-in-workspace path inside `args` to its host form.
+ * Throws PathOutOfWorkspaceError / PathTranslationError on the two refusal
+ * cases above; the caller (handleToolsCall) converts either into an
+ * isError:true result rather than letting it escape. */
+function rewriteArguments(args) {
+  const root = repoRoot();
+  const out = {};
+  for (const [k, v] of Object.entries(args || {})) {
+    out[k] = rewritePathsIn(v, `arguments.${k}`, root, 1);
+  }
+  return out;
 }
 
 // ------------------------------------------------------- oversized results
@@ -431,9 +620,44 @@ async function handleToolsCall(params) {
     return isErrorText(beforeDrift);
   }
 
+  // Pre-flight liveness probe (task 2 / criterion 7), ordered AFTER the
+  // deny-list refusal and the epoch comparison above (a refused tool and a
+  // restarted machine both need answering without any network activity at
+  // all) and BEFORE delegating to call() -- see vice-probe.mjs's header for
+  // why this is a single 1500ms-budget round trip with no retry, never
+  // wrapped in withReconnect()'s ladder. One call site, not inside a loop.
+  const { url, port } = activeInstance();
+  const probe = await probeInstance({ url, port });
+  if (!probe.alive) {
+    const epoch = currentEpoch();
+    if (isConnectionRefusedReason(probe.reason) && !epoch.present) {
+      return isErrorText(neverStartedMessage(probe));
+    }
+    // Every other unreachable shape -- refused-with-an-epoch-on-record,
+    // timed out, or something answered but didn't look like VICE -- is
+    // "dead or hung"; probe.reason itself says which, verbatim.
+    return isErrorText(deadOrHungMessage(probe, epoch));
+  }
+
+  // Path translation at the seam (task 3 / decision D-G / criterion 9),
+  // ordered after the deny-list refusal, the epoch comparison and the
+  // liveness probe above, and before delegating to call(). A refusal here
+  // (out-of-workspace absolute path, or a translation failure) is returned
+  // exactly like every other tools/call outcome: a well-formed isError:true
+  // result, never a throw.
+  let translatedArgs;
+  try {
+    translatedArgs = rewriteArguments(args);
+  } catch (e) {
+    if (e instanceof PathOutOfWorkspaceError || e instanceof PathTranslationError) {
+      return isErrorText(e.message);
+    }
+    throw e; // unexpected -- let the never-throw dispatch one layer up handle it
+  }
+
   let payload;
   try {
-    payload = await call(name, args);
+    payload = await call(name, translatedArgs);
   } catch (e) {
     if (e instanceof MachineRestartedError) {
       // call()'s own post-reconnect fast path detected this first -- convert
@@ -450,7 +674,9 @@ async function handleToolsCall(params) {
     // NEVER rethrow past this point -- a tool-execution failure (transport
     // error, a rejected RPC) is a normal, expected outcome for this method
     // and must come back as a well-formed result, not crash the read loop.
-    return isErrorText(e && e.message ? e.message : String(e));
+    // The probe above already proved the host alive, so this is the "alive
+    // but the operation failed" state -- relay verbatim, no restart advice.
+    return isErrorText(aliveButFailedMessage(e && e.message ? e.message : String(e)));
   }
 
   const afterDrift = checkEpochAndRebaseline("after the call returned");
@@ -465,11 +691,29 @@ async function handleToolsCall(params) {
 }
 
 // ---------------------------------------------------------- message dispatch
+//
+// Structural validation runs BEFORE the hasId/method dispatch below, and is
+// deliberately stricter than "does this look like a notification": a value
+// that parsed as valid JSON but is not an object at all (a bare number, a
+// string, an array), or an object with a missing/non-string "method", is not
+// a well-formed JSON-RPC message of EITHER kind (request or notification) --
+// there is no `id` field to trust as evidence of intent either way, so per
+// spec this is always answered with an Invalid Request (-32600) error,
+// keyed to whatever `id` the malformed value happens to carry (or `null`
+// if it carries none / isn't even an object). Silently dropping it as if it
+// were a "notification we don't understand" would hide a caller bug behind
+// the never-throw discipline instead of surfacing it.
 async function handleMessage(msg) {
-  const hasId = msg !== null && typeof msg === "object" && Object.prototype.hasOwnProperty.call(msg, "id");
-  const id = hasId ? msg.id : undefined;
-  const method = msg && typeof msg === "object" ? msg.method : undefined;
-  const params = msg && typeof msg === "object" ? msg.params : undefined;
+  if (msg === null || typeof msg !== "object" || Array.isArray(msg)) {
+    return errorResponse(null, -32600, "Invalid Request: message is not a JSON object");
+  }
+  const hasId = Object.prototype.hasOwnProperty.call(msg, "id");
+  const id = hasId ? msg.id : null;
+  const method = msg.method;
+  if (typeof method !== "string" || method.length === 0) {
+    return errorResponse(id, -32600, 'Invalid Request: missing or non-string "method"');
+  }
+  const params = msg.params;
 
   try {
     if (method === "initialize") {
@@ -488,7 +732,11 @@ async function handleMessage(msg) {
       const result = await handleToolsCall(params);
       return hasId ? respond(id, result) : null;
     }
-    // Unknown method: a genuine protocol problem.
+    // A well-formed message (valid object, valid string method) naming a
+    // method this proxy does not implement. Answered ONLY if the caller
+    // expected an answer -- a notification-shaped message with an unknown
+    // method name is still just consumed, per the same "never respond to a
+    // message with no id" rule as notifications/initialized above.
     return hasId ? errorResponse(id, -32601, `Method not found: ${method}`) : null;
   } catch (e) {
     if (e instanceof ProtocolError) {
@@ -550,11 +798,17 @@ process.stdin.on("data", (chunk) => {
 // The one exit path that IS correct: stdin end/close is normal session
 // shutdown (Claude Code's termination ladder is stdin EOF -> SIGTERM ->
 // SIGKILL). "Never exits" means never on an error path, not never at all.
-process.stdin.on("end", () => {
+//
+// A single shared `shutdown()` function is the ONLY place `process.exit(`
+// appears in this file -- both listeners call it rather than each carrying
+// their own `process.exit(0)` literal, so the source assertion this task's
+// acceptance criteria specify ("excluding comment lines, vice-proxy.mjs
+// contains exactly one `process.exit(` occurrence, and it is on the stdin
+// end/close path") stays true even though there are two listeners.
+function shutdown() {
   process.exit(0);
-});
-process.stdin.on("close", () => {
-  process.exit(0);
-});
+}
+process.stdin.on("end", shutdown);
+process.stdin.on("close", shutdown);
 
 console.error(`vice-proxy: ready, forwarding to ${activeInstance().url} (port ${activeInstance().port})`);
