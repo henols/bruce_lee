@@ -2,18 +2,18 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: Pipeline Proven *
-current_phase: 01
-current_phase_name: recovery-provenance
+current_phase: 01.1
+current_phase_name: tool-mediated-emulator-access
 status: executing
 stopped_at: "Completed quick task 260730-u9w: extracted checkpoint-sync primitives into vice-session's vice-sync.mjs; durable module-leak gate in SKILL.md"
-last_updated: "2026-07-31T14:34:04.848Z"
+last_updated: "2026-07-31T14:40:54.800Z"
 last_activity: 2026-07-31
-last_activity_desc: Phase 01 execution resumed (wave continue)
+last_activity_desc: Phase 01.1 execution started
 progress:
   total_phases: 3
   completed_phases: 0
   total_plans: 10
-  completed_plans: 1
+  completed_plans: 3
   percent: 0
 ---
 
@@ -25,15 +25,15 @@ See: .planning/PROJECT.md (updated 2026-07-30)
 
 **Core value:** An ACME source tree that rebuilds a Bruce Lee which plays identically to the original, where every gameplay system is explained well enough that someone could change it.
 **Current milestone:** v1.0 — Pipeline Proven (Phases 1–4, 24 requirements)
-**Current focus:** Phase 01 — recovery-provenance
+**Current focus:** Phase 01.1 — tool-mediated-emulator-access
 
 ## Current Position
 
 Milestone: v1.0 — Pipeline Proven (Phases 1–4 of 7 total)
-Phase: 01 (recovery-provenance) — EXECUTING
-Plan: 1 of 6
-Status: Ready to execute
-Last activity: 2026-07-31 — Phase 01 execution resumed (wave continue)
+Phase: 01.1 (tool-mediated-emulator-access) — EXECUTING
+Plan: 1 of 4
+Status: Executing Phase 01.1
+Last activity: 2026-07-31 — Phase 01.1 execution started
 
 Progress (v1.0): [░░░░░░░░░░] 0% — 0/20 plans
 Progress (overall): [░░░░░░░░░░] 0% — 0/35 plans

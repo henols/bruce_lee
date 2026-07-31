@@ -142,11 +142,11 @@ Plans:
   8. Agent-facing `Bash`-mediated emulator access is retired: no remaining skill, agent definition, or document instructs an agent to reach the emulator through `Bash`. Removal lands only after criterion 3 passes — retiring access before the replacement is proven would strand the emulator. Two things this criterion is **not**: it is not a bare `rm -rf` of `.claude/skills/vice-session/` (its transport module is imported as a *library* by `tools/recover.mjs`, `tools/chip-state.mjs`, `tools/watch-loads.mjs` and `c64-ram-capture`, entirely outside the MCP layer — those call sites must be relocated and repointed, not broken), and it does not touch host-side launch machinery (`vice-pool.sh` / `vice-supervisor.sh`), which still serves the fixed port 1.1 forwards to.
   9. **Container→host path translation happens in the proxy, not in every caller that goes through it.** Any path argument on a forwarded call that names a location inside the container workspace is rewritten to its host equivalent before the host emulator sees it — because VICE runs on the host, a container path is never correct there, and today a wrong one fails *silently*. A test proves an untranslated container path cannot reach the host. This is the same conversion as criterion 5: a rule that had to be remembered becomes a rule enforced at the one seam that sees every call. **The `devcontainer-host-path` skill is NOT retired by this**, and the plan must not try — its consumers were traced by hand in `01.1-PATTERNS.md`: `install-resources.mjs` uses it to print a host path for a *human* (nothing to do with tool calls), and `vice-sync.mjs`'s `screenshot()` plus `c64-ram-capture`'s `attachAndStart()` hand paths to VICE only through `tools/recover.mjs`'s standalone Bash-invoked pipeline, which criterion 8 deliberately preserves outside the MCP layer. The proxy becomes a **third consumer** of `hostpath.mjs`, not a replacement for it. What the phase retires is the *manual discipline* on the MCP-mediated path, not the module.
 
-**Plans**: 4 plans
+**Plans**: 1/4 plans executed
 
 Plans:
 
-- [ ] 01.1-01-PLAN.md — Diagnosis (criterion 1), the tracer proxy proving one real tool call end-to-end, and the one static `.mcp.json` entry resolving D-5 (criteria 1, 2, tracer scope of 4)
+- [x] 01.1-01-PLAN.md — Diagnosis (criterion 1), the tracer proxy proving one real tool call end-to-end, and the one static `.mcp.json` entry resolving D-5 (criteria 1, 2, tracer scope of 4)
 - [ ] 01.1-02-PLAN.md — `tools/list` from a committed snapshot with its refresh script, plus all three hazards enforced in code with per-layer tests (criteria 4, 5)
 - [ ] 01.1-03-PLAN.md — Never-throw hardening, fail-fast three-state diagnostics, proxy-owned path translation (criteria 6, 7, 9 proxy-side)
 - [ ] 01.1-04-PLAN.md — Blocking fresh-session proof, then the transport-module relocation and retirement of the documented Bash path (criteria 3, 8, 9 caller-side) — *has a blocking human-verify checkpoint*
@@ -158,6 +158,7 @@ Plans:
 **Planning note (2026-07-31, `/gsd-plan-phase 1.1`):** the plan set is **tracer-first**. Plan 01.1-01's second task is a `type="tracer"` slice that wires one `tools/call` from stdin through the reused transport to an MCP server over HTTP and back out on stdout, with the never-throw handlers and the spawned-child test harness present from the first commit — retrofitting never-throw is how finding 7 turns into a session with no emulator access. The remaining plans expand horizontally from that proven slice. Five decisions were resolved with reversibility ratings and none rated `one-way`, so no `checkpoint:decision` was inserted: **D-A** fixed port 6510 via `tools/vice-supervisor.sh`; **D-B** `.mcp.json`'s first entry as D-5's resolution (rated `costly`); **D-C** committed schema snapshot plus refresh script; **D-D** epoch narrowed to mid-session restart detection via `readEpoch()` only, declining `assertSameMachine()`'s checkpoint-fallback probe; **D-E** the `_meta` output ceiling *plus* proxy-side continuation chunking, never truncation; **D-F** the pause-on-state-read discipline stays documented rather than absorbed, because `vice_execution_run` is this project's leading crash suspect; **D-G** the structural path rule with a loud refusal for out-of-workspace absolute paths and relative paths a stated residual. One deliberate deviation from `workflow.human_verify_mode: end-of-phase`: criterion 3 is a blocking `checkpoint:human-verify`, because it is a sequencing gate the removal work depends on rather than a look-at-it check.
 
 **Decisions to resolve here** *(all five resolved at planning time — see the planning note above for the D-A … D-G verdicts and their reversibility ratings; the open framing is kept because it records why each was live)*:
+
 - **Where the tool manifest for `tools/list` comes from** — a schema snapshot baked in at build time, or a live fetch cached from a warm emulator. Forced by finding 6: tools must enumerate with no emulator present.
 - **Whether the proxy absorbs the pause-on-state-read polling discipline** (read → run → poll-with-`ping`, resume last) or leaves it documented. The proxy sees every call, so it *could* enforce ordering — design open question 4.
 - **What the epoch check is for now** — with fresh boots expected, its job narrows to detecting a host restart *mid-session*; confirm that narrowing rather than inheriting the old semantics (design open question 5).
@@ -371,7 +372,7 @@ Two cross-phase overlaps are intended and should be honoured when scheduling wor
 | Milestone | Phase | Plans Complete | Status | Completed |
 |-----------|-------|----------------|--------|-----------|
 | v1.0 | 1. Recovery & Provenance | 3/6 | In Progress|  |
-| v1.0 | 01.1. Tool-Mediated Emulator Access (INSERTED) | 0/4 | Not started | - |
+| v1.0 | 01.1. Tool-Mediated Emulator Access (INSERTED) | 1/4 | In Progress|  |
 | v1.0 | 01.2. On-Demand Broker & Leasing (INSERTED) | 0/5 | Not started | - |
 | v1.0 | 2. Coverage, Hazards & Memory Map | 0/5 | Not started | - |
 | v1.0 | 3. Verification Harness & Original Baselines | 0/4 | Not started | - |
