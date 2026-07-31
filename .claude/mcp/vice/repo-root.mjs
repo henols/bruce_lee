@@ -1,21 +1,21 @@
 // The ONE shared place every module in this directory resolves the repo
-// root through (D-2). Everything else in this skill -- vice.mjs's
+// root through (D-2). Everything else in this module tree -- vice.mjs's
 // EPOCH_FILE, vice-pool.mjs's poolDir(), vice-session.mjs's
 // sessionFilePath() -- derives its `.vice-supervisor` path through
 // supervisorDir() below, so there is exactly one definition of both "where
 // is the repo root" and "what is the shared state directory called".
 //
-// WHY THIS FILE EXISTS AT ALL: before this move, each of the three modules
+// WHY THIS FILE EXISTS AT ALL: originally, each of the three modules
 // resolved the repo root with a fixed `resolve(dirname(SELF), "..", ...)` --
 // ONE level up from the module's own file. That was correct while the
 // modules lived in `tools/` (one level up from `tools/` IS the repo root),
-// but this move puts them THREE levels deeper, at
-// `.claude/skills/vice-session/`'s `scripts/` directory (the original,
-// now-retired home; plan 01.1-04 relocated it again, into this skill, at the
-// same depth). A naive move that kept the old fixed `".."` would have
-// silently resolved to `.claude/skills/.vice-supervisor`
-// or `.claude/skills/vice-session/.vice-supervisor` instead
-// of `<repo>/.vice-supervisor` -- a directory the host-side shell scripts
+// but a move put them THREE levels deeper, at `.claude/skills/vice-session/`'s
+// `scripts/` directory (the original, now-retired home; plan 01.1-04
+// relocated it again, into the `vice-mcp-selector` skill, at the same
+// depth). A naive move that kept the old fixed `".."` would have silently
+// resolved to `.claude/skills/.vice-supervisor` or
+// `.claude/skills/vice-session/.vice-supervisor` instead of
+// `<repo>/.vice-supervisor` -- a directory the host-side shell scripts
 // (`tools/vice-supervisor.sh`, `tools/vice-pool.sh`) never write to. NOTHING
 // would have errored: the container would just read a permanently-empty
 // epoch/registry/session directory, and restart detection (and the pool,
@@ -25,8 +25,17 @@
 // elsewhere (see vice.mjs's MachineRestartedError, vice-session.mjs's
 // epoch-continuity guard). Do not reintroduce a fixed `".."` (or any other
 // relative-to-this-file hop count) in place of this resolver; if the
-// directory depth of this skill ever changes again, the ladder below still
-// gets the right answer without anyone having to count directories by hand.
+// directory depth of this module tree ever changes again, the ladder below
+// still gets the right answer without anyone having to count directories by
+// hand.
+//
+// THIRD MOVE (quick-260731-p8a): the implementation relocated again, out of
+// the `vice-mcp-selector` skill's `scripts/` into a new, flattened,
+// non-skill `.claude/mcp/vice/` directory -- ONE level SHALLOWER than the
+// old `.claude/skills/<skill>/scripts/` shape, since flattening removed the
+// `scripts/` segment. Branch 4's hop count below moved from four levels to
+// three to match. Branches 1-3 are depth-independent (an env var check, then
+// a `.git` ancestor walk) and needed no change.
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve, sep } from "node:path";
@@ -71,11 +80,12 @@ function isInside(child, parent) {
  *      outside the mounted workspace the variable names). Silence here would
  *      be exactly the quiet-wrong-answer failure class this file exists to
  *      prevent, so this path emits a one-time stderr note naming both paths.
- *   4. Otherwise, four levels up from `from`, with a one-time stderr note.
- *      Last resort only -- four levels is what
- *      `<root>/.claude/skills/<skill>/scripts/` implies, and is the same
- *      shape `devcontainer-host-path/scripts/hostpath.mjs` already uses
- *      for the same reason.
+ *   4. Otherwise, three levels up from `from`, with a one-time stderr note.
+ *      Last resort only -- three levels is what `<root>/.claude/mcp/<server>/`
+ *      implies. In this repo branch 4 never actually runs (there is always a
+ *      `.git` ancestor), which is exactly why the paired synthetic test in
+ *      vice-pool.test.mjs is the only thing that would catch a wrong hop
+ *      count here.
  */
 export function repoRoot({ from = HERE, env = process.env } = {}) {
   const cwp = env.CONTAINER_WORKSPACE_PATH;
@@ -109,14 +119,14 @@ export function repoRoot({ from = HERE, env = process.env } = {}) {
 
   if (!warnedNoMarkerFound) {
     warnedNoMarkerFound = true;
-    const fallback = resolve(from, "..", "..", "..", "..");
+    const fallback = resolve(from, "..", "..", "..");
     console.error(
       `warn: could not find a .git ancestor above ${from} and CONTAINER_WORKSPACE_PATH is not set -- ` +
-        `falling back to four levels up (${fallback}), the shape <root>/.claude/skills/<skill>/scripts/ implies. ` +
+        `falling back to three levels up (${fallback}), the shape <root>/.claude/mcp/<server>/ implies. ` +
         `This is a last resort; if it's wrong, set CONTAINER_WORKSPACE_PATH or run from inside a git repo.`
     );
   }
-  return resolve(from, "..", "..", "..", "..");
+  return resolve(from, "..", "..", "..");
 }
 
 /** The one shared directory name every module in this skill reads/writes
