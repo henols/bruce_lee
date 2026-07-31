@@ -16,6 +16,14 @@
 // this is the same cross-skill shape `c64-ram-capture/scripts/ram-capture.mjs`
 // already uses for `devcontainer-host-path`.
 import { call, activeInstance, DENY_LIST, readEpoch, beginSession, MachineRestartedError } from "../../vice-session/scripts/vice.mjs";
+// Same temporary cross-skill shape as the import above -- plan 01.1-04
+// relocates vice-probe.mjs alongside vice.mjs and rewrites this to a local
+// import. probeInstance() is the deliberately-fragile liveness check (see
+// that file's own header): one 1500ms-budget round trip, no retry, no
+// dependency on vice.mjs's resilient reconnect ladder.
+import { probeInstance } from "../../vice-session/scripts/vice-probe.mjs";
+import { repoRoot } from "../../vice-session/scripts/repo-root.mjs";
+import { hostPath, SET_ENV_HINT } from "../../devcontainer-host-path/scripts/hostpath.mjs";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
@@ -305,6 +313,90 @@ function isErrorText(text) {
   return { content: [{ type: "text", text }], isError: true };
 }
 
+// --------------------------------------------------- unreachable diagnostics
+//
+// Plan 01.1-03 task 2 / ROADMAP criterion 7. Blocking on withReconnect()'s
+// ~50s ladder turns a clear diagnosis into an opaque tool timeout, so every
+// forwarded tools/call gets a pre-flight `probeInstance()` check FIRST (one
+// 1500ms-budget round trip, no retry -- see vice-probe.mjs's own header for
+// why reusing the resilient ladder here would be wrong). When the probe
+// reports the emulator unreachable, this classifies the failure into exactly
+// one of three states, each with its own message and its own fix, each
+// quoting an absolute host path, each closing off the "just run the
+// transport module from a shell instead" workaround explicitly.
+//
+// This MCP tool surface is the only route to the emulator -- never named
+// together with a CLI verb here, since plan 01.1-04 installs a durable gate
+// matching exactly that pattern in documentation.
+const ONLY_ROUTE_NOTE =
+  "This MCP tool surface is the only route to the emulator. The correct action is to stop and ask " +
+  "the human to start it on the host -- falling back to a direct shell invocation of the underlying " +
+  "transport is not an available workaround.";
+
+/** The absolute path of the command a human should run on the HOST to
+ * start/restart the emulator -- computed via hostPath() over the deployed
+ * supervisor's container path, degrading to the container path plus
+ * SET_ENV_HINT exactly as vice-session's hostLaunchInstructions() does, so a
+ * translation failure still yields something to act on rather than an empty
+ * message. Recomputed fresh every call -- never cached (see the
+ * never-cache-a-negative-result invariant above ensureViceSession()). */
+function supervisorHostPath() {
+  const target = join(repoRoot(), "tools", "vice-supervisor.sh");
+  try {
+    return hostPath(target);
+  } catch {
+    return `${target}\n  (host path could not be determined -- ${SET_ENV_HINT})`;
+  }
+}
+
+// A causeCode-shaped reason string (e.g. "ECONNREFUSED", "ECONNRESET") is
+// exactly what probeInstance() returns for a connection actively refused --
+// see its own fallback `causeCode || e.message`. A timeout, an HTTP error
+// status, or "didn't decode to a recognisable ping" all produce prose
+// instead, never a bare all-caps E-code, which is what keeps this predicate
+// precise rather than a loose substring guess.
+function isConnectionRefusedReason(reason) {
+  return typeof reason === "string" && /^E[A-Z]+$/.test(reason);
+}
+
+function neverStartedMessage(probe) {
+  return (
+    `vice-proxy: the host VICE MCP server has never been started at this configured path -- no ` +
+    `restart-epoch record exists, and the connection was refused (${probe.reason}). Start it on the host with:\n` +
+    `  ${supervisorHostPath()}\n` +
+    ONLY_ROUTE_NOTE
+  );
+}
+
+function deadOrHungMessage(probe, epoch) {
+  const pidNote =
+    epoch && epoch.present && epoch.pid != null
+      ? ` (pid ${epoch.pid}${epoch.spawned_at ? `, spawned_at ${epoch.spawned_at}` : ""})`
+      : "";
+  return (
+    `vice-proxy: the host VICE MCP server appears to be dead or hung${pidNote} -- ${probe.reason}. ` +
+    `Restart it on the host with:\n` +
+    `  ${supervisorHostPath()}\n` +
+    ONLY_ROUTE_NOTE
+  );
+}
+
+/** Reached only when the pre-flight probe found the host alive but the
+ * forwarded call itself failed (a transport error the retry ladder gave up
+ * on, or a genuine RPC error). Relays the host's own message VERBATIM --
+ * never paraphrased -- and deliberately carries no restart instruction,
+ * since restarting a live, correctly-answering host is the wrong fix for a
+ * rejected tool call. Still names an absolute path and the only-route note
+ * (both required of every unreachable-adjacent message this proxy emits),
+ * worded so as never to suggest the action a restart message would. */
+function aliveButFailedMessage(errMessage) {
+  const hostRef = supervisorHostPath().split("\n")[0];
+  return (
+    `vice-proxy: the host VICE MCP server (reachable via the host-side launcher at ${hostRef}) rejected ` +
+    `this call: ${errMessage} ${ONLY_ROUTE_NOTE}`
+  );
+}
+
 // ------------------------------------------------------- oversized results
 //
 // Decision D-E: the `_meta["anthropic/maxResultSizeChars"]` declaration
@@ -443,6 +535,25 @@ async function handleToolsCall(params) {
     return isErrorText(beforeDrift);
   }
 
+  // Pre-flight liveness probe (task 2 / criterion 7), ordered AFTER the
+  // deny-list refusal and the epoch comparison above (a refused tool and a
+  // restarted machine both need answering without any network activity at
+  // all) and BEFORE delegating to call() -- see vice-probe.mjs's header for
+  // why this is a single 1500ms-budget round trip with no retry, never
+  // wrapped in withReconnect()'s ladder. One call site, not inside a loop.
+  const { url, port } = activeInstance();
+  const probe = await probeInstance({ url, port });
+  if (!probe.alive) {
+    const epoch = currentEpoch();
+    if (isConnectionRefusedReason(probe.reason) && !epoch.present) {
+      return isErrorText(neverStartedMessage(probe));
+    }
+    // Every other unreachable shape -- refused-with-an-epoch-on-record,
+    // timed out, or something answered but didn't look like VICE -- is
+    // "dead or hung"; probe.reason itself says which, verbatim.
+    return isErrorText(deadOrHungMessage(probe, epoch));
+  }
+
   let payload;
   try {
     payload = await call(name, args);
@@ -462,7 +573,9 @@ async function handleToolsCall(params) {
     // NEVER rethrow past this point -- a tool-execution failure (transport
     // error, a rejected RPC) is a normal, expected outcome for this method
     // and must come back as a well-formed result, not crash the read loop.
-    return isErrorText(e && e.message ? e.message : String(e));
+    // The probe above already proved the host alive, so this is the "alive
+    // but the operation failed" state -- relay verbatim, no restart advice.
+    return isErrorText(aliveButFailedMessage(e && e.message ? e.message : String(e)));
   }
 
   const afterDrift = checkEpochAndRebaseline("after the call returned");
