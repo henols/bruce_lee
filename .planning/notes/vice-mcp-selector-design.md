@@ -184,11 +184,41 @@ the host" from "still launching," instead of polling until the tool timeout with
 
 ## Warm spares: hiding cold start without rebuilding the pool
 
-The broker keeps **K boot-fresh, never-used instances ready at all times** (`K=1` default). A first
-`tools/call` is handed a ready spare immediately, and the broker starts warming a replacement in the
-background. Cold start moves off the request path and becomes a background cost.
+The broker keeps **N boot-fresh, never-used instances ready at all times**, where `N` is the count
+passed at launch and defaults to **3**. A `tools/call` needing an emulator is handed a ready spare
+immediately, and the broker warms a replacement in the background. Cold start moves off the request
+path and becomes a background cost.
 
-Invariant: `count(ready_spares) == K`, re-evaluated after every grant and every teardown.
+**Invariant:** `ready_spares == N`, subject to `total_instances <= MAX` — re-evaluated after every
+grant and every teardown.
+
+`MAX` defaults to **16**, matching the range `vice-pool.sh` already accepts. The CLI mirrors the
+existing interface — `vice-broker.sh start [N]`, default 3, range 1..16 — so `tools/vice-pool.sh
+start 3` muscle memory carries over unchanged.
+
+### What N means, and what it does not
+
+`N` counts **ready spares, not total processes**. Total is `leased + N`, until the ceiling:
+
+| Leased | Total procs | Ready | Acquisition |
+|---|---|---|---|
+| 0 | 3 | 3 | instant |
+| 2 | 5 | 3 | instant |
+| 3 | 6 | 3 | instant |
+| 13 | 16 | 3 | instant |
+| 16 | 16 | 0 | cold path — "warming, retry" |
+
+This was a deliberate choice over the alternative reading (at least N processes *in total*), which
+caps idle cost at the old pool's level but runs out of spares at N concurrent sessions — exactly when
+contention is highest, and precisely the case spares exist to fix.
+
+A useful consequence at the default: **N=3 covers a three-way parallel wave instantly.** A session
+opening three instance handles takes all three spares and the broker warms three more, so the common
+GSD executor fan-out never pays a boot. Waves wider than N pay cold launches for the excess, so a
+plan expecting more can raise N at broker start.
+
+The ceiling is what keeps this bounded. Unbounded `leased + N` growth would make host RAM the only
+limit, with nothing warning before it is hit.
 
 ### The discipline that makes it safe
 
@@ -206,15 +236,20 @@ grantable, and readiness is proven by an actual MCP round-trip, not a socket pro
 
 ### What it costs and what it keeps
 
-One idle `x64sc` while the broker runs. That is a slice of the fixed pool's idle cost given back —
-but one is not three, and it is the *right* one, since it is the one that buys latency. Both
-properties that made on-demand win are kept intact: no configured cap, and no state contamination.
+At the default, three idle `x64sc` processes while the broker runs — the same idle cost as the old
+fixed pool. That cost is being paid back deliberately, in exchange for guaranteed instant
+acquisition. What on-demand still keeps, and what the fixed pool never had:
 
-`K` is a knob, not a constant. A session opening three handles for a parallel wave consumes the spare
-plus two cold launches, so a plan expecting parallel VICE work can raise `K` beforehand.
+- **No state contamination.** Every granted instance is boot-fresh and single-use.
+- **Total is not capped at N.** The old pool's 3 meant *three sessions, ever*. Here 3 is the ready
+  floor and up to 13 sessions can be leased simultaneously beneath the 16 ceiling.
 
-Broker startup should begin warming immediately, so "start the broker on the host" implies "and it is
-ready within a few seconds" rather than "and the next call still pays for a boot."
+The steady-state cost is churn rather than idle: kill-on-release means every session end triggers a
+background boot to refill the spare set. Cheap, but constant, and worth seeing in the broker log
+rather than discovering as mystery host load.
+
+Broker startup begins warming immediately, so "start the broker on the host" implies "and it is ready
+within a few seconds" rather than "and the next call still pays for a boot."
 
 ## Broker-absent reporting
 

@@ -41,10 +41,11 @@ broker (see the design note).
 shorter than a synchronous `unlinkSync`, automatic release on session end is not achievable and
 release becomes sweeper-only — a different design, not an adjustment.
 
-**The latency row was downgraded by warm spares.** With the broker holding K boot-fresh instances
-ready, cold start no longer sits on the common path, so this measurement now bounds only the cold
-cases: the first call after the broker starts, and parallel waves that exceed K. Still worth
-measuring — it sets the "warming, retry" threshold — but it can no longer reshape the design.
+**The latency row was downgraded by warm spares.** With the broker holding N boot-fresh instances
+ready (N=3 default), cold start no longer sits on the common path. This measurement now bounds only
+two narrow cases: the first calls before the broker has finished its initial warm-up, and demand that
+pushes total instances against the 16 ceiling. Still worth measuring — it sets the "warming, retry"
+threshold — but it can no longer reshape the design.
 
 ## Done when
 
