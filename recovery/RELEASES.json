@@ -18,14 +18,14 @@
           }
         ],
         "program": null,
-        "host_path_used": "/home/henrik/dev/henrik/git/bruce_lee/.claude/worktrees/agent-a0b8d7d02af849d92/disks/danish.d64",
+        "host_path_used": "/home/henrik/dev/henrik/git/bruce_lee/.claude/worktrees/agent-a8de857fe175252c5/disks/danish.d64",
         "fallback_used": false,
-        "screenshot_host_path": "/home/henrik/dev/henrik/git/bruce_lee/.claude/worktrees/agent-a0b8d7d02af849d92/recovery/danish/dumps/danish-boot.png",
+        "screenshot_host_path": "/home/henrik/dev/henrik/git/bruce_lee/.claude/worktrees/agent-a8de857fe175252c5/recovery/danish/dumps/danish-boot.png",
         "gates_walked": [
           {
             "address": "$0900",
             "key": "SPACE",
-            "hit_count": 2041,
+            "hit_count": 713,
             "delivery": "matrix"
           }
         ],
