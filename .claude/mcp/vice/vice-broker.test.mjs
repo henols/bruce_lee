@@ -24,6 +24,7 @@ import {
   rmSync,
   utimesSync,
   chmodSync,
+  cpSync,
   symlinkSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -182,8 +183,11 @@ function runBrokerOnceDryRun(dir, basePort) {
 /** Runs `vice-broker.sh --once [--dry-run]` with the given pool dir/env
  * overrides, mirroring runBrokerOnceDryRun() above but with knobs for TTL
  * and non-dry-run opt-out (dry-run is the default -- no real x64sc is ever
- * needed by this file's own tests). */
-function runBrokerOnce(dir, { basePort = 7000, ttlS, dryRun = true, spares = 0, max, probeCmd } = {}) {
+ * needed by this file's own tests). Plan 04 adds `spares`/`max`/`probeCmd`/
+ * `script` (which broker script binary to invoke -- defaults to the real,
+ * tracked one; overridden by tests exercising the missing-supervisor-script
+ * denial, which run a temp copy of the whole resources/ dir instead). */
+function runBrokerOnce(dir, { basePort = 7000, ttlS, dryRun = true, spares = 0, max, probeCmd, script = BROKER_SCRIPT } = {}) {
   const env = {
     ...process.env,
     VICE_SUPERVISOR_ALLOW_CONTAINER: "1",
@@ -196,7 +200,7 @@ function runBrokerOnce(dir, { basePort = 7000, ttlS, dryRun = true, spares = 0, 
   if (probeCmd !== undefined) env.VICE_BROKER_PROBE_CMD = probeCmd;
   const args = ["--once"];
   if (dryRun) args.push("--dry-run");
-  return execFileP("bash", [BROKER_SCRIPT, ...args], { env });
+  return execFileP("bash", [script, ...args], { env });
 }
 
 /** Writes grants/<id>.json directly, in the exact shape vice-broker.sh's own
@@ -240,6 +244,16 @@ function ageLeaseFile(leasePath, secondsAgo) {
   utimesSync(leasePath, t, t);
 }
 
+// ---------------------------------------------------------------------------
+// Plan 04 (Task 1: launching/ready spare state machine; Task 2: grant from a
+// ready spare, cold-launch deferral, denials) fixtures. These bypass the
+// launch/probe round trip where a test only needs to plant a spare directly,
+// mirroring exactly the shape resources/vice-broker.sh's own launch_instance()
+// writes -- the pass under test cannot tell the difference.
+
+/** Writes spares/<port>.json directly, in the exact shape launch_instance()
+ * writes -- lets a test set up a promotion/grant scenario without needing a
+ * real launch to have happened first. */
 function writeSpareFile(
   dir,
   port,
@@ -329,6 +343,21 @@ function pathWithoutCurl() {
     }
   }
   return dir;
+}
+
+/** Copies the WHOLE resources/ directory (vice-broker.sh, lib/, vice-pool.sh)
+ * into a fresh temp dir and removes vice-supervisor.sh from the copy --
+ * SELF_DIR resolution (sibling-of-the-running-script, matching D-6) means
+ * the copy's own vice-broker.sh resolves SUPERVISOR_SCRIPT to a path that
+ * genuinely does not exist, exercising the "supervisor script missing"
+ * denial without touching the real, tracked resources/ directory at all.
+ * Returns the copy's own vice-broker.sh path (pass as `script` to
+ * runBrokerOnce()). */
+function brokerCopyMissingSupervisor() {
+  const dir = mkdtempSync(join(tmpdir(), "vice-broker-nosuper-"));
+  cpSync(join(HERE, "resources"), dir, { recursive: true });
+  rmSync(join(dir, "vice-supervisor.sh"), { force: true });
+  return join(dir, "vice-broker.sh");
 }
 
 /** Writes requests/<id>.json in the exact shape vice-broker-client.mjs's own
@@ -440,11 +469,26 @@ test("tracer: request -> grant -> forward -> SIGINT release -> teardown, end to 
     assert.equal(proxy.messages.length, 2, "the tools/call must not have resolved before a grant exists");
 
     // Run the host-side broker once, in dry-run mode, against the SAME pool
-    // directory and the stand-in server's own port.
+    // directory and the stand-in server's own port. Plan 04: with zero ready
+    // spares (VICE_BROKER_SPARES:"0" in runBrokerOnceDryRun's own env), this
+    // FIRST pass finds nothing ready and launches a COLD instance instead --
+    // deliberately writing NEITHER a grant NOR a denial (see
+    // process_requests()'s own comment on this point). No grant exists yet.
     await runBrokerOnceDryRun(dir, port);
-
     const grantPath = join(dir, "grants", `${id}.json`);
-    assert.ok(existsSync(grantPath), "a matching grant file must appear after one broker pass");
+    assert.equal(existsSync(grantPath), false, "the FIRST pass must not grant yet -- it only starts the cold launch");
+    assert.equal(existsSync(join(dir, "denials", `${id}.json`)), false, "the first pass must not deny either");
+    assert.ok(existsSync(join(dir, "requests", `${id}.json`)), "the request file must still be pending after the first pass");
+
+    // A SECOND pass: the cold-launched instance points at the stand-in
+    // server's own REAL, live port, so the default curl-based probe_ready()
+    // (no VICE_BROKER_PROBE_CMD override here) succeeds against it for real
+    // -- promoting launching -> ready within THIS pass's own maintain_spares
+    // step, which then lets THIS SAME pass's process_requests grant it on
+    // the pass immediately following (a second runBrokerOnceDryRun call is
+    // exactly what production's own poll loop provides for free).
+    await runBrokerOnceDryRun(dir, port);
+    assert.ok(existsSync(grantPath), "a matching grant file must appear after the second broker pass");
     const grant = JSON.parse(readFileSync(grantPath, "utf8"));
     assert.equal(grant.port, port, "the grant must carry the stand-in server's own port");
     assert.equal(grant.dry_run, true, "the grant must record dry_run:true");
@@ -462,11 +506,18 @@ test("tracer: request -> grant -> forward -> SIGINT release -> teardown, end to 
     const payload = JSON.parse(callResp.result.content[0].text);
     assert.equal(payload.version, "3.10", "the stand-in server's own ping payload must round-trip back out");
 
-    // Two "tools/call" requests reach the stand-in server, not one: the
-    // pre-flight liveness probe's own vice_ping round trip (plan 01.1-03),
-    // plus the one real forwarded call this tracer proves.
+    // THREE "tools/call" requests reach the stand-in server, not one: the
+    // proxy's own pre-flight liveness probe (plan 01.1-03's vice_ping round
+    // trip), the broker's OWN readiness probe_ready() (plan 04's default
+    // curl-based check, fired once against this same real, live port while
+    // promoting the cold-launched spare from launching -> ready), and the
+    // one real forwarded call this tracer proves.
     const toolCallsSeen = requests.filter((r) => r && r.method === "tools/call");
-    assert.equal(toolCallsSeen.length, 2, "the stand-in server must have received the probe ping plus the real forwarded call");
+    assert.equal(
+      toolCallsSeen.length,
+      3,
+      "the stand-in server must have received the pre-flight probe, the broker's readiness probe, and the real forwarded call"
+    );
     assert.ok(toolCallsSeen.every((r) => r.params.name === "vice_ping"));
 
     // A lease file for this id must exist, with an mtime no earlier than its
@@ -489,10 +540,11 @@ test("tracer: request -> grant -> forward -> SIGINT release -> teardown, end to 
     const leaseGone = await waitFor(() => !existsSync(leasePath));
     assert.ok(leaseGone, "SIGINT must release the lease");
 
-    // A second broker pass observes the released lease and tears the grant
-    // down.
+    // A further broker pass observes the released lease and tears the grant
+    // down (the third runBrokerOnceDryRun() call in this test -- the first
+    // two were the cold-launch pass and the grant pass above).
     await runBrokerOnceDryRun(dir, port);
-    assert.equal(existsSync(grantPath), false, "the second broker pass must have torn the grant down");
+    assert.equal(existsSync(grantPath), false, "this later broker pass must have torn the grant down");
   } finally {
     // SIGKILL, not the default SIGTERM: vice-proxy.mjs registers its own
     // SIGINT/SIGTERM/SIGHUP handlers and deliberately never calls
@@ -677,6 +729,15 @@ test("kill-never-recycle: a torn-down instance is never re-granted -- the next g
     // mirror that ordering here rather than granting into an immediate
     // same-pass sweep.
     writeLeaseFile(dir, id1);
+    // Plan 04: grant_from_spare() only grants from a spare ALREADY in state
+    // "ready" -- a bare cold-launched request needs a second pass to promote
+    // (see the tracer test's own comment on this). Pre-planting a ready
+    // spare at the SAME port this test's basePort would allocate first lets
+    // this test keep its original one-pass-grants shape while still
+    // exercising the real kill-never-recycle path this test is actually
+    // about. Distinct supervisorPid/launchedAt from the second spare below
+    // is what makes the "never recycled" assertions below meaningful.
+    writeSpareFile(dir, 7300, { state: "ready", supervisorPid: 111111111111111, launchedAt: 111111111111111, readyAt: 111111111111111 });
     await runBrokerOnce(dir, { basePort: 7300 });
 
     const grant1Path = join(dir, "grants", `${id1}.json`);
@@ -695,6 +756,7 @@ test("kill-never-recycle: a torn-down instance is never re-granted -- the next g
     const id2 = "req-7-7001-abcdef02";
     writeRequestFile(dir, id2);
     writeLeaseFile(dir, id2);
+    writeSpareFile(dir, 7300, { state: "ready", supervisorPid: 222222222222222, launchedAt: 222222222222222, readyAt: 222222222222222 });
     await runBrokerOnce(dir, { basePort: 7300 });
 
     const grant2Path = join(dir, "grants", `${id2}.json`);
@@ -741,6 +803,14 @@ test("parity: the shell script's own id validation and isValidRequestId() agree 
     // filenames, so this drives the validation under test (the id CHECK)
     // rather than the filesystem's own separate restrictions, per this
     // task's own instruction.
+    // Plan 04: each VALID id in this corpus also gets its own pre-planted
+    // ready spare (see the kill-never-recycle test's own comment on why a
+    // bare cold-launched request needs a second pass to grant) -- one
+    // distinct port per valid entry, so this test can keep asserting a
+    // single-pass grant/no-grant verdict per corpus entry, which is what it
+    // is actually testing (id validation), not the multi-pass cold-launch
+    // mechanics covered elsewhere.
+    let readySparePort = 7400;
     let i = 0;
     for (const { id, valid } of ID_CORPUS) {
       writeRequestFileRaw(dir, `probe-${i}`, id);
@@ -750,7 +820,11 @@ test("parity: the shell script's own id validation and isValidRequestId() agree 
       // it (lease absent) in the same call, which is a correct but
       // misleading-for-this-test outcome (see the kill-never-recycle test's
       // own comment on this exact ordering).
-      if (valid) writeLeaseFile(dir, id);
+      if (valid) {
+        writeLeaseFile(dir, id);
+        writeSpareFile(dir, readySparePort, { state: "ready", readyAt: Date.now() * 1e6 });
+        readySparePort++;
+      }
       i++;
     }
 
@@ -805,6 +879,7 @@ test("a malformed request body is skipped with a logged reason while a well-form
     const goodId = "req-8-8000-cafebabe";
     writeRequestFileRaw(dir, "good", goodId);
     writeLeaseFile(dir, goodId); // see the parity test's own comment on this ordering
+    writeSpareFile(dir, 7500, { state: "ready", readyAt: Date.now() * 1e6 }); // see the parity test's own comment on this too
 
     const { stderr } = await runBrokerOnce(dir, { basePort: 7500 });
     assert.match(stderr, /skipping request garbage\.json/);
@@ -813,6 +888,12 @@ test("a malformed request body is skipped with a logged reason while a well-form
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ---------------------------------------------------------------------------
+// Plan 04, Task 1: an instance is grantable only after it proves itself
+// ready -- the launching -> ready state machine, the injectable probe seam,
+// and the single function (maintain_spares) that owns both the ready_spares
+// == N target and the total_instances <= MAX ceiling.
 
 test("maintain_spares: with VICE_BROKER_SPARES=2 and an always-succeeding probe, two passes bring broker-instances.json to exactly two ready entries", async () => {
   const dir = tmpPoolDir();
@@ -956,6 +1037,39 @@ test("the leased/total/ready invariant table is reproduced exactly, and holds un
   }
 });
 
+test("maintain_spares: with no readiness mechanism available (VICE_BROKER_PROBE_CMD unset, curl absent), zero spares are warmed and one line names why -- but a genuinely pending request is still satisfied", async () => {
+  const dir = tmpPoolDir();
+  const noCurlPath = pathWithoutCurl();
+  try {
+    const id = "req-9-9000-f00dcafe";
+    writeRequestFile(dir, id);
+    writeLeaseFile(dir, id);
+
+    const env = {
+      PATH: noCurlPath,
+      VICE_SUPERVISOR_ALLOW_CONTAINER: "1",
+      VICE_POOL_DIR: dir,
+      VICE_BROKER_BASE_PORT: "7900",
+      VICE_BROKER_SPARES: "3",
+    };
+    const pass1 = await execFileP("bash", [BROKER_SCRIPT, "--once", "--dry-run"], { env });
+    assert.match(pass1.stderr, /no readiness probe available/, "pass 1 must log exactly why zero spares are being warmed");
+    assert.match(pass1.stderr, /VICE_BROKER_PROBE_CMD/, "the log line must name the missing command");
+
+    const spareFiles = readdirSync(join(dir, "spares")).filter((f) => f.endsWith(".json"));
+    assert.equal(spareFiles.length, 1, "only the ONE cold instance for the pending request exists -- zero SPECULATIVE spares");
+
+    const pass2 = await execFileP("bash", [BROKER_SCRIPT, "--once", "--dry-run"], { env });
+    void pass2;
+    assert.ok(
+      existsSync(join(dir, "grants", `${id}.json`)),
+      "the pending request must still be satisfied via the cold path even with no readiness mechanism at all"
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(noCurlPath, { recursive: true, force: true });
+  }
+});
 
 test("structural: maintain_spares has exactly one definition and one call site", () => {
   const src = readFileSync(BROKER_SCRIPT, "utf8");
@@ -1002,4 +1116,174 @@ test("structural: bash -n exits 0; start still refuses in-container with exit 2;
     (err) => err.code === 3,
     "--check-container must exit 3 inside a container"
   );
+});
+
+// ---------------------------------------------------------------------------
+// Plan 04, Task 2: grant from a ready spare, refill behind it, and
+// distinguish "not yet" (neither grant nor denial) from "never" (denial with
+// the broker's own reason verbatim).
+
+test("grant_from_spare: with one ready spare and one incoming request, the grant is issued in the same pass, and maintain_spares launches a replacement in the same pass", async () => {
+  const dir = tmpPoolDir();
+  const probe = alwaysSucceedProbe();
+  try {
+    const id = "req-10-10000-aaaaaaaa";
+    writeSpareFile(dir, 8100, { state: "ready", readyAt: Date.now() * 1e6 });
+    writeRequestFile(dir, id);
+    writeLeaseFile(dir, id);
+
+    const { stdout } = await runBrokerOnce(dir, { basePort: 8100, spares: 1, probeCmd: probe });
+
+    assert.match(stdout, new RegExp(`granted request ${id} -> port 8100`), "the grant must be issued in this same pass");
+    const grant = JSON.parse(readFileSync(join(dir, "grants", `${id}.json`), "utf8"));
+    assert.equal(grant.port, 8100, "the grant must carry the spare's own port");
+
+    assert.match(stdout, /vice-broker: launched port \d+ \(reason: spare\)/, "a replacement spare must be launched in this SAME pass");
+    const spareFiles = readdirSync(join(dir, "spares")).filter((f) => f.endsWith(".json"));
+    assert.equal(spareFiles.length, 1, "exactly one replacement spare must exist after the grant consumed the original");
+    assert.notEqual(
+      Number(spareFiles[0].replace(/\.json$/, "")),
+      8100,
+      "the replacement must be a DIFFERENT port from the one just granted"
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(dirname(probe), { recursive: true, force: true });
+  }
+});
+
+test("cold path: with zero ready spares, the pass launches a cold instance and writes neither a grant nor a denial; a later pass, once the probe succeeds, writes the grant", async () => {
+  const dir = tmpPoolDir();
+  const probe = alwaysSucceedProbe();
+  try {
+    const id = "req-11-11000-bbbbbbbb";
+    writeRequestFile(dir, id);
+    writeLeaseFile(dir, id);
+
+    await runBrokerOnce(dir, { basePort: 8200, spares: 0, probeCmd: probe });
+    assert.equal(existsSync(join(dir, "grants", `${id}.json`)), false, "the intermediate pass must write no grant for this id");
+    assert.equal(existsSync(join(dir, "denials", `${id}.json`)), false, "the intermediate pass must write no denial for this id");
+    assert.ok(existsSync(join(dir, "requests", `${id}.json`)), "the request file must still exist after the intermediate pass");
+
+    await runBrokerOnce(dir, { basePort: 8200, spares: 0, probeCmd: probe });
+    assert.ok(existsSync(join(dir, "grants", `${id}.json`)), "a later pass must write the grant once the probe has succeeded");
+    assert.equal(existsSync(join(dir, "requests", `${id}.json`)), false, "the request file must be gone once granted");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(dirname(probe), { recursive: true, force: true });
+  }
+});
+
+test("deny: the ceiling reached with nothing ready and nothing launchable produces a denial naming the ceiling and current counts", async () => {
+  const dir = tmpPoolDir();
+  try {
+    writeGrantFile(dir, "req-12-12000-cccccccc", { port: 8300 });
+    writeLeaseFile(dir, "req-12-12000-cccccccc");
+
+    const id = "req-12-12001-dddddddd";
+    writeRequestFile(dir, id);
+    writeLeaseFile(dir, id);
+
+    const { stdout } = await runBrokerOnce(dir, { basePort: 8300, spares: 0, max: 1 });
+    assert.match(stdout, new RegExp(`denied request ${id}`));
+    const denial = JSON.parse(readFileSync(join(dir, "denials", `${id}.json`), "utf8"));
+    assert.match(denial.reason, /ceiling/i);
+    assert.match(denial.reason, /1/, "the reason must name the concrete ceiling/count");
+    assert.equal(existsSync(join(dir, "requests", `${id}.json`)), false, "a denied request must be unlinked");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("deny: a launch failing because the target port is already bound produces a denial naming the port and the cause", async () => {
+  const dir = tmpPoolDir();
+  const server = createServer(() => {});
+  try {
+    const boundPort = await listen(server);
+
+    const id = "req-13-13000-eeeeeeee";
+    writeRequestFile(dir, id);
+    writeLeaseFile(dir, id);
+
+    // Non-dry-run: port_in_use() is checked ONLY outside --dry-run (see
+    // launch_instance()'s own comment) -- but since a bound port refuses
+    // BEFORE any real spawn is ever attempted, no real x64sc/supervisor
+    // process is spawned here at all.
+    const { stdout } = await runBrokerOnce(dir, { basePort: boundPort, spares: 0, dryRun: false });
+    assert.match(stdout, new RegExp(`denied request ${id}`));
+    const denial = JSON.parse(readFileSync(join(dir, "denials", `${id}.json`), "utf8"));
+    assert.match(denial.reason, /already bound/);
+    assert.match(denial.reason, new RegExp(String(boundPort)));
+  } finally {
+    await new Promise((resolveClose) => server.close(resolveClose));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("deny: a missing supervisor script at the resolved sibling path produces a denial naming the missing path", async () => {
+  const dir = tmpPoolDir();
+  const brokerCopy = brokerCopyMissingSupervisor();
+  try {
+    const id = "req-14-14000-ffffffff";
+    writeRequestFile(dir, id);
+    writeLeaseFile(dir, id);
+
+    const { stdout } = await runBrokerOnce(dir, { basePort: 8400, spares: 0, script: brokerCopy });
+    assert.match(stdout, new RegExp(`denied request ${id}`));
+    const denial = JSON.parse(readFileSync(join(dir, "denials", `${id}.json`), "utf8"));
+    assert.match(denial.reason, /supervisor script not found/);
+    assert.match(denial.reason, /vice-supervisor\.sh/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(dirname(brokerCopy), { recursive: true, force: true });
+  }
+});
+
+test("grant_from_spare: never selects an entry in state launching or leased -- only ready", async () => {
+  const dir = tmpPoolDir();
+  try {
+    writeSpareFile(dir, 8500, { state: "launching" });
+    writeGrantFile(dir, "req-15-15000-11112222", { port: 8501 });
+    writeLeaseFile(dir, "req-15-15000-11112222");
+
+    const id = "req-15-15001-33334444";
+    writeRequestFile(dir, id);
+    writeLeaseFile(dir, id);
+
+    await runBrokerOnce(dir, { basePort: 8500, spares: 0 });
+    // No READY spare exists (only a launching one and an already-leased
+    // one), so this request cannot be satisfied instantly at all -- it must
+    // fall through to the cold-launch path (deferred, per the cold-path test
+    // above), NOT reuse the launching or leased entry's port. Either way the
+    // key assertion is the same: no grant for THIS id appears in this pass.
+    assert.equal(existsSync(join(dir, "grants", `${id}.json`)), false, "no grant may be produced from a launching or leased entry");
+
+    // The pre-existing launching (8500) and leased (8501) entries must be
+    // completely undisturbed by this pass -- confirming grant_from_spare()
+    // never touched either of them while looking for a ready candidate.
+    const spareRec = JSON.parse(readFileSync(join(dir, "spares", "8500.json"), "utf8"));
+    assert.equal(spareRec.state, "launching", "the pre-existing launching entry must be untouched");
+    assert.ok(existsSync(join(dir, "grants", "req-15-15000-11112222.json")), "the pre-existing leased grant must be untouched");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("release-then-pass produces both a teardown log line and a refill launch log line", async () => {
+  const dir = tmpPoolDir();
+  const probe = alwaysSucceedProbe();
+  try {
+    const id = "req-16-16000-55556666";
+    writeGrantFile(dir, id, { port: 8600 });
+    writeLeaseFile(dir, id);
+
+    rmSync(join(dir, "leases", id));
+    const { stdout } = await runBrokerOnce(dir, { basePort: 8600, spares: 1, probeCmd: probe });
+
+    assert.match(stdout, new RegExp(`${id}.*released`), "the teardown must be logged");
+    assert.match(stdout, /vice-broker: launched port \d+ \(reason: spare\)/, "the refill launch must ALSO be logged in the same pass");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(dirname(probe), { recursive: true, force: true });
+  }
 });

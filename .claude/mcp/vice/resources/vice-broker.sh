@@ -577,7 +577,25 @@ count_total() {
   printf '%s\n' "$n"
 }
 
-
+# Counts spares in state "launching" whose reason is "cold" -- i.e., a launch
+# already in flight to satisfy some earlier pass's still-pending request.
+# process_requests() consults this to avoid launching a SECOND cold instance
+# for a request that is already covered by one from a previous pass (see its
+# own comment at the call site).
+count_cold_launching() {
+  local n=0 f state reason
+  if [ -d "$SPARES_DIR" ]; then
+    for f in "$SPARES_DIR"/*.json; do
+      [ -e "$f" ] || continue
+      state="$(read_spare_field "$f" state)"
+      reason="$(read_spare_field "$f" reason)"
+      if [ "$state" = "launching" ] && [ "$reason" = "cold" ]; then
+        n=$((n + 1))
+      fi
+    done
+  fi
+  printf '%s\n' "$n"
+}
 
 # The host-side MCP round trip that promotes "launching" to "ready"
 # (must_haves C9/T-01.2-16). When VICE_BROKER_PROBE_CMD names an executable,
@@ -857,23 +875,118 @@ JSON
   return 0
 }
 
+# Selects the LOWEST-PORT spare in state "ready" (a single snapshot read,
+# never re-checked mid-action -- must_haves C9), flips it to leased by
+# writing grants/$id.json carrying its recorded fields plus this request's
+# own id, removes the spare entry, and unlinks the request. Returns non-zero
+# (writing nothing) when no ready spare exists, so the caller falls through
+# to the cold-launch path. NEVER considers an entry in state "launching" --
+# there is no code path here that can select one.
+grant_from_spare() {
+  local id="$1"
+  local f lowest_port="" lowest_file="" state candidate_port
+  if [ -d "$SPARES_DIR" ]; then
+    for f in "$SPARES_DIR"/*.json; do
+      [ -e "$f" ] || continue
+      state="$(read_spare_field "$f" state)"
+      [ "$state" = "ready" ] || continue
+      candidate_port="$(read_spare_field "$f" port)"
+      [ -n "$candidate_port" ] || continue
+      if [ -z "$lowest_port" ] || [ "$candidate_port" -lt "$lowest_port" ]; then
+        lowest_port="$candidate_port"
+        lowest_file="$f"
+      fi
+    done
+  fi
+  [ -n "$lowest_file" ] || return 1
 
-# For each well-formed requests/*.json: allocate the next free port, and
-# under --dry-run record dry_run:true with no spawn at all (under a real
-# run, spawn vice-supervisor.sh detached exactly as vice-pool.sh's own
-# cmd_start does); write grants/<id>.json and unlink the request. The
-# OPERATIVE id for every request is its own body's "id" field
+  local url epoch_file supervisor_dir supervisor_pid launched_at dry_run_field now
+  url="$(read_spare_field "$lowest_file" url)"
+  epoch_file="$(read_spare_field "$lowest_file" epoch_file)"
+  supervisor_dir="$(read_spare_field "$lowest_file" supervisor_dir)"
+  supervisor_pid="$(read_spare_field "$lowest_file" supervisor_pid)"
+  launched_at="$(read_spare_field "$lowest_file" launched_at)"
+  dry_run_field="$(read_spare_field "$lowest_file" dry_run)"
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+  local grant_content
+  grant_content="$(cat <<JSON
+{
+  "version": 1,
+  "id": "$(json_escape "$id")",
+  "port": $lowest_port,
+  "url": "$(json_escape "$url")",
+  "epoch_file": "$(json_escape "$epoch_file")",
+  "supervisor_dir": "$(json_escape "$supervisor_dir")",
+  "supervisor_pid": ${supervisor_pid:-null},
+  "launched_at": ${launched_at:-null},
+  "granted_at": "$now",
+  "dry_run": ${dry_run_field:-false}
+}
+JSON
+)"
+  write_json_atomic "$GRANTS_DIR/$id.json" "$grant_content"
+  rm -f "$lowest_file"
+  rm -f "$REQUESTS_DIR/$id.json"
+  echo "vice-broker: granted request $id -> port $lowest_port (from ready spare)"
+  return 0
+}
+
+# Writes denials/$id.json (T-01.2's own field set: version, id, reason,
+# denied_at) through the atomic helper, unlinks the request, and logs the
+# denial. Called ONLY for the three cases that genuinely cannot be
+# satisfied -- the reason string is the message a human ultimately reads via
+# the container-side broker*Message() builders, so it names the concrete
+# obstacle and the current counts, never a generic failure.
+deny() {
+  local id="$1" reason="$2"
+  local now content
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  content="$(cat <<JSON
+{
+  "version": 1,
+  "id": "$(json_escape "$id")",
+  "reason": "$(json_escape "$reason")",
+  "denied_at": "$now"
+}
+JSON
+)"
+  write_json_atomic "$DENIALS_DIR/$id.json" "$content"
+  rm -f "$REQUESTS_DIR/$id.json"
+  echo "vice-broker: denied request $id -- $reason"
+}
+
+# For each well-formed requests/*.json: prefer a ready spare (grant_from_spare,
+# instant); otherwise, unless the ceiling is already reached, launch a COLD
+# instance and write NEITHER a grant NOR a denial -- the request file stays
+# in place so a LATER pass, once maintain_spares()'s probe promotes this new
+# instance, grants it via grant_from_spare() above. This absence-of-both-files
+# is load-bearing: it is how the container side knows to keep polling, while
+# a denial is how it knows to stop and report (must_haves C9/C10 input).
+#
+# The OPERATIVE id for every request is its own body's "id" field
 # (extract_id_field), never the filename -- validated against
 # is_valid_request_id() BEFORE it is EVER used to build a grant/lease/denial
-# path (T-01.2-01). A request whose id fails that check, or whose body
-# cannot even be parsed far enough to yield one, is skipped with a logged
-# reason and writes NO file anywhere -- one bad request must never stall the
-# rest of the pass (T-01.2-14). Reads the request directory ONCE per pass
-# (the for-loop's own glob) and acts on that snapshot -- a request that
-# appears mid-pass waits for the NEXT pass, never this one.
+# path (T-01.2-01, plan 02). A request whose id fails that check, or whose
+# body cannot even be parsed far enough to yield one, is skipped with a
+# logged reason and writes NO file anywhere (T-01.2-14). Reads the request
+# directory ONCE per pass (the for-loop's own glob) and acts on that
+# snapshot -- a request that appears mid-pass waits for the NEXT pass, never
+# this one.
 process_requests() {
-  local req_file id port now dir epoch_file resolved_args supervisor_pid_field dry_run_field spawned_pid grant_content launch_id
+  local req_file id cold_pending total_now port
   [ -d "$REQUESTS_DIR" ] || return 0
+
+  # A snapshot taken ONCE, before the loop: how many cold launches are
+  # ALREADY in flight from an earlier pass. Without this, a still-pending
+  # request whose own cold instance hasn't become ready yet would trigger a
+  # SECOND (then third, ...) redundant cold launch on every subsequent pass
+  # until it finally promotes -- wasteful, duplicate churn for what is, in
+  # this project's common single-session case, exactly one logical
+  # acquisition. Each still-pending request "consumes" one already-in-flight
+  # cold launch from this snapshot before this pass will start a new one.
+  cold_pending="$(count_cold_launching)"
+
   for req_file in "$REQUESTS_DIR"/*.json; do
     [ -e "$req_file" ] || continue
 
@@ -883,54 +996,27 @@ process_requests() {
       continue
     fi
 
-    port="$(next_free_port)"
-    now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    dir="$VICE_POOL_DIR/$port"
-    epoch_file="$dir/epoch.json"
-    mkdir -p "$dir"
-
-    if [ "$DRY_RUN" -eq 1 ]; then
-      # No real x64sc launches under --dry-run, so there is no real pid to
-      # prove "this is a fresh launch, not a recycled one"
-      # (kill-never-recycle). A CONSTANT placeholder (e.g. "null" for every
-      # dry-run grant) would make that property untestable -- pass
-      # vacuously no matter what the code actually does -- so this uses a
-      # nanosecond-epoch timestamp instead: monotonically increasing and
-      # virtually guaranteed distinct between any two separate grants
-      # (different process invocations, different wall-clock instants).
-      launch_id="$(date +%s%N)"
-      supervisor_pid_field="$launch_id"
-      dry_run_field="true"
-    else
-      resolved_args="-mcpserver -mcpserverhost $VICE_BROKER_MCP_HOST -mcpserverport $port"
-      VICE_SUPERVISOR_DIR="$dir" VICE_ARGS="$resolved_args" \
-        nohup "$SUPERVISOR_SCRIPT" >"$dir/supervisor.log" 2>&1 &
-      spawned_pid=$!
-      disown "$spawned_pid" 2>/dev/null || true
-      supervisor_pid_field="$spawned_pid"
-      launch_id="$(date +%s%N)"
-      dry_run_field="false"
-      echo "vice-broker: spawned supervisor for port $port (pid $spawned_pid), request $id"
+    if grant_from_spare "$id"; then
+      continue
     fi
 
-    grant_content="$(cat <<JSON
-{
-  "version": 1,
-  "id": "$(json_escape "$id")",
-  "port": $port,
-  "url": "http://127.0.0.1:$port/mcp",
-  "epoch_file": "$(json_escape "$epoch_file")",
-  "supervisor_dir": "$(json_escape "$dir")",
-  "supervisor_pid": $supervisor_pid_field,
-  "launched_at": $launch_id,
-  "granted_at": "$now",
-  "dry_run": $dry_run_field
-}
-JSON
-)"
-    write_json_atomic "$GRANTS_DIR/$id.json" "$grant_content"
-    rm -f "$req_file"
-    echo "vice-broker: granted request $id -> port $port"
+    if [ "$cold_pending" -gt 0 ]; then
+      cold_pending=$((cold_pending - 1))
+      continue
+    fi
+
+    total_now="$(count_total)"
+    if [ "$total_now" -ge "$VICE_BROKER_MAX" ]; then
+      deny "$id" "at the instance ceiling ($VICE_BROKER_MAX instances, $total_now in use) -- nothing ready and nothing launchable"
+      continue
+    fi
+
+    port="$(next_free_port)"
+    if launch_instance "$port" "cold"; then
+      echo "vice-broker: cold launch in flight for request $id on port $port -- awaiting readiness, no grant or denial written yet"
+    else
+      deny "$id" "$LAST_LAUNCH_ERROR"
+    fi
   done
 }
 
