@@ -32,11 +32,19 @@ untouched.
 | Startup timeout budget | Have the proxy sleep N seconds before answering `initialize`; find where it is dropped | The real upstream-connect budget, vs the unconfirmed `MCP_TIMEOUT` default |
 | Large-response handling | Return a >25K-token payload | Whether chunking must live in the proxy for 64K RAM reads |
 | **How long is the shutdown grace window really?** | Have the handler write a marker, then busy-wait in ~100ms increments writing progress lines, and see how far it gets before SIGKILL | Whether a synchronous `unlinkSync` release reliably completes. If the window is shorter than assumed, release has to be even cheaper — or become sweeper-only |
-| **First-call latency budget** | Have the tool handler sleep in increasing increments and find where `MCP_TOOL_TIMEOUT` cuts it off | Whether an `x64sc` cold start fits inside one tool call, or the first call must return "warming, retry" |
+| **First-call latency budget** | Have the tool handler sleep in increasing increments and find where `MCP_TOOL_TIMEOUT` cuts it off | The budget available to the *cold* path only — see the note below |
 
-Two of these were added after the design shifted from a fixed pre-launched pool to an on-demand
-host broker (see the design note). They are the two that decide whether automatic release and
-launch-on-first-use are viable at all, so treat them as the highest-value rows in the table.
+Two of these were added after the design shifted from a fixed pre-launched pool to an on-demand host
+broker (see the design note).
+
+**The grace-window row is the one that can still invalidate the design.** If the real window is
+shorter than a synchronous `unlinkSync`, automatic release on session end is not achievable and
+release becomes sweeper-only — a different design, not an adjustment.
+
+**The latency row was downgraded by warm spares.** With the broker holding K boot-fresh instances
+ready, cold start no longer sits on the common path, so this measurement now bounds only the cold
+cases: the first call after the broker starts, and parallel waves that exceed K. Still worth
+measuring — it sets the "warming, retry" threshold — but it can no longer reshape the design.
 
 ## Done when
 

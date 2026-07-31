@@ -182,6 +182,40 @@ common path, rather than a separate branch that rots untested.
 `broker.json` closes the last gap — it lets the proxy distinguish "no broker is running, start it on
 the host" from "still launching," instead of polling until the tool timeout with no diagnosis.
 
+## Warm spares: hiding cold start without rebuilding the pool
+
+The broker keeps **K boot-fresh, never-used instances ready at all times** (`K=1` default). A first
+`tools/call` is handed a ready spare immediately, and the broker starts warming a replacement in the
+background. Cold start moves off the request path and becomes a background cost.
+
+Invariant: `count(ready_spares) == K`, re-evaluated after every grant and every teardown.
+
+### The discipline that makes it safe
+
+**A released instance is killed, never returned to the spare slot.** On-demand beat the fixed pool
+because a newly launched emulator is a known-clean power-on state — which is what retires the reset
+ritual. A warm spare preserves that property only while it has never been used. Recycling released
+instances back into the spare set rebuilds the fixed pool, reintroduces cross-session contamination,
+and keeps none of the benefit. This is the one rule that must not be relaxed for efficiency.
+
+**"Ready" means MCP-ready, not launched.** A TCP accept can occur before the C64 has finished
+booting, so advertising a spare on `port_in_use()` alone would hand out a half-ready machine — and
+that failure presents as a flaky emulator rather than as a race, which is the expensive kind of bug
+in this project. Spares therefore carry explicit `launching` → `ready` states, only `ready` ones are
+grantable, and readiness is proven by an actual MCP round-trip, not a socket probe.
+
+### What it costs and what it keeps
+
+One idle `x64sc` while the broker runs. That is a slice of the fixed pool's idle cost given back —
+but one is not three, and it is the *right* one, since it is the one that buys latency. Both
+properties that made on-demand win are kept intact: no configured cap, and no state contamination.
+
+`K` is a knob, not a constant. A session opening three handles for a parallel wave consumes the spare
+plus two cold launches, so a plan expecting parallel VICE work can raise `K` beforehand.
+
+Broker startup should begin warming immediately, so "start the broker on the host" implies "and it is
+ready within a few seconds" rather than "and the next call still pays for a boot."
+
 ## Broker-absent reporting
 
 The broker is started by hand on the host. Nothing auto-starts it, and nothing needs to — the proxy
@@ -280,10 +314,11 @@ These are the facts the design rests on. Confidence tags are the researcher's.
   startup launches one for every session, including sessions that never touch VICE. Enumerate tools
   without an emulator (from a manifest, or a schema baked in at build time); request on first
   `tools/call`.
-- **(6)+(12) put cold start on the first tool call.** `x64sc` launch + C64 boot + MCP-ready is
-  seconds. Because acquisition is deferred past `initialize`, the wait lands against
-  `MCP_TOOL_TIMEOUT`, not the startup timeout. The first call either completes inside budget or
-  returns an explicit "warming, retry" — never a silent hang.
+- **(6)+(12) would put cold start on the first tool call** — `x64sc` launch + C64 boot + MCP-ready is
+  seconds, and because acquisition is deferred past `initialize`, the wait lands against
+  `MCP_TOOL_TIMEOUT` rather than the startup timeout. **Warm spares move it off that path**; see
+  below. The cold path still needs an explicit "warming, retry" rather than a silent hang, but it is
+  no longer the common case.
 - **(7) makes "never throw" a hard requirement.** The proxy must catch everything and always answer
   in MCP frames. A crashed proxy is unrecoverable for the rest of the session.
 - **(8) makes the host sweeper mandatory** — see the shutdown section.
