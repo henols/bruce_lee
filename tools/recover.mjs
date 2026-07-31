@@ -37,6 +37,7 @@ import {
   captureDecayReference,
   classifyRuns,
 } from "../.claude/skills/c64-ram-capture/scripts/ram-capture.mjs";
+import { captureChipState, buildRangeManifest } from "./chip-state.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, "..");
@@ -138,6 +139,8 @@ export async function recover(releaseId, { runLabel = "run1" } = {}) {
   const dumpsDir = join(releaseDir(releaseId), "dumps");
   const binPath = join(dumpsDir, `${releaseId}-gameentry-${runLabel}.bin`);
   const capturePath = join(dumpsDir, `${releaseId}-gameentry-${runLabel}.capture.json`);
+  const chipStatePath = join(dumpsDir, `${releaseId}-gameentry-${runLabel}.state.json`);
+  const mapPath = join(dumpsDir, `${releaseId}-gameentry-${runLabel}.map.json`);
 
   try {
     await reset();
@@ -181,6 +184,19 @@ export async function recover(releaseId, { runLabel = "run1" } = {}) {
     // each other.
     const instancePort = activeInstance().port;
     const snapName = snapshotName(instancePort, releaseId, runLabel);
+
+    // D-04 chip-state sidecar: captured immediately after the RAM image, while
+    // the machine is still sitting at the trigger instant (capture() leaves it
+    // paused; nothing has run since). This is what makes captureChipState's
+    // facts -- the VIC bank, screen/charset bases, sprite pointers -- true of
+    // the SAME moment the .bin was read, not of some later, drifted state.
+    const chipState = await captureChipState({ release: releaseId, label: runLabel, snapshotName: snapName });
+
+    // D-02 range manifest: derived from the just-captured image bytes, so
+    // `unused` really means "this run's capture found this range uniform",
+    // not a guess.
+    const rangeManifest = buildRangeManifest({ image: cap.image, release: releaseId, label: runLabel, snapshotName: snapName });
+
     let snapshotSaved = true;
     let snapshotNote = null;
     try {
@@ -208,6 +224,8 @@ export async function recover(releaseId, { runLabel = "run1" } = {}) {
     mkdirSync(dumpsDir, { recursive: true });
 
     writeFileSync(binPath, cap.image);
+    writeFileSync(chipStatePath, JSON.stringify(chipState, null, 2) + "\n");
+    writeFileSync(mapPath, JSON.stringify(rangeManifest, null, 2) + "\n");
     const captureRecord = {
       release: releaseId,
       run_label: runLabel,
@@ -243,8 +261,8 @@ export async function recover(releaseId, { runLabel = "run1" } = {}) {
           kind: "gameentry",
           bin: `recovery/${releaseId}/dumps/${releaseId}-gameentry-${runLabel}.bin`,
           capture_record: `recovery/${releaseId}/dumps/${releaseId}-gameentry-${runLabel}.capture.json`,
-          chip_state: null,
-          range_manifest: null,
+          chip_state: `recovery/${releaseId}/dumps/${releaseId}-gameentry-${runLabel}.state.json`,
+          range_manifest: `recovery/${releaseId}/dumps/${releaseId}-gameentry-${runLabel}.map.json`,
           sha256: cap.sha256,
           load_event_ref: null,
         },
@@ -252,7 +270,7 @@ export async function recover(releaseId, { runLabel = "run1" } = {}) {
       snapshot_names: [...new Set([...(r.snapshot_names || []), snapName])],
     }));
 
-    return { binPath, capturePath, sha256: cap.sha256, triggerAddress };
+    return { binPath, capturePath, chipStatePath, mapPath, sha256: cap.sha256, triggerAddress };
   } catch (e) {
     if (e instanceof MachineRestartedError) {
       voidRun({
