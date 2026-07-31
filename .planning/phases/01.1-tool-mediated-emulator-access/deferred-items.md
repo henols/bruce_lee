@@ -63,3 +63,53 @@ caused by the plan's `git mv` relocation or any edit made in this plan:
 
 None of these three are new regressions from this plan's own changes — see
 `01.1-04-SUMMARY.md`'s Deviations section for the full trace.
+
+### Post-merge outcome (recorded by the orchestrator after the wave-4 merge)
+
+All three are now closed. Resolution, item by item:
+
+1. **Both `path agreement` failures — RESOLVED by the merge, exactly as predicted.**
+   Confirmed on merged `main`: `path agreement (D-3, D-6, THE regression this task
+   exists to catch)` and `path agreement without CONTAINER_WORKSPACE_PATH (D-6)` both
+   pass with no code change. The diagnosis above was correct — the failures were an
+   artifact of `CONTAINER_WORKSPACE_PATH` resolving a worktree to the main checkout
+   that had not yet received the `git mv`.
+
+2. **The D-7 `acquire()` zero-config failure — FIXED, not merely explained.**
+   The diagnosis above was right that a live emulator on 6510 was the cause, and
+   that it was not a defect in `acquire()`. But leaving it there would have left a
+   permanently-red test: a live supervised instance on the default port is the normal
+   working state from criterion 3 onward, so the assertion would have tripped every
+   future wave gate. The test now probes the default instance first (via
+   `probeInstance` + `instanceFor(DEFAULT_PORT)`, both already imported) and asserts
+   the branch that applies — `/not answering/` must appear when the port is dead, and
+   must NOT appear when it is live. The D-7 guarantee (warn, never fail) is still
+   guarded where it is meaningful, and the live case gained a real assertion rather
+   than a skip. Verified in both environments: 73/73 with the real emulator answering,
+   and 73/73 under `VICE_MCP_HOST=no-such-host.invalid` to force the dead branch.
+
+## Plan 01.1-04 — intermittent failure in the two-port registry test (OPEN, uninvestigated)
+
+Observed by the orchestrator while establishing the post-merge baseline, and recorded
+because a single run would not have surfaced it.
+
+**Test:** `acquire(): a two-port registry with only one live stub returns the LIVE port
+even when descending order would have preferred the dead one`
+(`.claude/skills/vice-mcp-selector/scripts/vice-pool.test.mjs:1331`)
+
+**Failure rate:** 1 of 5 consecutive full-suite runs before the D-7 fix; 0 of 4 runs
+after it. Not reproduced on demand, and NOT believed to be related to the D-7 change —
+the two tests share no state, so the post-fix clean streak is most likely luck rather
+than a fix.
+
+**What is known:** the test stands up stub HTTP servers and asserts that `acquire()`
+prefers the live port over a dead higher-numbered one. A one-in-five failure in a test
+that builds and tears down real sockets points at a race in stub-server readiness (a
+probe reaching a port before its listener is bound, or a previous test's socket not
+yet released), possibly aggravated by the live host emulator on 6510 competing on the
+same probe path. That is a hypothesis, not a diagnosis — it was not investigated.
+
+**Why deferred:** unrelated to this plan's relocation, and chasing a 20%-reproducible
+socket race is out of scope for a phase whose remaining work was a file move. Recorded
+so that a future intermittent red in this test is recognised as a known flake with a
+starting hypothesis rather than mistaken for a fresh regression.

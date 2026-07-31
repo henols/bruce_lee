@@ -1396,8 +1396,20 @@ test("acquire(): a hostile registry url field is never probed -- the target is d
   });
 });
 
+// Two environments, ONE contract. The zero-config path must always return the
+// default port unpooled; whether it ALSO warns depends on whether anything is
+// actually listening on 6510 -- which is not a property of acquire() and never
+// was. Asserting only the dead-port branch made this test fail for exactly the
+// reason phase 01.1 succeeded: since criterion 3, a real supervised host
+// emulator on the default port is the normal working state, not an exception.
+// So probe first and assert the branch that applies, keeping the D-7
+// guarantee (warn, never fail) guarded where it is meaningful and adding the
+// complementary assertion for a live instance rather than skipping it.
 test("acquire(): zero-config path still returns port 6510 with no registry, probes it, and warns on stderr rather than failing when it is not answering (D-7)", async () => {
   const dir = tmpPoolDir();
+  // instanceFor() derives port+url identically to the private defaultInstance()
+  // for DEFAULT_PORT; only epochFile differs, and a probe reads neither.
+  const { alive } = await probeInstance({ ...instanceFor(DEFAULT_PORT, dir), timeoutMs: 1000 });
   const originalError = console.error;
   let warning = "";
   console.error = (msg) => {
@@ -1411,7 +1423,11 @@ test("acquire(): zero-config path still returns port 6510 with no registry, prob
   }
   assert.equal(l.port, DEFAULT_PORT);
   assert.equal(l.pooled, false);
-  assert.match(warning, /not answering/);
+  if (alive) {
+    assert.doesNotMatch(warning, /not answering/, "a default instance that IS answering must not be reported as not answering");
+  } else {
+    assert.match(warning, /not answering/, "a default instance that is not answering must warn on stderr, never fail");
+  }
   await l.release();
 });
 
