@@ -12,7 +12,7 @@ These apply across every phase and every plan; `/gsd-plan-phase` should inherit 
 
 | Constraint | Consequence for planning |
 |---|---|
-| **VICE is a single shared host instance reached only over MCP** | `parallelization: true` does **not** extend to emulator work. Any two plans that both drive VICE must be serialised, and each must open with the reset/clear-checkpoints/reload ritual before trusting emulator state. Plans marked parallel below are parallel in *authoring*; their VICE steps still queue. **Phase 1.1 does not change this** — it replaces how the emulator is reached, not how many there are. **Phase 1.2 is expected to relax it**: per-session on-demand instances make cross-session concurrency real, and because each is a fresh boot, **the reset/clear-checkpoints/reload ritual should narrow** to within-session reuse only. Intra-*session* parallelism is a separate question deferred to a seed (instance handles), since subagents share their parent's MCP connections. See `.planning/notes/vice-mcp-selector-design.md`; until 1.2 lands, this constraint stands exactly as written and plans must not assume otherwise. |
+| **VICE is a single shared host instance reached only over MCP** | `parallelization: true` does **not** extend to emulator work. Any two plans that both drive VICE must be serialised, and each must open with the reset/clear-checkpoints/reload ritual before trusting emulator state. Plans marked parallel below are parallel in *authoring*; their VICE steps still queue. **Phase 01.1 does not change this** — it replaces how the emulator is reached, not how many there are. **Phase 01.2 is expected to relax it**: per-session on-demand instances make cross-session concurrency real, and because each is a fresh boot, **the reset/clear-checkpoints/reload ritual should narrow** to within-session reuse only. Intra-*session* parallelism is a separate question deferred to a seed (instance handles), since subagents share their parent's MCP connections. See `.planning/notes/vice-mcp-selector-design.md`; until 01.2 lands, this constraint stands exactly as written and plans must not assume otherwise. |
 | **`vice_disk_list` crashes the host MCP server** | Never called. Disk directory inspection is done by parsing `.d64` bytes directly. Recovery from an accidental call needs a manual host-side VICE restart. |
 | **Host-side tools need translated paths** | Every artifact a host-side tool touches stays inside the workspace and goes through the `devcontainer-host-path` skill. |
 | **All ACME warnings are build-blocking; `--strict-segments` always** | Established as a gate in Phase 4 and inherited by every later phase. The `acme-build` skill's wrapper does not currently expose `--strict-segments` or a warning-gated exit — Phase 4 must extend it (or wrap it) rather than assume the flag is reachable. |
@@ -48,8 +48,8 @@ Decimal phases appear between their surrounding integers in numeric order.
 ### Milestone v1.0 — Pipeline Proven *(active)*
 
 - [ ] **Phase 1: Recovery & Provenance** - Defeat both crack loaders, capture a clean canonical memory image, and give every byte range a provenance verdict
-- [ ] **Phase 1.1: Tool-Mediated Emulator Access** *(INSERTED)* - Diagnose why `vice-session` fails, remove it, and replace it with `vice-mcp-selector`: one static `.mcp.json` entry whose stdio proxy forwards to a fixed host port, surfacing the emulator as real `mcp__vice__*` tools and enforcing the known hazards in code. No leasing, no broker — deliberately immune to every unverified assumption
-- [ ] **Phase 1.2: On-Demand Broker & Per-Session Leasing** *(INSERTED)* - Add the host-side broker: launch a fresh `x64sc` per session on first use, kill it at session end, keep N warm spares, sweep orphans on TTL. This is the phase that makes cross-session concurrency real and narrows the reset ritual. Gated by the lifecycle spike
+- [ ] **Phase 01.1: Tool-Mediated Emulator Access** *(INSERTED)* - Diagnose why `vice-session` fails, remove it, and replace it with `vice-mcp-selector`: one static `.mcp.json` entry whose stdio proxy forwards to a fixed host port, surfacing the emulator as real `mcp__vice__*` tools and enforcing the known hazards in code. No leasing, no broker — deliberately immune to every unverified assumption
+- [ ] **Phase 01.2: On-Demand Broker and Per-Session Leasing** *(INSERTED)* - Add the host-side broker: launch a fresh `x64sc` per session on first use, kill it at session end, keep N warm spares, sweep orphans on TTL. This is the phase that makes cross-session concurrency real and narrows the reset ritual. Gated by the lifecycle spike
 - [ ] **Phase 2: Coverage, Hazards & Memory Map** - Classify every byte as code/data/untouched by live trace, label every reachable routine, catalogue every reconstruction hazard, document the memory map
 - [ ] **Phase 3: Verification Harness & Original Baselines** - Build the deterministic replay harness and record the original's checkpoint baselines, before any rebuild exists
 - [ ] **Phase 4: Vertical Slice — Sprite & Display Pilot** - Prove the whole pipeline end-to-end on one subsystem: trace → annotate → document → extract → ACME → `.prg` → verified against baseline
@@ -324,8 +324,8 @@ Two cross-phase overlaps are intended and should be honoured when scheduling wor
 | Milestone | Phase | Plans Complete | Status | Completed |
 |-----------|-------|----------------|--------|-----------|
 | v1.0 | 1. Recovery & Provenance | 3/6 | In Progress|  |
-| v1.0 | 1.1. Tool-Mediated Emulator Access (INSERTED) | 0/3 | Not started | - |
-| v1.0 | 1.2. On-Demand Broker & Leasing (INSERTED) | 0/5 | Not started | - |
+| v1.0 | 01.1. Tool-Mediated Emulator Access (INSERTED) | 0/3 | Not started | - |
+| v1.0 | 01.2. On-Demand Broker & Leasing (INSERTED) | 0/5 | Not started | - |
 | v1.0 | 2. Coverage, Hazards & Memory Map | 0/5 | Not started | - |
 | v1.0 | 3. Verification Harness & Original Baselines | 0/4 | Not started | - |
 | v1.0 | 4. Vertical Slice — Sprite & Display Pilot | 0/5 | Not started | - |
