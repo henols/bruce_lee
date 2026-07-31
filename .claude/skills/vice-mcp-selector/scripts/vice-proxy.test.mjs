@@ -20,6 +20,8 @@ import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PROXY_PATH = join(HERE, "vice-proxy.mjs");
@@ -268,5 +270,130 @@ test("stdout carries only valid JSON-RPC messages", async () => {
   } finally {
     proxy.child.kill();
     await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+// -----------------------------------------------------------------------
+// Plan 01.1-02 task 1: tools/list answers from a committed on-disk snapshot
+// with ZERO emulator involvement, and degrades to a well-formed empty list
+// on any snapshot problem rather than a fetch, a throw, or a hang.
+// -----------------------------------------------------------------------
+
+test("tools/list reads the committed snapshot with no emulator", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vice-proxy-manifest-"));
+  const manifestFile = join(dir, "tools-manifest.json");
+  const fixture = {
+    generated_at: "2026-07-31T00:00:00.000Z",
+    endpoint: "http://example.invalid/mcp",
+    tools: [
+      { name: "vice_ping", description: "ping the emulator", inputSchema: { type: "object", properties: {} } },
+      {
+        name: "vice_memory_read",
+        description: "read a range of C64 memory",
+        inputSchema: {
+          type: "object",
+          properties: { address: { type: "string" }, length: { type: "number" } },
+          required: ["address"],
+        },
+      },
+    ],
+  };
+  writeFileSync(manifestFile, JSON.stringify(fixture), "utf8");
+
+  const { server, requests } = startStandInServer();
+  const port = await listen(server);
+  const proxy = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${port}/mcp`, VICE_TOOLS_MANIFEST: manifestFile });
+
+  try {
+    proxy.send({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } },
+    });
+    await proxy.nextMessage();
+
+    proxy.send({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} });
+    const resp = await proxy.nextMessage();
+    const tools = resp.result.tools;
+    assert.equal(tools.length, 2, "both fixture tools must come back");
+
+    const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+    assert.ok(byName.vice_ping, "vice_ping must be present");
+    assert.ok(byName.vice_memory_read, "vice_memory_read must be present");
+    assert.deepEqual(
+      byName.vice_memory_read.inputSchema,
+      fixture.tools[1].inputSchema,
+      "inputSchema must survive intact"
+    );
+    for (const t of tools) {
+      assert.equal(
+        typeof (t._meta && t._meta["anthropic/maxResultSizeChars"]),
+        "number",
+        `${t.name} must carry _meta["anthropic/maxResultSizeChars"]`
+      );
+    }
+
+    assert.equal(requests.length, 0, "tools/list must make ZERO requests to the stand-in host");
+  } finally {
+    proxy.child.kill();
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("tools/list survives a missing or corrupt snapshot", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vice-proxy-manifest-bad-"));
+  const missingPath = join(dir, "does-not-exist.json");
+  const invalidJsonPath = join(dir, "invalid.json");
+  writeFileSync(invalidJsonPath, "{ this is not valid JSON", "utf8");
+  const wrongShapePath = join(dir, "wrong-shape.json");
+  writeFileSync(wrongShapePath, JSON.stringify({ generated_at: null, endpoint: null, tools: "nope, a string" }), "utf8");
+
+  const { server, requests } = startStandInServer();
+  const port = await listen(server);
+
+  try {
+    for (const manifestFile of [missingPath, invalidJsonPath, wrongShapePath]) {
+      const proxy = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${port}/mcp`, VICE_TOOLS_MANIFEST: manifestFile });
+      try {
+        proxy.send({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } },
+        });
+        await proxy.nextMessage();
+
+        proxy.send({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} });
+        const resp = await proxy.nextMessage();
+        assert.deepEqual(resp.result.tools, [], `expected an empty tools array for ${manifestFile}`);
+
+        // The child must still be alive and answer a SUBSEQUENT
+        // initialize-then-tools/list correctly -- a snapshot problem must
+        // never strand the session.
+        proxy.send({
+          jsonrpc: "2.0",
+          id: 3,
+          method: "initialize",
+          params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } },
+        });
+        const secondInit = await proxy.nextMessage();
+        assert.equal(secondInit.result.protocolVersion, "2025-06-18");
+
+        proxy.send({ jsonrpc: "2.0", id: 4, method: "tools/list", params: {} });
+        const secondList = await proxy.nextMessage();
+        assert.deepEqual(secondList.result.tools, []);
+
+        assert.equal(proxy.child.exitCode, null, "the proxy process must still be running");
+        assert.equal(proxy.child.killed, false);
+      } finally {
+        proxy.child.kill();
+      }
+    }
+    assert.equal(requests.length, 0, "no manifest-read path may ever reach the stand-in host");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
   }
 });
