@@ -50,8 +50,36 @@
 # never in what happens to the instance afterward. A released instance's
 # grant entry is removed, never reset to a re-grantable state
 # (kill-never-recycle): the only way an instance becomes grantable again is a
-# fresh launch. Warm spares and plan 04's three-state diagnostics remain out
-# of THIS script's scope.
+# fresh launch.
+#
+# EXTENDED IN PHASE 01.2 PLAN 04: warm spares. Every launched instance now
+# carries an explicit "launching" -> "ready" state (spares/<port>.json,
+# distinct from grants/<id>.json, which continues to represent LEASED
+# instances exactly as plan 02 left it). Readiness is proven by a real MCP
+# round trip (probe_ready(), an injectable seam via VICE_BROKER_PROBE_CMD, or
+# the default host curl-based vice_ping check) -- a bare port_in_use() TCP
+# accept is explicitly NOT sufficient, because a half-booted C64 can accept a
+# connection before it can actually answer, and handing that out presents as
+# a flaky emulator rather than as a race. maintain_spares() is the single
+# function that owns BOTH the ready_spares == N target and the
+# total_instances <= MAX ceiling, called once at the end of every
+# broker_once() pass (after grants and after teardowns) so the two bounds can
+# never drift apart. A request that finds no ready spare triggers a "cold"
+# launch and gets NEITHER a grant NOR a denial -- the request file stays in
+# place so a LATER pass, once that instance's probe succeeds, grants it;
+# absence of both files is how the container side knows to keep polling,
+# distinct from a denial telling it to stop and report (deny(), producing
+# denials/<id>.json with the three genuinely-unsatisfiable reasons: ceiling
+# reached, port already bound, supervisor script missing). When no readiness
+# mechanism exists on this host at all (no VICE_BROKER_PROBE_CMD and no
+# curl), maintain_spares() warms ZERO speculative spares and logs why --
+# spares are a latency optimisation, not a correctness requirement (the
+# tool-call budget was measured at >=150s, comfortably covering a cold
+# boot) -- but probe_ready() itself still degrades to "trust the launch" in
+# that one specific case for an ALREADY-pending request's cold instance, since
+# refusing to ever grant ANY request on a probe-less host would be strictly
+# worse than the alternative. See probe_ready()'s and maintain_spares()'s own
+# comments below for the reasoning in full.
 #
 # Run the DEPLOYED copy from the HOST workspace, e.g.:
 #   /home/henrik/dev/henrik/git/bruce_lee/tools/vice-broker.sh start
@@ -85,6 +113,12 @@ REQUESTS_DIR="$VICE_POOL_DIR/requests"
 GRANTS_DIR="$VICE_POOL_DIR/grants"
 DENIALS_DIR="$VICE_POOL_DIR/denials"
 LEASES_DIR="$VICE_POOL_DIR/leases"
+# Spare instances (state "launching" or "ready"), NOT YET leased -- one file
+# per port, keyed by port rather than request id because a spare has no
+# request associated with it until grant_from_spare() hands it out (plan 04).
+# Once granted, a spare's entry here is removed and its ongoing record moves
+# to grants/<id>.json, exactly like every other leased instance.
+SPARES_DIR="$VICE_POOL_DIR/spares"
 BROKER_JSON="$VICE_POOL_DIR/broker.json"
 INSTANCES_JSON="$VICE_POOL_DIR/broker-instances.json"
 
@@ -155,10 +189,26 @@ Flags:
                 nothing.
 
 Configuration (all environment-overridable):
-  VICE_BROKER_SPARES       Warm-spares target recorded into broker.json
-                            (default: 3) -- not yet enforced in this version.
-  VICE_BROKER_MAX          Max instances recorded into broker.json
-                            (default: 16) -- not yet enforced in this version.
+  VICE_BROKER_SPARES       Warm-spares target: maintain_spares() launches new
+                            spare instances until this many are in state
+                            "ready" (subject to the ceiling below), re-checked
+                            at the end of every pass (default: 3).
+  VICE_BROKER_MAX          Max instances (spares + leased) maintain_spares()
+                            will ever hold at once (default: 16, range 1..16).
+  VICE_BROKER_PROBE_CMD    Path to an executable readiness probe, invoked as
+                            "$VICE_BROKER_PROBE_CMD" "$port" (the port as a
+                            positional argument, never interpolated into a
+                            command string) -- exit 0 means ready. When unset,
+                            the default host probe is used: a single curl POST
+                            of a vice_ping tools/call, bounded by
+                            VICE_BROKER_PROBE_TIMEOUT_S. When NEITHER this nor
+                            curl is available, maintain_spares() warms ZERO
+                            speculative spares and logs why (D-1.2-J) --
+                            spares are a latency optimisation, not a
+                            correctness requirement.
+  VICE_BROKER_PROBE_TIMEOUT_S
+                            Bound (seconds) on the default curl-based probe's
+                            round trip (default: 5).
   VICE_BROKER_TTL_S        TTL seconds a lease may go unrefreshed before the
                             sweeper reclaims its grant (default: 180 -- three
                             times the 60s heartbeat interval, D-1.2-G; a
@@ -337,8 +387,26 @@ VICE_BROKER_TTL_S="${VICE_BROKER_TTL_S:-180}"
 VICE_BROKER_BASE_PORT="${VICE_BROKER_BASE_PORT:-6510}"
 VICE_BROKER_MCP_HOST="${VICE_BROKER_MCP_HOST:-0.0.0.0}"
 VICE_BROKER_POLL_MS="${VICE_BROKER_POLL_MS:-500}"
+VICE_BROKER_PROBE_CMD="${VICE_BROKER_PROBE_CMD:-}"
+VICE_BROKER_PROBE_TIMEOUT_S="${VICE_BROKER_PROBE_TIMEOUT_S:-5}"
 
-mkdir -p "$VICE_POOL_DIR" "$REQUESTS_DIR" "$GRANTS_DIR" "$DENIALS_DIR" "$LEASES_DIR"
+# VICE_BROKER_MAX validated as an integer 1..16 (same message shape as the
+# existing start [N] range check) -- must_haves C9/T-01.2-05: this is the
+# ceiling maintain_spares() enforces, so a malformed value must be caught
+# here rather than silently coercing to something unbounded or zero.
+if ! [[ "$VICE_BROKER_MAX" =~ ^[0-9]+$ ]] || [ "$VICE_BROKER_MAX" -lt 1 ] || [ "$VICE_BROKER_MAX" -gt 16 ]; then
+  echo "usage error: VICE_BROKER_MAX must be an integer 1..16, got: $VICE_BROKER_MAX" >&2
+  exit 1
+fi
+# VICE_BROKER_SPARES validated as an integer 0..MAX -- zero is legitimate
+# (plan 01's own "N can be 0, no spares logic exists yet" note; here it is
+# now a genuine "warm nothing" configuration, not merely inert).
+if ! [[ "$VICE_BROKER_SPARES" =~ ^[0-9]+$ ]] || [ "$VICE_BROKER_SPARES" -lt 0 ] || [ "$VICE_BROKER_SPARES" -gt "$VICE_BROKER_MAX" ]; then
+  echo "usage error: VICE_BROKER_SPARES must be an integer 0..$VICE_BROKER_MAX, got: $VICE_BROKER_SPARES" >&2
+  exit 1
+fi
+
+mkdir -p "$VICE_POOL_DIR" "$REQUESTS_DIR" "$GRANTS_DIR" "$DENIALS_DIR" "$LEASES_DIR" "$SPARES_DIR"
 
 # ---------------------------------------------------------------- json helpers
 #
@@ -349,6 +417,23 @@ json_escape() {
   s="${s//\\/\\\\}"
   s="${s//\"/\\\"}"
   printf '%s' "$s"
+}
+
+# ---------------------------------------------------------------- port probe
+#
+# Best-effort only (matches vice-pool.sh's own port_in_use(), copied here
+# rather than shared via lib/ since it is a single three-line bash builtin,
+# not worth a new sourced file): if bash's /dev/tcp redirection itself errors
+# for a reason unrelated to the connection (feature unsupported, permission
+# issue), this reports "not in use" and the launch proceeds -- cheaper and
+# clearer than letting the supervisor discover a bound port through its own
+# crash-loop give-up path. This answers ONLY "is a TCP listener already bound
+# here" -- the launch-refusal question it exists for -- and is deliberately
+# NEVER reused as a readiness check (see probe_ready()'s own header comment
+# on exactly this point).
+port_in_use() {
+  local port="$1"
+  ( exec 3<>"/dev/tcp/127.0.0.1/$port" ) 2>/dev/null
 }
 
 # Single atomic-write choke point (T-01.2-03): every protocol file this
@@ -415,30 +500,164 @@ extract_id_field() {
 }
 
 # Next free port at or above VICE_BROKER_BASE_PORT, "free" meaning not
-# already recorded as some other live grant's port -- scans every existing
-# grants/*.json's own "port" field with the same grep-against-known-shape
-# idiom vice-pool.sh's read_registry_ports uses, never jq.
+# already recorded as some other live grant's OR spare's port -- scans every
+# existing grants/*.json AND spares/*.json "port" field with the same
+# grep-against-known-shape idiom vice-pool.sh's read_registry_ports uses,
+# never jq. Spares must be included here (plan 04): a warm spare occupies a
+# real port just as much as a leased grant does, and skipping that dir would
+# let a new launch collide with an already-launching or already-ready spare.
 next_free_port() {
   local port="$VICE_BROKER_BASE_PORT"
-  local f p taken
+  local f p taken d
   while : ; do
     taken=0
-    if [ -d "$GRANTS_DIR" ]; then
-      for f in "$GRANTS_DIR"/*.json; do
+    for d in "$GRANTS_DIR" "$SPARES_DIR"; do
+      [ -d "$d" ] || continue
+      for f in "$d"/*.json; do
         [ -e "$f" ] || continue
         p="$(grep -o '"port": *[0-9]\+' "$f" 2>/dev/null | head -1 | grep -o '[0-9]\+$' || true)"
         if [ -n "$p" ] && [ "$p" = "$port" ]; then
           taken=1
-          break
+          break 2
         fi
       done
-    fi
+    done
     if [ "$taken" -eq 0 ]; then
       printf '%s\n' "$port"
       return 0
     fi
     port=$((port + 1))
   done
+}
+
+# Generic reader for a spares/<port>.json file, mirroring
+# read_instance_field()'s grep-against-known-shape idiom (no jq). $1 = file
+# path, $2 = field name. "id"/"url"/"epoch_file"/"supervisor_dir"/"state"/
+# "reason" are quoted-string fields (or, for "id", always absent on a spare --
+# a spare has no request id until it is granted); every other field here is a
+# bare JSON scalar (number/bool/null).
+read_spare_field() {
+  local file="$1" field="$2"
+  [ -f "$file" ] || return 0
+  case "$field" in
+    url|epoch_file|supervisor_dir|state|reason)
+      grep -o "\"$field\": *\"[^\"]*\"" "$file" 2>/dev/null | sed "s/.*\"$field\": *\"//; s/\"$//" || true
+      ;;
+    *)
+      grep -o "\"$field\": *[^,}[:space:]]*" "$file" 2>/dev/null | sed "s/.*\"$field\": *//" || true
+      ;;
+  esac
+}
+
+# Counts spares currently in state "ready" -- the numerator of the
+# ready_spares == N invariant (must_haves C9). Reads SPARES_DIR once.
+count_ready() {
+  local n=0 f state
+  if [ -d "$SPARES_DIR" ]; then
+    for f in "$SPARES_DIR"/*.json; do
+      [ -e "$f" ] || continue
+      state="$(read_spare_field "$f" state)"
+      [ "$state" = "ready" ] && n=$((n + 1))
+    done
+  fi
+  printf '%s\n' "$n"
+}
+
+# Counts every launched instance regardless of state -- spares
+# (launching+ready) plus leased (grants/*.json) -- the denominator of the
+# total_instances <= MAX ceiling (must_haves C9).
+count_total() {
+  local n=0 f
+  if [ -d "$SPARES_DIR" ]; then
+    for f in "$SPARES_DIR"/*.json; do [ -e "$f" ] && n=$((n + 1)); done
+  fi
+  if [ -d "$GRANTS_DIR" ]; then
+    for f in "$GRANTS_DIR"/*.json; do [ -e "$f" ] && n=$((n + 1)); done
+  fi
+  printf '%s\n' "$n"
+}
+
+# Counts spares in state "launching" whose reason is "cold" -- i.e., a launch
+# already in flight to satisfy some earlier pass's still-pending request.
+# process_requests() consults this to avoid launching a SECOND cold instance
+# for a request that is already covered by one from a previous pass (see its
+# own comment at the call site).
+count_cold_launching() {
+  local n=0 f state reason
+  if [ -d "$SPARES_DIR" ]; then
+    for f in "$SPARES_DIR"/*.json; do
+      [ -e "$f" ] || continue
+      state="$(read_spare_field "$f" state)"
+      reason="$(read_spare_field "$f" reason)"
+      if [ "$state" = "launching" ] && [ "$reason" = "cold" ]; then
+        n=$((n + 1))
+      fi
+    done
+  fi
+  printf '%s\n' "$n"
+}
+
+# The host-side MCP round trip that promotes "launching" to "ready"
+# (must_haves C9/T-01.2-16). When VICE_BROKER_PROBE_CMD names an executable,
+# it is invoked as "$VICE_BROKER_PROBE_CMD" "$port" -- the port passed as a
+# POSITIONAL ARGUMENT, never interpolated into a command string, so there is
+# no injection surface (T-01.2-15) and the test suite gets a clean,
+# deterministic seam. Exit 0 means ready.
+#
+# Otherwise, the DEFAULT host probe: a single curl POST of a tools/call for
+# vice_ping at the instance's own URL, bounded by VICE_BROKER_PROBE_TIMEOUT_S,
+# matching the exact single-POST curl form already documented in
+# tools/README.md's own "Verify the connection" section. Treated as ready
+# ONLY when the response body carries BOTH the "version" and "machine"
+# markers a real vice_ping reply contains -- a bare TCP accept is explicitly
+# NOT sufficient here: the C64 can accept a connection before it has finished
+# booting, and advertising that as ready would hand out a half-ready machine,
+# which presents as a flaky emulator rather than as a race (the expensive
+# kind of bug in this project). This is exactly why port_in_use() -- correct
+# for the launch-refusal check above -- is never reused for this question.
+#
+# When NEITHER a probe command nor curl is available at all, there is
+# genuinely no mechanism left to check with. maintain_spares() responds to
+# that by warming ZERO speculative spares (D-1.2-J) -- but a COLD instance
+# launched for an ALREADY-pending real request is a different situation:
+# refusing to ever promote it would mean this host could never satisfy ANY
+# request at all, which is strictly worse than trusting the launch itself.
+# So in this one degenerate case, and ONLY this one, probe_ready() returns
+# success unconditionally -- there is nothing else it could possibly check.
+probe_ready() {
+  local port="$1"
+
+  if [ -n "$VICE_BROKER_PROBE_CMD" ]; then
+    "$VICE_BROKER_PROBE_CMD" "$port"
+    return $?
+  fi
+
+  if command -v curl >/dev/null 2>&1; then
+    local body response
+    body='{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"vice_ping","arguments":{}}}'
+    response="$(curl -sS --max-time "$VICE_BROKER_PROBE_TIMEOUT_S" \
+      -H 'Content-Type: application/json' -H 'Accept: application/json' \
+      --data "$body" "http://127.0.0.1:$port/mcp" 2>/dev/null || true)"
+    # A real vice_ping result is MCP tool-call content: a JSON-RPC envelope
+    # whose result.content[0].text is ITSELF a JSON-encoded string (matching
+    # vice-probe.mjs's own parseMcpBody()/tool-result shape). That means the
+    # "version"/"machine" keys arrive with their quotes BACKSLASH-ESCAPED in
+    # the raw response bytes (`\"version\"`, not `"version"`) -- matching on
+    # literal unescaped quotes here would never fire against a real server.
+    # Matching the bare words (no quote framing) is deliberately looser, but
+    # correct for both the escaped-string and (if a future server ever
+    # returned it unwrapped) unescaped shape alike.
+    case "$response" in
+      *version*machine*|*machine*version*)
+        return 0
+        ;;
+    esac
+    return 1
+  fi
+
+  # No mechanism whatsoever -- see the header comment above for why this
+  # degrades to "trust the launch" rather than "never ready".
+  return 0
 }
 
 # $1 = started_at (fixed across every loop pass of ONE daemon lifetime --
@@ -473,15 +692,17 @@ JSON
   write_json_atomic "$BROKER_JSON" "$content"
 }
 
-# Rebuilds broker-instances.json entirely from the CURRENT grants/ directory
-# every pass -- this file is a PROJECTION of live grants, never independently
-# maintained state. A torn-down grant (removed by the tear-down function
-# below) simply stops appearing on the very next write, with no separate
-# "mark reusable" step for kill-never-recycle (task 2) to accidentally skip
-# (T-01.2-10). No jq: same grep-against-known-shape idiom as
+# Rebuilds broker-instances.json entirely from the CURRENT grants/ AND
+# spares/ directories every pass -- this file is a PROJECTION of live state,
+# never independently maintained. A torn-down grant (removed by the
+# tear-down function below) simply stops appearing on the very next write,
+# with no separate "mark reusable" step for kill-never-recycle (task 2) to
+# accidentally skip (T-01.2-10). Every leased instance (a live grant) is
+# reported with state "leased"; every spare reports its OWN recorded state
+# ("launching" or "ready"). No jq: same grep-against-known-shape idiom as
 # next_free_port() above.
 write_instances() {
-  local f id port supervisor_pid launched_at dry_run_field first=1 body=""
+  local f id port supervisor_pid launched_at dry_run_field state reason ready_at first=1 body=""
   if [ -d "$GRANTS_DIR" ]; then
     for f in "$GRANTS_DIR"/*.json; do
       [ -e "$f" ] || continue
@@ -497,8 +718,37 @@ write_instances() {
     {
       "id": "$(json_escape "$id")",
       "port": ${port:-null},
+      "state": "leased",
       "supervisor_pid": ${supervisor_pid:-null},
       "launched_at": ${launched_at:-null},
+      "ready_at": null,
+      "dry_run": ${dry_run_field:-false}
+    }
+JSON
+)"
+    done
+  fi
+  if [ -d "$SPARES_DIR" ]; then
+    for f in "$SPARES_DIR"/*.json; do
+      [ -e "$f" ] || continue
+      port="$(read_spare_field "$f" port)"
+      supervisor_pid="$(read_spare_field "$f" supervisor_pid)"
+      launched_at="$(read_spare_field "$f" launched_at)"
+      ready_at="$(read_spare_field "$f" ready_at)"
+      state="$(read_spare_field "$f" state)"
+      reason="$(read_spare_field "$f" reason)"
+      dry_run_field="$(read_spare_field "$f" dry_run)"
+      if [ "$first" -eq 1 ]; then first=0; else body+=","; fi
+      body+="$(cat <<JSON
+
+    {
+      "id": null,
+      "port": ${port:-null},
+      "state": "$(json_escape "${state:-launching}")",
+      "reason": "$(json_escape "${reason:-spare}")",
+      "supervisor_pid": ${supervisor_pid:-null},
+      "launched_at": ${launched_at:-null},
+      "ready_at": ${ready_at:-null},
       "dry_run": ${dry_run_field:-false}
     }
 JSON
@@ -538,22 +788,205 @@ read_instance_field() {
   esac
 }
 
-# For each well-formed requests/*.json: allocate the next free port, and
-# under --dry-run record dry_run:true with no spawn at all (under a real
-# run, spawn vice-supervisor.sh detached exactly as vice-pool.sh's own
-# cmd_start does); write grants/<id>.json and unlink the request. The
-# OPERATIVE id for every request is its own body's "id" field
+# Allocates $1=port for reason $2 ("spare" or "cold"): spawns (or, under
+# --dry-run, pretends to spawn) a supervised instance and records it in
+# spares/$port.json with state "launching" -- NEVER directly grantable; only
+# maintain_spares()'s probe_ready() promotion (or, in the degenerate no-probe
+# case, probe_ready()'s own unconditional-success branch) can move it to
+# "ready", and only grant_from_spare() below can move a ready entry to
+# leased. Sets LAST_LAUNCH_ERROR and returns non-zero on failure so the
+# caller can build a denial reason naming the concrete obstacle (T-mef-05
+# style: visibility, not a guarantee, for the two preconditions checked here).
+#
+# port_in_use() is checked ONLY outside --dry-run, matching vice-pool.sh's
+# own cmd_start convention exactly: a real x64sc genuinely cannot share a
+# bound port, but --dry-run never spawns anything real in the first place,
+# and this file's own tests deliberately grant a dry-run instance against an
+# ALREADY-BOUND port (the in-process stand-in MCP server in the tracer test)
+# so a forwarded call has something real to reach -- gating the check here
+# preserves that pattern exactly as plan 01/02 established it. The
+# "supervisor script missing" precondition, by contrast, is checked
+# REGARDLESS of --dry-run: it has no side effect either way, is a real fact
+# about this host that matters in every mode, and gating it behind
+# "not dry-run" would make that denial path untestable without a real x64sc
+# -- exactly the scenario this project's own hazard note forbids relying on
+# in this container.
+LAST_LAUNCH_ERROR=""
+launch_instance() {
+  local port="$1" reason="$2"
+  LAST_LAUNCH_ERROR=""
+
+  if [ "$DRY_RUN" -eq 0 ] && port_in_use "$port"; then
+    LAST_LAUNCH_ERROR="port $port is already bound"
+    echo "vice-broker: refusing to launch on port $port -- something is already listening there" >&2
+    return 1
+  fi
+  if [ ! -e "$SUPERVISOR_SCRIPT" ]; then
+    LAST_LAUNCH_ERROR="supervisor script not found at $SUPERVISOR_SCRIPT"
+    echo "vice-broker: cannot launch on port $port -- $LAST_LAUNCH_ERROR" >&2
+    return 2
+  fi
+
+  local dir epoch_file resolved_args supervisor_pid_field dry_run_field spawned_pid launched_at
+  dir="$VICE_POOL_DIR/$port"
+  epoch_file="$dir/epoch.json"
+  mkdir -p "$dir"
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    # No real x64sc launches under --dry-run, so there is no real pid to
+    # prove "this is a fresh launch, not a recycled one" (kill-never-recycle,
+    # plan 02). A CONSTANT placeholder would make that property untestable --
+    # pass vacuously no matter what the code actually does -- so this uses a
+    # nanosecond-epoch timestamp instead: monotonically increasing and
+    # virtually guaranteed distinct between any two separate launches.
+    launched_at="$(date +%s%N)"
+    supervisor_pid_field="$launched_at"
+    dry_run_field="true"
+  else
+    resolved_args="-mcpserver -mcpserverhost $VICE_BROKER_MCP_HOST -mcpserverport $port"
+    VICE_SUPERVISOR_DIR="$dir" VICE_ARGS="$resolved_args" \
+      nohup "$SUPERVISOR_SCRIPT" >"$dir/supervisor.log" 2>&1 &
+    spawned_pid=$!
+    disown "$spawned_pid" 2>/dev/null || true
+    supervisor_pid_field="$spawned_pid"
+    launched_at="$(date +%s%N)"
+    dry_run_field="false"
+  fi
+
+  local content
+  content="$(cat <<JSON
+{
+  "version": 1,
+  "port": $port,
+  "url": "http://127.0.0.1:$port/mcp",
+  "epoch_file": "$(json_escape "$epoch_file")",
+  "supervisor_dir": "$(json_escape "$dir")",
+  "supervisor_pid": $supervisor_pid_field,
+  "launched_at": $launched_at,
+  "ready_at": null,
+  "state": "launching",
+  "reason": "$(json_escape "$reason")",
+  "dry_run": $dry_run_field
+}
+JSON
+)"
+  write_json_atomic "$SPARES_DIR/$port.json" "$content"
+  echo "vice-broker: launched port $port (reason: $reason)"
+  return 0
+}
+
+# Selects the LOWEST-PORT spare in state "ready" (a single snapshot read,
+# never re-checked mid-action -- must_haves C9), flips it to leased by
+# writing grants/$id.json carrying its recorded fields plus this request's
+# own id, removes the spare entry, and unlinks the request. Returns non-zero
+# (writing nothing) when no ready spare exists, so the caller falls through
+# to the cold-launch path. NEVER considers an entry in state "launching" --
+# there is no code path here that can select one.
+grant_from_spare() {
+  local id="$1"
+  local f lowest_port="" lowest_file="" state candidate_port
+  if [ -d "$SPARES_DIR" ]; then
+    for f in "$SPARES_DIR"/*.json; do
+      [ -e "$f" ] || continue
+      state="$(read_spare_field "$f" state)"
+      [ "$state" = "ready" ] || continue
+      candidate_port="$(read_spare_field "$f" port)"
+      [ -n "$candidate_port" ] || continue
+      if [ -z "$lowest_port" ] || [ "$candidate_port" -lt "$lowest_port" ]; then
+        lowest_port="$candidate_port"
+        lowest_file="$f"
+      fi
+    done
+  fi
+  [ -n "$lowest_file" ] || return 1
+
+  local url epoch_file supervisor_dir supervisor_pid launched_at dry_run_field now
+  url="$(read_spare_field "$lowest_file" url)"
+  epoch_file="$(read_spare_field "$lowest_file" epoch_file)"
+  supervisor_dir="$(read_spare_field "$lowest_file" supervisor_dir)"
+  supervisor_pid="$(read_spare_field "$lowest_file" supervisor_pid)"
+  launched_at="$(read_spare_field "$lowest_file" launched_at)"
+  dry_run_field="$(read_spare_field "$lowest_file" dry_run)"
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+  local grant_content
+  grant_content="$(cat <<JSON
+{
+  "version": 1,
+  "id": "$(json_escape "$id")",
+  "port": $lowest_port,
+  "url": "$(json_escape "$url")",
+  "epoch_file": "$(json_escape "$epoch_file")",
+  "supervisor_dir": "$(json_escape "$supervisor_dir")",
+  "supervisor_pid": ${supervisor_pid:-null},
+  "launched_at": ${launched_at:-null},
+  "granted_at": "$now",
+  "dry_run": ${dry_run_field:-false}
+}
+JSON
+)"
+  write_json_atomic "$GRANTS_DIR/$id.json" "$grant_content"
+  rm -f "$lowest_file"
+  rm -f "$REQUESTS_DIR/$id.json"
+  echo "vice-broker: granted request $id -> port $lowest_port (from ready spare)"
+  return 0
+}
+
+# Writes denials/$id.json (T-01.2's own field set: version, id, reason,
+# denied_at) through the atomic helper, unlinks the request, and logs the
+# denial. Called ONLY for the three cases that genuinely cannot be
+# satisfied -- the reason string is the message a human ultimately reads via
+# the container-side broker*Message() builders, so it names the concrete
+# obstacle and the current counts, never a generic failure.
+deny() {
+  local id="$1" reason="$2"
+  local now content
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  content="$(cat <<JSON
+{
+  "version": 1,
+  "id": "$(json_escape "$id")",
+  "reason": "$(json_escape "$reason")",
+  "denied_at": "$now"
+}
+JSON
+)"
+  write_json_atomic "$DENIALS_DIR/$id.json" "$content"
+  rm -f "$REQUESTS_DIR/$id.json"
+  echo "vice-broker: denied request $id -- $reason"
+}
+
+# For each well-formed requests/*.json: prefer a ready spare (grant_from_spare,
+# instant); otherwise, unless the ceiling is already reached, launch a COLD
+# instance and write NEITHER a grant NOR a denial -- the request file stays
+# in place so a LATER pass, once maintain_spares()'s probe promotes this new
+# instance, grants it via grant_from_spare() above. This absence-of-both-files
+# is load-bearing: it is how the container side knows to keep polling, while
+# a denial is how it knows to stop and report (must_haves C9/C10 input).
+#
+# The OPERATIVE id for every request is its own body's "id" field
 # (extract_id_field), never the filename -- validated against
 # is_valid_request_id() BEFORE it is EVER used to build a grant/lease/denial
-# path (T-01.2-01). A request whose id fails that check, or whose body
-# cannot even be parsed far enough to yield one, is skipped with a logged
-# reason and writes NO file anywhere -- one bad request must never stall the
-# rest of the pass (T-01.2-14). Reads the request directory ONCE per pass
-# (the for-loop's own glob) and acts on that snapshot -- a request that
-# appears mid-pass waits for the NEXT pass, never this one.
+# path (T-01.2-01, plan 02). A request whose id fails that check, or whose
+# body cannot even be parsed far enough to yield one, is skipped with a
+# logged reason and writes NO file anywhere (T-01.2-14). Reads the request
+# directory ONCE per pass (the for-loop's own glob) and acts on that
+# snapshot -- a request that appears mid-pass waits for the NEXT pass, never
+# this one.
 process_requests() {
-  local req_file id port now dir epoch_file resolved_args supervisor_pid_field dry_run_field spawned_pid grant_content launch_id
+  local req_file id cold_pending total_now port
   [ -d "$REQUESTS_DIR" ] || return 0
+
+  # A snapshot taken ONCE, before the loop: how many cold launches are
+  # ALREADY in flight from an earlier pass. Without this, a still-pending
+  # request whose own cold instance hasn't become ready yet would trigger a
+  # SECOND (then third, ...) redundant cold launch on every subsequent pass
+  # until it finally promotes -- wasteful, duplicate churn for what is, in
+  # this project's common single-session case, exactly one logical
+  # acquisition. Each still-pending request "consumes" one already-in-flight
+  # cold launch from this snapshot before this pass will start a new one.
+  cold_pending="$(count_cold_launching)"
+
   for req_file in "$REQUESTS_DIR"/*.json; do
     [ -e "$req_file" ] || continue
 
@@ -563,54 +996,101 @@ process_requests() {
       continue
     fi
 
-    port="$(next_free_port)"
-    now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    dir="$VICE_POOL_DIR/$port"
-    epoch_file="$dir/epoch.json"
-    mkdir -p "$dir"
-
-    if [ "$DRY_RUN" -eq 1 ]; then
-      # No real x64sc launches under --dry-run, so there is no real pid to
-      # prove "this is a fresh launch, not a recycled one"
-      # (kill-never-recycle). A CONSTANT placeholder (e.g. "null" for every
-      # dry-run grant) would make that property untestable -- pass
-      # vacuously no matter what the code actually does -- so this uses a
-      # nanosecond-epoch timestamp instead: monotonically increasing and
-      # virtually guaranteed distinct between any two separate grants
-      # (different process invocations, different wall-clock instants).
-      launch_id="$(date +%s%N)"
-      supervisor_pid_field="$launch_id"
-      dry_run_field="true"
-    else
-      resolved_args="-mcpserver -mcpserverhost $VICE_BROKER_MCP_HOST -mcpserverport $port"
-      VICE_SUPERVISOR_DIR="$dir" VICE_ARGS="$resolved_args" \
-        nohup "$SUPERVISOR_SCRIPT" >"$dir/supervisor.log" 2>&1 &
-      spawned_pid=$!
-      disown "$spawned_pid" 2>/dev/null || true
-      supervisor_pid_field="$spawned_pid"
-      launch_id="$(date +%s%N)"
-      dry_run_field="false"
-      echo "vice-broker: spawned supervisor for port $port (pid $spawned_pid), request $id"
+    if grant_from_spare "$id"; then
+      continue
     fi
 
-    grant_content="$(cat <<JSON
-{
-  "version": 1,
-  "id": "$(json_escape "$id")",
-  "port": $port,
-  "url": "http://127.0.0.1:$port/mcp",
-  "epoch_file": "$(json_escape "$epoch_file")",
-  "supervisor_dir": "$(json_escape "$dir")",
-  "supervisor_pid": $supervisor_pid_field,
-  "launched_at": $launch_id,
-  "granted_at": "$now",
-  "dry_run": $dry_run_field
+    if [ "$cold_pending" -gt 0 ]; then
+      cold_pending=$((cold_pending - 1))
+      continue
+    fi
+
+    total_now="$(count_total)"
+    if [ "$total_now" -ge "$VICE_BROKER_MAX" ]; then
+      deny "$id" "at the instance ceiling ($VICE_BROKER_MAX instances, $total_now in use) -- nothing ready and nothing launchable"
+      continue
+    fi
+
+    port="$(next_free_port)"
+    if launch_instance "$port" "cold"; then
+      echo "vice-broker: cold launch in flight for request $id on port $port -- awaiting readiness, no grant or denial written yet"
+    else
+      deny "$id" "$LAST_LAUNCH_ERROR"
+    fi
+  done
 }
-JSON
-)"
-    write_json_atomic "$GRANTS_DIR/$id.json" "$grant_content"
-    rm -f "$req_file"
-    echo "vice-broker: granted request $id -> port $port"
+
+# The single function that owns BOTH halves of the spare invariant
+# (must_haves C9/T-01.2-05): ready_spares == VICE_BROKER_SPARES, subject to
+# total_instances <= VICE_BROKER_MAX, re-evaluated after every grant and
+# every teardown (broker_once calls this LAST, after process_requests and
+# sweep_grants). Both bounds are read ONLY here (and in the argument
+# validation above) so they can never drift apart into two independently
+# maintained limits.
+#
+# Step 1: promote every existing "launching" spare whose probe_ready() now
+# succeeds, stamping ready_at and logging the transition with its elapsed
+# time. This runs regardless of probe availability -- see probe_ready()'s own
+# comment for why an unavailable probe still lets an ALREADY-launched cold
+# instance promote (trust-the-launch), even though step 2 below will not
+# speculatively launch anything new in that same case.
+#
+# Step 2: when no readiness mechanism is available at all (T-01.2-16/D-1.2-J
+# -- neither VICE_BROKER_PROBE_CMD nor curl), warm ZERO speculative spares and
+# log exactly one line naming what is missing, the consequence (every
+# acquisition pays a cold launch), and the fix -- then return. Spares are a
+# latency optimisation (the tool-call budget was measured at >=150s,
+# comfortably covering a cold boot), never a correctness requirement, so
+# guessing here would trade a real hazard for a marginal latency win.
+#
+# Step 3: otherwise, take ONE snapshot of count_ready()/count_total() (after
+# the promotions above) and launch new spares while the snapshot's ready
+# count is below VICE_BROKER_SPARES AND the snapshot's total is below
+# VICE_BROKER_MAX -- both counters advance locally as each new spare is
+# launched (a launch always starts "launching", never "ready", but for the
+# purpose of deciding how many MORE to start in this pass it counts toward
+# the target being pursued; the probe on a genuinely still-booting instance
+# only succeeds on a LATER pass, which is what makes the "two passes to reach
+# steady state" behavior in this file's own tests true).
+maintain_spares() {
+  local f port
+
+  if [ -d "$SPARES_DIR" ]; then
+    for f in "$SPARES_DIR"/*.json; do
+      [ -e "$f" ] || continue
+      if [ "$(read_spare_field "$f" state)" = "launching" ]; then
+        port="$(read_spare_field "$f" port)"
+        if [ -n "$port" ] && probe_ready "$port"; then
+          local launched_at now_ns elapsed_ns elapsed_s content
+          launched_at="$(read_spare_field "$f" launched_at)"
+          now_ns="$(date +%s%N)"
+          elapsed_s="?"
+          if [ -n "$launched_at" ]; then
+            elapsed_ns=$((now_ns - launched_at))
+            [ "$elapsed_ns" -lt 0 ] && elapsed_ns=0
+            elapsed_s=$((elapsed_ns / 1000000000))
+          fi
+          content="$(cat "$f")"
+          content="$(printf '%s' "$content" | sed 's/"state": *"launching"/"state": "ready"/; s/"ready_at": *null/"ready_at": '"$now_ns"'/')"
+          write_json_atomic "$f" "$content"
+          echo "vice-broker: port $port launching -> ready (${elapsed_s}s)"
+        fi
+      fi
+    done
+  fi
+
+  if [ -z "$VICE_BROKER_PROBE_CMD" ] && ! command -v curl >/dev/null 2>&1; then
+    echo "vice-broker: no readiness probe available (VICE_BROKER_PROBE_CMD is unset and curl was not found) -- warming ZERO speculative spares; every acquisition will pay a cold launch until this is fixed (set VICE_BROKER_PROBE_CMD to an executable readiness check, or install curl)" >&2
+    return 0
+  fi
+
+  local ready total
+  ready="$(count_ready)"
+  total="$(count_total)"
+  while [ "$ready" -lt "$VICE_BROKER_SPARES" ] && [ "$total" -lt "$VICE_BROKER_MAX" ]; do
+    launch_instance "$(next_free_port)" "spare"
+    ready=$((ready + 1))
+    total=$((total + 1))
   done
 }
 
@@ -678,16 +1158,21 @@ sweep_grants() {
   done
 }
 
-# One pass, in this fixed order: grant every well-formed pending request;
-# tear down every grant whose lease is gone or stale; rebuild
-# broker-instances.json as a projection of whatever grants remain. Each step
-# reads its own facts once and acts on that snapshot. write_broker_json() is
-# NOT called here -- it is the caller's job (cmd_start), since started_at
-# must stay fixed across every pass of one daemon lifetime, not be
-# rewritten by broker_once() itself.
+# One pass, in this fixed order (plan 04 adds maintain_spares, LAST -- "after
+# grants and after teardowns" per its own must_haves, so the spare invariant
+# is always re-evaluated against the freshest possible grant/teardown state):
+# grant every well-formed pending request from a ready spare or a fresh cold
+# launch; tear down every grant whose lease is gone or stale; promote/launch
+# spares to restore the ready_spares == N invariant under the total <= MAX
+# ceiling; rebuild broker-instances.json as a projection of whatever grants
+# and spares remain. Each step reads its own facts once and acts on that
+# snapshot. write_broker_json() is NOT called here -- it is the caller's job
+# (cmd_start), since started_at must stay fixed across every pass of one
+# daemon lifetime, not be rewritten by broker_once() itself.
 broker_once() {
   process_requests
   sweep_grants
+  maintain_spares
   write_instances
 }
 
