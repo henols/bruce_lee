@@ -20,7 +20,7 @@ import { call, activeInstance, DENY_LIST, readEpoch, beginSession, MachineRestar
 // reconnect ladder.
 import { probeInstance } from "./vice-probe.mjs";
 import { repoRoot } from "./repo-root.mjs";
-import { hostPath, SET_ENV_HINT } from "../../devcontainer-host-path/scripts/hostpath.mjs";
+import { hostPath, SET_ENV_HINT } from "../../skills/devcontainer-host-path/scripts/hostpath.mjs";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";

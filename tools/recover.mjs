@@ -17,8 +17,8 @@ import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
 
-import { call, beginSession, MachineRestartedError, useInstance, activeInstance } from "../.claude/skills/vice-mcp-selector/scripts/vice.mjs";
-import { acquire } from "../.claude/skills/vice-mcp-selector/scripts/vice-pool.mjs";
+import { call, beginSession, MachineRestartedError, useInstance, activeInstance } from "../.claude/mcp/vice/vice.mjs";
+import { acquire } from "../.claude/mcp/vice/vice-pool.mjs";
 import { release, releaseDir, upsertRelease } from "./releases.mjs";
 import {
   addrNum,
@@ -26,7 +26,7 @@ import {
   runToCheckpoint,
   reset as syncReset,
   screenshot,
-} from "../.claude/skills/vice-mcp-selector/scripts/vice-sync.mjs";
+} from "../.claude/mcp/vice/vice-sync.mjs";
 import {
   attachAndStart,
   findEntry,

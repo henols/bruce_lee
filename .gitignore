@@ -59,10 +59,12 @@ dkms.conf
 # Claude Code state staged for the first devcontainer rebuild (contains credentials)
 .devcontainer/.claude-seed/
 
-# Claude Code: track this project's own skills, ignore the installed toolkit
-# (agents, commands, hooks, gsd-core and local settings are per-machine)
+# Claude Code: track this project's own skills and its non-skill MCP server
+# implementations, ignore the installed toolkit (agents, commands, hooks,
+# gsd-core and local settings are per-machine)
 .claude/*
 !.claude/skills/
+!.claude/mcp/
 
 # scratch notes
 anything.*

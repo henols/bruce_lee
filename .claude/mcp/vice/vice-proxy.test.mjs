@@ -24,7 +24,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { mkdtempSync, writeFileSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { hostPath } from "../../devcontainer-host-path/scripts/hostpath.mjs";
+import { hostPath } from "../../skills/devcontainer-host-path/scripts/hostpath.mjs";
 import { repoRoot } from "./repo-root.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
