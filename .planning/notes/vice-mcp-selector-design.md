@@ -104,6 +104,84 @@ the lease released and the broker, which outlives it, does the teardown.
 it leaks an orphaned `x64sc` eating host RAM, so the host-side sweeper is mandatory rather than
 hygiene. Only the host can kill host processes, which is another reason the broker must exist.
 
+## The broker protocol: files on the shared bind mount
+
+File IPC is the only channel available — the container cannot signal a host process any other way —
+and it is the channel `epoch.json` and `registry.json` already use (design decision D-2).
+
+Verified properties of this boundary (2026-07-31, in-container):
+
+| Property | Value | Consequence |
+|---|---|---|
+| Container identity | `uid=1000(vscode) gid=1000(vscode)` | — |
+| Workspace ownership | `1000:1000` | The host's `henrik` is also uid 1000, so **either side can create and unlink the other's files**. This is the risk that would silently break file IPC; it is clear |
+| Mount type | `/dev/nvme0n1p4[/henrik/dev/henrik/git/bruce_lee]`, **ext4** — a real bind mount, not gRPC-FUSE/virtiofs | Same inodes both sides, so `inotify` works across the boundary |
+| `registry.json` mode | `0600` | Fine while both sides are uid 1000; breaks if the broker ever runs as a different host user. Decide this deliberately rather than inherit it |
+
+**Poll as the contract, inotify as an optional accelerator.** The mount type is a property of this
+host, not of the design — a macOS/Windows host would not have it. `acquire()` already polls at
+500ms, so the latency floor is acceptable without watching.
+
+**The broker needs no path translation.** It runs on the host and resolves the repo root itself via
+`lib/repo-root.sh`. Only file *contents* naming paths (attaching a `.d64`) go through the
+`devcontainer-host-path` skill.
+
+### Layout
+
+Everything lives under the **existing** `.vice-supervisor/` directory — already gitignored
+(`.gitignore:76`), already on the bind mount, already holding a `leases/` folder and the per-port
+supervisor dirs. The protocol adds files to a directory that exists, rather than introducing a new
+location, a new mount, or a new gitignore entry.
+
+```
+.vice-supervisor/
+  broker.json           host writes  — liveness: pid, started_at, heartbeat mtime
+  registry.json         host writes  — existing; what is currently launched
+  requests/<id>.json    proxy writes — {op, proxy_pid, created_at}
+  grants/<id>.json      host writes  — {port, epoch, x64sc_pid, granted_at}
+  denials/<id>.json     host writes  — {reason} when a launch fails
+  leases/<id>           proxy writes — lease, heartbeat, AND release signal   (dir exists today)
+  <port>/               host writes  — existing per-port epoch.json + logs; still per-port, since
+                                       an on-demand x64sc still binds one
+```
+
+Every write is tmp-file + `rename()` in the same directory — never in place, or a poller reads a
+half-written file. The pool already writes `registry.json` atomically, so the idiom exists.
+
+### Lifecycle
+
+1. **Proxy startup** — nothing. Acquisition is deferred (finding 6) so a session that never touches
+   VICE never launches an emulator.
+2. **First `tools/call`** — proxy writes `requests/<id>.json`, creates `leases/<id>`, then polls for
+   `grants/<id>.json` or `denials/<id>.json`.
+3. **Broker loop** — scans `requests/`, launches `x64sc`, writes `grants/<id>.json`, removes the
+   request.
+4. **Proxy** reads the grant, connects to the port, forwards the pending call.
+5. **Steady state** — proxy touches `leases/<id>` on every call *and* on an interval timer. The
+   timer matters: touch-on-call alone would let a session that is merely thinking look abandoned.
+6. **Session end** — `unlinkSync(leases/<id>)` in the shutdown handler. One syscall, nothing awaited.
+7. **Broker** notices the lease is gone, kills that `x64sc` by the pid it recorded (identity-verified,
+   never a name match — the existing `stop` path already does this), removes the grant.
+8. **Crash** — the lease file survives but its mtime stops advancing; the broker sweeps it on TTL and
+   runs *the same teardown as step 7*.
+
+### Why release is a delete, not a write
+
+This is the load-bearing choice. Two constraints otherwise fight: the shutdown handler must do one
+cheap synchronous operation (finding 8), and only the host can kill a host process. Making the lease
+file's **absence** the release signal satisfies both — the proxy never writes at shutdown, it only
+unlinks, and the host does all teardown.
+
+One file then does three jobs: its existence is the lease, its mtime is the heartbeat, its removal is
+the release.
+
+The property that follows: **there is exactly one teardown path.** Graceful release and TTL sweep
+differ only in latency, converging on the same broker code. The rarely-exercised crash path *is* the
+common path, rather than a separate branch that rots untested.
+
+`broker.json` closes the last gap — it lets the proxy distinguish "no broker is running, start it on
+the host" from "still launching," instead of polling until the tool timeout with no diagnosis.
+
 ## Instance handles: the resolution to the parallelism fork
 
 `tools/vice-pool.sh:33` justifies a pool partly on throughput — *"N instances interleave and scaling
@@ -185,6 +263,11 @@ These are the facts the design rests on. Confidence tags are the researcher's.
 3. **What is the broker's own lifecycle?** Something has to start it, and it must survive host VICE
    restarts. If it must be started by hand, the "no host-side helpers" ergonomics regress relative
    to a pool that was also started by hand — this is a wash, but it should be a deliberate wash.
+6. **Does `registry.json` stay `0600`?** It works only while broker and proxy share uid 1000. Either
+   widen the mode or record uid-parity as a stated precondition of the whole design.
+7. **What is the request-id scheme?** It must not reuse a value across sessions, since grants and
+   leases are keyed by it and ports are recycled. It is also the natural snapshot-name prefix, now
+   that port-prefixing breaks under on-demand launch.
 4. **Does `vice-mcp-selector` absorb the pause-on-state-read polling discipline?** The proxy sees
    every call, so it could enforce read → run → poll-with-ping ordering rather than documenting it.
 5. **How does the epoch check interact with intentional fresh boots?** A blank machine is now the
