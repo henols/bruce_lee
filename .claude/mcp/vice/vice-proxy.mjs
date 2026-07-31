@@ -158,6 +158,68 @@ const OUTPUT_CHAR_CAP = (() => {
   return Number.isFinite(n) && n > 0 ? n : 500000;
 })();
 
+// -------------------------------------------------- output-limit warning
+//
+// D-1.2-H (plan 01.2-03 task 2). MAX_MCP_OUTPUT_TOKENS genuinely governs
+// the CLIENT's own inline-response ceiling (measured at 40-60KB --
+// spike-findings-bruce-lee skill, large-response-chunking.md -- about half
+// the design's original ~100KB assumption; a 64K RAM read is ~192KB as
+// hex, far above either figure). It is read from the client's own process
+// environment, set via `.claude/settings.json`'s `env` block, which this
+// repo's `.gitignore` makes untrackable (`.claude/*`, `.gitignore` lines
+// 62-67) -- the same structural wall plan 01.1-04 hit with
+// `.claude/CLAUDE.md`. It genuinely cannot be committed, so this proxy
+// documents the required value in a tracked file (`tools/README.md`'s
+// "Per-machine setup" section) and makes its OWN inherited environment's
+// view of the setting OBSERVABLE on stderr, rather than silently assuming
+// it is set. This is a WARNING, never a refusal: nothing throws, no call is
+// rejected, and stdout carries only MCP messages (see the stdin-loop
+// comment below) -- exactly one stderr line, at most once per process.
+//
+// Deliberately NOT resolved here, per this task's own instruction: the
+// standing 32KB chunking non-negotiable and this proxy's own 500,000-char
+// `_meta` ceiling (OUTPUT_CHAR_CAP above) are only compatible if a per-tool
+// override is genuinely honoured, which was never measured -- the spike
+// bracketed the inline ceiling at 40-60KB with no override set. Recorded as
+// a deferred item in this plan's SUMMARY (both numbers, the one open
+// question), not fixed by this warning or by changing OUTPUT_CHAR_CAP.
+const REQUIRED_MAX_MCP_OUTPUT_TOKENS = 25000;
+let outputLimitWarned = false;
+
+function warnOnceAboutOutputLimit() {
+  if (outputLimitWarned) return;
+  outputLimitWarned = true;
+  const raw = process.env.MAX_MCP_OUTPUT_TOKENS;
+  const n = Number(raw);
+  const sufficient = raw !== undefined && Number.isFinite(n) && n >= REQUIRED_MAX_MCP_OUTPUT_TOKENS;
+  if (sufficient) return;
+  console.error(
+    `vice-proxy: MAX_MCP_OUTPUT_TOKENS is ${raw === undefined ? "not set" : `set to ${raw}`} in this ` +
+      `process's environment -- this project requires at least ${REQUIRED_MAX_MCP_OUTPUT_TOKENS}. Set it in ` +
+      `.claude/settings.json's "env" block (untracked -- see tools/README.md's "Per-machine setup" ` +
+      `section for why and the exact value).`
+  );
+}
+
+// Two client behaviours this proxy deliberately does NOT rely on, recorded
+// here so a later reader does not reach for either as a solution:
+//
+// 1. MCP_TIMEOUT does NOT extend the startup handshake. The measurement
+//    behind that claim tested only a 60s cap against a 10s delay, so it
+//    cannot distinguish "honoured but never reached" from "does nothing",
+//    and current official documentation describes it as a startup timeout
+//    -- genuinely OPEN, not settled. Moot for this proxy either way:
+//    handleInitialize() (above) answers with zero host I/O, so there is no
+//    slow handshake here that would need extending.
+// 2. Automatic backgrounding of long tool calls does NOT apply to this
+//    project's dominant call pattern. It covers only main-conversation
+//    calls and explicitly excludes calls originating from subagents, and
+//    this project's emulator work runs overwhelmingly through executor
+//    waves, which are subagent-driven and share their parent session's
+//    single proxy connection. brokerWarmingMessage() (below) is therefore
+//    the PRIMARY cold-path mechanism, not a fallback for something the
+//    client will handle on this project's behalf.
+
 // The synthetic continuation tool (task 3, decision D-E): served entirely
 // inside this proxy, NEVER forwarded to the host, and advertised in every
 // tools/list response exactly like a real tool so an agent can discover it
@@ -1100,5 +1162,7 @@ process.on("SIGINT", () => onTeardown("SIGINT"));
 process.on("SIGTERM", () => onTeardown("SIGTERM"));
 process.on("SIGHUP", () => onTeardown("SIGHUP"));
 // TEARDOWN-REGION-END
+
+warnOnceAboutOutputLimit(); // D-1.2-H -- one stderr line, at most once per process, never a refusal
 
 console.error(`vice-proxy: ready, forwarding to ${activeInstance().url} (port ${activeInstance().port})`);

@@ -1945,3 +1945,111 @@ test("broker warming: a poll timeout with no grant or denial is a warming-and-re
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// -----------------------------------------------------------------------
+// Plan 01.2-03 task 2: the two client-side thresholds are set explicitly,
+// not inherited -- .mcp.json's per-server `timeout` is ordered correctly
+// against the proxy's own grant-poll deadline, and MAX_MCP_OUTPUT_TOKENS's
+// absence (a setting this repo structurally cannot commit -- see
+// .gitignore lines 62-67) is made observable on stderr rather than silent.
+// -----------------------------------------------------------------------
+
+function countStderrLinesMatching(proxy, pattern) {
+  return proxy.stderr.join("").split("\n").filter((line) => pattern.test(line)).length;
+}
+
+/** Walk up from `from` to the nearest `.git` ancestor. Deliberately NOT
+ * repoRoot() (repo-root.mjs): that module's documented CONTAINER_WORKSPACE_PATH
+ * precedence resolves to the shared devcontainer mount's MAIN checkout when
+ * run from inside a git worktree (see 01.2-01-SUMMARY.md's "Issues
+ * Encountered" -- a pre-existing, documented hazard this task does not fix),
+ * which would read the wrong .mcp.json when this test itself runs inside a
+ * worktree. Mirrors vice-mcp-selector-docs.test.mjs's own findRepoRoot(),
+ * anchored at THIS file's actual on-disk location instead. */
+function findWorktreeAwareRepoRoot(from) {
+  let dir = from;
+  while (true) {
+    if (existsSync(join(dir, ".git"))) return dir;
+    const parent = dirname(dir);
+    if (parent === dir) {
+      throw new Error(`findWorktreeAwareRepoRoot: no .git ancestor found above ${from}`);
+    }
+    dir = parent;
+  }
+}
+
+test("ordering: the proxy's own grant-poll deadline is strictly less than .mcp.json's timeout", () => {
+  const mcpJson = JSON.parse(readFileSync(join(findWorktreeAwareRepoRoot(HERE), ".mcp.json"), "utf8"));
+  const configuredTimeout = mcpJson.mcpServers.vice.timeout;
+  assert.equal(typeof configuredTimeout, "number", ".mcp.json's vice entry must carry a numeric timeout");
+  assert.ok(
+    GRANT_POLL_TIMEOUT_MS < configuredTimeout,
+    `the proxy's grant-poll deadline (${GRANT_POLL_TIMEOUT_MS}ms) must be strictly less than .mcp.json's ` +
+      `timeout (${configuredTimeout}ms), so the proxy's own warming-and-retry message is always what a ` +
+      `waiting caller sees rather than the client's own timeout`
+  );
+});
+
+test("output-limit warning: exactly one stderr line when MAX_MCP_OUTPUT_TOKENS is absent or insufficient, zero when sufficient", async () => {
+  const { server } = startStandInServer();
+  const port = await listen(server);
+
+  // Absent entirely -- and driven through SEVERAL messages, to prove the
+  // warning is a one-time startup event, not something re-emitted per call.
+  // Deleted from THIS test process's own env (restored in `finally` below),
+  // not merely omitted from the override object, so this assertion is not
+  // at the mercy of whatever the AMBIENT test-runner environment happens to
+  // already have set -- startProxy() merges `{...process.env, ...env}`, so
+  // an override object alone cannot force a key to be ABSENT if the real
+  // process.env already carries it.
+  const savedOutputTokens = process.env.MAX_MCP_OUTPUT_TOKENS;
+  delete process.env.MAX_MCP_OUTPUT_TOKENS;
+  const proxyAbsent = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${port}/mcp` });
+  try {
+    await handshake(proxyAbsent);
+    for (let i = 0; i < 3; i++) {
+      proxyAbsent.send({ jsonrpc: "2.0", id: 10 + i, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
+      await proxyAbsent.nextMessage();
+    }
+    await new Promise((r) => setTimeout(r, 100)); // let stderr settle
+    assert.equal(
+      countStderrLinesMatching(proxyAbsent, /MAX_MCP_OUTPUT_TOKENS/),
+      1,
+      "exactly one stderr line naming MAX_MCP_OUTPUT_TOKENS must appear, however many calls are made, when the setting is absent"
+    );
+  } finally {
+    proxyAbsent.child.kill("SIGKILL");
+    if (savedOutputTokens !== undefined) process.env.MAX_MCP_OUTPUT_TOKENS = savedOutputTokens;
+  }
+
+  // Present but below the required minimum.
+  const proxyLow = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${port}/mcp`, MAX_MCP_OUTPUT_TOKENS: "100" });
+  try {
+    await handshake(proxyLow);
+    await new Promise((r) => setTimeout(r, 100));
+    assert.equal(
+      countStderrLinesMatching(proxyLow, /MAX_MCP_OUTPUT_TOKENS/),
+      1,
+      "exactly one stderr line naming MAX_MCP_OUTPUT_TOKENS must appear when the setting is below the required minimum"
+    );
+  } finally {
+    proxyLow.child.kill("SIGKILL");
+  }
+
+  // Present and sufficient.
+  const proxySufficient = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${port}/mcp`, MAX_MCP_OUTPUT_TOKENS: "25000" });
+  try {
+    await handshake(proxySufficient);
+    proxySufficient.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
+    await proxySufficient.nextMessage();
+    await new Promise((r) => setTimeout(r, 100));
+    assert.equal(
+      countStderrLinesMatching(proxySufficient, /MAX_MCP_OUTPUT_TOKENS/),
+      0,
+      "zero stderr lines naming MAX_MCP_OUTPUT_TOKENS must appear when the setting is sufficient"
+    );
+  } finally {
+    proxySufficient.child.kill("SIGKILL");
+    await new Promise((resolve) => server.close(resolve));
+  }
+});

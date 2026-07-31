@@ -2,7 +2,8 @@
   "mcpServers": {
     "vice": {
       "command": "node",
-      "args": [".claude/mcp/vice/vice-proxy.mjs"]
+      "args": [".claude/mcp/vice/vice-proxy.mjs"],
+      "timeout": 60000
     }
   }
 }
