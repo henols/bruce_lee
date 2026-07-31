@@ -1504,6 +1504,39 @@ async function acquireLeaseViaBroker(proxy, dir, port, callId) {
   assert.ok(reqFiles, "a request file must appear before the broker has run");
   const id = reqFiles[0].replace(/\.json$/, "");
 
+  // Plan 01.2-04 task 2: a request that finds ZERO ready spares triggers a
+  // cold launch and the pass writes NEITHER a grant nor a denial -- the
+  // request stays pending for a LATER pass, once maintain_spares()'s
+  // probe_ready() has promoted the new instance from `launching` to `ready`.
+  // This helper runs the broker exactly once and then awaits the forwarded
+  // call, which was true while one pass always granted, and is false now.
+  // Pre-plant an already-`ready` spare at the target port so
+  // grant_from_spare() hands it out on the FIRST pass, which is what this
+  // helper's single-pass shape expects. Record shape mirrors
+  // writeSpareFile() in vice-broker.test.mjs; readiness is pre-proven here
+  // precisely so no real x64sc or probe round-trip is involved.
+  mkdirSync(join(dir, "spares"), { recursive: true });
+  writeFileSync(
+    join(dir, "spares", `${port}.json`),
+    JSON.stringify(
+      {
+        version: 1,
+        port,
+        url: `http://127.0.0.1:${port}/mcp`,
+        epoch_file: join(dir, String(port), "epoch.json"),
+        supervisor_dir: join(dir, String(port)),
+        supervisor_pid: null,
+        launched_at: Date.now() * 1e6,
+        ready_at: Date.now() * 1e6,
+        state: "ready",
+        reason: "spare",
+        dry_run: true,
+      },
+      null,
+      2
+    ) + "\n"
+  );
+
   await runBrokerOnceDryRun(dir, port);
   await proxy.nextMessage(); // the forwarded call's own response
 
