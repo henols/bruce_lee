@@ -400,19 +400,18 @@ lease_is_stale() {
 
 # ---------------------------------------------------------------- request scan
 #
-# Lists candidate request ids by filename only (the request file's basename
-# minus .json) -- read_registry_ports/read_registry_pids's own
-# grep-against-known-shape idiom, no jq. Each id is validated by
-# is_valid_request_id() before it is EVER used to build a further path (grant,
-# denial, lease) -- see process_requests() below.
-list_request_ids() {
-  local f
-  if [ -d "$REQUESTS_DIR" ]; then
-    for f in "$REQUESTS_DIR"/*.json; do
-      [ -e "$f" ] || continue
-      basename "$f" .json
-    done
-  fi
+# Extracts the "id" JSON field's value from a request file -- the OPERATIVE
+# id used everywhere below is this body field, NEVER the filename (T-01.2-01,
+# task 2's own id-pattern parity test drives this specific extraction path).
+# Matches a single quoted "id" value with no jq; a request whose body cannot
+# even be parsed this far yields an empty string, which is_valid_request_id()
+# below always rejects. `|| true` is load-bearing under this script's own
+# `set -e -o pipefail`: grep exits 1 on no match (a malformed/garbage body,
+# exactly the case this function exists to handle gracefully), and pipefail
+# would otherwise propagate that as this function's own exit status, aborting
+# the ENTIRE broker pass rather than skipping one bad request (T-01.2-14).
+extract_id_field() {
+  grep -o '"id": *"[^"]*"' "$1" 2>/dev/null | head -1 | sed 's/.*"id": *"//; s/"$//' || true
 }
 
 # Next free port at or above VICE_BROKER_BASE_PORT, "free" meaning not
@@ -482,14 +481,16 @@ JSON
 # (T-01.2-10). No jq: same grep-against-known-shape idiom as
 # next_free_port() above.
 write_instances() {
-  local f id port supervisor_pid dry_run_field first=1 body=""
+  local f id port supervisor_pid launched_at dry_run_field first=1 body=""
   if [ -d "$GRANTS_DIR" ]; then
     for f in "$GRANTS_DIR"/*.json; do
       [ -e "$f" ] || continue
-      id="$(basename "$f" .json)"
+      id="$(extract_id_field "$f")"
+      [ -n "$id" ] || id="$(basename "$f" .json)" # defensive only -- this script's own writes always carry a matching id
       port="$(grep -o '"port": *[0-9]\+' "$f" 2>/dev/null | head -1 | grep -o '[0-9]\+$' || true)"
-      supervisor_pid="$(grep -o '"supervisor_pid": *\(null\|[0-9]\+\)' "$f" 2>/dev/null | sed 's/.*: *//')"
-      dry_run_field="$(grep -o '"dry_run": *\(true\|false\)' "$f" 2>/dev/null | sed 's/.*: *//')"
+      supervisor_pid="$(grep -o '"supervisor_pid": *\(null\|[0-9]\+\)' "$f" 2>/dev/null | sed 's/.*: *//' || true)"
+      launched_at="$(grep -o '"launched_at": *[0-9]\+' "$f" 2>/dev/null | head -1 | grep -o '[0-9]\+$' || true)"
+      dry_run_field="$(grep -o '"dry_run": *\(true\|false\)' "$f" 2>/dev/null | sed 's/.*: *//' || true)"
       if [ "$first" -eq 1 ]; then first=0; else body+=","; fi
       body+="$(cat <<JSON
 
@@ -497,6 +498,7 @@ write_instances() {
       "id": "$(json_escape "$id")",
       "port": ${port:-null},
       "supervisor_pid": ${supervisor_pid:-null},
+      "launched_at": ${launched_at:-null},
       "dry_run": ${dry_run_field:-false}
     }
 JSON
@@ -525,13 +527,13 @@ read_instance_field() {
   [ -f "$INSTANCES_JSON" ] || return 0
   case "$field" in
     id)
-      grep -o '"id": *"[^"]*"' "$INSTANCES_JSON" 2>/dev/null | sed 's/.*"id": *"//; s/"$//'
+      grep -o '"id": *"[^"]*"' "$INSTANCES_JSON" 2>/dev/null | sed 's/.*"id": *"//; s/"$//' || true
       ;;
     port)
-      grep -o '"port": *[0-9]\+' "$INSTANCES_JSON" 2>/dev/null | grep -o '[0-9]\+$'
+      grep -o '"port": *[0-9]\+' "$INSTANCES_JSON" 2>/dev/null | grep -o '[0-9]\+$' || true
       ;;
     *)
-      grep -o "\"$field\": *[^,}]*" "$INSTANCES_JSON" 2>/dev/null | sed "s/.*\"$field\": *//"
+      grep -o "\"$field\": *[^,}]*" "$INSTANCES_JSON" 2>/dev/null | sed "s/.*\"$field\": *//" || true
       ;;
   esac
 }
@@ -539,20 +541,27 @@ read_instance_field() {
 # For each well-formed requests/*.json: allocate the next free port, and
 # under --dry-run record dry_run:true with no spawn at all (under a real
 # run, spawn vice-supervisor.sh detached exactly as vice-pool.sh's own
-# cmd_start does); write grants/<id>.json and unlink the request. Reads the
-# request directory ONCE per pass (list_request_ids() is called once, at the
-# top of the loop construct below) and acts on that snapshot -- a request
-# that appears mid-pass waits for the NEXT pass, never this one.
+# cmd_start does); write grants/<id>.json and unlink the request. The
+# OPERATIVE id for every request is its own body's "id" field
+# (extract_id_field), never the filename -- validated against
+# is_valid_request_id() BEFORE it is EVER used to build a grant/lease/denial
+# path (T-01.2-01). A request whose id fails that check, or whose body
+# cannot even be parsed far enough to yield one, is skipped with a logged
+# reason and writes NO file anywhere -- one bad request must never stall the
+# rest of the pass (T-01.2-14). Reads the request directory ONCE per pass
+# (the for-loop's own glob) and acts on that snapshot -- a request that
+# appears mid-pass waits for the NEXT pass, never this one.
 process_requests() {
-  local id req_file port now dir epoch_file resolved_args supervisor_pid_field dry_run_field spawned_pid grant_content
-  while IFS= read -r id; do
-    [ -z "$id" ] && continue
-    if ! is_valid_request_id "$id"; then
-      echo "vice-broker: skipping malformed request id: $id" >&2
+  local req_file id port now dir epoch_file resolved_args supervisor_pid_field dry_run_field spawned_pid grant_content launch_id
+  [ -d "$REQUESTS_DIR" ] || return 0
+  for req_file in "$REQUESTS_DIR"/*.json; do
+    [ -e "$req_file" ] || continue
+
+    id="$(extract_id_field "$req_file")"
+    if [ -z "$id" ] || ! is_valid_request_id "$id"; then
+      echo "vice-broker: skipping request $(basename "$req_file") -- invalid or missing id: \"$id\"" >&2
       continue
     fi
-    req_file="$REQUESTS_DIR/$id.json"
-    [ -e "$req_file" ] || continue # vanished between listing and processing
 
     port="$(next_free_port)"
     now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -561,7 +570,16 @@ process_requests() {
     mkdir -p "$dir"
 
     if [ "$DRY_RUN" -eq 1 ]; then
-      supervisor_pid_field="null"
+      # No real x64sc launches under --dry-run, so there is no real pid to
+      # prove "this is a fresh launch, not a recycled one"
+      # (kill-never-recycle). A CONSTANT placeholder (e.g. "null" for every
+      # dry-run grant) would make that property untestable -- pass
+      # vacuously no matter what the code actually does -- so this uses a
+      # nanosecond-epoch timestamp instead: monotonically increasing and
+      # virtually guaranteed distinct between any two separate grants
+      # (different process invocations, different wall-clock instants).
+      launch_id="$(date +%s%N)"
+      supervisor_pid_field="$launch_id"
       dry_run_field="true"
     else
       resolved_args="-mcpserver -mcpserverhost $VICE_BROKER_MCP_HOST -mcpserverport $port"
@@ -570,6 +588,7 @@ process_requests() {
       spawned_pid=$!
       disown "$spawned_pid" 2>/dev/null || true
       supervisor_pid_field="$spawned_pid"
+      launch_id="$(date +%s%N)"
       dry_run_field="false"
       echo "vice-broker: spawned supervisor for port $port (pid $spawned_pid), request $id"
     fi
@@ -583,6 +602,7 @@ process_requests() {
   "epoch_file": "$(json_escape "$epoch_file")",
   "supervisor_dir": "$(json_escape "$dir")",
   "supervisor_pid": $supervisor_pid_field,
+  "launched_at": $launch_id,
   "granted_at": "$now",
   "dry_run": $dry_run_field
 }
@@ -591,7 +611,7 @@ JSON
     write_json_atomic "$GRANTS_DIR/$id.json" "$grant_content"
     rm -f "$req_file"
     echo "vice-broker: granted request $id -> port $port"
-  done < <(list_request_ids)
+  done
 }
 
 # The SINGLE implementation both triggers below converge on (must_haves C7):
@@ -609,7 +629,7 @@ teardown() {
   local f="$GRANTS_DIR/$id.json"
   [ -e "$f" ] || return 0
   local supervisor_pid args
-  supervisor_pid="$(grep -o '"supervisor_pid": *\(null\|[0-9]\+\)' "$f" 2>/dev/null | sed 's/.*: *//')"
+  supervisor_pid="$(grep -o '"supervisor_pid": *\(null\|[0-9]\+\)' "$f" 2>/dev/null | sed 's/.*: *//' || true)"
   if [ -n "$supervisor_pid" ] && [ "$supervisor_pid" != "null" ]; then
     args="$(ps -o args= -p "$supervisor_pid" 2>/dev/null || true)"
     case "$args" in

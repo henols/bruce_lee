@@ -632,8 +632,15 @@ test("parity: the shell script's own id validation and isValidRequestId() agree 
     // rather than the filesystem's own separate restrictions, per this
     // task's own instruction.
     let i = 0;
-    for (const { id } of ID_CORPUS) {
+    for (const { id, valid } of ID_CORPUS) {
       writeRequestFileRaw(dir, `probe-${i}`, id);
+      // A valid id needs a lease already in place, mirroring
+      // vice-proxy.mjs's own createLease()-BEFORE-pollGrant() ordering --
+      // otherwise this single --once pass would grant AND immediately sweep
+      // it (lease absent) in the same call, which is a correct but
+      // misleading-for-this-test outcome (see the kill-never-recycle test's
+      // own comment on this exact ordering).
+      if (valid) writeLeaseFile(dir, id);
       i++;
     }
 
@@ -687,6 +694,7 @@ test("a malformed request body is skipped with a logged reason while a well-form
 
     const goodId = "req-8-8000-cafebabe";
     writeRequestFileRaw(dir, "good", goodId);
+    writeLeaseFile(dir, goodId); // see the parity test's own comment on this ordering
 
     const { stderr } = await runBrokerOnce(dir, { basePort: 7500 });
     assert.match(stderr, /skipping request garbage\.json/);
