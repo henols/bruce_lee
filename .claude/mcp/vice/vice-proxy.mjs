@@ -710,6 +710,11 @@ async function ensureBrokerLease() {
   const grant = result.grant;
   useInstance({ port: grant.port, url: grant.url, epochFile: grant.epoch_file, pooled: true });
   viceSession = null; // re-baseline: the next ensureViceSession() reads the GRANTED instance's own epoch file
+  // startHeartbeat() (vice-broker-client.mjs) returns an unref'd interval
+  // timer -- unref'd so the TIMER never holds this process alive past its
+  // natural lifetime; stdin being open is what does that. Keeping the timer
+  // handle here is only so a future stop-the-heartbeat path has something to
+  // clear; nothing currently reads it back.
   brokerHeartbeatTimer = startHeartbeat(id);
   return { ok: true };
 }
@@ -952,6 +957,12 @@ process.stdin.on("data", (chunk) => {
 // it any more. The graceful path is killed by SIGKILL ~490ms after the
 // first signal regardless of anything this process does, and the abrupt
 // path exits naturally once stdin is gone and nothing else is listening.
+//
+// TEARDOWN-REGION-BEGIN -- vice-proxy.test.mjs's source assertion slices
+// the file between this marker and its closing counterpart further below,
+// and asserts that slice contains no promise-awaiting construct and calls
+// the broker client's release function exactly once. Do not move either
+// marker away from the code each one bounds.
 let teardownRan = false;
 
 function releaseLeaseNow(trigger) {
@@ -979,5 +990,6 @@ process.stdin.on("close", () => onTeardown("stdin_close"));
 process.on("SIGINT", () => onTeardown("SIGINT"));
 process.on("SIGTERM", () => onTeardown("SIGTERM"));
 process.on("SIGHUP", () => onTeardown("SIGHUP"));
+// TEARDOWN-REGION-END
 
 console.error(`vice-proxy: ready, forwarding to ${activeInstance().url} (port ${activeInstance().port})`);

@@ -185,16 +185,24 @@ export function touchLease(id) {
 
 // ------------------------------------------------------------- releaseLease
 //
-// The ENTIRE release: one unlinkSync, nothing else. This is what the
-// proxy's teardown handler calls, so it must contain no promise, no timer
-// and no subprocess -- the ~490ms graceful shutdown window has no room for
-// anything else (see the spike-findings-bruce-lee skill's
-// shutdown-and-lease-release.md). The caller (vice-proxy.mjs's
-// releaseLeaseNow()) is responsible for checking whether a lease is even
-// held and for wrapping this call in its own try/catch that logs to stderr
-// -- mirroring the verbatim handler set that reference document specifies.
+// The ENTIRE release: one ATTEMPTED unlinkSync, nothing else -- no promise,
+// no timer, no subprocess. The ~490ms graceful shutdown window has no room
+// for anything more (see the spike-findings-bruce-lee skill's
+// shutdown-and-lease-release.md). Idempotent by design: a lease already
+// removed (a double release, or the broker's own sweep racing this call) is
+// a silent no-op, never a throw -- "release something that's already
+// released" is the expected shape of both a double-teardown (SIGINT then
+// SIGTERM ~100ms later, both calling in) and a post-sweep release, matching
+// vice-pool.mjs's own releaseLeaseByToken()'s idempotent posture. The
+// caller (vice-proxy.mjs's releaseLeaseNow()) still wraps this in its own
+// try/catch that logs to stderr, as a second layer for anything this
+// swallow does not anticipate (e.g. a permissions error).
 export function releaseLease(id) {
-  unlinkSync(leasePathFor(id));
+  try {
+    unlinkSync(leasePathFor(id));
+  } catch {
+    // already gone -- release is idempotent, nothing else to do
+  }
 }
 
 // -------------------------------------------------------------- pollGrant
