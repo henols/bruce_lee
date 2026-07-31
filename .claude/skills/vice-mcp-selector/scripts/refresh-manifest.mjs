@@ -5,10 +5,10 @@
 // to refresh the snapshot; vice-proxy.mjs never imports this file, so this
 // file's stdout is a normal CLI stream, not the MCP channel.
 //
-// Cross-skill relative import, deliberate and TEMPORARY -- matches
-// vice-proxy.mjs's own note: `vice-session` still owns the transport module
-// as of this task; plan 01.1-04 relocates it into this skill.
-import { serverInfo, activeInstance } from "../../vice-session/scripts/vice.mjs";
+// Sibling import: the transport module lives in this skill's own scripts/
+// directory (plan 01.1-04 relocated it from the now-retired `vice-session`
+// skill).
+import { serverInfo, activeInstance } from "./vice.mjs";
 import { writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";

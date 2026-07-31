@@ -10,8 +10,10 @@
 // ONE level up from the module's own file. That was correct while the
 // modules lived in `tools/` (one level up from `tools/` IS the repo root),
 // but this move puts them THREE levels deeper, at
-// `.claude/skills/vice-session/scripts/`. A naive move that kept the old
-// fixed `".."` would have silently resolved to `.claude/skills/.vice-supervisor`
+// `.claude/skills/vice-session/`'s `scripts/` directory (the original,
+// now-retired home; plan 01.1-04 relocated it again, into this skill, at the
+// same depth). A naive move that kept the old fixed `".."` would have
+// silently resolved to `.claude/skills/.vice-supervisor`
 // or `.claude/skills/vice-session/.vice-supervisor` instead
 // of `<repo>/.vice-supervisor` -- a directory the host-side shell scripts
 // (`tools/vice-supervisor.sh`, `tools/vice-pool.sh`) never write to. NOTHING

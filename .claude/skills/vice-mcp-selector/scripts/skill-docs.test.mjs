@@ -19,19 +19,29 @@
 // add a companion document, a "see also", or a pointer to one -- that would
 // silently recreate the disclosure this gate exists to prevent.
 //
-// The entry-point module (`vice.mjs`) is exempt in both directions: the
-// usage guide has to give callers a command to run, so its name belongs
-// there, and a rewrite that dropped it would itself be a regression this
-// gate should catch.
+// INVERTED, plan 01.1-04: this file was relocated here from the now-retired
+// `vice-session` skill, whose entry point (`vice.mjs`, a CLI a caller
+// invoked from a shell) was exempt from the no-module-names rule in BOTH
+// directions -- the usage guide had to give callers a command to run.
+// `vice-mcp-selector` has no such exemption and never will: its agent-facing
+// surface is `mcp__vice__*` tool calls, not a command, so `SKILL.md` must
+// name NO module under `scripts/` at all -- including `vice.mjs`, which is
+// no longer an entry point here, just one library module among many that
+// happens to keep its old name. The rule this file enforces is therefore
+// now fully one-directional in a second sense too: nothing under `scripts/`
+// belongs in `SKILL.md`, full stop. The replacement assertion is that
+// `SKILL.md` names the REAL surface instead -- the `mcp__vice__` tool
+// prefix -- so a rewrite that dropped that surface is still caught as a
+// regression, just anchored on the right thing.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
-import { dirname, join, basename } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const SCRIPTS_DIR = dirname(fileURLToPath(import.meta.url));
 const SKILL_MD = join(SCRIPTS_DIR, "..", "SKILL.md");
-const ENTRY_POINT = "vice.mjs";
+const TOOL_PREFIX = "mcp__vice__";
 
 function scriptModules() {
   return readdirSync(SCRIPTS_DIR)
@@ -48,23 +58,23 @@ test("scripts/ enumeration is non-empty and anchored on vice-sync.mjs", () => {
   );
 });
 
-test("no module under scripts/ is named in SKILL.md, except the documented entry point", () => {
+test("no module under scripts/ is named in SKILL.md -- no exemption, not even vice.mjs", () => {
   const skillMd = readFileSync(SKILL_MD, "utf8");
   for (const mod of scriptModules()) {
-    if (mod === ENTRY_POINT) continue;
     assert.ok(
       !skillMd.includes(mod),
       `${mod} is named in SKILL.md -- the usage-only guide must not leak internal module names. ` +
-        `Remove the reference (or move the rationale into ${mod}'s own header comment).`
+        `This skill has no entry-point exemption (agents call mcp__vice__* tools directly, never a ` +
+        `module by name) -- remove the reference, or move the rationale into ${mod}'s own header comment.`
     );
   }
 });
 
-test("the entry point vice.mjs is still named in SKILL.md", () => {
+test("SKILL.md names the mcp__vice__ tool prefix -- the real agent-facing surface", () => {
   const skillMd = readFileSync(SKILL_MD, "utf8");
   assert.ok(
-    skillMd.includes(ENTRY_POINT),
-    `${ENTRY_POINT} is missing from SKILL.md -- callers need this one command path; a rewrite that ` +
-      `dropped it is a regression, not a cleanup.`
+    skillMd.includes(TOOL_PREFIX),
+    `${TOOL_PREFIX} is missing from SKILL.md -- callers need to know this is how the emulator is ` +
+      `reached; a rewrite that dropped it is a regression, not a cleanup.`
   );
 });

@@ -1,9 +1,10 @@
 // node:test gate keeping module names out of SKILL.md -- the usage-only
 // guide this skill ships instead of a maintainer document.
 //
-// This is a deliberate COPY of the sibling gate `vice-session` ships
-// (.claude/skills/vice-session/scripts/skill-docs.test.mjs), not a shared
-// helper. Each skill has to carry its own doc-hygiene gate for the skill to
+// This is a deliberate COPY of the sibling gate `vice-mcp-selector` ships
+// (.claude/skills/vice-mcp-selector/scripts/skill-docs.test.mjs -- originally
+// `vice-session`'s, before that skill was retired in plan 01.1-04), not a
+// shared helper. Each skill has to carry its own doc-hygiene gate for the skill to
 // stay copyable on its own terms -- a gate living in a sibling and reaching
 // across directories would make each skill's exportability a lie, the same
 // false-copyability trap already corrected once in this repo (260730-u9w).

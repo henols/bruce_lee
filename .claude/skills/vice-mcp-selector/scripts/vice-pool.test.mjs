@@ -935,8 +935,8 @@ test("path agreement (D-3, D-6, THE regression this task exists to catch): super
   // makes that loud (ENOENT-shaped) rather than a silent script-not-found.
   const supervisorScript = join(repoRoot(), "tools", "vice-supervisor.sh");
   const poolScript = join(repoRoot(), "tools", "vice-pool.sh");
-  const resourcesSupervisorScript = join(repoRoot(), ".claude", "skills", "vice-session", "resources", "vice-supervisor.sh");
-  const resourcesPoolScript = join(repoRoot(), ".claude", "skills", "vice-session", "resources", "vice-pool.sh");
+  const resourcesSupervisorScript = join(repoRoot(), ".claude", "skills", "vice-mcp-selector", "resources", "vice-supervisor.sh");
+  const resourcesPoolScript = join(repoRoot(), ".claude", "skills", "vice-mcp-selector", "resources", "vice-pool.sh");
   assert.ok(existsSync(supervisorScript), `expected ${supervisorScript} to exist (resolved via repoRoot())`);
   assert.ok(existsSync(poolScript), `expected ${poolScript} to exist (resolved via repoRoot())`);
   assert.ok(existsSync(resourcesSupervisorScript), `expected ${resourcesSupervisorScript} to exist (resolved via repoRoot())`);
@@ -999,7 +999,7 @@ test("path agreement (D-3, D-6, THE regression this task exists to catch): super
 });
 
 test("path agreement without CONTAINER_WORKSPACE_PATH (D-6): the .git-walk branch -- the ONLY branch that ever runs on the real host -- still agrees between resources/ and tools/", async () => {
-  const resourcesSupervisorScript = join(repoRoot(), ".claude", "skills", "vice-session", "resources", "vice-supervisor.sh");
+  const resourcesSupervisorScript = join(repoRoot(), ".claude", "skills", "vice-mcp-selector", "resources", "vice-supervisor.sh");
   const supervisorScript = join(repoRoot(), "tools", "vice-supervisor.sh");
 
   const hostEnv = { ...process.env };
@@ -1599,8 +1599,8 @@ test("RESOURCES_DIR (quick-260730-r0u, path-anchor regression): points at the SK
   // subdirectory makes readdirSync() throw loudly inside resourceEntries(),
   // so this test dies instead of quietly comparing two empty lists.
   assert.ok(
-    RESOURCES_DIR.endsWith(join("vice-session", "resources")),
-    `expected RESOURCES_DIR to end with vice-session/resources, got ${RESOURCES_DIR}`
+    RESOURCES_DIR.endsWith(join("vice-mcp-selector", "resources")),
+    `expected RESOURCES_DIR to end with vice-mcp-selector/resources, got ${RESOURCES_DIR}`
   );
   assert.ok(
     !RESOURCES_DIR.split(sep).includes("scripts"),

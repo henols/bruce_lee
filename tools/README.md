@@ -107,7 +107,7 @@ D-5's original reasoning stands and stays visible here rather than being
 erased: a direct `mcp__vice__*` registration pointed at the host's HTTP
 endpoint would bypass the deny-list, restart/epoch detection and lease
 discipline that used to live only inside
-[`.claude/skills/vice-session/scripts/vice.mjs`](../.claude/skills/vice-session/scripts/vice.mjs)'s
+[`.claude/skills/vice-mcp-selector/scripts/vice.mjs`](../.claude/skills/vice-mcp-selector/scripts/vice.mjs)'s
 seam — which is exactly why `.mcp.json` was left empty for as long as it
 was.
 
@@ -125,34 +125,41 @@ concern — "don't hand agents a second path that skips the guard" — is
 satisfied by construction: there is no longer any registered path that
 skips it.
 
-**Layout note:** `vice.mjs`, `vice-pool.mjs`, `vice-session.mjs` and their
-test file moved from this directory into
-[`.claude/skills/vice-session/scripts/`](../.claude/skills/vice-session/SKILL.md) so
-the `vice-session` skill is self-contained and exportable, matching every
-other skill in this project (`acme-build/scripts/acme.mjs`,
-`devcontainer-host-path/scripts/hostpath.mjs`) — every skill keeps its
-executable `.mjs` modules in its own `scripts/` subdirectory, with `SKILL.md`,
-data files and (for `vice-session`) `resources/` staying at the skill root.
+**Layout note:** `vice.mjs`, `vice-pool.mjs`, `vice-session.mjs`, `vice-sync.mjs`,
+`vice-probe.mjs`, `repo-root.mjs`, `install-resources.mjs` and their test
+files live in
+[`.claude/skills/vice-mcp-selector/scripts/`](../.claude/skills/vice-mcp-selector/SKILL.md) —
+originally moved out of this directory into a `vice-session` skill, then
+relocated again (plan 01.1-04) into `vice-mcp-selector` once that skill
+became the registered, agent-facing route and `vice-session` was retired.
+Every skill in this project keeps its executable `.mjs` modules in its own
+`scripts/` subdirectory, with `SKILL.md`, data files and (for
+`vice-mcp-selector`) `resources/` staying at the skill root — matching
+`acme-build/scripts/acme.mjs` and `devcontainer-host-path/scripts/hostpath.mjs`.
 The HOST-side launchers —
 `vice-supervisor.sh`, `vice-pool.sh` and `lib/container-guard.sh` — live
 tracked in that same skill's
-[`resources/`](../.claude/skills/vice-session/resources/), not here:
+[`resources/`](../.claude/skills/vice-mcp-selector/resources/), not here:
 `tools/vice-supervisor.sh`, `tools/vice-pool.sh` and `tools/lib/container-guard.sh`
 are **gitignored, disposable deployed copies**, regenerated automatically by
-`install-resources.mjs` the first time any of the skill's `.mjs` files runs
-(`node .claude/skills/vice-session/scripts/vice.mjs ping`, `install`, or any other
-verb all trigger it identically). A fresh clone has no `tools/` scripts at
-all until that first run — `node .claude/skills/vice-session/scripts/vice.mjs install`
-is the one command that materialises them deliberately, with no other side
-effect. The reason the second TRACKED copy went away: two tracked copies of
-one script drift apart, and the drift is invisible until the host happens to
-run the stale one — keeping exactly one tracked source of truth
-(`resources/`) makes that class of bug structurally impossible. An existing
-deployed copy is never overwritten automatically, whatever its contents;
-`install --force` is the only command that refreshes a copy that has been
-hand-edited. `tools/recover.mjs` (and its test file) also stayed, importing
-the moved modules via the same cross-tree path
-`devcontainer-host-path/scripts/hostpath.mjs` already used.
+`install-resources.mjs` the first time any of the skill's `.mjs` entry
+points runs — including `vice-proxy.mjs` itself, every time a Claude Code
+session starts the registered server. A fresh clone has no `tools/` scripts
+at all until that first run; the deploy-on-first-use trigger fires from
+`repo-root.mjs`'s own module body, not from any particular CLI verb, so
+there is no shell command required to materialise them. The reason the
+second TRACKED copy went away: two tracked copies of one script drift
+apart, and the drift is invisible until the host happens to run the stale
+one — keeping exactly one tracked source of truth (`resources/`) makes that
+class of bug structurally impossible. An existing deployed copy is never
+overwritten automatically, whatever its contents; `node
+.claude/skills/vice-mcp-selector/scripts/vice.mjs install --force` is the
+one command that refreshes a copy that has been hand-edited (the
+resource-deployment verb, not an emulator-reaching one — see
+[Troubleshooting](../.claude/skills/vice-mcp-selector/SKILL.md) in the
+skill's own guide for when to reach for it). `tools/recover.mjs` (and its
+test file) also stayed, importing the relocated modules via the same
+cross-tree path `devcontainer-host-path/scripts/hostpath.mjs` already used.
 
 ```json
 {
@@ -218,18 +225,7 @@ Without it the name does not resolve and every call fails at DNS.
 
 ### Verify the connection
 
-```bash
-node .claude/skills/vice-session/scripts/vice.mjs ping        # -> VICE 3.10 (C64SC) -- paused [port 6510, http://...]
-```
-
-If the host is down or unreachable, `ping` is the wrong first check — it
-touches the network and can take up to ~50s to fail through the retry
-budget. Check `node .claude/skills/vice-session/scripts/vice.mjs session status` first: it is a **pure
-file read**, makes no MCP call at all, and works (or reports "no active
-session") even with the host completely down. See
-[§6, Sessions](#6-sessions-and-tool-discovery) below.
-
-Or without the harness:
+A plain HTTP round trip needs no project code at all:
 
 ```bash
 curl -sS http://host.docker.internal:6510/mcp \
@@ -239,13 +235,18 @@ curl -sS http://host.docker.internal:6510/mcp \
            "params":{"name":"vice_ping","arguments":{}}}'
 ```
 
+From inside a Claude Code session, the equivalent check is a call to the
+`mcp__vice__ping` tool — no shell command, no harness invocation. See
+[§6, Tool discovery](#6-tool-discovery) below for how that tool (and every
+other `mcp__vice__*` tool) gets in front of the agent in the first place.
+
 ---
 
 ## 4. Restart detection
 
 A supervisor that silently respawns VICE would turn a loud failure into a quiet,
 wrong one.
-[`.claude/skills/vice-session/scripts/vice.mjs`](../.claude/skills/vice-session/scripts/vice.mjs)
+[`.claude/skills/vice-mcp-selector/scripts/vice.mjs`](../.claude/skills/vice-mcp-selector/scripts/vice.mjs)
 retries transport failures and redoes the
 MCP handshake — so after a respawn it would happily reconnect to a **brand-new,
 blank machine** (no disk attached, no checkpoints, CPU halted) and keep reading
@@ -313,7 +314,7 @@ would change how the default instance is reached.
 `vice-pool.sh` writes `<pool dir>/registry.json` atomically (temp file + `mv`)
 on the same bind mount `epoch.json` already uses — no new port, socket, or
 protocol.
-[`.claude/skills/vice-session/scripts/vice-pool.mjs`](../.claude/skills/vice-session/scripts/vice-pool.mjs)
+[`.claude/skills/vice-mcp-selector/scripts/vice-pool.mjs`](../.claude/skills/vice-mcp-selector/scripts/vice-pool.mjs)
 reads it, validating every port as an untrusted, host-written field (same
 posture as `readEpoch()`), and derives each instance's URL and epoch-file
 path from the **validated port only** — never from a path string read out of
@@ -323,7 +324,7 @@ the file.
 
 Two container-side processes racing for the same pool must never both get the
 same busy instance.
-[`.claude/skills/vice-session/scripts/vice-pool.mjs`](../.claude/skills/vice-session/scripts/vice-pool.mjs)'s
+[`.claude/skills/vice-mcp-selector/scripts/vice-pool.mjs`](../.claude/skills/vice-mcp-selector/scripts/vice-pool.mjs)'s
 `acquire()` takes
 an atomic lease (a `linkSync` of a fully-written temp file — `link` fails
 `EEXIST` if the name is taken, and never publishes a half-written lease) on
@@ -374,61 +375,29 @@ writes. A lease on 6510 in that mixed setup would find no epoch file at that
 path and fall back to the checkpoint-presence probe. Run either a bare
 supervisor **or** a pool, not both, to avoid this.
 
-### Interactive use reaches a pooled instance through a session, not `.mcp.json`
+### Interactive (agent-facing) use takes no pool lease at all
 
-The pool is a container-side, harness-driven concept, and (as covered in
-§3 above) `.mcp.json` no longer registers a server at all — Claude Code has
-no direct MCP connection to repoint at a leased instance in the first place.
-`tools/recover.mjs`'s own CLI acquires and redirects a `kind:"process"` lease
-for the duration of the verb it's running; **interactive** use reaches a
-pooled instance through a `kind:"session"` lease instead — see §6 below.
+The pool is a container-side, harness-driven concept for `tools/recover.mjs`'s
+own batch pipeline — it has nothing to do with how Claude Code reaches the
+emulator. As of Phase 01.1 (§3 above), `.mcp.json` registers
+`vice-proxy.mjs`, which forwards every `mcp__vice__*` call to the FIXED
+port from decision D-A (6510, the single supervised instance) — it never
+leases a pooled instance and never redirects. `tools/recover.mjs`'s own CLI
+still acquires and redirects a `kind:"process"` lease for the duration of
+the verb it's running, exactly as before; that machinery is entirely
+internal to the standalone batch pipeline and is not part of the
+agent-facing path at all. See §6 below for how an agent actually discovers
+and calls tools.
 
 ---
 
-## 6. Sessions and tool discovery
+## 6. Tool discovery
 
-### Why a session exists
-
-The agent's shell environment does not persist between separate Bash
-invocations, so a lease taken by one command is invisible to the next one —
-each `node .claude/skills/vice-session/scripts/vice.mjs ...` call is a brand-new
-process with no memory of anything an earlier call `export`ed. A session
-solves this by living in a **file** instead: `.vice-supervisor/session.json`
-by default, or wherever `VICE_SESSION_FILE` points (set it to give two
-concurrent workstreams each their own session, without stepping on each
-other).
-
-```bash
-node .claude/skills/vice-session/scripts/vice.mjs session acquire [--ttl-min N]   # lease an instance, start a session
-node .claude/skills/vice-session/scripts/vice.mjs session status                  # read-only report, no emulator touched
-node .claude/skills/vice-session/scripts/vice.mjs session release                 # free the lease, delete the session file
-```
-
-Every later `ping`/`call` invocation resolves the active session automatically
-— nothing to re-specify. With **no session acquired**, everything works
-exactly as it always has, against the default port-6510 instance, zero
-configuration required.
-
-### Default TTL and refresh-on-use
-
-A session defaults to a 30-minute TTL (`VICE_SESSION_TTL_MS` to change it
-globally, `--ttl-min N` at acquire time for one session). Every successful
-resolution pushes the TTL forward to `now + ttl`, on both the lease and the
-session file — a session in continuous use never approaches its own expiry.
-An **expired** session refuses rather than silently falling back to the
-default instance; the error names both recovery verbs (`session release`
-then `session acquire`).
-
-### Two lease kinds, side by side
-
-| | `kind:"process"` (`tools/recover.mjs`) | `kind:"session"` (`.claude/skills/vice-session/scripts/vice.mjs session acquire`) |
-|---|---|---|
-| Holder | One long-running process, alive for the whole verb | A short-lived CLI invocation that **exits** the instant `acquire` returns |
-| Reclaimed by | Same-host pid death, or `maxLeaseAgeMs` | TTL expiry (`expires_at`) **only** |
-| Why | The holder process dying really does mean the lease is abandoned | Pid-liveness would reclaim the lease within milliseconds of every successful acquire — the process that "holds" it is already gone by the time anyone could use it |
-
-Both kinds share one lease namespace on disk — a port leased one way cannot
-be taken the other way while it's held.
+Everything an agent needs to reach the emulator is covered by the two
+subsections below. There is no session CLI and no discovery command for an
+agent to invoke here — `mcp__vice__*` tool calls are the only route, exactly
+as [`vice-mcp-selector/SKILL.md`](../.claude/skills/vice-mcp-selector/SKILL.md)
+states.
 
 ### Discovering tools: `mcp__vice__*`, backed by a committed snapshot
 
@@ -470,3 +439,20 @@ re-filters the snapshot again at read time — a snapshot generated by any
 other means still can't leak it. The prohibition is enforced in two
 independent places at the call boundary too: `tools/call` refuses it before
 any request is serialised, even if the name is obtained some other way.
+
+### Programmatic seam: two library consumers that are not the proxy
+
+`tools/recover.mjs` and the `c64-ram-capture` skill's pipeline import
+`vice.mjs`/`vice-sync.mjs` directly, as a library — `node tools/recover.mjs
+...`, invoked from a shell, exactly as it always has been. This is
+deliberate and unchanged by the proxy's arrival: criterion 8's retirement is
+of the *documented, agent-facing* route to the emulator, not of the
+transport module itself, which both of these standalone pipelines still
+need as their only way to reach VICE. Neither pipeline is something an
+agent is ever instructed to invoke as a substitute for `mcp__vice__*` tool
+calls — they are Phase 1's own recovery/capture tooling, run by a human or
+by an agent executing a *documented, specific plan step* that names
+`tools/recover.mjs` by task, not a general-purpose emulator-access
+shortcut. If a document ever tells an agent to reach for this module as a
+generic alternative to `mcp__vice__*`, that is the regression
+`vice-mcp-selector-docs.test.mjs` exists to catch.

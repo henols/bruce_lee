@@ -25,7 +25,7 @@ import { dirname, join } from "node:path";
 import { mkdtempSync, writeFileSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { hostPath } from "../../devcontainer-host-path/scripts/hostpath.mjs";
-import { repoRoot } from "../../vice-session/scripts/repo-root.mjs";
+import { repoRoot } from "./repo-root.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PROXY_PATH = join(HERE, "vice-proxy.mjs");

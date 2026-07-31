@@ -5,24 +5,21 @@
 // over stdin/stdout. This file owns ONLY that stdio-server-facing half --
 // the HTTP-client half (retry ladder, SSE-body parsing, the vice_disk_list
 // deny-list, epoch-based restart detection) is `call()` and its siblings,
-// imported unchanged from the relocated `vice-session` transport module.
-// Re-implementing that half here would duplicate code that has already
-// survived six real host outages; see 01.1-RESEARCH.md's "Don't Hand-Roll"
-// table.
+// imported unchanged from the transport module, now a sibling in this
+// skill's own `scripts/` directory (plan 01.1-04 relocated it from
+// `vice-session`). Re-implementing that half here would duplicate code that
+// has already survived six real host outages; see 01.1-RESEARCH.md's
+// "Don't Hand-Roll" table.
 //
-// Cross-skill relative import, deliberate and TEMPORARY: `vice-session`
-// still owns the transport module as of this task. Plan 01.1-04 relocates
-// it into this skill and rewrites this import to `./vice.mjs`. Until then
-// this is the same cross-skill shape `c64-ram-capture/scripts/ram-capture.mjs`
-// already uses for `devcontainer-host-path`.
-import { call, activeInstance, DENY_LIST, readEpoch, beginSession, MachineRestartedError } from "../../vice-session/scripts/vice.mjs";
-// Same temporary cross-skill shape as the import above -- plan 01.1-04
-// relocates vice-probe.mjs alongside vice.mjs and rewrites this to a local
-// import. probeInstance() is the deliberately-fragile liveness check (see
-// that file's own header): one 1500ms-budget round trip, no retry, no
-// dependency on vice.mjs's resilient reconnect ladder.
-import { probeInstance } from "../../vice-session/scripts/vice-probe.mjs";
-import { repoRoot } from "../../vice-session/scripts/repo-root.mjs";
+// Sibling import, no longer cross-skill: `vice-session` has been retired
+// (plan 01.1-04) and its transport module tree lives here now.
+import { call, activeInstance, DENY_LIST, readEpoch, beginSession, MachineRestartedError } from "./vice.mjs";
+// Sibling import, same relocation as above. probeInstance() is the
+// deliberately-fragile liveness check (see that file's own header): one
+// 1500ms-budget round trip, no retry, no dependency on vice.mjs's resilient
+// reconnect ladder.
+import { probeInstance } from "./vice-probe.mjs";
+import { repoRoot } from "./repo-root.mjs";
 import { hostPath, SET_ENV_HINT } from "../../devcontainer-host-path/scripts/hostpath.mjs";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -336,7 +333,7 @@ const ONLY_ROUTE_NOTE =
 /** The absolute path of the command a human should run on the HOST to
  * start/restart the emulator -- computed via hostPath() over the deployed
  * supervisor's container path, degrading to the container path plus
- * SET_ENV_HINT exactly as vice-session's hostLaunchInstructions() does, so a
+ * SET_ENV_HINT exactly as install-resources.mjs's hostLaunchInstructions() does, so a
  * translation failure still yields something to act on rather than an empty
  * message. Recomputed fresh every call -- never cached (see the
  * never-cache-a-negative-result invariant above ensureViceSession()). */
