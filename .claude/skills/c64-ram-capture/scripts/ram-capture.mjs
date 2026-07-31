@@ -39,7 +39,7 @@
 // that contract is the caller's gate walk (`tools/recover.mjs`'s `boot()`).
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { call, beginSession, assertSameMachine, serverInfo, readEpoch, lastToolCall } from "../../vice-mcp-selector/scripts/vice.mjs";
 import { addrNum, hex4, waitCheckpointHit, armedCheckpoints } from "../../vice-mcp-selector/scripts/vice-sync.mjs";
@@ -355,6 +355,14 @@ export function voidRun({ binPath, capturePath, reason, baselineEpoch, currentEp
     voidedArtifacts.push(voidPath);
   }
   const notePath = `${binPath || capturePath}.VOID.json`;
+  // The note is the whole point of voiding, so its write must not be the thing
+  // that fails. recover()'s dumps/ directory is created late (after capture),
+  // but a MachineRestartedError can surface much earlier -- during reset(), or
+  // anywhere in boot() -- and on a release whose dumps/ does not exist yet an
+  // unguarded write throws ENOENT. That would discard the evidence AND replace
+  // the MachineRestartedError with a misleading filesystem error, hiding the
+  // host restart that actually caused the void.
+  mkdirSync(dirname(notePath), { recursive: true });
   writeFileSync(
     notePath,
     JSON.stringify(

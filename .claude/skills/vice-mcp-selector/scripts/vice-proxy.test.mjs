@@ -1328,3 +1328,83 @@ test("path translation: container paths cannot reach the host", async () => {
     await new Promise((resolve) => server.close(resolve));
   }
 });
+
+// Regression: the workspace boundary must be checked against a NORMALIZED
+// path. Before this, isInsideWorkspace() compared the raw string, so any value
+// merely beginning with the root's characters passed -- and hostPath() does not
+// refuse a normalizing-outward path either (it falls through to mount-based
+// translation by design), so the check here was the only boundary and a lexical
+// ".." walked straight through it into a real host path outside the workspace.
+//
+// Both directions matter, which is why one test covers both: refuse what
+// escapes, and still accept what merely LOOKS like it escapes but resolves back
+// inside. A fix that only refused any string containing ".." would pass the
+// first assertion and fail the second.
+test("path translation: a lexical .. cannot escape the workspace, and one that resolves back inside still translates", async () => {
+  const { server, requests } = startStandInServer();
+  const port = await listen(server);
+  const proxy = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${port}/mcp` });
+
+  try {
+    proxy.send({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } },
+    });
+    await proxy.nextMessage();
+
+    const root = repoRoot();
+
+    // Built by string concatenation, NOT join()/resolve() -- both would collapse
+    // the ".." here and destroy the very thing under test.
+    const escaping = `${root}/../../../etc/passwd`;
+    assert.ok(escaping.startsWith(root), "the probe must lexically start with the root, or it proves nothing");
+
+    proxy.send({
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tools/call",
+      params: { name: "vice_ping", arguments: { path: escaping } },
+    });
+    const refused = await proxy.nextMessage();
+    assert.equal(refused.result.isError, true, "a path that resolves outside the workspace must be refused");
+    assert.match(refused.result.content[0].text, /arguments\.path/, "the refusal must name the argument position");
+    assert.ok(
+      !requests.some(
+        (r) =>
+          r &&
+          r.method === "tools/call" &&
+          r.params &&
+          r.params.arguments &&
+          typeof r.params.arguments.path === "string" &&
+          /etc\/passwd/.test(r.params.arguments.path)
+      ),
+      "nothing naming /etc/passwd may reach the host -- in translated or untranslated form"
+    );
+
+    // The complement: ".." that resolves back inside is legitimate and must be
+    // normalized and translated, not refused.
+    const insideViaDotDot = `${root}/subdir/../CLAUDE.md`;
+    const expected = hostPath(join(root, "CLAUDE.md"));
+    proxy.send({
+      jsonrpc: "2.0",
+      id: 3,
+      method: "tools/call",
+      params: { name: "vice_ping", arguments: { path: insideViaDotDot } },
+    });
+    const accepted = await proxy.nextMessage();
+    assert.equal(accepted.result.isError, false, "a .. that resolves back inside the workspace must not be refused");
+    const forwarded = requests.find(
+      (r) => r && r.method === "tools/call" && r.params && r.params.arguments && r.params.arguments.path === expected
+    );
+    assert.ok(forwarded, "the normalized path must be forwarded as its host form");
+    assert.ok(
+      !forwarded.params.arguments.path.includes(".."),
+      "the host must never be handed a path still carrying a .. segment"
+    );
+  } finally {
+    proxy.child.kill();
+    await new Promise((resolve) => server.close(resolve));
+  }
+});

@@ -245,6 +245,36 @@ test("voidRun: artifacts that do not exist are a silent no-op (nothing renamed, 
   assert.equal(existsSync(capturePath), false);
 });
 
+// Regression: recover() computes binPath/capturePath under dumps/ up front but
+// only creates that directory AFTER a successful capture, while a
+// MachineRestartedError can surface much earlier -- during reset(), or anywhere
+// in boot(). On a release whose dumps/ does not exist yet, the unguarded note
+// write threw ENOENT: the evidence note that is the entire point of voiding was
+// discarded, and the ENOENT replaced the MachineRestartedError, hiding the host
+// restart that caused the void in the first place.
+test("voidRun: writes the evidence note even when the parent directory does not exist yet", () => {
+  const dir = tmpEpochDir();
+  const dumpsDir = join(dir, "never-created", "dumps");
+  assert.equal(existsSync(dumpsDir), false, "the probe requires the parent directory to be genuinely absent");
+  const binPath = join(dumpsDir, "danish-gameentry-run1.bin");
+  const capturePath = join(dumpsDir, "danish-gameentry-run1.capture.json");
+
+  const { voidedArtifacts, notePath } = voidRun({
+    binPath,
+    capturePath,
+    reason: "test: host restarted during reset(), before dumps/ existed",
+    baselineEpoch: 3,
+    currentEpoch: 4,
+  });
+
+  assert.deepEqual(voidedArtifacts, [], "nothing was written yet, so nothing can be renamed");
+  assert.equal(existsSync(notePath), true, "the evidence note must exist -- losing it defeats the voiding mechanism");
+  const note = JSON.parse(readFileSync(notePath, "utf8"));
+  assert.equal(note.reason, "test: host restarted during reset(), before dumps/ existed");
+  assert.equal(note.baseline_epoch, 3);
+  assert.equal(note.current_epoch, 4);
+});
+
 // ---------------------------------------------------------------------------
 // classifyRuns: the reproducibility contract for the PROGRAM IMAGE.
 //

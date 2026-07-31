@@ -421,6 +421,26 @@ const PATH_REWRITE_MAX_DEPTH = 10; // bounded so pathological nesting is left al
 class PathOutOfWorkspaceError extends Error {}
 class PathTranslationError extends Error {}
 
+// The boundary check MUST run against a normalized path, never the raw
+// string. `startsWith(root)` on an unnormalized value is satisfied by any
+// string that merely begins with the root's characters, so a lexical `..`
+// sequence -- "/workspaces/bruce_lee/../../../etc/passwd" -- passes a raw
+// prefix test and is then handed to hostPath(), which does NOT refuse it:
+// when relative() normalizes to a leading "..", hostpath.mjs deliberately
+// falls through to generic mount-based translation instead of throwing (its
+// own comment says so, for the CLI's benefit). That makes THIS check the only
+// workspace boundary on the forwarding path, so it has to be the strict one.
+//
+// resolve() collapses "." and ".." segments; callers only reach here after
+// value.startsWith("/") is confirmed, so it is pure normalization and never
+// pulls in process.cwd().
+//
+// STATED RESIDUAL: this is lexical, not physical -- a symlink inside the
+// workspace whose target lives outside it still translates. realpathSync()
+// would catch that but requires the file to already exist, which is wrong for
+// the write-side tools (snapshot_save and friends name a path that does not
+// exist yet). Lexical normalization is the part that can be enforced for both
+// directions without breaking writes.
 function isInsideWorkspace(absPath, root) {
   return absPath === root || absPath.startsWith(root.endsWith("/") ? root : root + "/");
 }
@@ -438,15 +458,20 @@ function rewritePathsIn(value, argPath, root, depth) {
   if (depth > PATH_REWRITE_MAX_DEPTH) return value;
   if (typeof value === "string") {
     if (!value.startsWith("/")) return value; // the stated residual: relative strings untouched
-    if (!isInsideWorkspace(value, root)) {
+    // Normalize FIRST, then check, then translate the normalized form -- so a
+    // path that only looks like it is inside the workspace cannot slip through,
+    // and the host is never handed a path still carrying ".." segments.
+    const normalized = resolve(value);
+    if (!isInsideWorkspace(normalized, root)) {
       throw new PathOutOfWorkspaceError(
-        `vice-proxy: ${argPath} is an absolute path (${value}) outside the mounted workspace (${root}). ` +
-          `The host emulator can only be handed paths that live inside the mounted workspace -- move the ` +
+        `vice-proxy: ${argPath} is an absolute path (${value}) outside the mounted workspace (${root})` +
+          (normalized === value ? "" : `; it resolves to ${normalized}`) +
+          `. The host emulator can only be handed paths that live inside the mounted workspace -- move the ` +
           `artifact inside the workspace and call again.`
       );
     }
     try {
-      return hostPath(value);
+      return hostPath(normalized);
     } catch (e) {
       throw new PathTranslationError(
         `vice-proxy: ${argPath} (${value}) could not be translated to a host path: ${e.message}\n  ${SET_ENV_HINT}`
