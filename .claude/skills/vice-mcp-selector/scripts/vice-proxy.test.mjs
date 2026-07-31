@@ -24,6 +24,8 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { mkdtempSync, writeFileSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { hostPath } from "../../devcontainer-host-path/scripts/hostpath.mjs";
+import { repoRoot } from "../../vice-session/scripts/repo-root.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PROXY_PATH = join(HERE, "vice-proxy.mjs");
@@ -1216,4 +1218,113 @@ test("three states: each unreachable shape gets its own message and fix", async 
   }
 
   rmSync(dir, { recursive: true, force: true });
+});
+
+// -----------------------------------------------------------------------
+// Plan 01.1-03 task 3: an absolute container path inside the workspace
+// reaches the host only in its translated host form; an absolute path
+// outside the workspace is refused before any forwarding; a non-path
+// argument (an address, a relative path, a plain number) passes through
+// byte-identical -- devcontainer-host-path itself is never modified by
+// this plan (verified separately, outside this file, via `git diff
+// --name-only -- .claude/skills/devcontainer-host-path`).
+// -----------------------------------------------------------------------
+
+test("path translation: container paths cannot reach the host", async () => {
+  const { server, requests } = startStandInServer();
+  const port = await listen(server);
+  const proxy = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${port}/mcp` });
+
+  try {
+    proxy.send({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } },
+    });
+    await proxy.nextMessage();
+
+    const root = repoRoot();
+    const containerPath = join(root, "CLAUDE.md"); // a real, stable, repo-relative file
+    const expectedHostPath = hostPath(containerPath);
+    assert.notEqual(
+      expectedHostPath,
+      containerPath,
+      "hostPath() must actually translate in this environment for this test to be meaningful"
+    );
+
+    // Translated case: a top-level path, one nested inside an object, and
+    // one nested inside an array, all in the SAME call.
+    proxy.send({
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tools/call",
+      params: {
+        name: "vice_ping",
+        arguments: {
+          path: containerPath,
+          nested: { inner: containerPath },
+          list: ["ok", containerPath],
+        },
+      },
+    });
+    const resp = await proxy.nextMessage();
+    assert.equal(resp.result.isError, false);
+
+    const forwarded = requests.find(
+      (r) => r && r.method === "tools/call" && r.params && r.params.arguments && Object.prototype.hasOwnProperty.call(r.params.arguments, "path")
+    );
+    assert.ok(forwarded, "the stand-in server must have received the forwarded call carrying the translated path");
+    assert.equal(forwarded.params.arguments.path, expectedHostPath, "a top-level path must be translated to hostPath(containerPath)");
+    assert.notEqual(forwarded.params.arguments.path, containerPath, "the container path must NOT reach the host untranslated");
+    assert.equal(forwarded.params.arguments.nested.inner, expectedHostPath, "a path nested inside an object must be translated");
+    assert.equal(forwarded.params.arguments.list[1], expectedHostPath, "a path nested inside an array must be translated");
+    assert.equal(forwarded.params.arguments.list[0], "ok", "a non-path element alongside a translated one is untouched");
+
+    // Out-of-workspace case: refused before the SENSITIVE path ever reaches
+    // the host. (The pre-flight liveness probe still runs -- it always
+    // does, for every non-deny-listed call -- so this asserts that no
+    // request carrying "/etc/passwd" appears, rather than a raw
+    // before/after request-count delta that the probe's own harmless ping
+    // traffic would spuriously fail.)
+    proxy.send({
+      jsonrpc: "2.0",
+      id: 3,
+      method: "tools/call",
+      params: { name: "vice_ping", arguments: { path: "/etc/passwd" } },
+    });
+    const refused = await proxy.nextMessage();
+    assert.equal(refused.result.isError, true, "an out-of-workspace absolute path must be refused");
+    assert.match(refused.result.content[0].text, /arguments\.path/, "the refusal must name the argument position");
+    assert.ok(
+      refused.result.content[0].text.includes(root),
+      "the refusal must name the workspace root"
+    );
+    assert.ok(
+      !requests.some((r) => r && r.method === "tools/call" && r.params && r.params.arguments && r.params.arguments.path === "/etc/passwd"),
+      "the refusal must happen before forwarding -- /etc/passwd must never reach the stand-in server"
+    );
+
+    // Pass-through case: a hex address, a relative path, and an integer all
+    // arrive at the host byte-identical -- the structural rule never
+    // touches a non-absolute-path string or a non-string value.
+    proxy.send({
+      jsonrpc: "2.0",
+      id: 4,
+      method: "tools/call",
+      params: { name: "vice_ping", arguments: { address: "$0400", relpath: "recovery/danish/dump.bin", count: 42 } },
+    });
+    const passthrough = await proxy.nextMessage();
+    assert.equal(passthrough.result.isError, false);
+    const lastForwarded = requests.find(
+      (r) => r && r.method === "tools/call" && r.params && r.params.arguments && r.params.arguments.address === "$0400"
+    );
+    assert.ok(lastForwarded, "the pass-through call must have reached the host");
+    assert.equal(lastForwarded.params.arguments.address, "$0400", "a hex-address-shaped string must not be touched");
+    assert.equal(lastForwarded.params.arguments.relpath, "recovery/danish/dump.bin", "a relative path must not be touched");
+    assert.equal(lastForwarded.params.arguments.count, 42, "a non-string value must not be touched");
+  } finally {
+    proxy.child.kill();
+    await new Promise((resolve) => server.close(resolve));
+  }
 });

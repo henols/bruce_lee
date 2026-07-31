@@ -397,6 +397,91 @@ function aliveButFailedMessage(errMessage) {
   );
 }
 
+// ------------------------------------------------------------ path rewriting
+//
+// Decision D-G (plan 01.1-03 task 3 / criterion 9): container->host path
+// translation moves from every caller's own discipline into this one seam,
+// which sees every forwarded call. The structural rule: any string argument
+// value beginning with "/" is an absolute filesystem path. One that resolves
+// inside the mounted workspace is rewritten to its host form via
+// hostPath() -- the host emulator can only ever be handed a HOST path,
+// since it runs on the host, not in this container. One that resolves
+// outside the workspace is refused outright, before any forwarding, because
+// a container path is never correct on the host: forwarding it untouched
+// can only produce a wrong answer with no error, which is exactly the
+// silent-failure class this criterion exists to eliminate.
+//
+// STATED RESIDUAL, deliberately not papered over: a RELATIVE path string
+// (no leading "/", e.g. "recovery/danish/dump.bin") is left byte-identical.
+// A relative-looking string is indistinguishable from a non-path argument
+// (a tool name, a hex address like "$0400", an arbitrary label) without
+// guessing, and rewriting a non-path argument would be a strictly worse
+// failure than leaving a relative path unresolved on the host. SKILL.md's
+// "Paths" section tells callers to pass absolute container paths for
+// exactly this reason.
+const PATH_REWRITE_MAX_DEPTH = 10; // bounded so pathological nesting is left alone rather than looping forever
+
+class PathOutOfWorkspaceError extends Error {}
+class PathTranslationError extends Error {}
+
+function isInsideWorkspace(absPath, root) {
+  return absPath === root || absPath.startsWith(root.endsWith("/") ? root : root + "/");
+}
+
+/**
+ * Recursively walk `value`, applying decision D-G's structural rule to
+ * every string found. Objects and arrays are walked (bounded by
+ * PATH_REWRITE_MAX_DEPTH); numbers, booleans, null, and non-absolute
+ * strings are returned byte-identical. `argPath` accumulates a
+ * human-readable position (e.g. "arguments.path" or "arguments.files[2]")
+ * used in a refusal message so the caller can find exactly which argument
+ * was the problem.
+ */
+function rewritePathsIn(value, argPath, root, depth) {
+  if (depth > PATH_REWRITE_MAX_DEPTH) return value;
+  if (typeof value === "string") {
+    if (!value.startsWith("/")) return value; // the stated residual: relative strings untouched
+    if (!isInsideWorkspace(value, root)) {
+      throw new PathOutOfWorkspaceError(
+        `vice-proxy: ${argPath} is an absolute path (${value}) outside the mounted workspace (${root}). ` +
+          `The host emulator can only be handed paths that live inside the mounted workspace -- move the ` +
+          `artifact inside the workspace and call again.`
+      );
+    }
+    try {
+      return hostPath(value);
+    } catch (e) {
+      throw new PathTranslationError(
+        `vice-proxy: ${argPath} (${value}) could not be translated to a host path: ${e.message}\n  ${SET_ENV_HINT}`
+      );
+    }
+  }
+  if (Array.isArray(value)) {
+    return value.map((v, i) => rewritePathsIn(v, `${argPath}[${i}]`, root, depth + 1));
+  }
+  if (value && typeof value === "object") {
+    const out = {};
+    for (const [k, v] of Object.entries(value)) {
+      out[k] = rewritePathsIn(v, `${argPath}.${k}`, root, depth + 1);
+    }
+    return out;
+  }
+  return value; // numbers, booleans, null -- byte-identical, never touched
+}
+
+/** Rewrite every absolute-in-workspace path inside `args` to its host form.
+ * Throws PathOutOfWorkspaceError / PathTranslationError on the two refusal
+ * cases above; the caller (handleToolsCall) converts either into an
+ * isError:true result rather than letting it escape. */
+function rewriteArguments(args) {
+  const root = repoRoot();
+  const out = {};
+  for (const [k, v] of Object.entries(args || {})) {
+    out[k] = rewritePathsIn(v, `arguments.${k}`, root, 1);
+  }
+  return out;
+}
+
 // ------------------------------------------------------- oversized results
 //
 // Decision D-E: the `_meta["anthropic/maxResultSizeChars"]` declaration
@@ -554,9 +639,25 @@ async function handleToolsCall(params) {
     return isErrorText(deadOrHungMessage(probe, epoch));
   }
 
+  // Path translation at the seam (task 3 / decision D-G / criterion 9),
+  // ordered after the deny-list refusal, the epoch comparison and the
+  // liveness probe above, and before delegating to call(). A refusal here
+  // (out-of-workspace absolute path, or a translation failure) is returned
+  // exactly like every other tools/call outcome: a well-formed isError:true
+  // result, never a throw.
+  let translatedArgs;
+  try {
+    translatedArgs = rewriteArguments(args);
+  } catch (e) {
+    if (e instanceof PathOutOfWorkspaceError || e instanceof PathTranslationError) {
+      return isErrorText(e.message);
+    }
+    throw e; // unexpected -- let the never-throw dispatch one layer up handle it
+  }
+
   let payload;
   try {
-    payload = await call(name, args);
+    payload = await call(name, translatedArgs);
   } catch (e) {
     if (e instanceof MachineRestartedError) {
       // call()'s own post-reconnect fast path detected this first -- convert
