@@ -20,6 +20,8 @@ import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PROXY_PATH = join(HERE, "vice-proxy.mjs");
@@ -265,6 +267,524 @@ test("stdout carries only valid JSON-RPC messages", async () => {
       );
       assert.equal(msg.jsonrpc, "2.0", `message missing/wrong jsonrpc field: ${JSON.stringify(msg)}`);
     }
+  } finally {
+    proxy.child.kill();
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+// -----------------------------------------------------------------------
+// Plan 01.1-02 task 1: tools/list answers from a committed on-disk snapshot
+// with ZERO emulator involvement, and degrades to a well-formed empty list
+// on any snapshot problem rather than a fetch, a throw, or a hang.
+// -----------------------------------------------------------------------
+
+test("tools/list reads the committed snapshot with no emulator", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vice-proxy-manifest-"));
+  const manifestFile = join(dir, "tools-manifest.json");
+  const fixture = {
+    generated_at: "2026-07-31T00:00:00.000Z",
+    endpoint: "http://example.invalid/mcp",
+    tools: [
+      { name: "vice_ping", description: "ping the emulator", inputSchema: { type: "object", properties: {} } },
+      {
+        name: "vice_memory_read",
+        description: "read a range of C64 memory",
+        inputSchema: {
+          type: "object",
+          properties: { address: { type: "string" }, length: { type: "number" } },
+          required: ["address"],
+        },
+      },
+    ],
+  };
+  writeFileSync(manifestFile, JSON.stringify(fixture), "utf8");
+
+  const { server, requests } = startStandInServer();
+  const port = await listen(server);
+  const proxy = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${port}/mcp`, VICE_TOOLS_MANIFEST: manifestFile });
+
+  try {
+    proxy.send({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } },
+    });
+    await proxy.nextMessage();
+
+    proxy.send({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} });
+    const resp = await proxy.nextMessage();
+    const tools = resp.result.tools;
+    // Both fixture tools, PLUS the always-present synthetic
+    // vice_result_continue tool (task 3) -- tools/list never omits it.
+    assert.equal(tools.length, 3, "both fixture tools plus the synthetic continuation tool must come back");
+
+    const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+    assert.ok(byName.vice_ping, "vice_ping must be present");
+    assert.ok(byName.vice_memory_read, "vice_memory_read must be present");
+    assert.deepEqual(
+      byName.vice_memory_read.inputSchema,
+      fixture.tools[1].inputSchema,
+      "inputSchema must survive intact"
+    );
+    for (const t of tools) {
+      assert.equal(
+        typeof (t._meta && t._meta["anthropic/maxResultSizeChars"]),
+        "number",
+        `${t.name} must carry _meta["anthropic/maxResultSizeChars"]`
+      );
+    }
+
+    assert.equal(requests.length, 0, "tools/list must make ZERO requests to the stand-in host");
+  } finally {
+    proxy.child.kill();
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("tools/list survives a missing or corrupt snapshot", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vice-proxy-manifest-bad-"));
+  const missingPath = join(dir, "does-not-exist.json");
+  const invalidJsonPath = join(dir, "invalid.json");
+  writeFileSync(invalidJsonPath, "{ this is not valid JSON", "utf8");
+  const wrongShapePath = join(dir, "wrong-shape.json");
+  writeFileSync(wrongShapePath, JSON.stringify({ generated_at: null, endpoint: null, tools: "nope, a string" }), "utf8");
+
+  const { server, requests } = startStandInServer();
+  const port = await listen(server);
+
+  try {
+    for (const manifestFile of [missingPath, invalidJsonPath, wrongShapePath]) {
+      const proxy = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${port}/mcp`, VICE_TOOLS_MANIFEST: manifestFile });
+      try {
+        proxy.send({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } },
+        });
+        await proxy.nextMessage();
+
+        proxy.send({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} });
+        const resp = await proxy.nextMessage();
+        // "Empty tools array" means empty of MANIFEST-derived tools -- the
+        // always-present synthetic vice_result_continue tool (task 3) is
+        // not sourced from the manifest at all, so a broken manifest can't
+        // take it down with it.
+        assert.deepEqual(
+          resp.result.tools.map((t) => t.name),
+          ["vice_result_continue"],
+          `expected only the synthetic continuation tool for ${manifestFile}`
+        );
+
+        // The child must still be alive and answer a SUBSEQUENT
+        // initialize-then-tools/list correctly -- a snapshot problem must
+        // never strand the session.
+        proxy.send({
+          jsonrpc: "2.0",
+          id: 3,
+          method: "initialize",
+          params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } },
+        });
+        const secondInit = await proxy.nextMessage();
+        assert.equal(secondInit.result.protocolVersion, "2025-06-18");
+
+        proxy.send({ jsonrpc: "2.0", id: 4, method: "tools/list", params: {} });
+        const secondList = await proxy.nextMessage();
+        assert.deepEqual(secondList.result.tools.map((t) => t.name), ["vice_result_continue"]);
+
+        assert.equal(proxy.child.exitCode, null, "the proxy process must still be running");
+        assert.equal(proxy.child.killed, false);
+      } finally {
+        proxy.child.kill();
+      }
+    }
+    assert.equal(requests.length, 0, "no manifest-read path may ever reach the stand-in host");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// -----------------------------------------------------------------------
+// Plan 01.1-02 task 2: the deny-list is enforced at BOTH discovery
+// (tools/list, above) and call time, as independent layers; and every
+// forwarded tools/call brackets itself with an epoch comparison, loud and
+// never cached.
+//
+// COVERAGE SPLIT (do not conflate the two): removing the proxy's call-time
+// deny check makes "vice_disk_list is refused at tools/call with no request
+// made" fail on its request-counter assertion, because the request would
+// then reach the stand-in server. Removing the read-time filter in
+// handleToolsList() makes "vice_disk_list is absent from tools/list" fail.
+// Neither test covers both layers.
+// -----------------------------------------------------------------------
+
+test("vice_disk_list is refused at tools/call with no request made", async () => {
+  const { server, requests } = startStandInServer();
+  const port = await listen(server);
+  const proxy = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${port}/mcp` });
+
+  try {
+    proxy.send({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } },
+    });
+    await proxy.nextMessage();
+
+    proxy.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "vice_disk_list", arguments: {} } });
+    const resp = await proxy.nextMessage();
+    assert.equal(resp.result.isError, true, "vice_disk_list must always be refused");
+    assert.match(resp.result.content[0].text, /vice_disk_list/);
+    assert.match(resp.result.content[0].text, /host-side restart|host VICE MCP server/i);
+    assert.equal(requests.length, 0, "the stand-in server's request counter must be unchanged");
+  } finally {
+    proxy.child.kill();
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("vice_disk_list is absent from tools/list", async () => {
+  // A fixture manifest that DELIBERATELY includes vice_disk_list, simulating
+  // a snapshot generated by some other means -- this is what makes the
+  // READ-TIME filter, not merely serverInfo()'s refresh-time filter, the
+  // thing under test.
+  const dir = mkdtempSync(join(tmpdir(), "vice-proxy-denylist-"));
+  const manifestFile = join(dir, "tools-manifest.json");
+  writeFileSync(
+    manifestFile,
+    JSON.stringify({
+      generated_at: "2026-07-31T00:00:00.000Z",
+      endpoint: "http://example.invalid/mcp",
+      tools: [
+        { name: "vice_ping", description: "ping", inputSchema: { type: "object", properties: {} } },
+        { name: "vice_disk_list", description: "list disks", inputSchema: { type: "object", properties: {} } },
+      ],
+    }),
+    "utf8"
+  );
+
+  const { server } = startStandInServer();
+  const port = await listen(server);
+  const proxy = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${port}/mcp`, VICE_TOOLS_MANIFEST: manifestFile });
+
+  try {
+    proxy.send({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } },
+    });
+    await proxy.nextMessage();
+
+    proxy.send({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} });
+    const resp = await proxy.nextMessage();
+    const names = resp.result.tools.map((t) => t.name);
+    assert.ok(names.includes("vice_ping"), "the other fixture tool must still be present");
+    assert.ok(!names.includes("vice_disk_list"), "vice_disk_list must be filtered out even from a manifest that names it");
+  } finally {
+    proxy.child.kill();
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("epoch drift is reported loudly and not cached", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vice-proxy-epoch-"));
+  const epochFile = join(dir, "epoch.json");
+  writeFileSync(epochFile, JSON.stringify({ epoch: 1, pid: 111, spawned_at: "2026-07-31T00:00:00.000Z" }), "utf8");
+
+  const { server, requests } = startStandInServer();
+  const port = await listen(server);
+  const proxy = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${port}/mcp`, VICE_EPOCH_FILE: epochFile });
+
+  try {
+    proxy.send({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } },
+    });
+    await proxy.nextMessage();
+
+    // Call 1: establishes the baseline (epoch 1) and forwards normally.
+    proxy.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
+    const first = await proxy.nextMessage();
+    assert.equal(first.result.isError, false);
+    assert.equal(requests.filter((r) => r && r.method === "tools/call").length, 1);
+
+    // Epoch changes underneath the proxy -- a restart happened.
+    writeFileSync(epochFile, JSON.stringify({ epoch: 2, pid: 222, spawned_at: "2026-07-31T00:05:00.000Z" }), "utf8");
+
+    // Call 2: refused BEFORE forwarding -- no new request reaches the host.
+    proxy.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
+    const second = await proxy.nextMessage();
+    assert.equal(second.result.isError, true, "an epoch change must refuse the call");
+    assert.match(second.result.content[0].text, /1/);
+    assert.match(second.result.content[0].text, /2/);
+    assert.equal(
+      requests.filter((r) => r && r.method === "tools/call").length,
+      1,
+      "the drifting call must NOT have reached the stand-in server"
+    );
+
+    // Call 3: the re-baseline took effect -- forwards normally again.
+    proxy.send({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
+    const third = await proxy.nextMessage();
+    assert.equal(third.result.isError, false, "the proxy must re-baseline, not cache the restart report");
+    assert.equal(requests.filter((r) => r && r.method === "tools/call").length, 2);
+  } finally {
+    proxy.child.kill();
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a missing epoch file is not a restart", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vice-proxy-epoch-absent-"));
+  const epochFile = join(dir, "epoch.json"); // deliberately never written yet
+
+  const { server, requests } = startStandInServer();
+  const port = await listen(server);
+  const proxy = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${port}/mcp`, VICE_EPOCH_FILE: epochFile });
+
+  try {
+    proxy.send({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } },
+    });
+    await proxy.nextMessage();
+
+    proxy.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
+    const first = await proxy.nextMessage();
+    assert.equal(first.result.isError, false, "no epoch file at all must never be treated as a restart");
+
+    proxy.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
+    const second = await proxy.nextMessage();
+    assert.equal(second.result.isError, false);
+
+    // The file appears for the first time -- absent-to-present is a
+    // supervisor merely starting, not a restart.
+    writeFileSync(epochFile, JSON.stringify({ epoch: 7 }), "utf8");
+
+    proxy.send({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
+    const third = await proxy.nextMessage();
+    assert.equal(third.result.isError, false, "absent -> present must not be reported as a restart");
+    assert.equal(requests.filter((r) => r && r.method === "tools/call").length, 3);
+  } finally {
+    proxy.child.kill();
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// -----------------------------------------------------------------------
+// Plan 01.1-02 task 3: a result larger than the declared cap comes back in
+// FULL across an explicit continuation sequence -- reassembled byte-for-byte,
+// served with no extra host traffic, never silently truncated.
+// -----------------------------------------------------------------------
+
+/**
+ * A stand-in server that answers `initialize` normally and ANY `tools/call`
+ * with the same fixed text payload -- unlike startStandInServer() above,
+ * this one does not special-case a tool name, since this section drives
+ * calls purely to exercise the size cap, not any particular tool's shape.
+ */
+function startBigPayloadServer(payloadText) {
+  const requests = [];
+  const server = createServer((req, res) => {
+    let body = "";
+    req.setEncoding("utf8");
+    req.on("data", (chunk) => (body += chunk));
+    req.on("end", () => {
+      let msg;
+      try {
+        msg = JSON.parse(body);
+      } catch {
+        msg = null;
+      }
+      requests.push(msg);
+
+      if (msg && msg.method === "initialize") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: msg.id,
+            result: { protocolVersion: "2024-11-05", capabilities: {}, serverInfo: { name: "stand-in-vice", version: "0.0.0" } },
+          })
+        );
+        return;
+      }
+      if (msg && msg.method === "tools/call") {
+        const result = { content: [{ type: "text", text: payloadText }] };
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result }));
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: msg && "id" in msg ? msg.id : null,
+          error: { code: -32601, message: "unsupported in this test's stand-in server" },
+        })
+      );
+    });
+  });
+  return { server, requests };
+}
+
+test("an oversized result is recoverable in full across continuations", async () => {
+  // NOT valid JSON, so call()'s own JSON.parse-or-verbatim fallback hands it
+  // back exactly as sent -- the cleanest possible byte-for-byte fixture.
+  const bigPayload = "PAYLOAD-START-" + "abcdefghij".repeat(500) + "-PAYLOAD-END"; // 5026 chars
+  const { server, requests } = startBigPayloadServer(bigPayload);
+  const port = await listen(server);
+  const proxy = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${port}/mcp`, VICE_MAX_RESULT_CHARS: "1000" });
+
+  try {
+    proxy.send({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } },
+    });
+    await proxy.nextMessage();
+
+    proxy.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
+    const first = await proxy.nextMessage();
+    assert.equal(first.result.isError, false);
+    assert.equal(first.result.content.length, 2, "an oversized result carries a chunk item plus a marker item");
+    assert.match(first.result.content[1].text, /chunk 1 of \d+/);
+    assert.match(first.result.content[1].text, /vice_result_continue/);
+
+    const tokenMatch = first.result.content[1].text.match(/"token":"([^"]+)"/);
+    assert.ok(tokenMatch, "the marker must name a continuation token");
+    const token = tokenMatch[1];
+
+    let reassembled = first.result.content[0].text;
+    let nextMarker = first.result.content[1].text;
+    let guard = 0;
+    while (!/\(last chunk\)/.test(nextMarker) && guard < 100) {
+      guard += 1;
+      proxy.send({
+        jsonrpc: "2.0",
+        id: 100 + guard,
+        method: "tools/call",
+        params: { name: "vice_result_continue", arguments: { token } },
+      });
+      const cont = await proxy.nextMessage();
+      assert.equal(cont.result.isError, false);
+      reassembled += cont.result.content[0].text;
+      nextMarker = cont.result.content[1].text;
+    }
+    assert.match(nextMarker, /\(last chunk\)/, "the sequence must terminate with a last-chunk marker");
+
+    assert.equal(reassembled, bigPayload, "reassembly must equal the original payload BYTE FOR BYTE");
+    assert.equal(
+      requests.filter((r) => r && r.method === "tools/call").length,
+      1,
+      "continuations must be served from the proxy's store, never re-forwarded -- exactly one host request total"
+    );
+    assert.ok(
+      !requests.some((r) => r && r.method === "tools/call" && r.params && r.params.name === "vice_result_continue"),
+      "vice_result_continue must never appear in a request the stand-in server receives"
+    );
+  } finally {
+    proxy.child.kill();
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("an exhausted continuation token fails loudly", async () => {
+  const bigPayload = "Z".repeat(3000);
+  const { server } = startBigPayloadServer(bigPayload);
+  const port = await listen(server);
+  const proxy = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${port}/mcp`, VICE_MAX_RESULT_CHARS: "1000" });
+
+  try {
+    proxy.send({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } },
+    });
+    await proxy.nextMessage();
+
+    proxy.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
+    const first = await proxy.nextMessage();
+    const tokenMatch = first.result.content[1].text.match(/"token":"([^"]+)"/);
+    const token = tokenMatch[1];
+
+    // Drain every remaining chunk.
+    let marker = first.result.content[1].text;
+    let guard = 0;
+    while (!/\(last chunk\)/.test(marker) && guard < 100) {
+      guard += 1;
+      proxy.send({
+        jsonrpc: "2.0",
+        id: 100 + guard,
+        method: "tools/call",
+        params: { name: "vice_result_continue", arguments: { token } },
+      });
+      const cont = await proxy.nextMessage();
+      marker = cont.result.content[1].text;
+    }
+
+    // One more call with the SAME (now-exhausted) token.
+    proxy.send({
+      jsonrpc: "2.0",
+      id: 999,
+      method: "tools/call",
+      params: { name: "vice_result_continue", arguments: { token } },
+    });
+    const exhausted = await proxy.nextMessage();
+    assert.equal(exhausted.result.isError, true, "an exhausted token must fail loudly");
+    assert.match(exhausted.result.content[0].text, /narrower range/);
+    assert.equal(proxy.child.exitCode, null, "the proxy must still be alive after an exhausted-token error");
+  } finally {
+    proxy.child.kill();
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("tools/list declares the same cap it enforces", async () => {
+  const { server } = startStandInServer();
+  const port = await listen(server);
+  const proxy = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${port}/mcp`, VICE_MAX_RESULT_CHARS: "12345" });
+
+  try {
+    proxy.send({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } },
+    });
+    await proxy.nextMessage();
+
+    proxy.send({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} });
+    const resp = await proxy.nextMessage();
+    assert.ok(resp.result.tools.length > 0, "tools/list must return at least the synthetic continuation tool");
+    for (const t of resp.result.tools) {
+      assert.equal(
+        t._meta && t._meta["anthropic/maxResultSizeChars"],
+        12345,
+        `${t.name} must declare the SAME cap the child was started with`
+      );
+    }
+    const continueTool = resp.result.tools.find((t) => t.name === "vice_result_continue");
+    assert.ok(continueTool, "vice_result_continue must appear in tools/list");
+    assert.ok(
+      Array.isArray(continueTool.inputSchema.required) && continueTool.inputSchema.required.includes("token"),
+      "vice_result_continue's inputSchema must require token"
+    );
   } finally {
     proxy.child.kill();
     await new Promise((resolve) => server.close(resolve));

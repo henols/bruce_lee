@@ -15,8 +15,12 @@
 // it into this skill and rewrites this import to `./vice.mjs`. Until then
 // this is the same cross-skill shape `c64-ram-capture/scripts/ram-capture.mjs`
 // already uses for `devcontainer-host-path`.
-import { call, activeInstance } from "../../vice-session/scripts/vice.mjs";
+import { call, activeInstance, DENY_LIST, readEpoch, beginSession, MachineRestartedError } from "../../vice-session/scripts/vice.mjs";
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join, resolve } from "node:path";
+
+const HERE_DIR = dirname(fileURLToPath(import.meta.url));
 
 // -------------------------------------------------------------- never-throw
 //
@@ -112,59 +116,352 @@ function handleInitialize(params) {
 
 // --------------------------------------------------------------- tools/list
 //
-// Tracer scope ONLY (per this task's <action>): read a static manifest file
-// named by VICE_TOOLS_MANIFEST if it is set and readable, else answer an
-// empty `tools` array. Deliberately does NOT call the host -- that is what
-// keeps this method's zero-HTTP-request property true. Plan 01.1-02 task 1
-// replaces this with the committed schema snapshot; this tracer needs only
-// enough to prove the method is answered without touching the host at all.
-function handleToolsList() {
-  const manifestPath = process.env.VICE_TOOLS_MANIFEST;
-  if (manifestPath) {
-    try {
-      const raw = readFileSync(manifestPath, "utf8");
-      const parsed = JSON.parse(raw);
-      if (parsed && Array.isArray(parsed.tools)) {
-        return { tools: parsed.tools };
-      }
-      console.error(
-        `vice-proxy: VICE_TOOLS_MANIFEST (${manifestPath}) did not contain a "tools" array -- falling back to an empty list`
-      );
-    } catch (e) {
-      console.error(
-        `vice-proxy: VICE_TOOLS_MANIFEST (${manifestPath}) could not be read/parsed (${e.message}) -- falling back to an empty list`
-      );
-    }
+// A pure, offline read of the committed schema snapshot (decision D-C).
+// `refresh-manifest.mjs` is the ONLY writer of that file -- this handler
+// never fetches, never awaits a network call, and never throws. Any problem
+// with the snapshot (absent, unparseable, wrong shape) degrades to a
+// well-formed empty `tools` array plus one stderr line naming the path and
+// the reason, never a fetch and never a hang.
+//
+// The output-size ceiling this proxy enforces (task 3's continuation logic)
+// is declared here too, on every tool entry via `_meta`, so the ceiling a
+// caller is TOLD about and the ceiling actually enforced are the same single
+// number -- see OUTPUT_CHAR_CAP below, the one definition both sites read.
+const OUTPUT_CHAR_CAP = (() => {
+  const n = Number(process.env.VICE_MAX_RESULT_CHARS);
+  return Number.isFinite(n) && n > 0 ? n : 500000;
+})();
+
+// The synthetic continuation tool (task 3, decision D-E): served entirely
+// inside this proxy, NEVER forwarded to the host, and advertised in every
+// tools/list response exactly like a real tool so an agent can discover it
+// the same way it discovers everything else.
+const RESULT_CONTINUE_TOOL = {
+  name: "vice_result_continue",
+  description:
+    "Retrieve the next chunk of an oversized tools/call result that vice-proxy split across a " +
+    "continuation sequence. Served entirely inside this proxy -- never forwarded to the host VICE " +
+    "MCP server, and has no counterpart there.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      token: {
+        type: "string",
+        description: "the continuation token named in the previous chunk's trailing marker",
+      },
+    },
+    required: ["token"],
+  },
+};
+
+function manifestPath() {
+  return process.env.VICE_TOOLS_MANIFEST
+    ? resolve(process.env.VICE_TOOLS_MANIFEST)
+    : join(HERE_DIR, "tools-manifest.json");
+}
+
+function readManifestTools() {
+  const path = manifestPath();
+  let raw;
+  try {
+    raw = readFileSync(path, "utf8");
+  } catch (e) {
+    console.error(
+      `vice-proxy: tools-manifest not readable at ${path} (${e.message}) -- answering tools/list with an empty tools array`
+    );
+    return [];
   }
-  return { tools: [] };
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (e) {
+    console.error(
+      `vice-proxy: tools-manifest at ${path} is not valid JSON (${e.message}) -- answering tools/list with an empty tools array`
+    );
+    return [];
+  }
+  const shapeOk =
+    parsed &&
+    Array.isArray(parsed.tools) &&
+    parsed.tools.every((t) => t && typeof t === "object" && typeof t.name === "string");
+  if (!shapeOk) {
+    console.error(
+      `vice-proxy: tools-manifest at ${path} has an unexpected shape ("tools" must be an array of objects ` +
+        `each carrying a string "name") -- answering tools/list with an empty tools array`
+    );
+    return [];
+  }
+  return parsed.tools;
+}
+
+function handleToolsList() {
+  // Two independent transforms applied at READ time, not write time, so a
+  // stale or hand-edited snapshot can never leak either property:
+  //   1. re-filter DENY_LIST -- refresh-manifest.mjs's serverInfo() call
+  //      already filters at write time; this is the second, independent
+  //      layer that catches a snapshot generated by any other means.
+  //   2. stamp the same output-size ceiling this proxy enforces onto every
+  //      tool, not a curated subset -- the host's tool set is not this
+  //      repo's to enumerate.
+  const manifestTools = readManifestTools().filter((t) => !DENY_LIST.includes(t.name));
+  const tools = [...manifestTools, RESULT_CONTINUE_TOOL].map((t) => ({
+    ...t,
+    _meta: { ...(t._meta || {}), "anthropic/maxResultSizeChars": OUTPUT_CHAR_CAP },
+  }));
+  return { tools };
 }
 
 // --------------------------------------------------------------- tools/call
 //
-// Delegates every real call to the reused `call()` -- the retry ladder,
-// deny-list refusal and epoch check all already live there (Pattern 1). Per
-// Pattern 2, EVERY outcome of a tool invocation attempt -- success or
-// failure -- becomes a JSON-RPC *result* carrying `content`/`isError`, never
-// a JSON-RPC `error` object. A JSON-RPC `error` is reserved for genuinely
-// missing/malformed `params` on this method itself, thrown as a
-// `ProtocolError` and caught one layer up in `handleMessage()`.
+// Delegates every real call to the reused `call()` -- the retry ladder
+// already lives there (Pattern 1). Per Pattern 2, EVERY outcome of a tool
+// invocation attempt -- success or failure -- becomes a JSON-RPC *result*
+// carrying `content`/`isError`, never a JSON-RPC `error` object. A JSON-RPC
+// `error` is reserved for genuinely missing/malformed `params` on this
+// method itself, thrown as a `ProtocolError` and caught one layer up in
+// `handleMessage()`.
+//
+// Two hazards are enforced HERE, at the proxy seam, as independent layers on
+// top of what `call()` already does internally:
+//
+//   1. vice_disk_list refusal. `call()` already refuses it (throwing a
+//      ViceError), but this proxy refuses it FIRST, before any forwarding
+//      logic runs and before any network attempt, so the refusal is
+//      observable with zero HTTP traffic and a well-formed MCP frame rather
+//      than one more layer of catch between the hazard and the answer.
+//
+//   2. Per-call epoch re-check (decision D-D). The proxy does NOT call
+//      assertSameMachine() and does NOT probe vice_checkpoint_list -- a
+//      state-reading call that pauses the emulated CPU and never resumes it,
+//      and the proxy arms no checkpoints of its own to probe with anyway.
+//      The narrowed contract is a plain readEpoch() comparison, before AND
+//      after every forwarded call: a changed epoch refuses the call (or
+//      discards its result, if the change happened mid-call) with a loud,
+//      evidence-carrying error naming both epoch values, then adopts the new
+//      value as the baseline so the SESSION stays usable -- a restart report
+//      is never cached, per criterion 6.
+let viceSession = null; // beginSession()'s return value, set lazily on the first forwarded call
+let epochBaseline = null; // the rolling comparison point; updated on every re-baseline
+
+function ensureViceSession() {
+  if (!viceSession) {
+    viceSession = beginSession();
+    epochBaseline = viceSession.baseline;
+  }
+}
+
+function currentEpoch() {
+  return readEpoch(viceSession.epochPath);
+}
+
+function epochChanged(baseline, current) {
+  return Boolean(baseline?.present) && Boolean(current?.present) && baseline.epoch !== current.epoch;
+}
+
+function epochDriftMessage(when, baseline, current) {
+  const pidNote = current && current.pid != null ? `, pid ${current.pid}` : "";
+  const spawnedNote = current && current.spawned_at ? `, spawned_at ${current.spawned_at}` : "";
+  return (
+    `vice-proxy: epoch drift detected ${when} -- the host VICE MCP server's epoch changed from ` +
+    `${baseline.epoch} to ${current.epoch}${pidNote}${spawnedNote}. Any work done since the previous ` +
+    `call may have hit a different, freshly-booted machine and should be redone.`
+  );
+}
+
+/**
+ * Compare the rolling baseline against a fresh epoch read. Returns an error
+ * MESSAGE string if the comparison proves a restart (and re-baselines to the
+ * new value so the next call is not refused again), or `null` if the call
+ * may proceed (including the "absent baseline, now present" case, which is
+ * adopted silently -- a supervisor merely started, not a restart, mirroring
+ * vice.mjs's own "only compare when both are present" rule).
+ */
+function checkEpochAndRebaseline(when) {
+  const current = currentEpoch();
+  if (epochChanged(epochBaseline, current)) {
+    const msg = epochDriftMessage(when, epochBaseline, current);
+    epochBaseline = current; // never cache a negative result (criterion 6)
+    return msg;
+  }
+  if (!epochBaseline.present && current.present) {
+    epochBaseline = current;
+  }
+  return null;
+}
+
+function isErrorText(text) {
+  return { content: [{ type: "text", text }], isError: true };
+}
+
+// ------------------------------------------------------- oversized results
+//
+// Decision D-E: the `_meta["anthropic/maxResultSizeChars"]` declaration
+// above raises the real limit far past the 25,000-token default, but a
+// second, proxy-side cap catches whatever still overruns it (a 64K RAM read
+// in any plausible encoding, per ROADMAP criterion 5). Nothing on this path
+// may silently shorten a payload -- there is no truncation branch. An
+// oversized result is split and served in full across an explicit
+// continuation sequence via one synthetic tool (`vice_result_continue`,
+// declared above), so the caller can always reassemble the whole payload.
+//
+// The store is bounded so a long session cannot grow it without limit: at
+// most MAX_CONTINUATIONS outstanding sequences, oldest evicted first (a
+// `Map` preserves insertion order, so its first key is always the oldest).
+// An evicted or exhausted token fails loudly with advice to narrow the
+// original call rather than resume it -- there is nothing left to resume.
+const CONTINUATION_STORE = new Map(); // token -> { chunks: string[], nextIndex: number, totalChunks: number, totalChars: number }
+const MAX_CONTINUATIONS = 5;
+let continuationCounter = 0;
+
+function nextContinuationToken() {
+  continuationCounter += 1;
+  return `cont-${process.pid}-${Date.now()}-${continuationCounter}`;
+}
+
+function chunkMarkerText({ chunkIndex, totalChunks, totalChars, token }) {
+  if (chunkIndex >= totalChunks) {
+    return (
+      `vice-proxy: chunk ${chunkIndex} of ${totalChunks} (last chunk) -- ${totalChars} total characters ` +
+      `served across this continuation sequence.`
+    );
+  }
+  return (
+    `vice-proxy: chunk ${chunkIndex} of ${totalChunks} -- ${totalChars} total characters. Call ` +
+    `vice_result_continue with arguments {"token":"${token}"} to retrieve the next chunk.`
+  );
+}
+
+/**
+ * Wrap a successful call's serialised text, splitting it across a
+ * continuation sequence if (and only if) it exceeds OUTPUT_CHAR_CAP. Under
+ * the cap, behaves exactly as an unchunked result always has: a single
+ * `content` item, nothing else appended. Over the cap, the FIRST content
+ * item is the pure payload chunk -- byte-for-byte, no marker text mixed in,
+ * so reassembly is a plain concatenation -- and a SECOND content item
+ * carries the marker, naming the exact next call to make.
+ */
+function wrapPossiblyChunked(text) {
+  if (text.length <= OUTPUT_CHAR_CAP) {
+    return { content: [{ type: "text", text }], isError: false };
+  }
+
+  const totalChars = text.length;
+  const pieces = [];
+  for (let i = 0; i < text.length; i += OUTPUT_CHAR_CAP) {
+    pieces.push(text.slice(i, i + OUTPUT_CHAR_CAP));
+  }
+  const totalChunks = pieces.length;
+  const [first, ...remaining] = pieces;
+
+  const token = nextContinuationToken();
+  while (CONTINUATION_STORE.size >= MAX_CONTINUATIONS) {
+    const oldestToken = CONTINUATION_STORE.keys().next().value;
+    CONTINUATION_STORE.delete(oldestToken);
+  }
+  CONTINUATION_STORE.set(token, { chunks: remaining, nextIndex: 2, totalChunks, totalChars });
+
+  return {
+    content: [
+      { type: "text", text: first },
+      { type: "text", text: chunkMarkerText({ chunkIndex: 1, totalChunks, totalChars, token }) },
+    ],
+    isError: false,
+  };
+}
+
+/** Handles `vice_result_continue` -- served entirely inside this proxy;
+ * NEVER reaches `call()` or the network. */
+function handleResultContinue(args) {
+  const token = args && typeof args.token === "string" ? args.token : null;
+  if (!token || !CONTINUATION_STORE.has(token)) {
+    return isErrorText(
+      `vice-proxy: continuation token "${token}" is unknown or has already expired. Re-issue the ` +
+        `original tools/call with a narrower range instead of resuming.`
+    );
+  }
+  const entry = CONTINUATION_STORE.get(token);
+  const chunk = entry.chunks.shift();
+  const chunkIndex = entry.nextIndex;
+  entry.nextIndex += 1;
+  const isLast = entry.chunks.length === 0;
+  if (isLast) {
+    CONTINUATION_STORE.delete(token);
+  }
+  return {
+    content: [
+      { type: "text", text: chunk },
+      {
+        type: "text",
+        text: chunkMarkerText({ chunkIndex, totalChunks: entry.totalChunks, totalChars: entry.totalChars, token }),
+      },
+    ],
+    isError: false,
+  };
+}
+
 async function handleToolsCall(params) {
   const name = params && params.name;
   if (!name || typeof name !== "string") {
     throw new ProtocolError(-32602, "tools/call requires params.name to be a non-empty string");
   }
   const args = params && typeof params.arguments === "object" && params.arguments !== null ? params.arguments : {};
-  try {
-    const payload = await call(name, args);
-    const text = typeof payload === "string" ? payload : JSON.stringify(payload);
-    return { content: [{ type: "text", text }], isError: false };
-  } catch (e) {
-    // NEVER rethrow past this point -- a tool-execution failure (transport
-    // error, deny-list refusal, a rejected RPC) is a normal, expected
-    // outcome for this method and must come back as a well-formed result,
-    // not crash the read loop.
-    return { content: [{ type: "text", text: e && e.message ? e.message : String(e) }], isError: true };
+
+  // The synthetic continuation tool: entirely a proxy-local concern, served
+  // before any deny-list or epoch logic and NEVER forwarded to the host.
+  if (name === "vice_result_continue") {
+    return handleResultContinue(args);
   }
+
+  // Layer 1: call-time deny-list refusal, before any forwarding logic and
+  // before any network attempt. Independent from handleToolsList()'s
+  // discovery-time filter -- removing either one leaves the other standing.
+  if (DENY_LIST.includes(name)) {
+    return isErrorText(
+      `${name} is permanently forbidden -- it is known to crash the shared host VICE MCP server. ` +
+        `Recovery requires a manual, host-side restart. This refusal is permanent; retrying will not help.`
+    );
+  }
+
+  ensureViceSession();
+
+  const beforeDrift = checkEpochAndRebaseline("before forwarding");
+  if (beforeDrift) {
+    // Refused BEFORE any request is serialised -- the whole point of the
+    // pre-forward check.
+    return isErrorText(beforeDrift);
+  }
+
+  let payload;
+  try {
+    payload = await call(name, args);
+  } catch (e) {
+    if (e instanceof MachineRestartedError) {
+      // call()'s own post-reconnect fast path detected this first -- convert
+      // to the same isError frame shape and re-baseline identically. Two
+      // layers, one observable behaviour.
+      const current = currentEpoch();
+      epochBaseline = current;
+      return isErrorText(
+        `vice-proxy: epoch drift detected mid-call -- the host VICE MCP server's epoch changed from ` +
+          `${e.baselineEpoch} to ${e.currentEpoch}. Any work done since the previous call may have hit ` +
+          `a different, freshly-booted machine and should be redone. (${e.message})`
+      );
+    }
+    // NEVER rethrow past this point -- a tool-execution failure (transport
+    // error, a rejected RPC) is a normal, expected outcome for this method
+    // and must come back as a well-formed result, not crash the read loop.
+    return isErrorText(e && e.message ? e.message : String(e));
+  }
+
+  const afterDrift = checkEpochAndRebaseline("after the call returned");
+  if (afterDrift) {
+    // A payload read from a machine whose identity changed mid-call is not
+    // trustworthy -- return the restart frame INSTEAD OF the call's result.
+    return isErrorText(afterDrift);
+  }
+
+  const text = typeof payload === "string" ? payload : JSON.stringify(payload);
+  return wrapPossiblyChunked(text);
 }
 
 // ---------------------------------------------------------- message dispatch
