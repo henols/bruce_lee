@@ -43,3 +43,36 @@ happens, so it is never rewritten.
 To inspect a disk's contents, parse the `.d64` bytes directly, or call the
 disk-sector tool for the emulated drive's own view — never the forbidden
 disk-listing tool above.
+
+## Troubleshooting
+
+**`mcp__vice__*` tools are missing from this session's tool list.** Two
+independent causes — check both:
+
+- The committed tool-manifest snapshot has never been refreshed against a
+  live host. A fresh clone ships with an empty snapshot on purpose, so a
+  session started before the refresh sees the server connected with zero
+  tools. See `tools/README.md`'s tool-discovery section for the refresh
+  step — it needs a live host and only needs running again after a
+  host-side tool-set change.
+- The `vice` project-scope MCP server was never approved for this
+  workspace. Check `/mcp` in a fresh session and approve it if prompted, or
+  check `~/.claude/settings.json`'s `enableAllProjectMcpServers` /
+  `enabledMcpjsonServers` if the workspace should already be trusted —
+  committed project settings are ignored until the workspace is trusted.
+
+**A tool call returns one of three "unreachable" messages instead of a
+result.** Each already carries its own diagnosis (never started on this
+host / dead or hung / alive but rejected the call) and an absolute host
+path to the fix, written to be actionable standalone — read the message
+itself rather than guessing.
+
+**A tool call reports the host emulator's identity changed mid-session (a
+restart report).** Treat every result captured before that point as void
+and redo the affected work from scratch. A restart report is never cached
+and is never resolved by retrying the same call — the underlying machine
+really did change.
+
+**Inspecting a disk's contents.** Parse the `.d64` bytes directly (see
+"Reading a disk" above) — never the deny-listed disk-listing tool, whatever
+the symptom that sent you looking for a workaround.

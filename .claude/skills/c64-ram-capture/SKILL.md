@@ -110,5 +110,5 @@ not a complete one.
 
 ## Copying this skill elsewhere
 
-This skill depends on the sibling `vice-session` and `devcontainer-host-path`
+This skill depends on the sibling `vice-mcp-selector` and `devcontainer-host-path`
 skills — copy all three into another project together, not this one alone.
