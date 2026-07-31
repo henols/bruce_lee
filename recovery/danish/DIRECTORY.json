@@ -1,0 +1,402 @@
+{
+  "release": "danish",
+  "disk_image": "disks/danish.d64",
+  "bam": {
+    "first_dir_track": 18,
+    "first_dir_sector": 1,
+    "dos_version": 65,
+    "disk_name": "",
+    "disk_id": "00",
+    "dos_type": "2A",
+    "per_track": [
+      {
+        "track": 1,
+        "free": 21,
+        "sectors_per_track": 21,
+        "bitmap": [
+          255,
+          255,
+          31
+        ]
+      },
+      {
+        "track": 2,
+        "free": 21,
+        "sectors_per_track": 21,
+        "bitmap": [
+          255,
+          255,
+          31
+        ]
+      },
+      {
+        "track": 3,
+        "free": 21,
+        "sectors_per_track": 21,
+        "bitmap": [
+          255,
+          255,
+          31
+        ]
+      },
+      {
+        "track": 4,
+        "free": 21,
+        "sectors_per_track": 21,
+        "bitmap": [
+          255,
+          255,
+          31
+        ]
+      },
+      {
+        "track": 5,
+        "free": 21,
+        "sectors_per_track": 21,
+        "bitmap": [
+          255,
+          255,
+          31
+        ]
+      },
+      {
+        "track": 6,
+        "free": 21,
+        "sectors_per_track": 21,
+        "bitmap": [
+          255,
+          255,
+          31
+        ]
+      },
+      {
+        "track": 7,
+        "free": 21,
+        "sectors_per_track": 21,
+        "bitmap": [
+          255,
+          255,
+          31
+        ]
+      },
+      {
+        "track": 8,
+        "free": 21,
+        "sectors_per_track": 21,
+        "bitmap": [
+          255,
+          255,
+          31
+        ]
+      },
+      {
+        "track": 9,
+        "free": 11,
+        "sectors_per_track": 21,
+        "bitmap": [
+          84,
+          83,
+          29
+        ]
+      },
+      {
+        "track": 10,
+        "free": 0,
+        "sectors_per_track": 21,
+        "bitmap": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "track": 11,
+        "free": 0,
+        "sectors_per_track": 21,
+        "bitmap": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "track": 12,
+        "free": 0,
+        "sectors_per_track": 21,
+        "bitmap": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "track": 13,
+        "free": 0,
+        "sectors_per_track": 21,
+        "bitmap": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "track": 14,
+        "free": 0,
+        "sectors_per_track": 21,
+        "bitmap": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "track": 15,
+        "free": 0,
+        "sectors_per_track": 21,
+        "bitmap": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "track": 16,
+        "free": 0,
+        "sectors_per_track": 21,
+        "bitmap": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "track": 17,
+        "free": 0,
+        "sectors_per_track": 21,
+        "bitmap": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "track": 18,
+        "free": 17,
+        "sectors_per_track": 19,
+        "bitmap": [
+          252,
+          255,
+          7
+        ]
+      },
+      {
+        "track": 19,
+        "free": 19,
+        "sectors_per_track": 19,
+        "bitmap": [
+          255,
+          255,
+          7
+        ]
+      },
+      {
+        "track": 20,
+        "free": 19,
+        "sectors_per_track": 19,
+        "bitmap": [
+          255,
+          255,
+          7
+        ]
+      },
+      {
+        "track": 21,
+        "free": 19,
+        "sectors_per_track": 19,
+        "bitmap": [
+          255,
+          255,
+          7
+        ]
+      },
+      {
+        "track": 22,
+        "free": 19,
+        "sectors_per_track": 19,
+        "bitmap": [
+          255,
+          255,
+          7
+        ]
+      },
+      {
+        "track": 23,
+        "free": 19,
+        "sectors_per_track": 19,
+        "bitmap": [
+          255,
+          255,
+          7
+        ]
+      },
+      {
+        "track": 24,
+        "free": 19,
+        "sectors_per_track": 19,
+        "bitmap": [
+          255,
+          255,
+          7
+        ]
+      },
+      {
+        "track": 25,
+        "free": 18,
+        "sectors_per_track": 18,
+        "bitmap": [
+          255,
+          255,
+          3
+        ]
+      },
+      {
+        "track": 26,
+        "free": 18,
+        "sectors_per_track": 18,
+        "bitmap": [
+          255,
+          255,
+          3
+        ]
+      },
+      {
+        "track": 27,
+        "free": 18,
+        "sectors_per_track": 18,
+        "bitmap": [
+          255,
+          255,
+          3
+        ]
+      },
+      {
+        "track": 28,
+        "free": 18,
+        "sectors_per_track": 18,
+        "bitmap": [
+          255,
+          255,
+          3
+        ]
+      },
+      {
+        "track": 29,
+        "free": 18,
+        "sectors_per_track": 18,
+        "bitmap": [
+          255,
+          255,
+          3
+        ]
+      },
+      {
+        "track": 30,
+        "free": 18,
+        "sectors_per_track": 18,
+        "bitmap": [
+          255,
+          255,
+          3
+        ]
+      },
+      {
+        "track": 31,
+        "free": 17,
+        "sectors_per_track": 17,
+        "bitmap": [
+          255,
+          255,
+          1
+        ]
+      },
+      {
+        "track": 32,
+        "free": 17,
+        "sectors_per_track": 17,
+        "bitmap": [
+          255,
+          255,
+          1
+        ]
+      },
+      {
+        "track": 33,
+        "free": 17,
+        "sectors_per_track": 17,
+        "bitmap": [
+          255,
+          255,
+          1
+        ]
+      },
+      {
+        "track": 34,
+        "free": 17,
+        "sectors_per_track": 17,
+        "bitmap": [
+          255,
+          255,
+          1
+        ]
+      },
+      {
+        "track": 35,
+        "free": 17,
+        "sectors_per_track": 17,
+        "bitmap": [
+          255,
+          255,
+          1
+        ]
+      }
+    ],
+    "occupied_tracks": [
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18
+    ],
+    "occupied_ranges": [
+      {
+        "start": 9,
+        "end": 18
+      }
+    ]
+  },
+  "directory": {
+    "entries": [
+      {
+        "dir_track": 18,
+        "dir_sector": 1,
+        "entry_index": 0,
+        "type": "PRG",
+        "closed": true,
+        "locked": false,
+        "name": "BRUCE LEE   (DC)",
+        "first_track": 17,
+        "first_sector": 0,
+        "blocks": 178,
+        "suspicious": false,
+        "suspicious_reasons": []
+      }
+    ],
+    "chain_error": null
+  },
+  "generated_at": "2026-07-31T06:06:00.388Z"
+}
