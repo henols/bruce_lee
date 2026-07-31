@@ -1625,7 +1625,12 @@ test("RESOURCES_DIR (quick-260731-p8a, path-anchor regression): points at the MO
   );
   assert.deepEqual(
     resourceEntries().sort(),
-    ["lib/container-guard.sh", "lib/repo-root.sh", "vice-pool.sh", "vice-supervisor.sh"]
+    // vice-broker.sh (Phase 01.2 plan 01) joins the supervisor and pool
+    // scripts here -- a new resources/ entry deploys with no code change
+    // (install-resources.mjs's walk() is dynamic), but THIS list is
+    // deliberately hardcoded so a wrong path-anchor hop count still fails
+    // loudly rather than silently comparing two equally-wrong lists.
+    ["lib/container-guard.sh", "lib/repo-root.sh", "vice-broker.sh", "vice-pool.sh", "vice-supervisor.sh"]
   );
 });
 

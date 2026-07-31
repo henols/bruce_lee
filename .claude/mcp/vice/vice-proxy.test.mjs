@@ -16,6 +16,19 @@
 // never-cache-a-negative-result property, lives in the "never-throw"/
 // "never-cache" tests further down this file (plan 01.1-03 task 1) -- this
 // section EXTENDS the harness rather than duplicating it.
+//
+// Coverage note for plan 01.2-01 (broker teardown task): every `finally`
+// block's cleanup call is `proxy.child.kill("SIGKILL")`, not a bare
+// `kill()` -- a NON-assertion change, made necessary by this task's own
+// change to vice-proxy.mjs. Registering `process.on("SIGTERM", ...)` (this
+// task's teardown handler) suppresses Node's default SIGTERM-terminates
+// behaviour, and the handler itself deliberately never calls
+// `process.exit()` (see that handler's own comment in vice-proxy.mjs) --
+// in production the client's own ladder escalates to an unhandleable
+// SIGKILL ~490ms after the first signal, and a plain `kill()` in a test's
+// cleanup has to play that same role or the child is left running,
+// hanging the file on a dangling stdio pipe. No assertion anywhere in
+// this file was altered by this change.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -224,7 +237,7 @@ test("tracer: one real tool call round-trips end to end", async () => {
     assert.equal(proxy.child.exitCode, null, "the proxy process must still be running");
     assert.equal(proxy.child.killed, false);
   } finally {
-    proxy.child.kill();
+    proxy.child.kill("SIGKILL");
     await new Promise((resolve) => server.close(resolve));
   }
 });
@@ -280,7 +293,7 @@ test("stdout carries only valid JSON-RPC messages", async () => {
       assert.equal(msg.jsonrpc, "2.0", `message missing/wrong jsonrpc field: ${JSON.stringify(msg)}`);
     }
   } finally {
-    proxy.child.kill();
+    proxy.child.kill("SIGKILL");
     await new Promise((resolve) => server.close(resolve));
   }
 });
@@ -350,7 +363,7 @@ test("tools/list reads the committed snapshot with no emulator", async () => {
 
     assert.equal(requests.length, 0, "tools/list must make ZERO requests to the stand-in host");
   } finally {
-    proxy.child.kill();
+    proxy.child.kill("SIGKILL");
     await new Promise((resolve) => server.close(resolve));
     rmSync(dir, { recursive: true, force: true });
   }
@@ -410,7 +423,7 @@ test("tools/list survives a missing or corrupt snapshot", async () => {
         assert.equal(proxy.child.exitCode, null, "the proxy process must still be running");
         assert.equal(proxy.child.killed, false);
       } finally {
-        proxy.child.kill();
+        proxy.child.kill("SIGKILL");
       }
     }
     assert.equal(requests.length, 0, "no manifest-read path may ever reach the stand-in host");
@@ -455,7 +468,7 @@ test("vice_disk_list is refused at tools/call with no request made", async () =>
     assert.match(resp.result.content[0].text, /host-side restart|host VICE MCP server/i);
     assert.equal(requests.length, 0, "the stand-in server's request counter must be unchanged");
   } finally {
-    proxy.child.kill();
+    proxy.child.kill("SIGKILL");
     await new Promise((resolve) => server.close(resolve));
   }
 });
@@ -499,7 +512,7 @@ test("vice_disk_list is absent from tools/list", async () => {
     assert.ok(names.includes("vice_ping"), "the other fixture tool must still be present");
     assert.ok(!names.includes("vice_disk_list"), "vice_disk_list must be filtered out even from a manifest that names it");
   } finally {
-    proxy.child.kill();
+    proxy.child.kill("SIGKILL");
     await new Promise((resolve) => server.close(resolve));
     rmSync(dir, { recursive: true, force: true });
   }
@@ -557,7 +570,7 @@ test("epoch drift is reported loudly and not cached", async () => {
     assert.equal(third.result.isError, false, "the proxy must re-baseline, not cache the restart report");
     assert.equal(requests.filter((r) => r && r.method === "tools/call").length, 4);
   } finally {
-    proxy.child.kill();
+    proxy.child.kill("SIGKILL");
     await new Promise((resolve) => server.close(resolve));
     rmSync(dir, { recursive: true, force: true });
   }
@@ -600,7 +613,7 @@ test("a missing epoch file is not a restart", async () => {
     // vice_ping, plus the real forwarded call -- plan 01.1-03 task 2).
     assert.equal(requests.filter((r) => r && r.method === "tools/call").length, 6);
   } finally {
-    proxy.child.kill();
+    proxy.child.kill("SIGKILL");
     await new Promise((resolve) => server.close(resolve));
     rmSync(dir, { recursive: true, force: true });
   }
@@ -742,7 +755,7 @@ test("an oversized result is recoverable in full across continuations", async ()
       "vice_result_continue must never appear in a request the stand-in server receives"
     );
   } finally {
-    proxy.child.kill();
+    proxy.child.kill("SIGKILL");
     await new Promise((resolve) => server.close(resolve));
   }
 });
@@ -794,7 +807,7 @@ test("an exhausted continuation token fails loudly", async () => {
     assert.match(exhausted.result.content[0].text, /narrower range/);
     assert.equal(proxy.child.exitCode, null, "the proxy must still be alive after an exhausted-token error");
   } finally {
-    proxy.child.kill();
+    proxy.child.kill("SIGKILL");
     await new Promise((resolve) => server.close(resolve));
   }
 });
@@ -830,7 +843,7 @@ test("tools/list declares the same cap it enforces", async () => {
       "vice_result_continue's inputSchema must require token"
     );
   } finally {
-    proxy.child.kill();
+    proxy.child.kill("SIGKILL");
     await new Promise((resolve) => server.close(resolve));
   }
 });
@@ -895,7 +908,7 @@ test("never-throw: malformed and hostile input is answered, not fatal", async ()
     assert.equal(proxy.child.exitCode, null, "the proxy must still be running throughout");
     assert.equal(proxy.child.killed, false);
   } finally {
-    proxy.child.kill();
+    proxy.child.kill("SIGKILL");
     await new Promise((resolve) => server.close(resolve));
   }
 });
@@ -931,7 +944,7 @@ test("never-throw: a notification draws no response", async () => {
     // notification produced a line of its own.
     assert.equal(proxy.messages.length, 2, "the two notifications must not have produced any stdout lines");
   } finally {
-    proxy.child.kill();
+    proxy.child.kill("SIGKILL");
     await new Promise((resolve) => server.close(resolve));
   }
 });
@@ -995,7 +1008,7 @@ test("never-cache: host down then up succeeds without a restart", async () => {
     assert.equal(proxy.child.pid, pidBefore, "both calls must have gone through the same child process -- no restart");
     assert.equal(proxy.child.exitCode, null);
   } finally {
-    proxy.child.kill();
+    proxy.child.kill("SIGKILL");
     if (server) await new Promise((resolve) => server.close(resolve));
   }
 });
@@ -1043,7 +1056,7 @@ test("never-throw: a broken stdout pipe does not kill the process", async () => 
       "vice-proxy.mjs must register an 'error' listener on process.stdout"
     );
   } finally {
-    proxy.child.kill();
+    proxy.child.kill("SIGKILL");
     await new Promise((resolve) => server.close(resolve));
   }
 });
@@ -1088,7 +1101,7 @@ test("three states: each unreachable shape gets its own message and fix", async 
       `the never-started diagnosis must be fail-fast, not the ~50s reconnect ladder -- took ${elapsedMs}ms`
     );
   } finally {
-    proxy1.child.kill();
+    proxy1.child.kill("SIGKILL");
   }
 
   // ---- Dead or hung: refused, but a restart-epoch record DOES exist. ----
@@ -1116,7 +1129,7 @@ test("three states: each unreachable shape gets its own message and fix", async 
     assert.match(deadOrHungText, /dead or hung/i);
     assert.match(deadOrHungText, /4242/, "the pid read from the epoch file must appear in the dead-or-hung message");
   } finally {
-    proxy2.child.kill();
+    proxy2.child.kill("SIGKILL");
   }
 
   // ---- Alive, but the operation itself failed. ----
@@ -1203,7 +1216,7 @@ test("three states: each unreachable shape gets its own message and fix", async 
       "the alive-but-failed message must NOT carry a host-restart instruction"
     );
   } finally {
-    proxy3.child.kill();
+    proxy3.child.kill("SIGKILL");
     await new Promise((resolve) => aliveServer.close(resolve));
   }
 
@@ -1324,7 +1337,7 @@ test("path translation: container paths cannot reach the host", async () => {
     assert.equal(lastForwarded.params.arguments.relpath, "recovery/danish/dump.bin", "a relative path must not be touched");
     assert.equal(lastForwarded.params.arguments.count, 42, "a non-string value must not be touched");
   } finally {
-    proxy.child.kill();
+    proxy.child.kill("SIGKILL");
     await new Promise((resolve) => server.close(resolve));
   }
 });
@@ -1404,7 +1417,7 @@ test("path translation: a lexical .. cannot escape the workspace, and one that r
       "the host must never be handed a path still carrying a .. segment"
     );
   } finally {
-    proxy.child.kill();
+    proxy.child.kill("SIGKILL");
     await new Promise((resolve) => server.close(resolve));
   }
 });
