@@ -6,14 +6,14 @@ current_phase: 01
 current_phase_name: recovery-provenance
 status: executing
 stopped_at: "Completed quick task 260730-u9w: extracted checkpoint-sync primitives into vice-session's vice-sync.mjs; durable module-leak gate in SKILL.md"
-last_updated: "2026-07-30T22:22:19.954Z"
-last_activity: 2026-07-30
-last_activity_desc: "Completed quick task 260730-ryz: `vice-session/SKILL.md` rewritten as a usage-only guide, internals moved to `INTERNALS.md`"
+last_updated: "2026-07-31T05:45:37.779Z"
+last_activity: 2026-07-31
+last_activity_desc: Phase 01 execution resumed (wave continue)
 progress:
   total_phases: 1
   completed_phases: 0
   total_plans: 6
-  completed_plans: 0
+  completed_plans: 1
   percent: 0
 ---
 
@@ -33,7 +33,7 @@ Milestone: v1.0 — Pipeline Proven (Phases 1–4 of 7 total)
 Phase: 01 (recovery-provenance) — EXECUTING
 Plan: 1 of 6
 Status: Executing Phase 01
-Last activity: 2026-07-30 — Completed quick task 260730-u9w: checkpoint-synchronization primitives extracted from `tools/recover.mjs` into `vice-session/scripts/vice-sync.mjs`; `INTERNALS.md` deleted by decision and a durable node:test gate now keeps module names out of `SKILL.md`
+Last activity: 2026-07-31 — Phase 01 execution resumed (wave continue)
 
 Progress (v1.0): [░░░░░░░░░░] 0% — 0/20 plans
 Progress (overall): [░░░░░░░░░░] 0% — 0/35 plans
@@ -95,7 +95,7 @@ None yet.
 - **[Phase 1, 2026-07-30]: Tier-1 provenance evidence captured** — the cracktro screen reads "Danish Crackers Presents BRUCE LEE", scroller includes release id **DC-011/P**, sign-off reads "They make'em, We break'em." This **corroborates the CSDb record** found during research from an independent source (the artifact itself). The post-cracktro title screen is Datasoft's original and unmodified ("DATASOFT PRESENTS / BRUCE LEE (TM) / BY RON J FORTIER"). Recorded in `RELEASES.json` → `danish.tier1_evidence`; feeds RECOVER-07 in plan 01-06.
 - **[HARD BLOCKER — Phase 1, 2026-07-30]: the host VICE MCP server is DOWN.** `http://host.docker.internal:6510/mcp` returns `ECONNREFUSED` from both the raw HTTP path and the harness MCP client. It was verified healthy (`vice_ping` → `version 3.10, C64SC, paused`) immediately before plan 01-01 was dispatched, then dropped mid-run (`SocketError: other side closed`, then refused). DNS to `host.docker.internal` still resolves (172.17.0.1), so this is the VICE process, not container networking. `vice_disk_list` was **never** called — root cause unknown. **Recovery requires restarting the host-side VICE MCP server (`x64sc -mcpserver`); the container cannot do it.** Verify with:
   `curl -s -X POST http://host.docker.internal:6510/mcp -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"vice_ping","arguments":{}}}'`
-  Plans 01-01 through 01-04 all need the emulator and cannot proceed until this is restored.
+  **RESOLVED 2026-07-31** — the pool is back up and was healthy throughout plan 01-02 (3/3 instances answering on ports 6510–6512, epoch 3). Kept as history because the outage pattern is unexplained and recurred six times; the container still cannot restart the host side. Root cause remains unknown.
 
 - [Phase 1]: **Recon finding to re-verify, not to trust** — before the outage, the executor traced `danish.d64` to a title-screen dispatcher at **$08B1**, reached via `JSR` from `$0711` and distinct from the loader's own `$0900` polling loop (confirmed by `vice_disassemble` + `vice_backtrace`). This is a strong D-06 trigger candidate. `recovery/RELEASES.json`'s `trigger` field is deliberately still `null` — the recorded value must come from the tool running live, not from these notes.
 - [Phase 1]: **`vice_run_until` returns immediately/asynchronously** — confirmed live, consistent with its schema's "timeout, not yet implemented" note on `cycles`. Synchronisation needs a poll-until-paused loop plus a client-side `AbortSignal.timeout`, or a wrong target address hangs with no safety net.
@@ -104,7 +104,9 @@ None yet.
 - [Phase 1]: `vice_snapshot_save` takes only a `name`, not a `path`; snapshots are written host-side to `~/.config/vice/mcp_snapshots/` and there is **no tool to export their bytes into this container**. A `.vsf` therefore cannot be committed as a project artifact — supersedes CONTEXT.md D-07's original wording. Snapshots are recorded by name only; reproducibility runs through the recorded procedure instead.
 - [Phase 1]: `vice_run_until`'s `cycles` parameter is documented in its own live schema as "timeout, not yet implemented" — there is no safety net against hanging on a misidentified target address. Every run-to-checkpoint task needs a stated manual-recovery path.
 - [Phase 3]: `.d64` writing tool unresolved (`c1541` standalone vs custom writer). If a `.prg` cannot be injected directly over MCP, this becomes a hard blocker on Phase 4, not Phase 7.
-- [All phases]: VICE is a single shared host instance. `parallelization: true` does not extend to emulator work — plans marked parallel are parallel in authoring; their VICE steps serialise.
+- [All phases, CORRECTED 2026-07-31]: VICE is a **pool of supervised instances**, not a single shared one — `tools/vice-pool.sh start N` on the host, verified 3/3 alive and free (epoch 3) during plan 01-02. `vice.mjs session acquire` takes an atomic lease and skips unusable instances, so concurrent emulator work is safe and *does* parallelise up to the pool size. This supersedes the earlier claim that "VICE steps serialise" — that was written before the pool existed and would needlessly serialise Phase 3's replay harness and the Phase 5/6 parallel plans. Two real constraints remain: snapshot names must be prefixed with the instance port (one shared host snapshot directory), and plan `depends_on` chains still serialise regardless of pool size — which is why Phase 1 ran one plan per wave.
+- **[MAJOR FINDING — Phase 1, 2026-07-31, plan 01-02]: PROJECT.md's "faked directories" claim is REFUTED for both releases.** PROJECT.md's Context section states *"Both have faked directories — 0-block BRUCE LEE PRG entries pointing at bogus track/sector."* Direct byte-level parsing (`tools/d64-parse.mjs`) shows neither entry is faked: `danish.d64` = `PRG (closed)`, `BRUCE LEE   (DC)`, first T/S **17/0**, **178 blocks**; `saeger.d64` = `PRG (closed)`, `BRUCE LEE`, first T/S **1/0**, **186 blocks**. Three independent evidence lines per disk: (1) block count is not 0 and the suspicious-entry detector — proven to fire against a synthetic defect in `d64-parse.test.mjs` — stays silent; (2) each entry's own sector chain walks cleanly and terminates on exactly its stated block count, matching the BAM's independent per-track free counts (danish interleave-10 t17→t9; saeger interleave-1 t1→t9); (3) the pointed-to sector is the documented BASIC stub byte-for-byte — danish t17/s0 holds load address `$0801` + tokenized `SYS 2073` + `TCS-CRUNCH!`, at exactly the track/sector PROJECT.md's own boot-stub table cites. **PROJECT.md was deliberately NOT edited** — the correction is a provenance decision for 01-05/01-06, and is flagged for human confirmation as coverage item D5 in `01-02-SUMMARY.md`. Anyone writing `PROVENANCE.md` inherits the corrected picture.
+- **[PROCESS — Phase 1, 2026-07-31]: an executor can die silently with no completion signal.** Plan 01-02's executor committed tasks 1–2, wrote `tools/recovery-schema.mjs`, then died at ~06:10Z before committing it or writing SUMMARY.md; the harness never reported a failure, so the orchestrator waited ~20 min past the 10-minute stall threshold believing it was still working. **`/tmp` file metadata is NOT a usable liveness signal here** — `stat` reported 128 bytes for a file `cat` showed as 900KB. **The signal that works: check whether any live process holds a cwd inside the worktree** (`readlink /proc/*/cwd`). Uncommitted worktree files are lost on cleanup (#2070), so rescue before any `worktree remove`. Recovery used was "close out manually": rescue the file, verify it against the plan's own `<automated>` gate *before* trusting it, commit, orchestrator authors SUMMARY.md.
 - [Phase 5/6]: `src/zeropage.a` and `src/main.a` are the highest-fan-in files. Parallel plans must not edit them concurrently; each phase's first plan allocates them for the whole phase.
 
 ### Quick Tasks Completed
