@@ -182,6 +182,44 @@ common path, rather than a separate branch that rots untested.
 `broker.json` closes the last gap — it lets the proxy distinguish "no broker is running, start it on
 the host" from "still launching," instead of polling until the tool timeout with no diagnosis.
 
+## Broker-absent reporting
+
+The broker is started by hand on the host. Nothing auto-starts it, and nothing needs to — the proxy
+reports the situation as an actionable tool result and the next call succeeds once it is running.
+
+Three rules make this work rather than annoy:
+
+**1. Report, never exit.** Finding 7 — a dead stdio server is never reconnected — means a proxy that
+exits on "no broker" costs the session its emulator access for good. The proxy stays alive, answers
+in MCP frames, and re-checks liveness per call. It must not cache a negative result, so the call
+after the user starts the broker just works, with no session restart.
+
+**2. Carry the host path.** The command is run on the host, so `tools/vice-broker.sh start` is the
+wrong string to emit — it must be the translated absolute host path, computed by the proxy via the
+`devcontainer-host-path` skill's `hostpath.mjs`.
+
+**3. Three states, three messages.** They have three different fixes, and one generic
+"broker unavailable" sends the reader to the wrong one two times out of three:
+
+| State | Detection | Message |
+|---|---|---|
+| Never started | `broker.json` absent | Start it, quoting the host path |
+| Dead or hung | `broker.json` present, mtime stale | Restart it; include the recorded pid so it can be checked on the host |
+| Alive, launch failed | `denials/<id>.json` written | Relay the broker's own reason verbatim — missing `x64sc`, port already bound, no display |
+
+Two properties specific to an agent audience:
+
+- **The message must forbid routing around it.** An agent that hits "broker not running" is otherwise
+  quite likely to reach for the old `vice.mjs` scripts as a workaround — the exact path being
+  removed. State explicitly that this is the only route and that the correct action is to stop and
+  ask the human.
+- **Fail fast, do not wait out the timeout.** Blocking on a poll loop hoping the broker appears is
+  pointless before anyone has been told to act, and it converts a clear diagnosis into an opaque
+  tool timeout.
+
+This is the same channel the epoch hazard should use: a mid-session host restart becomes a loud,
+actionable tool result instead of silent blank-machine reads.
+
 ## Instance handles: the resolution to the parallelism fork
 
 `tools/vice-pool.sh:33` justifies a pool partly on throughput — *"N instances interleave and scaling
@@ -260,9 +298,9 @@ These are the facts the design rests on. Confidence tags are the researcher's.
 2. **Is the reset ritual actually retired, or only weakened?** Fresh-boot removes cross-*session*
    contamination. It does not remove contamination *within* a session that reuses one emulator
    across several plans. The constraint may narrow rather than disappear.
-3. **What is the broker's own lifecycle?** Something has to start it, and it must survive host VICE
-   restarts. If it must be started by hand, the "no host-side helpers" ergonomics regress relative
-   to a pool that was also started by hand — this is a wash, but it should be a deliberate wash.
+3. ~~What is the broker's own lifecycle?~~ **Resolved** — the broker is started by hand on the host,
+   and the proxy's job is to say so, precisely, at the moment it matters. See "Broker-absent
+   reporting" below. No auto-start machinery, no launch-agent, no supervisor-of-the-supervisor.
 6. **Does `registry.json` stay `0600`?** It works only while broker and proxy share uid 1000. Either
    widen the mode or record uid-parity as a stated precondition of the whole design.
 7. **What is the request-id scheme?** It must not reuse a value across sessions, since grants and
