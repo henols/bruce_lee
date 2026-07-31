@@ -76,12 +76,20 @@ Decimal phases appear between their surrounding integers in numeric order.
   4. `recovery/PROVENANCE.md` records an explicit verdict on whether the two cracks are independent, the artifacts examined to reach it, and the confidence weight a "both releases agree" verdict therefore carries.
   5. `recovery/clean/README.md` names the canonical disassembly subject and the reason it was chosen over the other image.
 
-**Plans**: 6 plans
+**Plans**: 1/6 plans executed
 
 Plans:
+
+- [x] 01-01-PLAN.md
+- [ ] 01-02-PLAN.md
+- [ ] 01-03-PLAN.md
+- [ ] 01-04-PLAN.md
+- [ ] 01-05-PLAN.md
+- [ ] 01-06-PLAN.md
+
 **Wave 1**
 
-- [ ] 01-01: **Tracer** — one release recovered end-to-end: MCP client seam, boot, loader-done signal, bank-scoped 64K capture, byte-identical re-run proof, `RELEASES.json` registry (RECOVER-01, RECOVER-02) — *strictly first; everything else in this phase depends on it*
+- [x] 01-01: **Tracer** — one release recovered end-to-end: MCP client seam, boot, loader-done signal, bank-scoped 64K capture, byte-identical re-run proof, `RELEASES.json` registry (RECOVER-01, RECOVER-02) — *strictly first; everything else in this phase depends on it*
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
@@ -313,7 +321,7 @@ Two cross-phase overlaps are intended and should be honoured when scheduling wor
 
 | Milestone | Phase | Plans Complete | Status | Completed |
 |-----------|-------|----------------|--------|-----------|
-| v1.0 | 1. Recovery & Provenance | 0/6 | Not started | - |
+| v1.0 | 1. Recovery & Provenance | 1/6 | In Progress|  |
 | v1.0 | 2. Coverage, Hazards & Memory Map | 0/5 | Not started | - |
 | v1.0 | 3. Verification Harness & Original Baselines | 0/4 | Not started | - |
 | v1.0 | 4. Vertical Slice — Sprite & Display Pilot | 0/5 | Not started | - |
