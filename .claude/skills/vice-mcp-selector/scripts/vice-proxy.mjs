@@ -240,6 +240,18 @@ function handleToolsList() {
 //      evidence-carrying error naming both epoch values, then adopts the new
 //      value as the baseline so the SESSION stays usable -- a restart report
 //      is never cached, per criterion 6.
+// NEVER-CACHE-A-NEGATIVE-RESULT INVARIANT (plan 01.1-03 task 1, criterion 6):
+// nothing below this line may memoise "the host is down" as a fact that
+// outlives a single tools/call. There is no cached probe verdict, no sticky
+// "last known unreachable" flag, and no early-return short-circuit keyed off
+// a PREVIOUS failure -- every forwarded tools/call re-evaluates reachability
+// from scratch (the epoch check below reads the file fresh every time; the
+// liveness probe added in task 2 does its own fresh network round trip every
+// time; task 3's translation runs fresh every time). This is deliberate and
+// easy to break by a later, performance-minded edit ("let's skip the probe
+// if we just failed one 200ms ago") -- don't. A cached negative here is
+// exactly the "quiet wrong answer" failure class this codebase rejects
+// elsewhere (MachineRestartedError, the epoch re-check itself).
 let viceSession = null; // beginSession()'s return value, set lazily on the first forwarded call
 let epochBaseline = null; // the rolling comparison point; updated on every re-baseline
 
@@ -465,11 +477,29 @@ async function handleToolsCall(params) {
 }
 
 // ---------------------------------------------------------- message dispatch
+//
+// Structural validation runs BEFORE the hasId/method dispatch below, and is
+// deliberately stricter than "does this look like a notification": a value
+// that parsed as valid JSON but is not an object at all (a bare number, a
+// string, an array), or an object with a missing/non-string "method", is not
+// a well-formed JSON-RPC message of EITHER kind (request or notification) --
+// there is no `id` field to trust as evidence of intent either way, so per
+// spec this is always answered with an Invalid Request (-32600) error,
+// keyed to whatever `id` the malformed value happens to carry (or `null`
+// if it carries none / isn't even an object). Silently dropping it as if it
+// were a "notification we don't understand" would hide a caller bug behind
+// the never-throw discipline instead of surfacing it.
 async function handleMessage(msg) {
-  const hasId = msg !== null && typeof msg === "object" && Object.prototype.hasOwnProperty.call(msg, "id");
-  const id = hasId ? msg.id : undefined;
-  const method = msg && typeof msg === "object" ? msg.method : undefined;
-  const params = msg && typeof msg === "object" ? msg.params : undefined;
+  if (msg === null || typeof msg !== "object" || Array.isArray(msg)) {
+    return errorResponse(null, -32600, "Invalid Request: message is not a JSON object");
+  }
+  const hasId = Object.prototype.hasOwnProperty.call(msg, "id");
+  const id = hasId ? msg.id : null;
+  const method = msg.method;
+  if (typeof method !== "string" || method.length === 0) {
+    return errorResponse(id, -32600, 'Invalid Request: missing or non-string "method"');
+  }
+  const params = msg.params;
 
   try {
     if (method === "initialize") {
@@ -488,7 +518,11 @@ async function handleMessage(msg) {
       const result = await handleToolsCall(params);
       return hasId ? respond(id, result) : null;
     }
-    // Unknown method: a genuine protocol problem.
+    // A well-formed message (valid object, valid string method) naming a
+    // method this proxy does not implement. Answered ONLY if the caller
+    // expected an answer -- a notification-shaped message with an unknown
+    // method name is still just consumed, per the same "never respond to a
+    // message with no id" rule as notifications/initialized above.
     return hasId ? errorResponse(id, -32601, `Method not found: ${method}`) : null;
   } catch (e) {
     if (e instanceof ProtocolError) {
@@ -550,11 +584,17 @@ process.stdin.on("data", (chunk) => {
 // The one exit path that IS correct: stdin end/close is normal session
 // shutdown (Claude Code's termination ladder is stdin EOF -> SIGTERM ->
 // SIGKILL). "Never exits" means never on an error path, not never at all.
-process.stdin.on("end", () => {
+//
+// A single shared `shutdown()` function is the ONLY place `process.exit(`
+// appears in this file -- both listeners call it rather than each carrying
+// their own `process.exit(0)` literal, so the source assertion this task's
+// acceptance criteria specify ("excluding comment lines, vice-proxy.mjs
+// contains exactly one `process.exit(` occurrence, and it is on the stdin
+// end/close path") stays true even though there are two listeners.
+function shutdown() {
   process.exit(0);
-});
-process.stdin.on("close", () => {
-  process.exit(0);
-});
+}
+process.stdin.on("end", shutdown);
+process.stdin.on("close", shutdown);
 
 console.error(`vice-proxy: ready, forwarding to ${activeInstance().url} (port ${activeInstance().port})`);

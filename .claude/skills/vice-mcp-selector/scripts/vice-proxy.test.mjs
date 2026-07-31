@@ -7,20 +7,22 @@
 // STATE.md HARD BLOCKER history for why that property matters here
 // specifically.
 //
-// Coverage note for plan 01.1-03 (never-throw hardening task): NEITHER test
-// below directly triggers `process.on('uncaughtException', ...)` or an
-// EPIPE on `process.stdout`'s `'error'` listener -- both handlers are
-// installed in vice-proxy.mjs and exercised only incidentally (by staying
-// silent) in this file. Plan 01.1-03 task 1 is where dedicated tests for
-// those two handlers land; this comment exists so that work EXTENDS this
-// file rather than duplicating its harness.
+// Coverage note for plan 01.1-03 (never-throw hardening task): the two
+// tracer-era tests immediately below do NOT directly trigger
+// `process.on('uncaughtException', ...)` or an EPIPE on `process.stdout`'s
+// `'error'` listener -- both handlers are installed in vice-proxy.mjs and
+// exercised only incidentally (by staying silent) here. Dedicated coverage
+// for those two handlers, plus the full JSON-RPC error-code matrix and the
+// never-cache-a-negative-result property, lives in the "never-throw"/
+// "never-cache" tests further down this file (plan 01.1-03 task 1) -- this
+// section EXTENDS the harness rather than duplicating it.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -784,6 +786,219 @@ test("tools/list declares the same cap it enforces", async () => {
     assert.ok(
       Array.isArray(continueTool.inputSchema.required) && continueTool.inputSchema.required.includes("token"),
       "vice_result_continue's inputSchema must require token"
+    );
+  } finally {
+    proxy.child.kill();
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+// -----------------------------------------------------------------------
+// Plan 01.1-03 task 1: nothing can kill the proxy, and nothing it does may
+// cache a negative ("the host is down") result. Every hostile-input shape
+// gets a well-formed JSON-RPC response, never a crash and never silence
+// when the caller expected an answer.
+// -----------------------------------------------------------------------
+
+test("never-throw: malformed and hostile input is answered, not fatal", async () => {
+  const { server } = startStandInServer();
+  const port = await listen(server);
+  const proxy = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${port}/mcp` });
+
+  try {
+    proxy.send({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } },
+    });
+    await proxy.nextMessage();
+
+    // 1. Raw non-JSON text -- JSON-RPC parse error, id: null.
+    proxy.sendRaw("this is not { json at all");
+    const parseErr = await proxy.nextMessage();
+    assert.equal(parseErr.error && parseErr.error.code, -32700, "malformed JSON must yield -32700");
+    assert.equal(parseErr.id, null);
+    assert.equal(proxy.child.exitCode, null, "still alive after a malformed line");
+
+    // 2. Valid JSON that is not an object at all (a bare number) -- Invalid
+    //    Request. There is no id to trust, so this must still be ANSWERED
+    //    (never silently dropped as if it were a notification).
+    proxy.sendRaw(JSON.stringify(42));
+    const bareNumberErr = await proxy.nextMessage();
+    assert.equal(bareNumberErr.error && bareNumberErr.error.code, -32600, "a non-object JSON value must yield -32600");
+
+    // 3. A well-formed object with no "method" at all.
+    proxy.send({ jsonrpc: "2.0", id: 10, params: {} });
+    const noMethodErr = await proxy.nextMessage();
+    assert.equal(noMethodErr.error && noMethodErr.error.code, -32600, 'an object with no "method" must yield -32600');
+    assert.equal(noMethodErr.id, 10, "the id, when present, must still be echoed on an Invalid Request error");
+
+    // 4. An unknown (unimplemented) method name.
+    proxy.send({ jsonrpc: "2.0", id: 11, method: "something/unimplemented", params: {} });
+    const unknownErr = await proxy.nextMessage();
+    assert.equal(unknownErr.error && unknownErr.error.code, -32601, "an unrecognised method must yield -32601");
+
+    // 5. tools/call with params but no name.
+    proxy.send({ jsonrpc: "2.0", id: 12, method: "tools/call", params: { arguments: {} } });
+    const noNameErr = await proxy.nextMessage();
+    assert.equal(noNameErr.error && noNameErr.error.code, -32602, "tools/call with no params.name must yield -32602");
+
+    // 6. Finally: a genuinely valid tools/call, proving the process is
+    //    still fully functional after five consecutive hostile inputs.
+    proxy.send({ jsonrpc: "2.0", id: 13, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
+    const okResp = await proxy.nextMessage();
+    assert.equal(okResp.result.isError, false, "a valid call after five hostile inputs must still succeed");
+
+    assert.equal(proxy.child.exitCode, null, "the proxy must still be running throughout");
+    assert.equal(proxy.child.killed, false);
+  } finally {
+    proxy.child.kill();
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("never-throw: a notification draws no response", async () => {
+  const { server } = startStandInServer();
+  const port = await listen(server);
+  const proxy = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${port}/mcp` });
+
+  try {
+    proxy.send({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } },
+    });
+    await proxy.nextMessage();
+
+    // Two notification-shaped messages -- valid method, no `id` at all.
+    proxy.send({ jsonrpc: "2.0", method: "notifications/initialized" });
+    proxy.send({ jsonrpc: "2.0", method: "notifications/some-other-thing", params: { x: 1 } });
+
+    // A subsequent real request must still get exactly its own response,
+    // correlated by id -- proving neither notification ate it or produced a
+    // stray response of its own.
+    proxy.send({ jsonrpc: "2.0", id: 42, method: "tools/list", params: {} });
+    const listResp = await proxy.nextMessage();
+    assert.equal(listResp.id, 42, "the response after two notifications must be correlated to the real request's id");
+    assert.ok(Array.isArray(listResp.result.tools));
+
+    // Exactly two stdout messages total across this whole session: the
+    // initial initialize response and this tools/list response -- neither
+    // notification produced a line of its own.
+    assert.equal(proxy.messages.length, 2, "the two notifications must not have produced any stdout lines");
+  } finally {
+    proxy.child.kill();
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+/** Reserve a free TCP port and release it immediately, so a proxy can be
+ * pointed at "nothing listening here yet" before something real starts. */
+function reserveFreePort() {
+  return new Promise((resolvePort, reject) => {
+    const probe = createServer();
+    probe.on("error", reject);
+    probe.listen(0, "127.0.0.1", () => {
+      const { port } = probe.address();
+      probe.close(() => resolvePort(port));
+    });
+  });
+}
+
+test("never-cache: host down then up succeeds without a restart", async () => {
+  const port = await reserveFreePort();
+  // Nothing is listening on `port` yet -- the very first call must observe
+  // a refused connection, not a cached assumption from some earlier check.
+  const proxy = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${port}/mcp` });
+  let server;
+
+  try {
+    proxy.send({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } },
+    });
+    await proxy.nextMessage();
+
+    const pidBefore = proxy.child.pid;
+
+    // Call 1: nothing listening -- must come back as a well-formed
+    // isError:true RESULT (Pattern 2's two-category model: a failed tool
+    // call is still an answer, never a crash and never a JSON-RPC error
+    // object). Generous timeout: with no pre-flight probe yet in place this
+    // exhausts the full ~50s reconnect ladder before failing; once task 2's
+    // probe lands this same assertion resolves in about a second instead --
+    // either way it must eventually come back as isError:true.
+    proxy.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
+    const down = await proxy.nextMessage(65000);
+    assert.equal(down.result.isError, true, "a call against nothing listening must fail as isError:true, not crash");
+
+    // Now start the real stand-in server ON THE SAME PORT.
+    const standIn = startStandInServer();
+    server = standIn.server;
+    await new Promise((resolveListen, rejectListen) => {
+      server.listen(port, "127.0.0.1", resolveListen);
+      server.once("error", rejectListen);
+    });
+
+    // Call 2, same child process, no restart: must succeed now, proving the
+    // previous failure was never cached anywhere in the proxy.
+    proxy.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
+    const up = await proxy.nextMessage(15000);
+    assert.equal(up.result.isError, false, "the very next call on the SAME process must succeed once the host is up");
+
+    assert.equal(proxy.child.pid, pidBefore, "both calls must have gone through the same child process -- no restart");
+    assert.equal(proxy.child.exitCode, null);
+  } finally {
+    proxy.child.kill();
+    if (server) await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("never-throw: a broken stdout pipe does not kill the process", async () => {
+  const { server } = startStandInServer();
+  const port = await listen(server);
+  const proxy = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${port}/mcp` });
+
+  try {
+    proxy.send({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } },
+    });
+    await proxy.nextMessage();
+
+    // Destroy the PARENT's read end of the child's stdout pipe. On this
+    // platform/runtime this is expected to make the child's NEXT
+    // process.stdout.write() fail with EPIPE -- exactly the filed
+    // typescript-sdk#1564 failure class this task hardens against.
+    proxy.child.stdout.destroy();
+    await new Promise((r) => setTimeout(r, 200));
+
+    // Ask for something that would normally produce a response line. We can
+    // no longer read the response (the read end is destroyed), so the
+    // PRIMARY signal is process liveness, not stdout content.
+    proxy.sendRaw(JSON.stringify({ jsonrpc: "2.0", id: 99, method: "tools/list", params: {} }));
+    await new Promise((r) => setTimeout(r, 300));
+
+    assert.equal(proxy.child.exitCode, null, "a broken stdout pipe must not kill the process");
+    assert.equal(proxy.child.signalCode, null, "the process must not have been signalled");
+
+    // Belt-and-suspenders source assertion, per this task's own documented
+    // escape hatch: EPIPE-inducibility via destroy() can vary across
+    // Node/platform combinations, so this independently confirms the actual
+    // defensive code the plan requires is present, regardless of whether
+    // this particular runtime reproduced a real EPIPE just now. See
+    // 01.1-03-SUMMARY.md's coverage note for this substitution.
+    const source = readFileSync(PROXY_PATH, "utf8");
+    assert.match(
+      source,
+      /process\.stdout\.on\(\s*["']error["']/,
+      "vice-proxy.mjs must register an 'error' listener on process.stdout"
     );
   } finally {
     proxy.child.kill();
