@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: Pipeline Proven *
 current_phase: 01.2
-current_phase_name: on demand broker and per session leasing
+current_phase_name: On-Demand Broker and Per-Session Leasing
 status: executing
 stopped_at: "Completed quick task 260730-v6z: layer B extracted into the new `c64-ram-capture` skill; `tools/recover.mjs` is now layer C only. A live `reproduce danish` during this task reported `MISMATCH` at `$D588` (2-bit) — the already-documented Hamming-1-too-tight edge case above, not a regression; that design gap remains open."
-last_updated: "2026-07-31T21:28:35.452Z"
+last_updated: "2026-07-31T21:30:27.641Z"
 last_activity: 2026-07-31
-last_activity_desc: "Completed quick task 260731-p8a: moved the vice MCP implementation to `.claude/mcp/vice/`"
+last_activity_desc: Phase 01.2 execution started
 progress:
   total_phases: 3
   completed_phases: 1
@@ -25,15 +25,15 @@ See: .planning/PROJECT.md (updated 2026-07-31)
 
 **Core value:** An ACME source tree that rebuilds a Bruce Lee which plays identically to the original, where every gameplay system is explained well enough that someone could change it.
 **Current milestone:** v1.0 — Pipeline Proven (Phases 1–4, 24 requirements)
-**Current focus:** Phase 01.2 — on-demand broker and per-session leasing
+**Current focus:** Phase 01.2 — On-Demand Broker and Per-Session Leasing
 
 ## Current Position
 
 Milestone: v1.0 — Pipeline Proven (Phases 1–4 of 7 total)
-Phase: 01.2 — on demand broker and per session leasing
-Plan: Not started
-Status: Ready to execute
-Last activity: 2026-07-31 — Completed quick task 260731-p8a: moved the vice MCP implementation to `.claude/mcp/vice/`
+Phase: 01.2 (On-Demand Broker and Per-Session Leasing) — EXECUTING
+Plan: 1 of 5
+Status: Executing Phase 01.2
+Last activity: 2026-07-31 — Phase 01.2 execution started
 
 Progress (v1.0): [████░░░░░░] 35% — 7/20 plans
 Progress (overall): [██░░░░░░░░] 20% — 7/35 plans
