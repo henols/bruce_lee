@@ -24,7 +24,7 @@
           {
             "address": "$0900",
             "key": "SPACE",
-            "hit_count": 1804
+            "hit_count": 629
           }
         ],
         "keys_held_into_capture": [
@@ -44,7 +44,7 @@
           "capture_record": "recovery/danish/dumps/danish-gameentry-run1.capture.json",
           "chip_state": null,
           "range_manifest": null,
-          "sha256": "6e444cf1dedbc71b067365f47ec06af900374d74ea42a0dce491eb3b563d7f11",
+          "sha256": "138350968375fcd502c76bb219c996ecaf052158670ba0166f6722dddfab70e5",
           "load_event_ref": null
         },
         {
@@ -54,7 +54,7 @@
           "capture_record": "recovery/danish/dumps/danish-gameentry-run2.capture.json",
           "chip_state": null,
           "range_manifest": null,
-          "sha256": "e964450f17b58f3fee079e27b476959759ebbb95a4e989643bf2ed2424158f93",
+          "sha256": "0d21fb071e63df8540db829628c904fe21d263c67c62a6fde674bed3dbe5aeb2",
           "load_event_ref": null
         },
         {
@@ -64,7 +64,7 @@
           "capture_record": "recovery/danish/dumps/danish-gameentry-run3.capture.json",
           "chip_state": null,
           "range_manifest": null,
-          "sha256": "f3fdd5df9c499a6a1a3a77c8839cdb438ab3f2d8984b1f9e2ed180371cafb033",
+          "sha256": "969c878b4564d659aa25ac8db1fb8afa469adb1532a26b4ebd42510912676755",
           "load_event_ref": null
         }
       ],
@@ -72,7 +72,10 @@
         "danish_gameentry_v1",
         "danish_gameentry_run1",
         "danish_gameentry_run2",
-        "danish_gameentry_run3"
+        "danish_gameentry_run3",
+        "p6512_danish_gameentry_run1",
+        "p6512_danish_gameentry_run2",
+        "p6512_danish_gameentry_run3"
       ],
       "tier1_evidence": [
         "Cracktro screen reads 'Danish Crackers Presents BRUCE LEE' with scroller text including the release id 'DC-011/P' (captured: recovery/danish/dumps/probe-stepped.png, probe-postkey.png).",
@@ -82,7 +85,7 @@
       ],
       "tier2_evidence": [],
       "independence": null,
-      "notes": null
+      "notes": "recovery/danish/NOTES.md"
     },
     {
       "id": "saeger",

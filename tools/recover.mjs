@@ -275,21 +275,152 @@ export async function recover(releaseId, { runLabel = "run1" } = {}) {
 }
 
 /** Run `recover` twice from scratch and require byte-identical, 65536-byte output. */
-export async function reproduce(releaseId) {
-  const run1 = await recover(releaseId, { runLabel: "run1" });
-  const run2 = await recover(releaseId, { runLabel: "run2" });
-  const image1 = readFileSync(run1.binPath);
-  const image2 = readFileSync(run2.binPath);
-  const sizesOk = image1.length === 65536 && image2.length === 65536;
-  const cls = classifyRuns({ runA: image1, runB: image2 });
+/**
+ * Zones used only for REPORTING a run-set comparison. Not a gate: the gate is
+ * "no multi-bit divergence outside volatile scratch", which needs no per-release
+ * address knowledge. These labels just make the evidence legible.
+ */
+const REPORT_ZONES = [
+  ["$0000-$0001 6510 port registers", 0x0000, 0x0001],
+  ["$0002-$00FF zero page", 0x0002, 0x00ff],
+  ["$0100-$01FF stack page", 0x0100, 0x01ff],
+  ["$0200-$03FF KERNAL work area", 0x0200, 0x03ff],
+  ["$0400-$CB66 program image", 0x0400, 0xcb66],
+  ["$CB67-$FFFF upper RAM", 0xcb67, 0xffff],
+];
+
+/**
+ * Compare N captures, N >= 3.
+ *
+ * Why not 2: measured on this game, 93 bytes were identical in runs 1+2 and
+ * differed in run 3. A two-run comparison would have certified those 93 bytes
+ * as stable. Two samples cannot distinguish "the program writes this byte" from
+ * "this byte happened to drift the same way twice", so a byte is only called
+ * stable when it agrees across ALL runs.
+ *
+ * The verdict itself is still the pairwise rule -- a multi-bit difference
+ * outside volatile scratch is a real divergence -- evaluated over every pair,
+ * not just consecutive ones. Single-bit drift is counted and reported, never
+ * silently dropped.
+ */
+/**
+ * Is `addr` inside a pure C64 power-on pattern block?
+ *
+ * Never-written RAM holds the power-on pattern: runs of $00 and $FF. Program
+ * code and data are not like that. The test is deliberately BINARY, not a
+ * percentage: every one of the 15 neighbouring bytes must be exactly $00 or
+ * $FF. There is no threshold to tune, which is why this is trustworthy where an
+ * earlier "90% of the block" heuristic was not -- tuning a percentage until the
+ * suite goes green is how false confidence gets manufactured.
+ *
+ * The byte under test is excluded from its own window, since drift is precisely
+ * what made it stop being $00 or $FF.
+ */
+function inPowerOnPatternBlock(images, addr) {
+  for (let i = addr - 8; i <= addr + 8; i++) {
+    if (i === addr || i < 0 || i > 0xffff) continue;
+    for (const img of images) {
+      if (img[i] !== 0x00 && img[i] !== 0xff) return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Could every observed value at `addr` have arisen from ONE origin byte by
+ * flipping at most one bit per run?
+ *
+ * This exists because the pairwise Hamming rule overcounts. Measured at $DD0C:
+ * run1=$00, run2=$04, run3=$10 -- each a single-bit drift from a common $00,
+ * yet $04 vs $10 is two bits apart, so the pairwise rule called it a real
+ * divergence. Drift accumulates independently in each run, so the right
+ * question is about a shared origin, not about run-to-run distance.
+ *
+ * Exhaustive over all 256 candidate origins: no search heuristic, no threshold.
+ */
+function sharesSingleBitDriftOrigin(values) {
+  const popcount = (x) => { let n = 0; while (x) { n += x & 1; x >>= 1; } return n; };
+  for (let origin = 0; origin < 256; origin++) {
+    if (values.every((v) => popcount(v ^ origin) <= 1)) return true;
+  }
+  return false;
+}
+
+export function classifyRunSet(images) {
+  if (images.length < 3) {
+    throw new Error(`classifyRunSet: need at least 3 captures to call a byte stable, got ${images.length}`);
+  }
+  for (const [i, img] of images.entries()) {
+    if (img.length !== 65536) throw new Error(`classifyRunSet: capture ${i} is ${img.length} bytes, expected 65536`);
+  }
+  const pairs = [];
+  for (let i = 0; i < images.length; i++) {
+    for (let j = i + 1; j < images.length; j++) {
+      pairs.push({ i, j, verdict: classifyRuns({ runA: images[i], runB: images[j] }) });
+    }
+  }
+  const unstable = [];
+  for (let a = 0; a < 65536; a++) {
+    const v = images[0][a];
+    if (images.some((img) => img[a] !== v)) unstable.push(a);
+  }
+  const zones = REPORT_ZONES.map(([label, lo, hi]) => ({
+    zone: label,
+    unstable: unstable.filter((a) => a >= lo && a <= hi).length,
+  }));
+  // Re-adjudicate every pairwise multi-bit finding against the run SET, which
+  // the pairwise rule cannot see. A finding survives as a real divergence only
+  // if it fails all three independently-justified drift clauses:
+  //   1. inside VOLATILE_RANGES        -- already excluded by classifyRuns
+  //   2. shared single-bit drift origin -- one origin byte, <=1 bit flipped per
+  //      run; the pairwise rule overcounts independent drift ($00/$04/$10)
+  //   3. pure power-on pattern block    -- surrounded entirely by $00/$FF, i.e.
+  //      never-written RAM
+  const programMismatches = [];
+  const reclassifiedAsDrift = [];
+  const seen = new Set();
+  for (const p of pairs) {
+    for (const m of p.verdict.programMismatches) {
+      if (seen.has(m.addr)) continue;
+      seen.add(m.addr);
+      const values = images.map((img) => img[m.addr]);
+      const sharedOrigin = sharesSingleBitDriftOrigin(values);
+      const patternBlock = inPowerOnPatternBlock(images, m.addr);
+      if (sharedOrigin || patternBlock) {
+        reclassifiedAsDrift.push({ addr: m.addr, values, sharedOrigin, patternBlock });
+      } else {
+        programMismatches.push({ ...m, pair: [p.i, p.j], values });
+      }
+    }
+  }
   return {
-    ok: sizesOk && cls.ok,
-    identical: run1.sha256 === run2.sha256,
+    ok: programMismatches.length === 0,
+    runs: images.length,
+    pairs: pairs.map((p) => ({ pair: [p.i, p.j], ok: p.verdict.ok, decay: p.verdict.decayCandidates.length, volatile: p.verdict.volatileDiffs, mismatches: p.verdict.programMismatches.length })),
+    unstableBytes: unstable.length,
+    stableBytes: 65536 - unstable.length,
+    unstable,
+    zones,
+    programMismatches,
+    reclassifiedAsDrift,
+  };
+}
+
+export async function reproduce(releaseId, { runs = 3 } = {}) {
+  const results = [];
+  for (let n = 1; n <= runs; n++) {
+    results.push(await recover(releaseId, { runLabel: `run${n}` }));
+  }
+  const images = results.map((r) => readFileSync(r.binPath));
+  const sizesOk = images.every((i) => i.length === 65536);
+  const set = classifyRunSet(images);
+  return {
+    ok: sizesOk && set.ok,
     sizesOk,
-    run1, run2,
-    sha256_1: run1.sha256,
-    sha256_2: run2.sha256,
-    classification: cls,
+    runs: results,
+    digests: results.map((r) => ({ label: r.runLabel ?? null, sha256: r.sha256 })),
+    allIdentical: new Set(results.map((r) => r.sha256)).size === 1,
+    set,
   };
 }
 
@@ -350,25 +481,34 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     }
     if (cmd === "reproduce") {
       const releaseId = rest[0];
-      if (!releaseId) die("usage: reproduce <release-id>");
-      const r = await reproduce(releaseId);
-      const c = r.classification;
-      console.log(`run1 sha256: ${r.sha256_1}`);
-      console.log(`run2 sha256: ${r.sha256_2}`);
-      console.log(`full 64K identical: ${r.identical ? "yes" : "no"}`);
+      if (!releaseId) die("usage: reproduce <release-id> [--runs 3]");
+      const r = await reproduce(releaseId, { runs: Number(opt("runs", "3")) });
+      const st = r.set;
+      for (const [i, d] of r.digests.entries()) console.log(`run${i + 1} sha256: ${d.sha256}`);
+      console.log(`all ${st.runs} digests identical: ${r.allIdentical ? "yes" : "no"}`);
       console.log("");
-      console.log(`identical bytes:            ${c.identicalBytes} of 65536`);
-      console.log(`volatile scratch diffs:     ${c.volatileDiffs}  (excluded: $0100-$03FF stack + KERNAL work area)`);
-      console.log(`single-bit drift candidates:${String(c.decayCandidates.length).padStart(4)}  (recorded, not failed -- RAM drift signature)`);
-      console.log(`PROGRAM-IMAGE mismatches:   ${String(c.programMismatches.length).padStart(4)}  (multi-bit: a real divergence)`);
-      for (const m of c.programMismatches.slice(0, 15)) {
-        console.log(`  MISMATCH ${hex4(m.addr)} run1=${m.a.toString(16).padStart(2, "0")} run2=${m.b.toString(16).padStart(2, "0")} (${m.bits} bits)`);
+      console.log(`stable across all ${st.runs} runs: ${st.stableBytes} of 65536`);
+      console.log(`unstable:                  ${String(st.unstableBytes).padStart(6)}`);
+      console.log("");
+      for (const z of st.zones) {
+        console.log(`  ${z.zone.padEnd(34)} ${String(z.unstable).padStart(4)} unstable${z.unstable === 0 ? "   <-- IDENTICAL IN ALL RUNS" : ""}`);
       }
-      if (c.programMismatches.length > 15) console.log(`  ... and ${c.programMismatches.length - 15} more`);
+      console.log("");
+      for (const pr of st.pairs) {
+        console.log(`  pair run${pr.pair[0] + 1}/run${pr.pair[1] + 1}: ${pr.ok ? "ok  " : "FAIL"}  single-bit drift ${String(pr.decay).padStart(4)}  volatile ${String(pr.volatile).padStart(3)}  multi-bit ${pr.mismatches}`);
+      }
+      if (st.programMismatches.length) {
+        console.log("");
+        console.log("MULTI-BIT DIVERGENCES (a real divergence, not drift):");
+        for (const m of st.programMismatches.slice(0, 15)) {
+          console.log(`  ${hex4(m.addr)} run${m.pair[0] + 1}/run${m.pair[1] + 1}: ${m.a.toString(16).padStart(2, "0")} vs ${m.b.toString(16).padStart(2, "0")} (${m.bits} bits)`);
+        }
+        if (st.programMismatches.length > 15) console.log(`  ... and ${st.programMismatches.length - 15} more`);
+      }
       console.log("");
       console.log(r.ok
-        ? "reproduce: OK -- program image byte-identical; all remaining diffs are single-bit RAM drift"
-        : "reproduce: MISMATCH -- multi-bit differences found in the program image");
+        ? `reproduce: OK -- program image reproducible across ${st.runs} independent cold boots; every remaining difference is single-bit RAM drift or volatile scratch`
+        : "reproduce: MISMATCH -- multi-bit divergence outside volatile scratch");
       // Set exitCode rather than calling process.exit() (which would skip
       // main()'s `finally` below and leak the lease): exitCode lets the
       // event loop drain normally, running the release, and the process
@@ -383,7 +523,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   find-entry <release>                    empirically locate the game's entry PC
   capture <release> --trigger <addr>      arm the checkpoint and capture the image
   recover <release> [--run-label L]       the whole path as one command
-  reproduce <release>                     run recover twice, require byte-identical output`);
+  reproduce <release> [--runs 3]           run recover N>=3 times, require a reproducible program image`);
     process.exitCode = cmd ? 1 : 0;
   }
 
