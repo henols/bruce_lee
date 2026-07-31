@@ -1,0 +1,3376 @@
+<title>MCP proxy lifecycle — 002-shutdown.jsonl</title>
+<style>
+  :root {
+    --bg: #fbfbfa; --fg: #1b1a17; --muted: #6f6b63; --line: #d9d5cd; --card: #ffffff;
+    --rpc: #3b6ea5; --tool: #2f7d57; --teardown: #b3452f; --lease: #7a4fa3;
+    --busywait: #c07c1e; --heartbeat: #8a8578; --delay: #a06a2c; --meta: #8a8578;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16161a; --fg: #ece9e3; --muted: #9a958c; --line: #33323a; --card: #1e1e24;
+      --rpc: #7fb0e0; --tool: #6cc294; --teardown: #f08a6e; --lease: #bb92e0;
+      --busywait: #e5b25d; --heartbeat: #9a958c; --delay: #d9a05e; --meta: #9a958c;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #16161a; --fg: #ece9e3; --muted: #9a958c; --line: #33323a; --card: #1e1e24;
+    --rpc: #7fb0e0; --tool: #6cc294; --teardown: #f08a6e; --lease: #bb92e0;
+    --busywait: #e5b25d; --heartbeat: #9a958c; --delay: #d9a05e; --meta: #9a958c;
+  }
+  :root[data-theme="light"] {
+    --bg: #fbfbfa; --fg: #1b1a17; --muted: #6f6b63; --line: #d9d5cd; --card: #ffffff;
+    --rpc: #3b6ea5; --tool: #2f7d57; --teardown: #b3452f; --lease: #7a4fa3;
+    --busywait: #c07c1e; --heartbeat: #8a8578; --delay: #a06a2c; --meta: #8a8578;
+  }
+  body { margin: 0; padding: 2rem 1.25rem 4rem; background: var(--bg); color: var(--fg);
+    font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 1100px; margin: 0 auto; }
+  h1 { font-size: 1.4rem; margin: 0 0 .2rem; letter-spacing: -.01em; }
+  .sub { color: var(--muted); font-size: .85rem; margin-bottom: 2rem; }
+  .legend { display: flex; flex-wrap: wrap; gap: .75rem 1.25rem; margin: 0 0 2rem;
+    font-size: .78rem; color: var(--muted); }
+  .legend span { display: inline-flex; align-items: center; gap: .35rem; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+  .block { background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+    padding: 1.1rem 1.25rem 1.4rem; margin-bottom: 1.25rem; }
+  .block h2 { font-size: .95rem; margin: 0 0 .15rem; font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+  .meta { color: var(--muted); font-size: .8rem; margin-bottom: 1rem; }
+  .pill { display: inline-block; border: 1px solid var(--line); border-radius: 999px;
+    padding: .05rem .5rem; margin-right: .35rem; font-size: .75rem; }
+  .lane { margin: 1.1rem 0 0; }
+  .lanehead { display: flex; flex-wrap: wrap; gap: .5rem; align-items: baseline;
+    font-family: ui-monospace, Menlo, monospace; font-size: .78rem; color: var(--muted); margin-bottom: .3rem; }
+  .lanehead b { color: var(--fg); }
+  .track { position: relative; height: 34px; border-bottom: 1px solid var(--line); overflow: visible; }
+  .track::before { content: ""; position: absolute; left: 0; right: 0; top: 16px; height: 1px; background: var(--line); }
+  .mark { position: absolute; top: 11px; width: 11px; height: 11px; border-radius: 50%;
+    transform: translateX(-50%); cursor: help; border: 2px solid var(--card); }
+  .mark.rpc { background: var(--rpc); } .mark.tool { background: var(--tool); }
+  .mark.teardown { background: var(--teardown); width: 13px; height: 13px; top: 10px; }
+  .mark.lease { background: var(--lease); } .mark.busywait { background: var(--busywait); width: 7px; height: 7px; top: 13px; }
+  .mark.heartbeat { background: var(--heartbeat); width: 7px; height: 7px; top: 13px; }
+  .mark.delay { background: var(--delay); } .mark.meta { background: var(--meta); }
+  .ladder { font-family: ui-monospace, Menlo, monospace; font-size: .75rem; color: var(--muted); margin-top: .3rem; }
+  .ladder b { color: var(--teardown); }
+  .scroller { overflow-x: auto; }
+</style>
+<main>
+  <h1>Stdio MCP proxy lifecycle</h1>
+  <div class="sub">002-shutdown.jsonl — 1083 events, 9 experiments. Each lane is one proxy subprocess; time is normalised per experiment. Hover any mark for its raw record.</div>
+  <div class="legend">
+    <span><i class="dot" style="background:var(--rpc)"></i> JSON-RPC</span>
+    <span><i class="dot" style="background:var(--tool)"></i> tool call</span>
+    <span><i class="dot" style="background:var(--teardown)"></i> teardown / signal</span>
+    <span><i class="dot" style="background:var(--lease)"></i> lease</span>
+    <span><i class="dot" style="background:var(--busywait)"></i> shutdown busy-wait</span>
+    <span><i class="dot" style="background:var(--delay)"></i> injected delay</span>
+    <span><i class="dot" style="background:var(--heartbeat)"></i> heartbeat</span>
+  </div>
+  <section class="block">
+    <h2>f1-ladder-print</h2>
+    <div class="meta">
+      <span class="pill">1 proxy subprocess</span>
+      <span class="pill">3682 ms wall</span>
+    </div>
+    <div class="scroller">
+      <div class="lane">
+        <div class="lanehead"><b>pid 556057</b>
+          <span>1 tool call</span>
+          <span>ended: killed (no exit handler ran)</span>
+          
+        </div>
+        <div class="track">
+          <div class="mark lease" style="left:0.000%" title="2026-07-31T19:15:37.900Z  +1ms (proc)
+lease_created"></div>
+          <div class="mark meta" style="left:0.000%" title="2026-07-31T19:15:37.900Z  +1ms (proc)
+spawn"></div>
+          <div class="mark rpc" style="left:2.363%" title="2026-07-31T19:15:37.987Z  +88ms (proc)
+rpc_in initialize"></div>
+          <div class="mark rpc" style="left:2.444%" title="2026-07-31T19:15:37.990Z  +90ms (proc)
+rpc_out initialize"></div>
+          <div class="mark rpc" style="left:3.504%" title="2026-07-31T19:15:38.029Z  +130ms (proc)
+rpc_in notifications/initialized"></div>
+          <div class="mark rpc" style="left:3.504%" title="2026-07-31T19:15:38.029Z  +130ms (proc)
+notification_ignored notifications/initialized"></div>
+          <div class="mark rpc" style="left:3.504%" title="2026-07-31T19:15:38.029Z  +130ms (proc)
+rpc_in tools/list"></div>
+          <div class="mark rpc" style="left:3.504%" title="2026-07-31T19:15:38.029Z  +130ms (proc)
+rpc_out tools/list"></div>
+          <div class="mark rpc" style="left:63.145%" title="2026-07-31T19:15:40.225Z  +2326ms (proc)
+rpc_in tools/call"></div>
+          <div class="mark tool" style="left:63.145%" title="2026-07-31T19:15:40.225Z  +2326ms (proc)
+tool_call_begin
+text: f1"></div>
+          <div class="mark rpc" style="left:63.145%" title="2026-07-31T19:15:40.225Z  +2326ms (proc)
+rpc_out tools/call"></div>
+          <div class="mark teardown" style="left:97.230%" title="2026-07-31T19:15:41.480Z  +3581ms (proc)
+teardown_trigger SIGINT"></div>
+          <div class="mark lease" style="left:97.257%" title="2026-07-31T19:15:41.481Z  +3582ms (proc)
+lease_unlinked SIGINT
+elapsed: 0.211ms"></div>
+          <div class="mark teardown" style="left:100.000%" title="2026-07-31T19:15:41.582Z  +3683ms (proc)
+teardown_trigger SIGTERM"></div>
+        </div>
+        <div class="ladder">ladder: <b>SIGINT</b> → <b>SIGTERM</b></div>
+      </div>
+    </div>
+  </section>
+  <section class="block">
+    <h2>f2-busywait-print</h2>
+    <div class="meta">
+      <span class="pill">1 proxy subprocess</span>
+      <span class="pill">3690 ms wall</span>
+    </div>
+    <div class="scroller">
+      <div class="lane">
+        <div class="lanehead"><b>pid 556257</b>
+          <span>1 tool call</span>
+          <span>ended: killed (no exit handler ran)</span>
+          <span>busy-wait reached 400ms</span>
+        </div>
+        <div class="track">
+          <div class="mark lease" style="left:0.000%" title="2026-07-31T19:16:02.488Z  +1ms (proc)
+lease_created"></div>
+          <div class="mark meta" style="left:0.027%" title="2026-07-31T19:16:02.489Z  +2ms (proc)
+spawn"></div>
+          <div class="mark rpc" style="left:2.033%" title="2026-07-31T19:16:02.563Z  +75ms (proc)
+rpc_in initialize"></div>
+          <div class="mark rpc" style="left:2.087%" title="2026-07-31T19:16:02.565Z  +78ms (proc)
+rpc_out initialize"></div>
+          <div class="mark rpc" style="left:2.900%" title="2026-07-31T19:16:02.595Z  +108ms (proc)
+rpc_in notifications/initialized"></div>
+          <div class="mark rpc" style="left:2.900%" title="2026-07-31T19:16:02.595Z  +108ms (proc)
+notification_ignored notifications/initialized"></div>
+          <div class="mark rpc" style="left:2.900%" title="2026-07-31T19:16:02.595Z  +108ms (proc)
+rpc_in tools/list"></div>
+          <div class="mark rpc" style="left:2.927%" title="2026-07-31T19:16:02.596Z  +108ms (proc)
+rpc_out tools/list"></div>
+          <div class="mark rpc" style="left:57.696%" title="2026-07-31T19:16:04.617Z  +2129ms (proc)
+rpc_in tools/call"></div>
+          <div class="mark tool" style="left:57.696%" title="2026-07-31T19:16:04.617Z  +2130ms (proc)
+tool_call_begin
+text: f2"></div>
+          <div class="mark rpc" style="left:57.696%" title="2026-07-31T19:16:04.617Z  +2130ms (proc)
+rpc_out tools/call"></div>
+          <div class="mark teardown" style="left:89.133%" title="2026-07-31T19:16:05.777Z  +3290ms (proc)
+teardown_trigger SIGINT"></div>
+          <div class="mark lease" style="left:89.133%" title="2026-07-31T19:16:05.777Z  +3290ms (proc)
+lease_unlinked SIGINT
+elapsed: 0.107ms"></div>
+          <div class="mark busywait" style="left:89.160%" title="2026-07-31T19:16:05.778Z  +3290ms (proc)
+busywait_begin SIGINT"></div>
+          <div class="mark busywait" style="left:91.870%" title="2026-07-31T19:16:05.878Z  +3390ms (proc)
+busywait_progress SIGINT
+elapsed: 100ms"></div>
+          <div class="mark busywait" style="left:94.580%" title="2026-07-31T19:16:05.978Z  +3490ms (proc)
+busywait_progress SIGINT
+elapsed: 200ms"></div>
+          <div class="mark busywait" style="left:97.290%" title="2026-07-31T19:16:06.078Z  +3590ms (proc)
+busywait_progress SIGINT
+elapsed: 300ms"></div>
+          <div class="mark busywait" style="left:100.000%" title="2026-07-31T19:16:06.178Z  +3690ms (proc)
+busywait_progress SIGINT
+elapsed: 400ms"></div>
+        </div>
+        <div class="ladder">ladder: <b>SIGINT</b></div>
+      </div>
+    </div>
+  </section>
+  <section class="block">
+    <h2>f2-busywait-print-r1</h2>
+    <div class="meta">
+      <span class="pill">1 proxy subprocess</span>
+      <span class="pill">3693 ms wall</span>
+    </div>
+    <div class="scroller">
+      <div class="lane">
+        <div class="lanehead"><b>pid 556692</b>
+          <span>1 tool call</span>
+          <span>ended: killed (no exit handler ran)</span>
+          <span>busy-wait reached 490ms</span>
+        </div>
+        <div class="track">
+          <div class="mark lease" style="left:0.000%" title="2026-07-31T19:17:01.462Z  +1ms (proc)
+lease_created"></div>
+          <div class="mark meta" style="left:0.027%" title="2026-07-31T19:17:01.463Z  +1ms (proc)
+spawn"></div>
+          <div class="mark rpc" style="left:1.327%" title="2026-07-31T19:17:01.511Z  +49ms (proc)
+rpc_in initialize"></div>
+          <div class="mark rpc" style="left:1.381%" title="2026-07-31T19:17:01.513Z  +51ms (proc)
+rpc_out initialize"></div>
+          <div class="mark rpc" style="left:2.410%" title="2026-07-31T19:17:01.551Z  +89ms (proc)
+rpc_in notifications/initialized"></div>
+          <div class="mark rpc" style="left:2.410%" title="2026-07-31T19:17:01.551Z  +90ms (proc)
+notification_ignored notifications/initialized"></div>
+          <div class="mark rpc" style="left:2.437%" title="2026-07-31T19:17:01.552Z  +90ms (proc)
+rpc_in tools/list"></div>
+          <div class="mark rpc" style="left:2.437%" title="2026-07-31T19:17:01.552Z  +90ms (proc)
+rpc_out tools/list"></div>
+          <div class="mark rpc" style="left:56.458%" title="2026-07-31T19:17:03.547Z  +2085ms (proc)
+rpc_in tools/call"></div>
+          <div class="mark tool" style="left:56.458%" title="2026-07-31T19:17:03.547Z  +2085ms (proc)
+tool_call_begin
+text: f2r1"></div>
+          <div class="mark rpc" style="left:56.458%" title="2026-07-31T19:17:03.547Z  +2085ms (proc)
+rpc_out tools/call"></div>
+          <div class="mark teardown" style="left:86.705%" title="2026-07-31T19:17:04.664Z  +3202ms (proc)
+teardown_trigger SIGINT"></div>
+          <div class="mark lease" style="left:86.705%" title="2026-07-31T19:17:04.664Z  +3203ms (proc)
+lease_unlinked SIGINT
+elapsed: 0.108ms"></div>
+          <div class="mark busywait" style="left:86.732%" title="2026-07-31T19:17:04.665Z  +3203ms (proc)
+busywait_begin SIGINT"></div>
+          <div class="mark busywait" style="left:87.002%" title="2026-07-31T19:17:04.675Z  +3213ms (proc)
+busywait_progress SIGINT
+elapsed: 10ms"></div>
+          <div class="mark busywait" style="left:87.273%" title="2026-07-31T19:17:04.685Z  +3223ms (proc)
+busywait_progress SIGINT
+elapsed: 20ms"></div>
+          <div class="mark busywait" style="left:87.544%" title="2026-07-31T19:17:04.695Z  +3233ms (proc)
+busywait_progress SIGINT
+elapsed: 30ms"></div>
+          <div class="mark busywait" style="left:87.815%" title="2026-07-31T19:17:04.705Z  +3243ms (proc)
+busywait_progress SIGINT
+elapsed: 40ms"></div>
+          <div class="mark busywait" style="left:88.086%" title="2026-07-31T19:17:04.715Z  +3253ms (proc)
+busywait_progress SIGINT
+elapsed: 50ms"></div>
+          <div class="mark busywait" style="left:88.356%" title="2026-07-31T19:17:04.725Z  +3263ms (proc)
+busywait_progress SIGINT
+elapsed: 60ms"></div>
+          <div class="mark busywait" style="left:88.627%" title="2026-07-31T19:17:04.735Z  +3273ms (proc)
+busywait_progress SIGINT
+elapsed: 70ms"></div>
+          <div class="mark busywait" style="left:88.898%" title="2026-07-31T19:17:04.745Z  +3283ms (proc)
+busywait_progress SIGINT
+elapsed: 80ms"></div>
+          <div class="mark busywait" style="left:89.169%" title="2026-07-31T19:17:04.755Z  +3293ms (proc)
+busywait_progress SIGINT
+elapsed: 90ms"></div>
+          <div class="mark busywait" style="left:89.439%" title="2026-07-31T19:17:04.765Z  +3303ms (proc)
+busywait_progress SIGINT
+elapsed: 100ms"></div>
+          <div class="mark busywait" style="left:89.710%" title="2026-07-31T19:17:04.775Z  +3313ms (proc)
+busywait_progress SIGINT
+elapsed: 110ms"></div>
+          <div class="mark busywait" style="left:89.981%" title="2026-07-31T19:17:04.785Z  +3323ms (proc)
+busywait_progress SIGINT
+elapsed: 120ms"></div>
+          <div class="mark busywait" style="left:90.252%" title="2026-07-31T19:17:04.795Z  +3333ms (proc)
+busywait_progress SIGINT
+elapsed: 130ms"></div>
+          <div class="mark busywait" style="left:90.523%" title="2026-07-31T19:17:04.805Z  +3343ms (proc)
+busywait_progress SIGINT
+elapsed: 140ms"></div>
+          <div class="mark busywait" style="left:90.793%" title="2026-07-31T19:17:04.815Z  +3353ms (proc)
+busywait_progress SIGINT
+elapsed: 150ms"></div>
+          <div class="mark busywait" style="left:91.064%" title="2026-07-31T19:17:04.825Z  +3363ms (proc)
+busywait_progress SIGINT
+elapsed: 160ms"></div>
+          <div class="mark busywait" style="left:91.335%" title="2026-07-31T19:17:04.835Z  +3373ms (proc)
+busywait_progress SIGINT
+elapsed: 170ms"></div>
+          <div class="mark busywait" style="left:91.606%" title="2026-07-31T19:17:04.845Z  +3383ms (proc)
+busywait_progress SIGINT
+elapsed: 180ms"></div>
+          <div class="mark busywait" style="left:91.877%" title="2026-07-31T19:17:04.855Z  +3393ms (proc)
+busywait_progress SIGINT
+elapsed: 190ms"></div>
+          <div class="mark busywait" style="left:92.147%" title="2026-07-31T19:17:04.865Z  +3403ms (proc)
+busywait_progress SIGINT
+elapsed: 200ms"></div>
+          <div class="mark busywait" style="left:92.418%" title="2026-07-31T19:17:04.875Z  +3413ms (proc)
+busywait_progress SIGINT
+elapsed: 210ms"></div>
+          <div class="mark busywait" style="left:92.689%" title="2026-07-31T19:17:04.885Z  +3423ms (proc)
+busywait_progress SIGINT
+elapsed: 220ms"></div>
+          <div class="mark busywait" style="left:92.960%" title="2026-07-31T19:17:04.895Z  +3433ms (proc)
+busywait_progress SIGINT
+elapsed: 230ms"></div>
+          <div class="mark busywait" style="left:93.230%" title="2026-07-31T19:17:04.905Z  +3443ms (proc)
+busywait_progress SIGINT
+elapsed: 240ms"></div>
+          <div class="mark busywait" style="left:93.501%" title="2026-07-31T19:17:04.915Z  +3453ms (proc)
+busywait_progress SIGINT
+elapsed: 250ms"></div>
+          <div class="mark busywait" style="left:93.772%" title="2026-07-31T19:17:04.925Z  +3463ms (proc)
+busywait_progress SIGINT
+elapsed: 260ms"></div>
+          <div class="mark busywait" style="left:94.043%" title="2026-07-31T19:17:04.935Z  +3473ms (proc)
+busywait_progress SIGINT
+elapsed: 270ms"></div>
+          <div class="mark busywait" style="left:94.314%" title="2026-07-31T19:17:04.945Z  +3483ms (proc)
+busywait_progress SIGINT
+elapsed: 280ms"></div>
+          <div class="mark busywait" style="left:94.584%" title="2026-07-31T19:17:04.955Z  +3493ms (proc)
+busywait_progress SIGINT
+elapsed: 290ms"></div>
+          <div class="mark busywait" style="left:94.855%" title="2026-07-31T19:17:04.965Z  +3503ms (proc)
+busywait_progress SIGINT
+elapsed: 300ms"></div>
+          <div class="mark busywait" style="left:95.126%" title="2026-07-31T19:17:04.975Z  +3513ms (proc)
+busywait_progress SIGINT
+elapsed: 310ms"></div>
+          <div class="mark busywait" style="left:95.397%" title="2026-07-31T19:17:04.985Z  +3523ms (proc)
+busywait_progress SIGINT
+elapsed: 320ms"></div>
+          <div class="mark busywait" style="left:95.667%" title="2026-07-31T19:17:04.995Z  +3533ms (proc)
+busywait_progress SIGINT
+elapsed: 330ms"></div>
+          <div class="mark busywait" style="left:95.938%" title="2026-07-31T19:17:05.005Z  +3543ms (proc)
+busywait_progress SIGINT
+elapsed: 340ms"></div>
+          <div class="mark busywait" style="left:96.209%" title="2026-07-31T19:17:05.015Z  +3553ms (proc)
+busywait_progress SIGINT
+elapsed: 350ms"></div>
+          <div class="mark busywait" style="left:96.480%" title="2026-07-31T19:17:05.025Z  +3563ms (proc)
+busywait_progress SIGINT
+elapsed: 360ms"></div>
+          <div class="mark busywait" style="left:96.751%" title="2026-07-31T19:17:05.035Z  +3573ms (proc)
+busywait_progress SIGINT
+elapsed: 370ms"></div>
+          <div class="mark busywait" style="left:97.021%" title="2026-07-31T19:17:05.045Z  +3583ms (proc)
+busywait_progress SIGINT
+elapsed: 380ms"></div>
+          <div class="mark busywait" style="left:97.292%" title="2026-07-31T19:17:05.055Z  +3593ms (proc)
+busywait_progress SIGINT
+elapsed: 390ms"></div>
+          <div class="mark busywait" style="left:97.563%" title="2026-07-31T19:17:05.065Z  +3603ms (proc)
+busywait_progress SIGINT
+elapsed: 400ms"></div>
+          <div class="mark busywait" style="left:97.834%" title="2026-07-31T19:17:05.075Z  +3613ms (proc)
+busywait_progress SIGINT
+elapsed: 410ms"></div>
+          <div class="mark busywait" style="left:98.105%" title="2026-07-31T19:17:05.085Z  +3623ms (proc)
+busywait_progress SIGINT
+elapsed: 420ms"></div>
+          <div class="mark busywait" style="left:98.375%" title="2026-07-31T19:17:05.095Z  +3633ms (proc)
+busywait_progress SIGINT
+elapsed: 430ms"></div>
+          <div class="mark busywait" style="left:98.646%" title="2026-07-31T19:17:05.105Z  +3643ms (proc)
+busywait_progress SIGINT
+elapsed: 440ms"></div>
+          <div class="mark busywait" style="left:98.917%" title="2026-07-31T19:17:05.115Z  +3653ms (proc)
+busywait_progress SIGINT
+elapsed: 450ms"></div>
+          <div class="mark busywait" style="left:99.188%" title="2026-07-31T19:17:05.125Z  +3663ms (proc)
+busywait_progress SIGINT
+elapsed: 460ms"></div>
+          <div class="mark busywait" style="left:99.458%" title="2026-07-31T19:17:05.135Z  +3673ms (proc)
+busywait_progress SIGINT
+elapsed: 470ms"></div>
+          <div class="mark busywait" style="left:99.729%" title="2026-07-31T19:17:05.145Z  +3683ms (proc)
+busywait_progress SIGINT
+elapsed: 480ms"></div>
+          <div class="mark busywait" style="left:100.000%" title="2026-07-31T19:17:05.155Z  +3693ms (proc)
+busywait_progress SIGINT
+elapsed: 490ms"></div>
+        </div>
+        <div class="ladder">ladder: <b>SIGINT</b></div>
+      </div>
+    </div>
+  </section>
+  <section class="block">
+    <h2>f2-busywait-print-r2</h2>
+    <div class="meta">
+      <span class="pill">1 proxy subprocess</span>
+      <span class="pill">3763 ms wall</span>
+    </div>
+    <div class="scroller">
+      <div class="lane">
+        <div class="lanehead"><b>pid 556801</b>
+          <span>1 tool call</span>
+          <span>ended: killed (no exit handler ran)</span>
+          <span>busy-wait reached 490ms</span>
+        </div>
+        <div class="track">
+          <div class="mark lease" style="left:0.000%" title="2026-07-31T19:17:08.224Z  +1ms (proc)
+lease_created"></div>
+          <div class="mark meta" style="left:0.000%" title="2026-07-31T19:17:08.224Z  +1ms (proc)
+spawn"></div>
+          <div class="mark rpc" style="left:0.505%" title="2026-07-31T19:17:08.243Z  +20ms (proc)
+rpc_in initialize"></div>
+          <div class="mark rpc" style="left:0.531%" title="2026-07-31T19:17:08.244Z  +21ms (proc)
+rpc_out initialize"></div>
+          <div class="mark rpc" style="left:1.143%" title="2026-07-31T19:17:08.267Z  +44ms (proc)
+rpc_in notifications/initialized"></div>
+          <div class="mark rpc" style="left:1.143%" title="2026-07-31T19:17:08.267Z  +44ms (proc)
+notification_ignored notifications/initialized"></div>
+          <div class="mark rpc" style="left:1.143%" title="2026-07-31T19:17:08.267Z  +44ms (proc)
+rpc_in tools/list"></div>
+          <div class="mark rpc" style="left:1.143%" title="2026-07-31T19:17:08.267Z  +44ms (proc)
+rpc_out tools/list"></div>
+          <div class="mark rpc" style="left:56.816%" title="2026-07-31T19:17:10.362Z  +2139ms (proc)
+rpc_in tools/call"></div>
+          <div class="mark tool" style="left:56.816%" title="2026-07-31T19:17:10.362Z  +2139ms (proc)
+tool_call_begin
+text: f2r2"></div>
+          <div class="mark rpc" style="left:56.816%" title="2026-07-31T19:17:10.362Z  +2139ms (proc)
+rpc_out tools/call"></div>
+          <div class="mark teardown" style="left:86.952%" title="2026-07-31T19:17:11.496Z  +3273ms (proc)
+teardown_trigger SIGINT"></div>
+          <div class="mark lease" style="left:86.952%" title="2026-07-31T19:17:11.496Z  +3273ms (proc)
+lease_unlinked SIGINT
+elapsed: 0.076ms"></div>
+          <div class="mark busywait" style="left:86.978%" title="2026-07-31T19:17:11.497Z  +3273ms (proc)
+busywait_begin SIGINT"></div>
+          <div class="mark busywait" style="left:87.244%" title="2026-07-31T19:17:11.507Z  +3284ms (proc)
+busywait_progress SIGINT
+elapsed: 10ms"></div>
+          <div class="mark busywait" style="left:87.510%" title="2026-07-31T19:17:11.517Z  +3294ms (proc)
+busywait_progress SIGINT
+elapsed: 20ms"></div>
+          <div class="mark busywait" style="left:87.776%" title="2026-07-31T19:17:11.527Z  +3303ms (proc)
+busywait_progress SIGINT
+elapsed: 30ms"></div>
+          <div class="mark busywait" style="left:88.041%" title="2026-07-31T19:17:11.537Z  +3313ms (proc)
+busywait_progress SIGINT
+elapsed: 40ms"></div>
+          <div class="mark busywait" style="left:88.307%" title="2026-07-31T19:17:11.547Z  +3323ms (proc)
+busywait_progress SIGINT
+elapsed: 50ms"></div>
+          <div class="mark busywait" style="left:88.573%" title="2026-07-31T19:17:11.557Z  +3333ms (proc)
+busywait_progress SIGINT
+elapsed: 60ms"></div>
+          <div class="mark busywait" style="left:88.839%" title="2026-07-31T19:17:11.567Z  +3343ms (proc)
+busywait_progress SIGINT
+elapsed: 70ms"></div>
+          <div class="mark busywait" style="left:89.104%" title="2026-07-31T19:17:11.577Z  +3353ms (proc)
+busywait_progress SIGINT
+elapsed: 80ms"></div>
+          <div class="mark busywait" style="left:89.370%" title="2026-07-31T19:17:11.587Z  +3363ms (proc)
+busywait_progress SIGINT
+elapsed: 90ms"></div>
+          <div class="mark busywait" style="left:89.636%" title="2026-07-31T19:17:11.597Z  +3373ms (proc)
+busywait_progress SIGINT
+elapsed: 100ms"></div>
+          <div class="mark busywait" style="left:89.902%" title="2026-07-31T19:17:11.607Z  +3383ms (proc)
+busywait_progress SIGINT
+elapsed: 110ms"></div>
+          <div class="mark busywait" style="left:90.167%" title="2026-07-31T19:17:11.617Z  +3393ms (proc)
+busywait_progress SIGINT
+elapsed: 120ms"></div>
+          <div class="mark busywait" style="left:90.433%" title="2026-07-31T19:17:11.627Z  +3403ms (proc)
+busywait_progress SIGINT
+elapsed: 130ms"></div>
+          <div class="mark busywait" style="left:90.699%" title="2026-07-31T19:17:11.637Z  +3413ms (proc)
+busywait_progress SIGINT
+elapsed: 140ms"></div>
+          <div class="mark busywait" style="left:90.965%" title="2026-07-31T19:17:11.647Z  +3423ms (proc)
+busywait_progress SIGINT
+elapsed: 150ms"></div>
+          <div class="mark busywait" style="left:91.230%" title="2026-07-31T19:17:11.657Z  +3433ms (proc)
+busywait_progress SIGINT
+elapsed: 160ms"></div>
+          <div class="mark busywait" style="left:91.496%" title="2026-07-31T19:17:11.667Z  +3443ms (proc)
+busywait_progress SIGINT
+elapsed: 170ms"></div>
+          <div class="mark busywait" style="left:91.762%" title="2026-07-31T19:17:11.677Z  +3453ms (proc)
+busywait_progress SIGINT
+elapsed: 180ms"></div>
+          <div class="mark busywait" style="left:92.028%" title="2026-07-31T19:17:11.687Z  +3463ms (proc)
+busywait_progress SIGINT
+elapsed: 190ms"></div>
+          <div class="mark busywait" style="left:92.293%" title="2026-07-31T19:17:11.697Z  +3473ms (proc)
+busywait_progress SIGINT
+elapsed: 200ms"></div>
+          <div class="mark busywait" style="left:92.559%" title="2026-07-31T19:17:11.707Z  +3483ms (proc)
+busywait_progress SIGINT
+elapsed: 210ms"></div>
+          <div class="mark busywait" style="left:92.825%" title="2026-07-31T19:17:11.717Z  +3493ms (proc)
+busywait_progress SIGINT
+elapsed: 220ms"></div>
+          <div class="mark busywait" style="left:93.091%" title="2026-07-31T19:17:11.727Z  +3503ms (proc)
+busywait_progress SIGINT
+elapsed: 230ms"></div>
+          <div class="mark busywait" style="left:93.356%" title="2026-07-31T19:17:11.737Z  +3513ms (proc)
+busywait_progress SIGINT
+elapsed: 240ms"></div>
+          <div class="mark busywait" style="left:93.622%" title="2026-07-31T19:17:11.747Z  +3523ms (proc)
+busywait_progress SIGINT
+elapsed: 250ms"></div>
+          <div class="mark busywait" style="left:93.888%" title="2026-07-31T19:17:11.757Z  +3533ms (proc)
+busywait_progress SIGINT
+elapsed: 260ms"></div>
+          <div class="mark busywait" style="left:94.154%" title="2026-07-31T19:17:11.767Z  +3543ms (proc)
+busywait_progress SIGINT
+elapsed: 270ms"></div>
+          <div class="mark busywait" style="left:94.419%" title="2026-07-31T19:17:11.777Z  +3553ms (proc)
+busywait_progress SIGINT
+elapsed: 280ms"></div>
+          <div class="mark busywait" style="left:94.685%" title="2026-07-31T19:17:11.787Z  +3563ms (proc)
+busywait_progress SIGINT
+elapsed: 290ms"></div>
+          <div class="mark busywait" style="left:94.951%" title="2026-07-31T19:17:11.797Z  +3573ms (proc)
+busywait_progress SIGINT
+elapsed: 300ms"></div>
+          <div class="mark busywait" style="left:95.217%" title="2026-07-31T19:17:11.807Z  +3583ms (proc)
+busywait_progress SIGINT
+elapsed: 310ms"></div>
+          <div class="mark busywait" style="left:95.482%" title="2026-07-31T19:17:11.817Z  +3593ms (proc)
+busywait_progress SIGINT
+elapsed: 320ms"></div>
+          <div class="mark busywait" style="left:95.748%" title="2026-07-31T19:17:11.827Z  +3603ms (proc)
+busywait_progress SIGINT
+elapsed: 330ms"></div>
+          <div class="mark busywait" style="left:96.014%" title="2026-07-31T19:17:11.837Z  +3613ms (proc)
+busywait_progress SIGINT
+elapsed: 340ms"></div>
+          <div class="mark busywait" style="left:96.280%" title="2026-07-31T19:17:11.847Z  +3623ms (proc)
+busywait_progress SIGINT
+elapsed: 350ms"></div>
+          <div class="mark busywait" style="left:96.545%" title="2026-07-31T19:17:11.857Z  +3633ms (proc)
+busywait_progress SIGINT
+elapsed: 360ms"></div>
+          <div class="mark busywait" style="left:96.811%" title="2026-07-31T19:17:11.867Z  +3643ms (proc)
+busywait_progress SIGINT
+elapsed: 370ms"></div>
+          <div class="mark busywait" style="left:97.077%" title="2026-07-31T19:17:11.877Z  +3653ms (proc)
+busywait_progress SIGINT
+elapsed: 380ms"></div>
+          <div class="mark busywait" style="left:97.343%" title="2026-07-31T19:17:11.887Z  +3663ms (proc)
+busywait_progress SIGINT
+elapsed: 390ms"></div>
+          <div class="mark busywait" style="left:97.608%" title="2026-07-31T19:17:11.897Z  +3673ms (proc)
+busywait_progress SIGINT
+elapsed: 400ms"></div>
+          <div class="mark busywait" style="left:97.874%" title="2026-07-31T19:17:11.907Z  +3683ms (proc)
+busywait_progress SIGINT
+elapsed: 410ms"></div>
+          <div class="mark busywait" style="left:98.140%" title="2026-07-31T19:17:11.917Z  +3693ms (proc)
+busywait_progress SIGINT
+elapsed: 420ms"></div>
+          <div class="mark busywait" style="left:98.406%" title="2026-07-31T19:17:11.927Z  +3703ms (proc)
+busywait_progress SIGINT
+elapsed: 430ms"></div>
+          <div class="mark busywait" style="left:98.671%" title="2026-07-31T19:17:11.937Z  +3713ms (proc)
+busywait_progress SIGINT
+elapsed: 440ms"></div>
+          <div class="mark busywait" style="left:98.937%" title="2026-07-31T19:17:11.947Z  +3723ms (proc)
+busywait_progress SIGINT
+elapsed: 450ms"></div>
+          <div class="mark busywait" style="left:99.203%" title="2026-07-31T19:17:11.957Z  +3733ms (proc)
+busywait_progress SIGINT
+elapsed: 460ms"></div>
+          <div class="mark busywait" style="left:99.469%" title="2026-07-31T19:17:11.967Z  +3743ms (proc)
+busywait_progress SIGINT
+elapsed: 470ms"></div>
+          <div class="mark busywait" style="left:99.734%" title="2026-07-31T19:17:11.977Z  +3753ms (proc)
+busywait_progress SIGINT
+elapsed: 480ms"></div>
+          <div class="mark busywait" style="left:100.000%" title="2026-07-31T19:17:11.987Z  +3763ms (proc)
+busywait_progress SIGINT
+elapsed: 490ms"></div>
+        </div>
+        <div class="ladder">ladder: <b>SIGINT</b></div>
+      </div>
+    </div>
+  </section>
+  <section class="block">
+    <h2>f2-busywait-print-r3</h2>
+    <div class="meta">
+      <span class="pill">1 proxy subprocess</span>
+      <span class="pill">3744 ms wall</span>
+    </div>
+    <div class="scroller">
+      <div class="lane">
+        <div class="lanehead"><b>pid 556908</b>
+          <span>1 tool call</span>
+          <span>ended: killed (no exit handler ran)</span>
+          <span>busy-wait reached 490ms</span>
+        </div>
+        <div class="track">
+          <div class="mark lease" style="left:0.000%" title="2026-07-31T19:17:15.222Z  +2ms (proc)
+lease_created"></div>
+          <div class="mark meta" style="left:0.027%" title="2026-07-31T19:17:15.223Z  +2ms (proc)
+spawn"></div>
+          <div class="mark rpc" style="left:1.629%" title="2026-07-31T19:17:15.283Z  +62ms (proc)
+rpc_in initialize"></div>
+          <div class="mark rpc" style="left:1.683%" title="2026-07-31T19:17:15.285Z  +64ms (proc)
+rpc_out initialize"></div>
+          <div class="mark rpc" style="left:2.324%" title="2026-07-31T19:17:15.309Z  +88ms (proc)
+rpc_in notifications/initialized"></div>
+          <div class="mark rpc" style="left:2.324%" title="2026-07-31T19:17:15.309Z  +88ms (proc)
+notification_ignored notifications/initialized"></div>
+          <div class="mark rpc" style="left:2.324%" title="2026-07-31T19:17:15.309Z  +88ms (proc)
+rpc_in tools/list"></div>
+          <div class="mark rpc" style="left:2.324%" title="2026-07-31T19:17:15.309Z  +88ms (proc)
+rpc_out tools/list"></div>
+          <div class="mark rpc" style="left:50.454%" title="2026-07-31T19:17:17.111Z  +1890ms (proc)
+rpc_in tools/call"></div>
+          <div class="mark tool" style="left:50.454%" title="2026-07-31T19:17:17.111Z  +1890ms (proc)
+tool_call_begin
+text: f2r3"></div>
+          <div class="mark rpc" style="left:50.481%" title="2026-07-31T19:17:17.112Z  +1891ms (proc)
+rpc_out tools/call"></div>
+          <div class="mark teardown" style="left:86.912%" title="2026-07-31T19:17:18.476Z  +3255ms (proc)
+teardown_trigger SIGINT"></div>
+          <div class="mark lease" style="left:86.912%" title="2026-07-31T19:17:18.476Z  +3255ms (proc)
+lease_unlinked SIGINT
+elapsed: 0.065ms"></div>
+          <div class="mark busywait" style="left:86.912%" title="2026-07-31T19:17:18.476Z  +3255ms (proc)
+busywait_begin SIGINT"></div>
+          <div class="mark busywait" style="left:87.179%" title="2026-07-31T19:17:18.486Z  +3265ms (proc)
+busywait_progress SIGINT
+elapsed: 10ms"></div>
+          <div class="mark busywait" style="left:87.447%" title="2026-07-31T19:17:18.496Z  +3275ms (proc)
+busywait_progress SIGINT
+elapsed: 20ms"></div>
+          <div class="mark busywait" style="left:87.714%" title="2026-07-31T19:17:18.506Z  +3285ms (proc)
+busywait_progress SIGINT
+elapsed: 30ms"></div>
+          <div class="mark busywait" style="left:87.981%" title="2026-07-31T19:17:18.516Z  +3295ms (proc)
+busywait_progress SIGINT
+elapsed: 40ms"></div>
+          <div class="mark busywait" style="left:88.248%" title="2026-07-31T19:17:18.526Z  +3305ms (proc)
+busywait_progress SIGINT
+elapsed: 50ms"></div>
+          <div class="mark busywait" style="left:88.515%" title="2026-07-31T19:17:18.536Z  +3315ms (proc)
+busywait_progress SIGINT
+elapsed: 60ms"></div>
+          <div class="mark busywait" style="left:88.782%" title="2026-07-31T19:17:18.546Z  +3325ms (proc)
+busywait_progress SIGINT
+elapsed: 70ms"></div>
+          <div class="mark busywait" style="left:89.049%" title="2026-07-31T19:17:18.556Z  +3335ms (proc)
+busywait_progress SIGINT
+elapsed: 80ms"></div>
+          <div class="mark busywait" style="left:89.316%" title="2026-07-31T19:17:18.566Z  +3345ms (proc)
+busywait_progress SIGINT
+elapsed: 90ms"></div>
+          <div class="mark busywait" style="left:89.583%" title="2026-07-31T19:17:18.576Z  +3355ms (proc)
+busywait_progress SIGINT
+elapsed: 100ms"></div>
+          <div class="mark busywait" style="left:89.850%" title="2026-07-31T19:17:18.586Z  +3365ms (proc)
+busywait_progress SIGINT
+elapsed: 110ms"></div>
+          <div class="mark busywait" style="left:90.118%" title="2026-07-31T19:17:18.596Z  +3375ms (proc)
+busywait_progress SIGINT
+elapsed: 120ms"></div>
+          <div class="mark busywait" style="left:90.385%" title="2026-07-31T19:17:18.606Z  +3385ms (proc)
+busywait_progress SIGINT
+elapsed: 130ms"></div>
+          <div class="mark busywait" style="left:90.652%" title="2026-07-31T19:17:18.616Z  +3395ms (proc)
+busywait_progress SIGINT
+elapsed: 140ms"></div>
+          <div class="mark busywait" style="left:90.919%" title="2026-07-31T19:17:18.626Z  +3405ms (proc)
+busywait_progress SIGINT
+elapsed: 150ms"></div>
+          <div class="mark busywait" style="left:91.186%" title="2026-07-31T19:17:18.636Z  +3415ms (proc)
+busywait_progress SIGINT
+elapsed: 160ms"></div>
+          <div class="mark busywait" style="left:91.453%" title="2026-07-31T19:17:18.646Z  +3425ms (proc)
+busywait_progress SIGINT
+elapsed: 170ms"></div>
+          <div class="mark busywait" style="left:91.720%" title="2026-07-31T19:17:18.656Z  +3435ms (proc)
+busywait_progress SIGINT
+elapsed: 180ms"></div>
+          <div class="mark busywait" style="left:91.987%" title="2026-07-31T19:17:18.666Z  +3445ms (proc)
+busywait_progress SIGINT
+elapsed: 190ms"></div>
+          <div class="mark busywait" style="left:92.254%" title="2026-07-31T19:17:18.676Z  +3455ms (proc)
+busywait_progress SIGINT
+elapsed: 200ms"></div>
+          <div class="mark busywait" style="left:92.521%" title="2026-07-31T19:17:18.686Z  +3465ms (proc)
+busywait_progress SIGINT
+elapsed: 210ms"></div>
+          <div class="mark busywait" style="left:92.788%" title="2026-07-31T19:17:18.696Z  +3475ms (proc)
+busywait_progress SIGINT
+elapsed: 220ms"></div>
+          <div class="mark busywait" style="left:93.056%" title="2026-07-31T19:17:18.706Z  +3485ms (proc)
+busywait_progress SIGINT
+elapsed: 230ms"></div>
+          <div class="mark busywait" style="left:93.323%" title="2026-07-31T19:17:18.716Z  +3495ms (proc)
+busywait_progress SIGINT
+elapsed: 240ms"></div>
+          <div class="mark busywait" style="left:93.590%" title="2026-07-31T19:17:18.726Z  +3505ms (proc)
+busywait_progress SIGINT
+elapsed: 250ms"></div>
+          <div class="mark busywait" style="left:93.857%" title="2026-07-31T19:17:18.736Z  +3515ms (proc)
+busywait_progress SIGINT
+elapsed: 260ms"></div>
+          <div class="mark busywait" style="left:94.124%" title="2026-07-31T19:17:18.746Z  +3525ms (proc)
+busywait_progress SIGINT
+elapsed: 270ms"></div>
+          <div class="mark busywait" style="left:94.391%" title="2026-07-31T19:17:18.756Z  +3535ms (proc)
+busywait_progress SIGINT
+elapsed: 280ms"></div>
+          <div class="mark busywait" style="left:94.658%" title="2026-07-31T19:17:18.766Z  +3545ms (proc)
+busywait_progress SIGINT
+elapsed: 290ms"></div>
+          <div class="mark busywait" style="left:94.925%" title="2026-07-31T19:17:18.776Z  +3555ms (proc)
+busywait_progress SIGINT
+elapsed: 300ms"></div>
+          <div class="mark busywait" style="left:95.192%" title="2026-07-31T19:17:18.786Z  +3565ms (proc)
+busywait_progress SIGINT
+elapsed: 310ms"></div>
+          <div class="mark busywait" style="left:95.459%" title="2026-07-31T19:17:18.796Z  +3575ms (proc)
+busywait_progress SIGINT
+elapsed: 320ms"></div>
+          <div class="mark busywait" style="left:95.726%" title="2026-07-31T19:17:18.806Z  +3585ms (proc)
+busywait_progress SIGINT
+elapsed: 330ms"></div>
+          <div class="mark busywait" style="left:95.994%" title="2026-07-31T19:17:18.816Z  +3595ms (proc)
+busywait_progress SIGINT
+elapsed: 340ms"></div>
+          <div class="mark busywait" style="left:96.261%" title="2026-07-31T19:17:18.826Z  +3605ms (proc)
+busywait_progress SIGINT
+elapsed: 350ms"></div>
+          <div class="mark busywait" style="left:96.528%" title="2026-07-31T19:17:18.836Z  +3615ms (proc)
+busywait_progress SIGINT
+elapsed: 360ms"></div>
+          <div class="mark busywait" style="left:96.795%" title="2026-07-31T19:17:18.846Z  +3625ms (proc)
+busywait_progress SIGINT
+elapsed: 370ms"></div>
+          <div class="mark busywait" style="left:97.062%" title="2026-07-31T19:17:18.856Z  +3635ms (proc)
+busywait_progress SIGINT
+elapsed: 380ms"></div>
+          <div class="mark busywait" style="left:97.329%" title="2026-07-31T19:17:18.866Z  +3645ms (proc)
+busywait_progress SIGINT
+elapsed: 390ms"></div>
+          <div class="mark busywait" style="left:97.596%" title="2026-07-31T19:17:18.876Z  +3655ms (proc)
+busywait_progress SIGINT
+elapsed: 400ms"></div>
+          <div class="mark busywait" style="left:97.863%" title="2026-07-31T19:17:18.886Z  +3665ms (proc)
+busywait_progress SIGINT
+elapsed: 410ms"></div>
+          <div class="mark busywait" style="left:98.130%" title="2026-07-31T19:17:18.896Z  +3675ms (proc)
+busywait_progress SIGINT
+elapsed: 420ms"></div>
+          <div class="mark busywait" style="left:98.397%" title="2026-07-31T19:17:18.906Z  +3685ms (proc)
+busywait_progress SIGINT
+elapsed: 430ms"></div>
+          <div class="mark busywait" style="left:98.665%" title="2026-07-31T19:17:18.916Z  +3695ms (proc)
+busywait_progress SIGINT
+elapsed: 440ms"></div>
+          <div class="mark busywait" style="left:98.932%" title="2026-07-31T19:17:18.926Z  +3705ms (proc)
+busywait_progress SIGINT
+elapsed: 450ms"></div>
+          <div class="mark busywait" style="left:99.199%" title="2026-07-31T19:17:18.936Z  +3715ms (proc)
+busywait_progress SIGINT
+elapsed: 460ms"></div>
+          <div class="mark busywait" style="left:99.466%" title="2026-07-31T19:17:18.946Z  +3725ms (proc)
+busywait_progress SIGINT
+elapsed: 470ms"></div>
+          <div class="mark busywait" style="left:99.733%" title="2026-07-31T19:17:18.956Z  +3735ms (proc)
+busywait_progress SIGINT
+elapsed: 480ms"></div>
+          <div class="mark busywait" style="left:100.000%" title="2026-07-31T19:17:18.966Z  +3745ms (proc)
+busywait_progress SIGINT
+elapsed: 490ms"></div>
+        </div>
+        <div class="ladder">ladder: <b>SIGINT</b></div>
+      </div>
+    </div>
+  </section>
+  <section class="block">
+    <h2>f3-stdin-close</h2>
+    <div class="meta">
+      <span class="pill">1 proxy subprocess</span>
+      <span class="pill">5913 ms wall</span>
+    </div>
+    <div class="scroller">
+      <div class="lane">
+        <div class="lanehead"><b>pid 557159</b>
+          <span>1 tool call</span>
+          <span>ended: killed (no exit handler ran)</span>
+          
+        </div>
+        <div class="track">
+          <div class="mark lease" style="left:0.000%" title="2026-07-31T19:17:42.428Z  +1ms (proc)
+lease_created"></div>
+          <div class="mark meta" style="left:0.017%" title="2026-07-31T19:17:42.429Z  +1ms (proc)
+spawn"></div>
+          <div class="mark rpc" style="left:0.846%" title="2026-07-31T19:17:42.478Z  +51ms (proc)
+rpc_in initialize"></div>
+          <div class="mark rpc" style="left:0.863%" title="2026-07-31T19:17:42.479Z  +51ms (proc)
+rpc_out initialize"></div>
+          <div class="mark rpc" style="left:1.421%" title="2026-07-31T19:17:42.512Z  +85ms (proc)
+rpc_in notifications/initialized"></div>
+          <div class="mark rpc" style="left:1.421%" title="2026-07-31T19:17:42.512Z  +85ms (proc)
+notification_ignored notifications/initialized"></div>
+          <div class="mark rpc" style="left:1.438%" title="2026-07-31T19:17:42.513Z  +85ms (proc)
+rpc_in tools/list"></div>
+          <div class="mark rpc" style="left:1.438%" title="2026-07-31T19:17:42.513Z  +85ms (proc)
+rpc_out tools/list"></div>
+          <div class="mark rpc" style="left:31.219%" title="2026-07-31T19:17:44.274Z  +1846ms (proc)
+rpc_in tools/call"></div>
+          <div class="mark tool" style="left:31.219%" title="2026-07-31T19:17:44.274Z  +1846ms (proc)
+tool_call_begin
+text: f3-stdin-close"></div>
+          <div class="mark rpc" style="left:31.219%" title="2026-07-31T19:17:44.274Z  +1847ms (proc)
+rpc_out tools/call"></div>
+          <div class="mark teardown" style="left:98.309%" title="2026-07-31T19:17:48.241Z  +5813ms (proc)
+teardown_trigger SIGINT"></div>
+          <div class="mark lease" style="left:98.309%" title="2026-07-31T19:17:48.241Z  +5814ms (proc)
+lease_unlinked SIGINT
+elapsed: 0.171ms"></div>
+          <div class="mark teardown" style="left:100.000%" title="2026-07-31T19:17:48.341Z  +5913ms (proc)
+teardown_trigger SIGTERM"></div>
+        </div>
+        <div class="ladder">ladder: <b>SIGINT</b> → <b>SIGTERM</b></div>
+      </div>
+    </div>
+  </section>
+  <section class="block">
+    <h2>f4-client-sigkill</h2>
+    <div class="meta">
+      <span class="pill">1 proxy subprocess</span>
+      <span class="pill">5809 ms wall</span>
+    </div>
+    <div class="scroller">
+      <div class="lane">
+        <div class="lanehead"><b>pid 557338</b>
+          <span>1 tool call</span>
+          <span>ended: normal exit</span>
+          
+        </div>
+        <div class="track">
+          <div class="mark lease" style="left:0.000%" title="2026-07-31T19:17:58.210Z  +1ms (proc)
+lease_created"></div>
+          <div class="mark meta" style="left:0.000%" title="2026-07-31T19:17:58.210Z  +1ms (proc)
+spawn"></div>
+          <div class="mark rpc" style="left:0.826%" title="2026-07-31T19:17:58.258Z  +49ms (proc)
+rpc_in initialize"></div>
+          <div class="mark rpc" style="left:0.844%" title="2026-07-31T19:17:58.259Z  +50ms (proc)
+rpc_out initialize"></div>
+          <div class="mark rpc" style="left:1.429%" title="2026-07-31T19:17:58.293Z  +84ms (proc)
+rpc_in notifications/initialized"></div>
+          <div class="mark rpc" style="left:1.429%" title="2026-07-31T19:17:58.293Z  +85ms (proc)
+notification_ignored notifications/initialized"></div>
+          <div class="mark rpc" style="left:1.429%" title="2026-07-31T19:17:58.293Z  +85ms (proc)
+rpc_in tools/list"></div>
+          <div class="mark rpc" style="left:1.446%" title="2026-07-31T19:17:58.294Z  +85ms (proc)
+rpc_out tools/list"></div>
+          <div class="mark rpc" style="left:36.874%" title="2026-07-31T19:18:00.352Z  +2143ms (proc)
+rpc_in tools/call"></div>
+          <div class="mark tool" style="left:36.874%" title="2026-07-31T19:18:00.352Z  +2143ms (proc)
+tool_call_begin
+text: f4-client-sigkill"></div>
+          <div class="mark rpc" style="left:36.874%" title="2026-07-31T19:18:00.352Z  +2144ms (proc)
+rpc_out tools/call"></div>
+          <div class="mark teardown" style="left:99.931%" title="2026-07-31T19:18:04.015Z  +5807ms (proc)
+teardown_trigger stdin_end"></div>
+          <div class="mark lease" style="left:99.966%" title="2026-07-31T19:18:04.017Z  +5808ms (proc)
+lease_unlinked stdin_end
+elapsed: 1.084ms"></div>
+          <div class="mark teardown" style="left:99.983%" title="2026-07-31T19:18:04.018Z  +5810ms (proc)
+teardown_trigger stdin_close"></div>
+          <div class="mark teardown" style="left:100.000%" title="2026-07-31T19:18:04.019Z  +5810ms (proc)
+exit"></div>
+        </div>
+        <div class="ladder">ladder: <b>stdin_end</b> → <b>stdin_close</b></div>
+      </div>
+    </div>
+  </section>
+  <section class="block">
+    <h2>f5-client-sigterm</h2>
+    <div class="meta">
+      <span class="pill">1 proxy subprocess</span>
+      <span class="pill">7547 ms wall</span>
+    </div>
+    <div class="scroller">
+      <div class="lane">
+        <div class="lanehead"><b>pid 557454</b>
+          <span>1 tool call</span>
+          <span>ended: killed (no exit handler ran)</span>
+          
+        </div>
+        <div class="track">
+          <div class="mark lease" style="left:0.000%" title="2026-07-31T19:18:06.750Z  +1ms (proc)
+lease_created"></div>
+          <div class="mark meta" style="left:0.000%" title="2026-07-31T19:18:06.750Z  +1ms (proc)
+spawn"></div>
+          <div class="mark rpc" style="left:1.087%" title="2026-07-31T19:18:06.832Z  +83ms (proc)
+rpc_in initialize"></div>
+          <div class="mark rpc" style="left:1.166%" title="2026-07-31T19:18:06.838Z  +89ms (proc)
+rpc_out initialize"></div>
+          <div class="mark rpc" style="left:1.630%" title="2026-07-31T19:18:06.873Z  +123ms (proc)
+rpc_in notifications/initialized"></div>
+          <div class="mark rpc" style="left:1.630%" title="2026-07-31T19:18:06.873Z  +124ms (proc)
+notification_ignored notifications/initialized"></div>
+          <div class="mark rpc" style="left:1.630%" title="2026-07-31T19:18:06.873Z  +124ms (proc)
+rpc_in tools/list"></div>
+          <div class="mark rpc" style="left:1.630%" title="2026-07-31T19:18:06.873Z  +124ms (proc)
+rpc_out tools/list"></div>
+          <div class="mark rpc" style="left:34.199%" title="2026-07-31T19:18:09.331Z  +2581ms (proc)
+rpc_in tools/call"></div>
+          <div class="mark tool" style="left:34.199%" title="2026-07-31T19:18:09.331Z  +2582ms (proc)
+tool_call_begin
+text: f5-client-sigterm"></div>
+          <div class="mark rpc" style="left:34.199%" title="2026-07-31T19:18:09.331Z  +2582ms (proc)
+rpc_out tools/call"></div>
+          <div class="mark teardown" style="left:98.675%" title="2026-07-31T19:18:14.197Z  +7448ms (proc)
+teardown_trigger SIGINT"></div>
+          <div class="mark lease" style="left:98.675%" title="2026-07-31T19:18:14.197Z  +7448ms (proc)
+lease_unlinked SIGINT
+elapsed: 0.117ms"></div>
+          <div class="mark rpc" style="left:98.887%" title="2026-07-31T19:18:14.213Z  +7463ms (proc)
+rpc_in notifications/cancelled"></div>
+          <div class="mark rpc" style="left:98.887%" title="2026-07-31T19:18:14.213Z  +7464ms (proc)
+notification_ignored notifications/cancelled"></div>
+          <div class="mark teardown" style="left:100.000%" title="2026-07-31T19:18:14.297Z  +7548ms (proc)
+teardown_trigger SIGTERM"></div>
+        </div>
+        <div class="ladder">ladder: <b>SIGINT</b> → <b>SIGTERM</b></div>
+      </div>
+    </div>
+  </section>
+  <section class="block">
+    <h2>f6-sigkill-busywait</h2>
+    <div class="meta">
+      <span class="pill">1 proxy subprocess</span>
+      <span class="pill">13910 ms wall</span>
+    </div>
+    <div class="scroller">
+      <div class="lane">
+        <div class="lanehead"><b>pid 557850</b>
+          <span>1 tool call</span>
+          <span>ended: normal exit</span>
+          <span>busy-wait reached 8000ms</span>
+        </div>
+        <div class="track">
+          <div class="mark lease" style="left:0.000%" title="2026-07-31T19:19:08.273Z  +1ms (proc)
+lease_created"></div>
+          <div class="mark meta" style="left:0.000%" title="2026-07-31T19:19:08.273Z  +1ms (proc)
+spawn"></div>
+          <div class="mark rpc" style="left:0.381%" title="2026-07-31T19:19:08.326Z  +54ms (proc)
+rpc_in initialize"></div>
+          <div class="mark rpc" style="left:0.395%" title="2026-07-31T19:19:08.328Z  +55ms (proc)
+rpc_out initialize"></div>
+          <div class="mark rpc" style="left:0.525%" title="2026-07-31T19:19:08.346Z  +74ms (proc)
+rpc_in notifications/initialized"></div>
+          <div class="mark rpc" style="left:0.525%" title="2026-07-31T19:19:08.346Z  +74ms (proc)
+notification_ignored notifications/initialized"></div>
+          <div class="mark rpc" style="left:0.525%" title="2026-07-31T19:19:08.346Z  +74ms (proc)
+rpc_in tools/list"></div>
+          <div class="mark rpc" style="left:0.525%" title="2026-07-31T19:19:08.346Z  +74ms (proc)
+rpc_out tools/list"></div>
+          <div class="mark rpc" style="left:14.450%" title="2026-07-31T19:19:10.283Z  +2010ms (proc)
+rpc_in tools/call"></div>
+          <div class="mark tool" style="left:14.450%" title="2026-07-31T19:19:10.283Z  +2011ms (proc)
+tool_call_begin
+text: f6-sigkill-busywait"></div>
+          <div class="mark rpc" style="left:14.450%" title="2026-07-31T19:19:10.283Z  +2011ms (proc)
+rpc_out tools/call"></div>
+          <div class="mark teardown" style="left:42.473%" title="2026-07-31T19:19:14.181Z  +5909ms (proc)
+teardown_trigger stdin_end"></div>
+          <div class="mark lease" style="left:42.480%" title="2026-07-31T19:19:14.182Z  +5910ms (proc)
+lease_unlinked stdin_end
+elapsed: 0.228ms"></div>
+          <div class="mark busywait" style="left:42.480%" title="2026-07-31T19:19:14.182Z  +5910ms (proc)
+busywait_begin stdin_end"></div>
+          <div class="mark busywait" style="left:42.559%" title="2026-07-31T19:19:14.193Z  +5921ms (proc)
+busywait_progress stdin_end
+elapsed: 11ms"></div>
+          <div class="mark busywait" style="left:42.624%" title="2026-07-31T19:19:14.202Z  +5930ms (proc)
+busywait_progress stdin_end
+elapsed: 20ms"></div>
+          <div class="mark busywait" style="left:42.696%" title="2026-07-31T19:19:14.212Z  +5940ms (proc)
+busywait_progress stdin_end
+elapsed: 30ms"></div>
+          <div class="mark busywait" style="left:42.768%" title="2026-07-31T19:19:14.222Z  +5950ms (proc)
+busywait_progress stdin_end
+elapsed: 40ms"></div>
+          <div class="mark busywait" style="left:42.840%" title="2026-07-31T19:19:14.232Z  +5960ms (proc)
+busywait_progress stdin_end
+elapsed: 50ms"></div>
+          <div class="mark busywait" style="left:42.912%" title="2026-07-31T19:19:14.242Z  +5970ms (proc)
+busywait_progress stdin_end
+elapsed: 60ms"></div>
+          <div class="mark busywait" style="left:42.983%" title="2026-07-31T19:19:14.252Z  +5980ms (proc)
+busywait_progress stdin_end
+elapsed: 70ms"></div>
+          <div class="mark busywait" style="left:43.055%" title="2026-07-31T19:19:14.262Z  +5990ms (proc)
+busywait_progress stdin_end
+elapsed: 80ms"></div>
+          <div class="mark busywait" style="left:43.127%" title="2026-07-31T19:19:14.272Z  +6000ms (proc)
+busywait_progress stdin_end
+elapsed: 90ms"></div>
+          <div class="mark busywait" style="left:43.199%" title="2026-07-31T19:19:14.282Z  +6010ms (proc)
+busywait_progress stdin_end
+elapsed: 100ms"></div>
+          <div class="mark busywait" style="left:43.271%" title="2026-07-31T19:19:14.292Z  +6020ms (proc)
+busywait_progress stdin_end
+elapsed: 110ms"></div>
+          <div class="mark busywait" style="left:43.343%" title="2026-07-31T19:19:14.302Z  +6030ms (proc)
+busywait_progress stdin_end
+elapsed: 120ms"></div>
+          <div class="mark busywait" style="left:43.415%" title="2026-07-31T19:19:14.312Z  +6040ms (proc)
+busywait_progress stdin_end
+elapsed: 130ms"></div>
+          <div class="mark busywait" style="left:43.487%" title="2026-07-31T19:19:14.322Z  +6050ms (proc)
+busywait_progress stdin_end
+elapsed: 140ms"></div>
+          <div class="mark busywait" style="left:43.559%" title="2026-07-31T19:19:14.332Z  +6060ms (proc)
+busywait_progress stdin_end
+elapsed: 150ms"></div>
+          <div class="mark busywait" style="left:43.630%" title="2026-07-31T19:19:14.342Z  +6070ms (proc)
+busywait_progress stdin_end
+elapsed: 160ms"></div>
+          <div class="mark busywait" style="left:43.702%" title="2026-07-31T19:19:14.352Z  +6080ms (proc)
+busywait_progress stdin_end
+elapsed: 170ms"></div>
+          <div class="mark busywait" style="left:43.774%" title="2026-07-31T19:19:14.362Z  +6090ms (proc)
+busywait_progress stdin_end
+elapsed: 180ms"></div>
+          <div class="mark busywait" style="left:43.846%" title="2026-07-31T19:19:14.372Z  +6100ms (proc)
+busywait_progress stdin_end
+elapsed: 190ms"></div>
+          <div class="mark busywait" style="left:43.918%" title="2026-07-31T19:19:14.382Z  +6110ms (proc)
+busywait_progress stdin_end
+elapsed: 200ms"></div>
+          <div class="mark busywait" style="left:43.990%" title="2026-07-31T19:19:14.392Z  +6120ms (proc)
+busywait_progress stdin_end
+elapsed: 210ms"></div>
+          <div class="mark busywait" style="left:44.062%" title="2026-07-31T19:19:14.402Z  +6130ms (proc)
+busywait_progress stdin_end
+elapsed: 220ms"></div>
+          <div class="mark busywait" style="left:44.134%" title="2026-07-31T19:19:14.412Z  +6140ms (proc)
+busywait_progress stdin_end
+elapsed: 230ms"></div>
+          <div class="mark busywait" style="left:44.206%" title="2026-07-31T19:19:14.422Z  +6150ms (proc)
+busywait_progress stdin_end
+elapsed: 240ms"></div>
+          <div class="mark busywait" style="left:44.277%" title="2026-07-31T19:19:14.432Z  +6160ms (proc)
+busywait_progress stdin_end
+elapsed: 250ms"></div>
+          <div class="mark busywait" style="left:44.349%" title="2026-07-31T19:19:14.442Z  +6170ms (proc)
+busywait_progress stdin_end
+elapsed: 260ms"></div>
+          <div class="mark busywait" style="left:44.421%" title="2026-07-31T19:19:14.452Z  +6180ms (proc)
+busywait_progress stdin_end
+elapsed: 270ms"></div>
+          <div class="mark busywait" style="left:44.493%" title="2026-07-31T19:19:14.462Z  +6190ms (proc)
+busywait_progress stdin_end
+elapsed: 280ms"></div>
+          <div class="mark busywait" style="left:44.565%" title="2026-07-31T19:19:14.472Z  +6200ms (proc)
+busywait_progress stdin_end
+elapsed: 290ms"></div>
+          <div class="mark busywait" style="left:44.637%" title="2026-07-31T19:19:14.482Z  +6210ms (proc)
+busywait_progress stdin_end
+elapsed: 300ms"></div>
+          <div class="mark busywait" style="left:44.709%" title="2026-07-31T19:19:14.492Z  +6220ms (proc)
+busywait_progress stdin_end
+elapsed: 310ms"></div>
+          <div class="mark busywait" style="left:44.781%" title="2026-07-31T19:19:14.502Z  +6230ms (proc)
+busywait_progress stdin_end
+elapsed: 320ms"></div>
+          <div class="mark busywait" style="left:44.853%" title="2026-07-31T19:19:14.512Z  +6240ms (proc)
+busywait_progress stdin_end
+elapsed: 330ms"></div>
+          <div class="mark busywait" style="left:44.925%" title="2026-07-31T19:19:14.522Z  +6250ms (proc)
+busywait_progress stdin_end
+elapsed: 340ms"></div>
+          <div class="mark busywait" style="left:44.996%" title="2026-07-31T19:19:14.532Z  +6260ms (proc)
+busywait_progress stdin_end
+elapsed: 350ms"></div>
+          <div class="mark busywait" style="left:45.068%" title="2026-07-31T19:19:14.542Z  +6270ms (proc)
+busywait_progress stdin_end
+elapsed: 360ms"></div>
+          <div class="mark busywait" style="left:45.140%" title="2026-07-31T19:19:14.552Z  +6280ms (proc)
+busywait_progress stdin_end
+elapsed: 370ms"></div>
+          <div class="mark busywait" style="left:45.212%" title="2026-07-31T19:19:14.562Z  +6290ms (proc)
+busywait_progress stdin_end
+elapsed: 380ms"></div>
+          <div class="mark busywait" style="left:45.284%" title="2026-07-31T19:19:14.572Z  +6300ms (proc)
+busywait_progress stdin_end
+elapsed: 390ms"></div>
+          <div class="mark busywait" style="left:45.356%" title="2026-07-31T19:19:14.582Z  +6310ms (proc)
+busywait_progress stdin_end
+elapsed: 400ms"></div>
+          <div class="mark busywait" style="left:45.428%" title="2026-07-31T19:19:14.592Z  +6320ms (proc)
+busywait_progress stdin_end
+elapsed: 410ms"></div>
+          <div class="mark busywait" style="left:45.500%" title="2026-07-31T19:19:14.602Z  +6330ms (proc)
+busywait_progress stdin_end
+elapsed: 420ms"></div>
+          <div class="mark busywait" style="left:45.572%" title="2026-07-31T19:19:14.612Z  +6340ms (proc)
+busywait_progress stdin_end
+elapsed: 430ms"></div>
+          <div class="mark busywait" style="left:45.643%" title="2026-07-31T19:19:14.622Z  +6350ms (proc)
+busywait_progress stdin_end
+elapsed: 440ms"></div>
+          <div class="mark busywait" style="left:45.715%" title="2026-07-31T19:19:14.632Z  +6360ms (proc)
+busywait_progress stdin_end
+elapsed: 450ms"></div>
+          <div class="mark busywait" style="left:45.787%" title="2026-07-31T19:19:14.642Z  +6370ms (proc)
+busywait_progress stdin_end
+elapsed: 460ms"></div>
+          <div class="mark busywait" style="left:45.859%" title="2026-07-31T19:19:14.652Z  +6380ms (proc)
+busywait_progress stdin_end
+elapsed: 470ms"></div>
+          <div class="mark busywait" style="left:45.931%" title="2026-07-31T19:19:14.662Z  +6390ms (proc)
+busywait_progress stdin_end
+elapsed: 480ms"></div>
+          <div class="mark busywait" style="left:46.003%" title="2026-07-31T19:19:14.672Z  +6400ms (proc)
+busywait_progress stdin_end
+elapsed: 490ms"></div>
+          <div class="mark busywait" style="left:46.075%" title="2026-07-31T19:19:14.682Z  +6410ms (proc)
+busywait_progress stdin_end
+elapsed: 500ms"></div>
+          <div class="mark busywait" style="left:46.147%" title="2026-07-31T19:19:14.692Z  +6420ms (proc)
+busywait_progress stdin_end
+elapsed: 510ms"></div>
+          <div class="mark busywait" style="left:46.219%" title="2026-07-31T19:19:14.702Z  +6430ms (proc)
+busywait_progress stdin_end
+elapsed: 520ms"></div>
+          <div class="mark busywait" style="left:46.290%" title="2026-07-31T19:19:14.712Z  +6440ms (proc)
+busywait_progress stdin_end
+elapsed: 530ms"></div>
+          <div class="mark busywait" style="left:46.362%" title="2026-07-31T19:19:14.722Z  +6450ms (proc)
+busywait_progress stdin_end
+elapsed: 540ms"></div>
+          <div class="mark busywait" style="left:46.434%" title="2026-07-31T19:19:14.732Z  +6460ms (proc)
+busywait_progress stdin_end
+elapsed: 550ms"></div>
+          <div class="mark busywait" style="left:46.506%" title="2026-07-31T19:19:14.742Z  +6470ms (proc)
+busywait_progress stdin_end
+elapsed: 560ms"></div>
+          <div class="mark busywait" style="left:46.578%" title="2026-07-31T19:19:14.752Z  +6480ms (proc)
+busywait_progress stdin_end
+elapsed: 570ms"></div>
+          <div class="mark busywait" style="left:46.650%" title="2026-07-31T19:19:14.762Z  +6490ms (proc)
+busywait_progress stdin_end
+elapsed: 580ms"></div>
+          <div class="mark busywait" style="left:46.722%" title="2026-07-31T19:19:14.772Z  +6500ms (proc)
+busywait_progress stdin_end
+elapsed: 590ms"></div>
+          <div class="mark busywait" style="left:46.794%" title="2026-07-31T19:19:14.782Z  +6510ms (proc)
+busywait_progress stdin_end
+elapsed: 600ms"></div>
+          <div class="mark busywait" style="left:46.866%" title="2026-07-31T19:19:14.792Z  +6520ms (proc)
+busywait_progress stdin_end
+elapsed: 610ms"></div>
+          <div class="mark busywait" style="left:46.937%" title="2026-07-31T19:19:14.802Z  +6530ms (proc)
+busywait_progress stdin_end
+elapsed: 620ms"></div>
+          <div class="mark busywait" style="left:47.009%" title="2026-07-31T19:19:14.812Z  +6540ms (proc)
+busywait_progress stdin_end
+elapsed: 630ms"></div>
+          <div class="mark busywait" style="left:47.081%" title="2026-07-31T19:19:14.822Z  +6550ms (proc)
+busywait_progress stdin_end
+elapsed: 640ms"></div>
+          <div class="mark busywait" style="left:47.153%" title="2026-07-31T19:19:14.832Z  +6560ms (proc)
+busywait_progress stdin_end
+elapsed: 650ms"></div>
+          <div class="mark busywait" style="left:47.225%" title="2026-07-31T19:19:14.842Z  +6570ms (proc)
+busywait_progress stdin_end
+elapsed: 660ms"></div>
+          <div class="mark busywait" style="left:47.297%" title="2026-07-31T19:19:14.852Z  +6580ms (proc)
+busywait_progress stdin_end
+elapsed: 670ms"></div>
+          <div class="mark busywait" style="left:47.369%" title="2026-07-31T19:19:14.862Z  +6590ms (proc)
+busywait_progress stdin_end
+elapsed: 680ms"></div>
+          <div class="mark busywait" style="left:47.441%" title="2026-07-31T19:19:14.872Z  +6600ms (proc)
+busywait_progress stdin_end
+elapsed: 690ms"></div>
+          <div class="mark busywait" style="left:47.513%" title="2026-07-31T19:19:14.882Z  +6610ms (proc)
+busywait_progress stdin_end
+elapsed: 700ms"></div>
+          <div class="mark busywait" style="left:47.584%" title="2026-07-31T19:19:14.892Z  +6620ms (proc)
+busywait_progress stdin_end
+elapsed: 710ms"></div>
+          <div class="mark busywait" style="left:47.656%" title="2026-07-31T19:19:14.902Z  +6630ms (proc)
+busywait_progress stdin_end
+elapsed: 720ms"></div>
+          <div class="mark busywait" style="left:47.728%" title="2026-07-31T19:19:14.912Z  +6640ms (proc)
+busywait_progress stdin_end
+elapsed: 730ms"></div>
+          <div class="mark busywait" style="left:47.800%" title="2026-07-31T19:19:14.922Z  +6650ms (proc)
+busywait_progress stdin_end
+elapsed: 740ms"></div>
+          <div class="mark busywait" style="left:47.872%" title="2026-07-31T19:19:14.932Z  +6660ms (proc)
+busywait_progress stdin_end
+elapsed: 750ms"></div>
+          <div class="mark busywait" style="left:47.944%" title="2026-07-31T19:19:14.942Z  +6670ms (proc)
+busywait_progress stdin_end
+elapsed: 760ms"></div>
+          <div class="mark busywait" style="left:48.016%" title="2026-07-31T19:19:14.952Z  +6680ms (proc)
+busywait_progress stdin_end
+elapsed: 770ms"></div>
+          <div class="mark busywait" style="left:48.088%" title="2026-07-31T19:19:14.962Z  +6690ms (proc)
+busywait_progress stdin_end
+elapsed: 780ms"></div>
+          <div class="mark busywait" style="left:48.160%" title="2026-07-31T19:19:14.972Z  +6700ms (proc)
+busywait_progress stdin_end
+elapsed: 790ms"></div>
+          <div class="mark busywait" style="left:48.231%" title="2026-07-31T19:19:14.982Z  +6710ms (proc)
+busywait_progress stdin_end
+elapsed: 800ms"></div>
+          <div class="mark busywait" style="left:48.303%" title="2026-07-31T19:19:14.992Z  +6720ms (proc)
+busywait_progress stdin_end
+elapsed: 810ms"></div>
+          <div class="mark busywait" style="left:48.375%" title="2026-07-31T19:19:15.002Z  +6730ms (proc)
+busywait_progress stdin_end
+elapsed: 820ms"></div>
+          <div class="mark busywait" style="left:48.447%" title="2026-07-31T19:19:15.012Z  +6740ms (proc)
+busywait_progress stdin_end
+elapsed: 830ms"></div>
+          <div class="mark busywait" style="left:48.519%" title="2026-07-31T19:19:15.022Z  +6750ms (proc)
+busywait_progress stdin_end
+elapsed: 840ms"></div>
+          <div class="mark busywait" style="left:48.591%" title="2026-07-31T19:19:15.032Z  +6760ms (proc)
+busywait_progress stdin_end
+elapsed: 850ms"></div>
+          <div class="mark busywait" style="left:48.663%" title="2026-07-31T19:19:15.042Z  +6770ms (proc)
+busywait_progress stdin_end
+elapsed: 860ms"></div>
+          <div class="mark busywait" style="left:48.735%" title="2026-07-31T19:19:15.052Z  +6780ms (proc)
+busywait_progress stdin_end
+elapsed: 870ms"></div>
+          <div class="mark busywait" style="left:48.807%" title="2026-07-31T19:19:15.062Z  +6790ms (proc)
+busywait_progress stdin_end
+elapsed: 880ms"></div>
+          <div class="mark busywait" style="left:48.879%" title="2026-07-31T19:19:15.072Z  +6800ms (proc)
+busywait_progress stdin_end
+elapsed: 890ms"></div>
+          <div class="mark busywait" style="left:48.950%" title="2026-07-31T19:19:15.082Z  +6810ms (proc)
+busywait_progress stdin_end
+elapsed: 900ms"></div>
+          <div class="mark busywait" style="left:49.022%" title="2026-07-31T19:19:15.092Z  +6820ms (proc)
+busywait_progress stdin_end
+elapsed: 910ms"></div>
+          <div class="mark busywait" style="left:49.094%" title="2026-07-31T19:19:15.102Z  +6830ms (proc)
+busywait_progress stdin_end
+elapsed: 920ms"></div>
+          <div class="mark busywait" style="left:49.166%" title="2026-07-31T19:19:15.112Z  +6840ms (proc)
+busywait_progress stdin_end
+elapsed: 930ms"></div>
+          <div class="mark busywait" style="left:49.238%" title="2026-07-31T19:19:15.122Z  +6850ms (proc)
+busywait_progress stdin_end
+elapsed: 940ms"></div>
+          <div class="mark busywait" style="left:49.310%" title="2026-07-31T19:19:15.132Z  +6860ms (proc)
+busywait_progress stdin_end
+elapsed: 950ms"></div>
+          <div class="mark busywait" style="left:49.382%" title="2026-07-31T19:19:15.142Z  +6870ms (proc)
+busywait_progress stdin_end
+elapsed: 960ms"></div>
+          <div class="mark busywait" style="left:49.454%" title="2026-07-31T19:19:15.152Z  +6880ms (proc)
+busywait_progress stdin_end
+elapsed: 970ms"></div>
+          <div class="mark busywait" style="left:49.526%" title="2026-07-31T19:19:15.162Z  +6890ms (proc)
+busywait_progress stdin_end
+elapsed: 980ms"></div>
+          <div class="mark busywait" style="left:49.597%" title="2026-07-31T19:19:15.172Z  +6900ms (proc)
+busywait_progress stdin_end
+elapsed: 990ms"></div>
+          <div class="mark busywait" style="left:49.669%" title="2026-07-31T19:19:15.182Z  +6910ms (proc)
+busywait_progress stdin_end
+elapsed: 1000ms"></div>
+          <div class="mark busywait" style="left:49.741%" title="2026-07-31T19:19:15.192Z  +6920ms (proc)
+busywait_progress stdin_end
+elapsed: 1010ms"></div>
+          <div class="mark busywait" style="left:49.813%" title="2026-07-31T19:19:15.202Z  +6930ms (proc)
+busywait_progress stdin_end
+elapsed: 1020ms"></div>
+          <div class="mark busywait" style="left:49.885%" title="2026-07-31T19:19:15.212Z  +6940ms (proc)
+busywait_progress stdin_end
+elapsed: 1030ms"></div>
+          <div class="mark busywait" style="left:49.957%" title="2026-07-31T19:19:15.222Z  +6950ms (proc)
+busywait_progress stdin_end
+elapsed: 1040ms"></div>
+          <div class="mark busywait" style="left:50.029%" title="2026-07-31T19:19:15.232Z  +6960ms (proc)
+busywait_progress stdin_end
+elapsed: 1050ms"></div>
+          <div class="mark busywait" style="left:50.101%" title="2026-07-31T19:19:15.242Z  +6970ms (proc)
+busywait_progress stdin_end
+elapsed: 1060ms"></div>
+          <div class="mark busywait" style="left:50.173%" title="2026-07-31T19:19:15.252Z  +6980ms (proc)
+busywait_progress stdin_end
+elapsed: 1070ms"></div>
+          <div class="mark busywait" style="left:50.244%" title="2026-07-31T19:19:15.262Z  +6990ms (proc)
+busywait_progress stdin_end
+elapsed: 1080ms"></div>
+          <div class="mark busywait" style="left:50.316%" title="2026-07-31T19:19:15.272Z  +7000ms (proc)
+busywait_progress stdin_end
+elapsed: 1090ms"></div>
+          <div class="mark busywait" style="left:50.388%" title="2026-07-31T19:19:15.282Z  +7010ms (proc)
+busywait_progress stdin_end
+elapsed: 1100ms"></div>
+          <div class="mark busywait" style="left:50.460%" title="2026-07-31T19:19:15.292Z  +7020ms (proc)
+busywait_progress stdin_end
+elapsed: 1110ms"></div>
+          <div class="mark busywait" style="left:50.532%" title="2026-07-31T19:19:15.302Z  +7030ms (proc)
+busywait_progress stdin_end
+elapsed: 1120ms"></div>
+          <div class="mark busywait" style="left:50.604%" title="2026-07-31T19:19:15.312Z  +7040ms (proc)
+busywait_progress stdin_end
+elapsed: 1130ms"></div>
+          <div class="mark busywait" style="left:50.676%" title="2026-07-31T19:19:15.322Z  +7050ms (proc)
+busywait_progress stdin_end
+elapsed: 1140ms"></div>
+          <div class="mark busywait" style="left:50.748%" title="2026-07-31T19:19:15.332Z  +7060ms (proc)
+busywait_progress stdin_end
+elapsed: 1150ms"></div>
+          <div class="mark busywait" style="left:50.820%" title="2026-07-31T19:19:15.342Z  +7070ms (proc)
+busywait_progress stdin_end
+elapsed: 1160ms"></div>
+          <div class="mark busywait" style="left:50.891%" title="2026-07-31T19:19:15.352Z  +7080ms (proc)
+busywait_progress stdin_end
+elapsed: 1170ms"></div>
+          <div class="mark busywait" style="left:50.963%" title="2026-07-31T19:19:15.362Z  +7090ms (proc)
+busywait_progress stdin_end
+elapsed: 1180ms"></div>
+          <div class="mark busywait" style="left:51.035%" title="2026-07-31T19:19:15.372Z  +7100ms (proc)
+busywait_progress stdin_end
+elapsed: 1190ms"></div>
+          <div class="mark busywait" style="left:51.107%" title="2026-07-31T19:19:15.382Z  +7110ms (proc)
+busywait_progress stdin_end
+elapsed: 1200ms"></div>
+          <div class="mark busywait" style="left:51.179%" title="2026-07-31T19:19:15.392Z  +7120ms (proc)
+busywait_progress stdin_end
+elapsed: 1210ms"></div>
+          <div class="mark busywait" style="left:51.251%" title="2026-07-31T19:19:15.402Z  +7130ms (proc)
+busywait_progress stdin_end
+elapsed: 1220ms"></div>
+          <div class="mark busywait" style="left:51.323%" title="2026-07-31T19:19:15.412Z  +7140ms (proc)
+busywait_progress stdin_end
+elapsed: 1230ms"></div>
+          <div class="mark busywait" style="left:51.395%" title="2026-07-31T19:19:15.422Z  +7150ms (proc)
+busywait_progress stdin_end
+elapsed: 1240ms"></div>
+          <div class="mark busywait" style="left:51.467%" title="2026-07-31T19:19:15.432Z  +7160ms (proc)
+busywait_progress stdin_end
+elapsed: 1250ms"></div>
+          <div class="mark busywait" style="left:51.538%" title="2026-07-31T19:19:15.442Z  +7170ms (proc)
+busywait_progress stdin_end
+elapsed: 1260ms"></div>
+          <div class="mark busywait" style="left:51.610%" title="2026-07-31T19:19:15.452Z  +7180ms (proc)
+busywait_progress stdin_end
+elapsed: 1270ms"></div>
+          <div class="mark busywait" style="left:51.682%" title="2026-07-31T19:19:15.462Z  +7190ms (proc)
+busywait_progress stdin_end
+elapsed: 1280ms"></div>
+          <div class="mark busywait" style="left:51.754%" title="2026-07-31T19:19:15.472Z  +7200ms (proc)
+busywait_progress stdin_end
+elapsed: 1290ms"></div>
+          <div class="mark busywait" style="left:51.826%" title="2026-07-31T19:19:15.482Z  +7210ms (proc)
+busywait_progress stdin_end
+elapsed: 1300ms"></div>
+          <div class="mark busywait" style="left:51.898%" title="2026-07-31T19:19:15.492Z  +7220ms (proc)
+busywait_progress stdin_end
+elapsed: 1310ms"></div>
+          <div class="mark busywait" style="left:51.970%" title="2026-07-31T19:19:15.502Z  +7230ms (proc)
+busywait_progress stdin_end
+elapsed: 1320ms"></div>
+          <div class="mark busywait" style="left:52.042%" title="2026-07-31T19:19:15.512Z  +7240ms (proc)
+busywait_progress stdin_end
+elapsed: 1330ms"></div>
+          <div class="mark busywait" style="left:52.114%" title="2026-07-31T19:19:15.522Z  +7250ms (proc)
+busywait_progress stdin_end
+elapsed: 1340ms"></div>
+          <div class="mark busywait" style="left:52.185%" title="2026-07-31T19:19:15.532Z  +7260ms (proc)
+busywait_progress stdin_end
+elapsed: 1350ms"></div>
+          <div class="mark busywait" style="left:52.257%" title="2026-07-31T19:19:15.542Z  +7270ms (proc)
+busywait_progress stdin_end
+elapsed: 1360ms"></div>
+          <div class="mark busywait" style="left:52.329%" title="2026-07-31T19:19:15.552Z  +7280ms (proc)
+busywait_progress stdin_end
+elapsed: 1370ms"></div>
+          <div class="mark busywait" style="left:52.401%" title="2026-07-31T19:19:15.562Z  +7290ms (proc)
+busywait_progress stdin_end
+elapsed: 1380ms"></div>
+          <div class="mark busywait" style="left:52.473%" title="2026-07-31T19:19:15.572Z  +7300ms (proc)
+busywait_progress stdin_end
+elapsed: 1390ms"></div>
+          <div class="mark busywait" style="left:52.545%" title="2026-07-31T19:19:15.582Z  +7310ms (proc)
+busywait_progress stdin_end
+elapsed: 1400ms"></div>
+          <div class="mark busywait" style="left:52.617%" title="2026-07-31T19:19:15.592Z  +7320ms (proc)
+busywait_progress stdin_end
+elapsed: 1410ms"></div>
+          <div class="mark busywait" style="left:52.689%" title="2026-07-31T19:19:15.602Z  +7330ms (proc)
+busywait_progress stdin_end
+elapsed: 1420ms"></div>
+          <div class="mark busywait" style="left:52.761%" title="2026-07-31T19:19:15.612Z  +7340ms (proc)
+busywait_progress stdin_end
+elapsed: 1430ms"></div>
+          <div class="mark busywait" style="left:52.832%" title="2026-07-31T19:19:15.622Z  +7350ms (proc)
+busywait_progress stdin_end
+elapsed: 1440ms"></div>
+          <div class="mark busywait" style="left:52.904%" title="2026-07-31T19:19:15.632Z  +7360ms (proc)
+busywait_progress stdin_end
+elapsed: 1450ms"></div>
+          <div class="mark busywait" style="left:52.976%" title="2026-07-31T19:19:15.642Z  +7370ms (proc)
+busywait_progress stdin_end
+elapsed: 1460ms"></div>
+          <div class="mark busywait" style="left:53.048%" title="2026-07-31T19:19:15.652Z  +7380ms (proc)
+busywait_progress stdin_end
+elapsed: 1470ms"></div>
+          <div class="mark busywait" style="left:53.120%" title="2026-07-31T19:19:15.662Z  +7390ms (proc)
+busywait_progress stdin_end
+elapsed: 1480ms"></div>
+          <div class="mark busywait" style="left:53.192%" title="2026-07-31T19:19:15.672Z  +7400ms (proc)
+busywait_progress stdin_end
+elapsed: 1490ms"></div>
+          <div class="mark busywait" style="left:53.264%" title="2026-07-31T19:19:15.682Z  +7410ms (proc)
+busywait_progress stdin_end
+elapsed: 1500ms"></div>
+          <div class="mark busywait" style="left:53.336%" title="2026-07-31T19:19:15.692Z  +7420ms (proc)
+busywait_progress stdin_end
+elapsed: 1510ms"></div>
+          <div class="mark busywait" style="left:53.408%" title="2026-07-31T19:19:15.702Z  +7430ms (proc)
+busywait_progress stdin_end
+elapsed: 1520ms"></div>
+          <div class="mark busywait" style="left:53.480%" title="2026-07-31T19:19:15.712Z  +7440ms (proc)
+busywait_progress stdin_end
+elapsed: 1530ms"></div>
+          <div class="mark busywait" style="left:53.551%" title="2026-07-31T19:19:15.722Z  +7450ms (proc)
+busywait_progress stdin_end
+elapsed: 1540ms"></div>
+          <div class="mark busywait" style="left:53.623%" title="2026-07-31T19:19:15.732Z  +7460ms (proc)
+busywait_progress stdin_end
+elapsed: 1550ms"></div>
+          <div class="mark busywait" style="left:53.695%" title="2026-07-31T19:19:15.742Z  +7470ms (proc)
+busywait_progress stdin_end
+elapsed: 1560ms"></div>
+          <div class="mark busywait" style="left:53.767%" title="2026-07-31T19:19:15.752Z  +7480ms (proc)
+busywait_progress stdin_end
+elapsed: 1570ms"></div>
+          <div class="mark busywait" style="left:53.839%" title="2026-07-31T19:19:15.762Z  +7490ms (proc)
+busywait_progress stdin_end
+elapsed: 1580ms"></div>
+          <div class="mark busywait" style="left:53.911%" title="2026-07-31T19:19:15.772Z  +7500ms (proc)
+busywait_progress stdin_end
+elapsed: 1590ms"></div>
+          <div class="mark busywait" style="left:53.983%" title="2026-07-31T19:19:15.782Z  +7510ms (proc)
+busywait_progress stdin_end
+elapsed: 1600ms"></div>
+          <div class="mark busywait" style="left:54.055%" title="2026-07-31T19:19:15.792Z  +7520ms (proc)
+busywait_progress stdin_end
+elapsed: 1610ms"></div>
+          <div class="mark busywait" style="left:54.127%" title="2026-07-31T19:19:15.802Z  +7530ms (proc)
+busywait_progress stdin_end
+elapsed: 1620ms"></div>
+          <div class="mark busywait" style="left:54.198%" title="2026-07-31T19:19:15.812Z  +7540ms (proc)
+busywait_progress stdin_end
+elapsed: 1630ms"></div>
+          <div class="mark busywait" style="left:54.270%" title="2026-07-31T19:19:15.822Z  +7550ms (proc)
+busywait_progress stdin_end
+elapsed: 1640ms"></div>
+          <div class="mark busywait" style="left:54.342%" title="2026-07-31T19:19:15.832Z  +7560ms (proc)
+busywait_progress stdin_end
+elapsed: 1650ms"></div>
+          <div class="mark busywait" style="left:54.414%" title="2026-07-31T19:19:15.842Z  +7570ms (proc)
+busywait_progress stdin_end
+elapsed: 1660ms"></div>
+          <div class="mark busywait" style="left:54.486%" title="2026-07-31T19:19:15.852Z  +7580ms (proc)
+busywait_progress stdin_end
+elapsed: 1670ms"></div>
+          <div class="mark busywait" style="left:54.558%" title="2026-07-31T19:19:15.862Z  +7590ms (proc)
+busywait_progress stdin_end
+elapsed: 1680ms"></div>
+          <div class="mark busywait" style="left:54.630%" title="2026-07-31T19:19:15.872Z  +7600ms (proc)
+busywait_progress stdin_end
+elapsed: 1690ms"></div>
+          <div class="mark busywait" style="left:54.702%" title="2026-07-31T19:19:15.882Z  +7610ms (proc)
+busywait_progress stdin_end
+elapsed: 1700ms"></div>
+          <div class="mark busywait" style="left:54.774%" title="2026-07-31T19:19:15.892Z  +7620ms (proc)
+busywait_progress stdin_end
+elapsed: 1710ms"></div>
+          <div class="mark busywait" style="left:54.845%" title="2026-07-31T19:19:15.902Z  +7630ms (proc)
+busywait_progress stdin_end
+elapsed: 1720ms"></div>
+          <div class="mark busywait" style="left:54.917%" title="2026-07-31T19:19:15.912Z  +7640ms (proc)
+busywait_progress stdin_end
+elapsed: 1730ms"></div>
+          <div class="mark busywait" style="left:54.989%" title="2026-07-31T19:19:15.922Z  +7650ms (proc)
+busywait_progress stdin_end
+elapsed: 1740ms"></div>
+          <div class="mark busywait" style="left:55.061%" title="2026-07-31T19:19:15.932Z  +7660ms (proc)
+busywait_progress stdin_end
+elapsed: 1750ms"></div>
+          <div class="mark busywait" style="left:55.133%" title="2026-07-31T19:19:15.942Z  +7670ms (proc)
+busywait_progress stdin_end
+elapsed: 1760ms"></div>
+          <div class="mark busywait" style="left:55.205%" title="2026-07-31T19:19:15.952Z  +7680ms (proc)
+busywait_progress stdin_end
+elapsed: 1770ms"></div>
+          <div class="mark busywait" style="left:55.277%" title="2026-07-31T19:19:15.962Z  +7690ms (proc)
+busywait_progress stdin_end
+elapsed: 1780ms"></div>
+          <div class="mark busywait" style="left:55.349%" title="2026-07-31T19:19:15.972Z  +7700ms (proc)
+busywait_progress stdin_end
+elapsed: 1790ms"></div>
+          <div class="mark busywait" style="left:55.421%" title="2026-07-31T19:19:15.982Z  +7710ms (proc)
+busywait_progress stdin_end
+elapsed: 1800ms"></div>
+          <div class="mark busywait" style="left:55.492%" title="2026-07-31T19:19:15.992Z  +7720ms (proc)
+busywait_progress stdin_end
+elapsed: 1810ms"></div>
+          <div class="mark busywait" style="left:55.564%" title="2026-07-31T19:19:16.002Z  +7730ms (proc)
+busywait_progress stdin_end
+elapsed: 1820ms"></div>
+          <div class="mark busywait" style="left:55.636%" title="2026-07-31T19:19:16.012Z  +7740ms (proc)
+busywait_progress stdin_end
+elapsed: 1830ms"></div>
+          <div class="mark busywait" style="left:55.708%" title="2026-07-31T19:19:16.022Z  +7750ms (proc)
+busywait_progress stdin_end
+elapsed: 1840ms"></div>
+          <div class="mark busywait" style="left:55.780%" title="2026-07-31T19:19:16.032Z  +7760ms (proc)
+busywait_progress stdin_end
+elapsed: 1850ms"></div>
+          <div class="mark busywait" style="left:55.852%" title="2026-07-31T19:19:16.042Z  +7770ms (proc)
+busywait_progress stdin_end
+elapsed: 1860ms"></div>
+          <div class="mark busywait" style="left:55.924%" title="2026-07-31T19:19:16.052Z  +7780ms (proc)
+busywait_progress stdin_end
+elapsed: 1870ms"></div>
+          <div class="mark busywait" style="left:55.996%" title="2026-07-31T19:19:16.062Z  +7790ms (proc)
+busywait_progress stdin_end
+elapsed: 1880ms"></div>
+          <div class="mark busywait" style="left:56.068%" title="2026-07-31T19:19:16.072Z  +7800ms (proc)
+busywait_progress stdin_end
+elapsed: 1890ms"></div>
+          <div class="mark busywait" style="left:56.139%" title="2026-07-31T19:19:16.082Z  +7810ms (proc)
+busywait_progress stdin_end
+elapsed: 1900ms"></div>
+          <div class="mark busywait" style="left:56.211%" title="2026-07-31T19:19:16.092Z  +7820ms (proc)
+busywait_progress stdin_end
+elapsed: 1910ms"></div>
+          <div class="mark busywait" style="left:56.283%" title="2026-07-31T19:19:16.102Z  +7830ms (proc)
+busywait_progress stdin_end
+elapsed: 1920ms"></div>
+          <div class="mark busywait" style="left:56.355%" title="2026-07-31T19:19:16.112Z  +7840ms (proc)
+busywait_progress stdin_end
+elapsed: 1930ms"></div>
+          <div class="mark busywait" style="left:56.427%" title="2026-07-31T19:19:16.122Z  +7850ms (proc)
+busywait_progress stdin_end
+elapsed: 1940ms"></div>
+          <div class="mark busywait" style="left:56.499%" title="2026-07-31T19:19:16.132Z  +7860ms (proc)
+busywait_progress stdin_end
+elapsed: 1950ms"></div>
+          <div class="mark busywait" style="left:56.571%" title="2026-07-31T19:19:16.142Z  +7870ms (proc)
+busywait_progress stdin_end
+elapsed: 1960ms"></div>
+          <div class="mark busywait" style="left:56.643%" title="2026-07-31T19:19:16.152Z  +7880ms (proc)
+busywait_progress stdin_end
+elapsed: 1970ms"></div>
+          <div class="mark busywait" style="left:56.715%" title="2026-07-31T19:19:16.162Z  +7890ms (proc)
+busywait_progress stdin_end
+elapsed: 1980ms"></div>
+          <div class="mark busywait" style="left:56.786%" title="2026-07-31T19:19:16.172Z  +7900ms (proc)
+busywait_progress stdin_end
+elapsed: 1990ms"></div>
+          <div class="mark busywait" style="left:56.858%" title="2026-07-31T19:19:16.182Z  +7910ms (proc)
+busywait_progress stdin_end
+elapsed: 2000ms"></div>
+          <div class="mark busywait" style="left:56.930%" title="2026-07-31T19:19:16.192Z  +7920ms (proc)
+busywait_progress stdin_end
+elapsed: 2010ms"></div>
+          <div class="mark busywait" style="left:57.002%" title="2026-07-31T19:19:16.202Z  +7930ms (proc)
+busywait_progress stdin_end
+elapsed: 2020ms"></div>
+          <div class="mark busywait" style="left:57.074%" title="2026-07-31T19:19:16.212Z  +7940ms (proc)
+busywait_progress stdin_end
+elapsed: 2030ms"></div>
+          <div class="mark busywait" style="left:57.146%" title="2026-07-31T19:19:16.222Z  +7950ms (proc)
+busywait_progress stdin_end
+elapsed: 2040ms"></div>
+          <div class="mark busywait" style="left:57.218%" title="2026-07-31T19:19:16.232Z  +7960ms (proc)
+busywait_progress stdin_end
+elapsed: 2050ms"></div>
+          <div class="mark busywait" style="left:57.290%" title="2026-07-31T19:19:16.242Z  +7970ms (proc)
+busywait_progress stdin_end
+elapsed: 2060ms"></div>
+          <div class="mark busywait" style="left:57.362%" title="2026-07-31T19:19:16.252Z  +7980ms (proc)
+busywait_progress stdin_end
+elapsed: 2070ms"></div>
+          <div class="mark busywait" style="left:57.434%" title="2026-07-31T19:19:16.262Z  +7990ms (proc)
+busywait_progress stdin_end
+elapsed: 2080ms"></div>
+          <div class="mark busywait" style="left:57.505%" title="2026-07-31T19:19:16.272Z  +8000ms (proc)
+busywait_progress stdin_end
+elapsed: 2090ms"></div>
+          <div class="mark busywait" style="left:57.577%" title="2026-07-31T19:19:16.282Z  +8010ms (proc)
+busywait_progress stdin_end
+elapsed: 2100ms"></div>
+          <div class="mark busywait" style="left:57.649%" title="2026-07-31T19:19:16.292Z  +8020ms (proc)
+busywait_progress stdin_end
+elapsed: 2110ms"></div>
+          <div class="mark busywait" style="left:57.721%" title="2026-07-31T19:19:16.302Z  +8030ms (proc)
+busywait_progress stdin_end
+elapsed: 2120ms"></div>
+          <div class="mark busywait" style="left:57.793%" title="2026-07-31T19:19:16.312Z  +8040ms (proc)
+busywait_progress stdin_end
+elapsed: 2130ms"></div>
+          <div class="mark busywait" style="left:57.865%" title="2026-07-31T19:19:16.322Z  +8050ms (proc)
+busywait_progress stdin_end
+elapsed: 2140ms"></div>
+          <div class="mark busywait" style="left:57.937%" title="2026-07-31T19:19:16.332Z  +8060ms (proc)
+busywait_progress stdin_end
+elapsed: 2150ms"></div>
+          <div class="mark busywait" style="left:58.009%" title="2026-07-31T19:19:16.342Z  +8070ms (proc)
+busywait_progress stdin_end
+elapsed: 2160ms"></div>
+          <div class="mark busywait" style="left:58.081%" title="2026-07-31T19:19:16.352Z  +8080ms (proc)
+busywait_progress stdin_end
+elapsed: 2170ms"></div>
+          <div class="mark busywait" style="left:58.152%" title="2026-07-31T19:19:16.362Z  +8090ms (proc)
+busywait_progress stdin_end
+elapsed: 2180ms"></div>
+          <div class="mark busywait" style="left:58.224%" title="2026-07-31T19:19:16.372Z  +8100ms (proc)
+busywait_progress stdin_end
+elapsed: 2190ms"></div>
+          <div class="mark busywait" style="left:58.296%" title="2026-07-31T19:19:16.382Z  +8110ms (proc)
+busywait_progress stdin_end
+elapsed: 2200ms"></div>
+          <div class="mark busywait" style="left:58.368%" title="2026-07-31T19:19:16.392Z  +8120ms (proc)
+busywait_progress stdin_end
+elapsed: 2210ms"></div>
+          <div class="mark busywait" style="left:58.440%" title="2026-07-31T19:19:16.402Z  +8130ms (proc)
+busywait_progress stdin_end
+elapsed: 2220ms"></div>
+          <div class="mark busywait" style="left:58.512%" title="2026-07-31T19:19:16.412Z  +8140ms (proc)
+busywait_progress stdin_end
+elapsed: 2230ms"></div>
+          <div class="mark busywait" style="left:58.584%" title="2026-07-31T19:19:16.422Z  +8150ms (proc)
+busywait_progress stdin_end
+elapsed: 2240ms"></div>
+          <div class="mark busywait" style="left:58.656%" title="2026-07-31T19:19:16.432Z  +8160ms (proc)
+busywait_progress stdin_end
+elapsed: 2250ms"></div>
+          <div class="mark busywait" style="left:58.728%" title="2026-07-31T19:19:16.442Z  +8170ms (proc)
+busywait_progress stdin_end
+elapsed: 2260ms"></div>
+          <div class="mark busywait" style="left:58.799%" title="2026-07-31T19:19:16.452Z  +8180ms (proc)
+busywait_progress stdin_end
+elapsed: 2270ms"></div>
+          <div class="mark busywait" style="left:58.871%" title="2026-07-31T19:19:16.462Z  +8190ms (proc)
+busywait_progress stdin_end
+elapsed: 2280ms"></div>
+          <div class="mark busywait" style="left:58.943%" title="2026-07-31T19:19:16.472Z  +8200ms (proc)
+busywait_progress stdin_end
+elapsed: 2290ms"></div>
+          <div class="mark busywait" style="left:59.015%" title="2026-07-31T19:19:16.482Z  +8210ms (proc)
+busywait_progress stdin_end
+elapsed: 2300ms"></div>
+          <div class="mark busywait" style="left:59.087%" title="2026-07-31T19:19:16.492Z  +8220ms (proc)
+busywait_progress stdin_end
+elapsed: 2310ms"></div>
+          <div class="mark busywait" style="left:59.159%" title="2026-07-31T19:19:16.502Z  +8230ms (proc)
+busywait_progress stdin_end
+elapsed: 2320ms"></div>
+          <div class="mark busywait" style="left:59.231%" title="2026-07-31T19:19:16.512Z  +8240ms (proc)
+busywait_progress stdin_end
+elapsed: 2330ms"></div>
+          <div class="mark busywait" style="left:59.303%" title="2026-07-31T19:19:16.522Z  +8250ms (proc)
+busywait_progress stdin_end
+elapsed: 2340ms"></div>
+          <div class="mark busywait" style="left:59.375%" title="2026-07-31T19:19:16.532Z  +8260ms (proc)
+busywait_progress stdin_end
+elapsed: 2350ms"></div>
+          <div class="mark busywait" style="left:59.446%" title="2026-07-31T19:19:16.542Z  +8270ms (proc)
+busywait_progress stdin_end
+elapsed: 2360ms"></div>
+          <div class="mark busywait" style="left:59.518%" title="2026-07-31T19:19:16.552Z  +8280ms (proc)
+busywait_progress stdin_end
+elapsed: 2370ms"></div>
+          <div class="mark busywait" style="left:59.590%" title="2026-07-31T19:19:16.562Z  +8290ms (proc)
+busywait_progress stdin_end
+elapsed: 2380ms"></div>
+          <div class="mark busywait" style="left:59.662%" title="2026-07-31T19:19:16.572Z  +8300ms (proc)
+busywait_progress stdin_end
+elapsed: 2390ms"></div>
+          <div class="mark busywait" style="left:59.734%" title="2026-07-31T19:19:16.582Z  +8310ms (proc)
+busywait_progress stdin_end
+elapsed: 2400ms"></div>
+          <div class="mark busywait" style="left:59.806%" title="2026-07-31T19:19:16.592Z  +8320ms (proc)
+busywait_progress stdin_end
+elapsed: 2410ms"></div>
+          <div class="mark busywait" style="left:59.878%" title="2026-07-31T19:19:16.602Z  +8330ms (proc)
+busywait_progress stdin_end
+elapsed: 2420ms"></div>
+          <div class="mark busywait" style="left:59.950%" title="2026-07-31T19:19:16.612Z  +8340ms (proc)
+busywait_progress stdin_end
+elapsed: 2430ms"></div>
+          <div class="mark busywait" style="left:60.022%" title="2026-07-31T19:19:16.622Z  +8350ms (proc)
+busywait_progress stdin_end
+elapsed: 2440ms"></div>
+          <div class="mark busywait" style="left:60.093%" title="2026-07-31T19:19:16.632Z  +8360ms (proc)
+busywait_progress stdin_end
+elapsed: 2450ms"></div>
+          <div class="mark busywait" style="left:60.165%" title="2026-07-31T19:19:16.642Z  +8370ms (proc)
+busywait_progress stdin_end
+elapsed: 2460ms"></div>
+          <div class="mark busywait" style="left:60.237%" title="2026-07-31T19:19:16.652Z  +8380ms (proc)
+busywait_progress stdin_end
+elapsed: 2470ms"></div>
+          <div class="mark busywait" style="left:60.309%" title="2026-07-31T19:19:16.662Z  +8390ms (proc)
+busywait_progress stdin_end
+elapsed: 2480ms"></div>
+          <div class="mark busywait" style="left:60.381%" title="2026-07-31T19:19:16.672Z  +8400ms (proc)
+busywait_progress stdin_end
+elapsed: 2490ms"></div>
+          <div class="mark busywait" style="left:60.453%" title="2026-07-31T19:19:16.682Z  +8410ms (proc)
+busywait_progress stdin_end
+elapsed: 2500ms"></div>
+          <div class="mark busywait" style="left:60.525%" title="2026-07-31T19:19:16.692Z  +8420ms (proc)
+busywait_progress stdin_end
+elapsed: 2510ms"></div>
+          <div class="mark busywait" style="left:60.597%" title="2026-07-31T19:19:16.702Z  +8430ms (proc)
+busywait_progress stdin_end
+elapsed: 2520ms"></div>
+          <div class="mark busywait" style="left:60.669%" title="2026-07-31T19:19:16.712Z  +8440ms (proc)
+busywait_progress stdin_end
+elapsed: 2530ms"></div>
+          <div class="mark busywait" style="left:60.740%" title="2026-07-31T19:19:16.722Z  +8450ms (proc)
+busywait_progress stdin_end
+elapsed: 2540ms"></div>
+          <div class="mark busywait" style="left:60.812%" title="2026-07-31T19:19:16.732Z  +8460ms (proc)
+busywait_progress stdin_end
+elapsed: 2550ms"></div>
+          <div class="mark busywait" style="left:60.884%" title="2026-07-31T19:19:16.742Z  +8470ms (proc)
+busywait_progress stdin_end
+elapsed: 2560ms"></div>
+          <div class="mark busywait" style="left:60.956%" title="2026-07-31T19:19:16.752Z  +8480ms (proc)
+busywait_progress stdin_end
+elapsed: 2570ms"></div>
+          <div class="mark busywait" style="left:61.028%" title="2026-07-31T19:19:16.762Z  +8490ms (proc)
+busywait_progress stdin_end
+elapsed: 2580ms"></div>
+          <div class="mark busywait" style="left:61.100%" title="2026-07-31T19:19:16.772Z  +8500ms (proc)
+busywait_progress stdin_end
+elapsed: 2590ms"></div>
+          <div class="mark busywait" style="left:61.172%" title="2026-07-31T19:19:16.782Z  +8510ms (proc)
+busywait_progress stdin_end
+elapsed: 2600ms"></div>
+          <div class="mark busywait" style="left:61.244%" title="2026-07-31T19:19:16.792Z  +8520ms (proc)
+busywait_progress stdin_end
+elapsed: 2610ms"></div>
+          <div class="mark busywait" style="left:61.316%" title="2026-07-31T19:19:16.802Z  +8530ms (proc)
+busywait_progress stdin_end
+elapsed: 2620ms"></div>
+          <div class="mark busywait" style="left:61.387%" title="2026-07-31T19:19:16.812Z  +8540ms (proc)
+busywait_progress stdin_end
+elapsed: 2630ms"></div>
+          <div class="mark busywait" style="left:61.459%" title="2026-07-31T19:19:16.822Z  +8550ms (proc)
+busywait_progress stdin_end
+elapsed: 2640ms"></div>
+          <div class="mark busywait" style="left:61.531%" title="2026-07-31T19:19:16.832Z  +8560ms (proc)
+busywait_progress stdin_end
+elapsed: 2650ms"></div>
+          <div class="mark busywait" style="left:61.603%" title="2026-07-31T19:19:16.842Z  +8570ms (proc)
+busywait_progress stdin_end
+elapsed: 2660ms"></div>
+          <div class="mark busywait" style="left:61.675%" title="2026-07-31T19:19:16.852Z  +8580ms (proc)
+busywait_progress stdin_end
+elapsed: 2670ms"></div>
+          <div class="mark busywait" style="left:61.747%" title="2026-07-31T19:19:16.862Z  +8590ms (proc)
+busywait_progress stdin_end
+elapsed: 2680ms"></div>
+          <div class="mark busywait" style="left:61.819%" title="2026-07-31T19:19:16.872Z  +8600ms (proc)
+busywait_progress stdin_end
+elapsed: 2690ms"></div>
+          <div class="mark busywait" style="left:61.891%" title="2026-07-31T19:19:16.882Z  +8610ms (proc)
+busywait_progress stdin_end
+elapsed: 2700ms"></div>
+          <div class="mark busywait" style="left:61.963%" title="2026-07-31T19:19:16.892Z  +8620ms (proc)
+busywait_progress stdin_end
+elapsed: 2710ms"></div>
+          <div class="mark busywait" style="left:62.035%" title="2026-07-31T19:19:16.902Z  +8630ms (proc)
+busywait_progress stdin_end
+elapsed: 2720ms"></div>
+          <div class="mark busywait" style="left:62.106%" title="2026-07-31T19:19:16.912Z  +8640ms (proc)
+busywait_progress stdin_end
+elapsed: 2730ms"></div>
+          <div class="mark busywait" style="left:62.178%" title="2026-07-31T19:19:16.922Z  +8650ms (proc)
+busywait_progress stdin_end
+elapsed: 2740ms"></div>
+          <div class="mark busywait" style="left:62.250%" title="2026-07-31T19:19:16.932Z  +8660ms (proc)
+busywait_progress stdin_end
+elapsed: 2750ms"></div>
+          <div class="mark busywait" style="left:62.322%" title="2026-07-31T19:19:16.942Z  +8670ms (proc)
+busywait_progress stdin_end
+elapsed: 2760ms"></div>
+          <div class="mark busywait" style="left:62.394%" title="2026-07-31T19:19:16.952Z  +8680ms (proc)
+busywait_progress stdin_end
+elapsed: 2770ms"></div>
+          <div class="mark busywait" style="left:62.466%" title="2026-07-31T19:19:16.962Z  +8690ms (proc)
+busywait_progress stdin_end
+elapsed: 2780ms"></div>
+          <div class="mark busywait" style="left:62.538%" title="2026-07-31T19:19:16.972Z  +8700ms (proc)
+busywait_progress stdin_end
+elapsed: 2790ms"></div>
+          <div class="mark busywait" style="left:62.610%" title="2026-07-31T19:19:16.982Z  +8710ms (proc)
+busywait_progress stdin_end
+elapsed: 2800ms"></div>
+          <div class="mark busywait" style="left:62.682%" title="2026-07-31T19:19:16.992Z  +8720ms (proc)
+busywait_progress stdin_end
+elapsed: 2810ms"></div>
+          <div class="mark busywait" style="left:62.753%" title="2026-07-31T19:19:17.002Z  +8730ms (proc)
+busywait_progress stdin_end
+elapsed: 2820ms"></div>
+          <div class="mark busywait" style="left:62.825%" title="2026-07-31T19:19:17.012Z  +8740ms (proc)
+busywait_progress stdin_end
+elapsed: 2830ms"></div>
+          <div class="mark busywait" style="left:62.897%" title="2026-07-31T19:19:17.022Z  +8750ms (proc)
+busywait_progress stdin_end
+elapsed: 2840ms"></div>
+          <div class="mark busywait" style="left:62.969%" title="2026-07-31T19:19:17.032Z  +8760ms (proc)
+busywait_progress stdin_end
+elapsed: 2850ms"></div>
+          <div class="mark busywait" style="left:63.041%" title="2026-07-31T19:19:17.042Z  +8770ms (proc)
+busywait_progress stdin_end
+elapsed: 2860ms"></div>
+          <div class="mark busywait" style="left:63.113%" title="2026-07-31T19:19:17.052Z  +8780ms (proc)
+busywait_progress stdin_end
+elapsed: 2870ms"></div>
+          <div class="mark busywait" style="left:63.185%" title="2026-07-31T19:19:17.062Z  +8790ms (proc)
+busywait_progress stdin_end
+elapsed: 2880ms"></div>
+          <div class="mark busywait" style="left:63.257%" title="2026-07-31T19:19:17.072Z  +8800ms (proc)
+busywait_progress stdin_end
+elapsed: 2890ms"></div>
+          <div class="mark busywait" style="left:63.329%" title="2026-07-31T19:19:17.082Z  +8810ms (proc)
+busywait_progress stdin_end
+elapsed: 2900ms"></div>
+          <div class="mark busywait" style="left:63.400%" title="2026-07-31T19:19:17.092Z  +8820ms (proc)
+busywait_progress stdin_end
+elapsed: 2910ms"></div>
+          <div class="mark busywait" style="left:63.472%" title="2026-07-31T19:19:17.102Z  +8830ms (proc)
+busywait_progress stdin_end
+elapsed: 2920ms"></div>
+          <div class="mark busywait" style="left:63.544%" title="2026-07-31T19:19:17.112Z  +8840ms (proc)
+busywait_progress stdin_end
+elapsed: 2930ms"></div>
+          <div class="mark busywait" style="left:63.616%" title="2026-07-31T19:19:17.122Z  +8850ms (proc)
+busywait_progress stdin_end
+elapsed: 2940ms"></div>
+          <div class="mark busywait" style="left:63.688%" title="2026-07-31T19:19:17.132Z  +8860ms (proc)
+busywait_progress stdin_end
+elapsed: 2950ms"></div>
+          <div class="mark busywait" style="left:63.760%" title="2026-07-31T19:19:17.142Z  +8870ms (proc)
+busywait_progress stdin_end
+elapsed: 2960ms"></div>
+          <div class="mark busywait" style="left:63.832%" title="2026-07-31T19:19:17.152Z  +8880ms (proc)
+busywait_progress stdin_end
+elapsed: 2970ms"></div>
+          <div class="mark busywait" style="left:63.904%" title="2026-07-31T19:19:17.162Z  +8890ms (proc)
+busywait_progress stdin_end
+elapsed: 2980ms"></div>
+          <div class="mark busywait" style="left:63.976%" title="2026-07-31T19:19:17.172Z  +8900ms (proc)
+busywait_progress stdin_end
+elapsed: 2990ms"></div>
+          <div class="mark busywait" style="left:64.047%" title="2026-07-31T19:19:17.182Z  +8910ms (proc)
+busywait_progress stdin_end
+elapsed: 3000ms"></div>
+          <div class="mark busywait" style="left:64.119%" title="2026-07-31T19:19:17.192Z  +8920ms (proc)
+busywait_progress stdin_end
+elapsed: 3010ms"></div>
+          <div class="mark busywait" style="left:64.191%" title="2026-07-31T19:19:17.202Z  +8930ms (proc)
+busywait_progress stdin_end
+elapsed: 3020ms"></div>
+          <div class="mark busywait" style="left:64.263%" title="2026-07-31T19:19:17.212Z  +8940ms (proc)
+busywait_progress stdin_end
+elapsed: 3030ms"></div>
+          <div class="mark busywait" style="left:64.335%" title="2026-07-31T19:19:17.222Z  +8950ms (proc)
+busywait_progress stdin_end
+elapsed: 3040ms"></div>
+          <div class="mark busywait" style="left:64.407%" title="2026-07-31T19:19:17.232Z  +8960ms (proc)
+busywait_progress stdin_end
+elapsed: 3050ms"></div>
+          <div class="mark busywait" style="left:64.479%" title="2026-07-31T19:19:17.242Z  +8970ms (proc)
+busywait_progress stdin_end
+elapsed: 3060ms"></div>
+          <div class="mark busywait" style="left:64.551%" title="2026-07-31T19:19:17.252Z  +8980ms (proc)
+busywait_progress stdin_end
+elapsed: 3070ms"></div>
+          <div class="mark busywait" style="left:64.623%" title="2026-07-31T19:19:17.262Z  +8990ms (proc)
+busywait_progress stdin_end
+elapsed: 3080ms"></div>
+          <div class="mark busywait" style="left:64.694%" title="2026-07-31T19:19:17.272Z  +9000ms (proc)
+busywait_progress stdin_end
+elapsed: 3090ms"></div>
+          <div class="mark busywait" style="left:64.766%" title="2026-07-31T19:19:17.282Z  +9010ms (proc)
+busywait_progress stdin_end
+elapsed: 3100ms"></div>
+          <div class="mark busywait" style="left:64.838%" title="2026-07-31T19:19:17.292Z  +9020ms (proc)
+busywait_progress stdin_end
+elapsed: 3110ms"></div>
+          <div class="mark busywait" style="left:64.910%" title="2026-07-31T19:19:17.302Z  +9030ms (proc)
+busywait_progress stdin_end
+elapsed: 3120ms"></div>
+          <div class="mark busywait" style="left:64.982%" title="2026-07-31T19:19:17.312Z  +9040ms (proc)
+busywait_progress stdin_end
+elapsed: 3130ms"></div>
+          <div class="mark busywait" style="left:65.054%" title="2026-07-31T19:19:17.322Z  +9050ms (proc)
+busywait_progress stdin_end
+elapsed: 3140ms"></div>
+          <div class="mark busywait" style="left:65.126%" title="2026-07-31T19:19:17.332Z  +9060ms (proc)
+busywait_progress stdin_end
+elapsed: 3150ms"></div>
+          <div class="mark busywait" style="left:65.198%" title="2026-07-31T19:19:17.342Z  +9070ms (proc)
+busywait_progress stdin_end
+elapsed: 3160ms"></div>
+          <div class="mark busywait" style="left:65.270%" title="2026-07-31T19:19:17.352Z  +9080ms (proc)
+busywait_progress stdin_end
+elapsed: 3170ms"></div>
+          <div class="mark busywait" style="left:65.341%" title="2026-07-31T19:19:17.362Z  +9090ms (proc)
+busywait_progress stdin_end
+elapsed: 3180ms"></div>
+          <div class="mark busywait" style="left:65.413%" title="2026-07-31T19:19:17.372Z  +9100ms (proc)
+busywait_progress stdin_end
+elapsed: 3190ms"></div>
+          <div class="mark busywait" style="left:65.485%" title="2026-07-31T19:19:17.382Z  +9110ms (proc)
+busywait_progress stdin_end
+elapsed: 3200ms"></div>
+          <div class="mark busywait" style="left:65.557%" title="2026-07-31T19:19:17.392Z  +9120ms (proc)
+busywait_progress stdin_end
+elapsed: 3210ms"></div>
+          <div class="mark busywait" style="left:65.629%" title="2026-07-31T19:19:17.402Z  +9130ms (proc)
+busywait_progress stdin_end
+elapsed: 3220ms"></div>
+          <div class="mark busywait" style="left:65.701%" title="2026-07-31T19:19:17.412Z  +9140ms (proc)
+busywait_progress stdin_end
+elapsed: 3230ms"></div>
+          <div class="mark busywait" style="left:65.773%" title="2026-07-31T19:19:17.422Z  +9150ms (proc)
+busywait_progress stdin_end
+elapsed: 3240ms"></div>
+          <div class="mark busywait" style="left:65.845%" title="2026-07-31T19:19:17.432Z  +9160ms (proc)
+busywait_progress stdin_end
+elapsed: 3250ms"></div>
+          <div class="mark busywait" style="left:65.917%" title="2026-07-31T19:19:17.442Z  +9170ms (proc)
+busywait_progress stdin_end
+elapsed: 3260ms"></div>
+          <div class="mark busywait" style="left:65.988%" title="2026-07-31T19:19:17.452Z  +9180ms (proc)
+busywait_progress stdin_end
+elapsed: 3270ms"></div>
+          <div class="mark busywait" style="left:66.060%" title="2026-07-31T19:19:17.462Z  +9190ms (proc)
+busywait_progress stdin_end
+elapsed: 3280ms"></div>
+          <div class="mark busywait" style="left:66.132%" title="2026-07-31T19:19:17.472Z  +9200ms (proc)
+busywait_progress stdin_end
+elapsed: 3290ms"></div>
+          <div class="mark busywait" style="left:66.204%" title="2026-07-31T19:19:17.482Z  +9210ms (proc)
+busywait_progress stdin_end
+elapsed: 3300ms"></div>
+          <div class="mark busywait" style="left:66.276%" title="2026-07-31T19:19:17.492Z  +9220ms (proc)
+busywait_progress stdin_end
+elapsed: 3310ms"></div>
+          <div class="mark busywait" style="left:66.348%" title="2026-07-31T19:19:17.502Z  +9230ms (proc)
+busywait_progress stdin_end
+elapsed: 3320ms"></div>
+          <div class="mark busywait" style="left:66.420%" title="2026-07-31T19:19:17.512Z  +9240ms (proc)
+busywait_progress stdin_end
+elapsed: 3330ms"></div>
+          <div class="mark busywait" style="left:66.492%" title="2026-07-31T19:19:17.522Z  +9250ms (proc)
+busywait_progress stdin_end
+elapsed: 3340ms"></div>
+          <div class="mark busywait" style="left:66.564%" title="2026-07-31T19:19:17.532Z  +9260ms (proc)
+busywait_progress stdin_end
+elapsed: 3350ms"></div>
+          <div class="mark busywait" style="left:66.636%" title="2026-07-31T19:19:17.542Z  +9270ms (proc)
+busywait_progress stdin_end
+elapsed: 3360ms"></div>
+          <div class="mark busywait" style="left:66.707%" title="2026-07-31T19:19:17.552Z  +9280ms (proc)
+busywait_progress stdin_end
+elapsed: 3370ms"></div>
+          <div class="mark busywait" style="left:66.779%" title="2026-07-31T19:19:17.562Z  +9290ms (proc)
+busywait_progress stdin_end
+elapsed: 3380ms"></div>
+          <div class="mark busywait" style="left:66.851%" title="2026-07-31T19:19:17.572Z  +9300ms (proc)
+busywait_progress stdin_end
+elapsed: 3390ms"></div>
+          <div class="mark busywait" style="left:66.923%" title="2026-07-31T19:19:17.582Z  +9310ms (proc)
+busywait_progress stdin_end
+elapsed: 3400ms"></div>
+          <div class="mark busywait" style="left:66.995%" title="2026-07-31T19:19:17.592Z  +9320ms (proc)
+busywait_progress stdin_end
+elapsed: 3410ms"></div>
+          <div class="mark busywait" style="left:67.067%" title="2026-07-31T19:19:17.602Z  +9330ms (proc)
+busywait_progress stdin_end
+elapsed: 3420ms"></div>
+          <div class="mark busywait" style="left:67.139%" title="2026-07-31T19:19:17.612Z  +9340ms (proc)
+busywait_progress stdin_end
+elapsed: 3430ms"></div>
+          <div class="mark busywait" style="left:67.211%" title="2026-07-31T19:19:17.622Z  +9350ms (proc)
+busywait_progress stdin_end
+elapsed: 3440ms"></div>
+          <div class="mark busywait" style="left:67.283%" title="2026-07-31T19:19:17.632Z  +9360ms (proc)
+busywait_progress stdin_end
+elapsed: 3450ms"></div>
+          <div class="mark busywait" style="left:67.354%" title="2026-07-31T19:19:17.642Z  +9370ms (proc)
+busywait_progress stdin_end
+elapsed: 3460ms"></div>
+          <div class="mark busywait" style="left:67.426%" title="2026-07-31T19:19:17.652Z  +9380ms (proc)
+busywait_progress stdin_end
+elapsed: 3470ms"></div>
+          <div class="mark busywait" style="left:67.498%" title="2026-07-31T19:19:17.662Z  +9390ms (proc)
+busywait_progress stdin_end
+elapsed: 3480ms"></div>
+          <div class="mark busywait" style="left:67.570%" title="2026-07-31T19:19:17.672Z  +9400ms (proc)
+busywait_progress stdin_end
+elapsed: 3490ms"></div>
+          <div class="mark busywait" style="left:67.642%" title="2026-07-31T19:19:17.682Z  +9410ms (proc)
+busywait_progress stdin_end
+elapsed: 3500ms"></div>
+          <div class="mark busywait" style="left:67.714%" title="2026-07-31T19:19:17.692Z  +9420ms (proc)
+busywait_progress stdin_end
+elapsed: 3510ms"></div>
+          <div class="mark busywait" style="left:67.800%" title="2026-07-31T19:19:17.704Z  +9432ms (proc)
+busywait_progress stdin_end
+elapsed: 3522ms"></div>
+          <div class="mark busywait" style="left:67.858%" title="2026-07-31T19:19:17.712Z  +9440ms (proc)
+busywait_progress stdin_end
+elapsed: 3530ms"></div>
+          <div class="mark busywait" style="left:67.930%" title="2026-07-31T19:19:17.722Z  +9450ms (proc)
+busywait_progress stdin_end
+elapsed: 3540ms"></div>
+          <div class="mark busywait" style="left:68.001%" title="2026-07-31T19:19:17.732Z  +9460ms (proc)
+busywait_progress stdin_end
+elapsed: 3550ms"></div>
+          <div class="mark busywait" style="left:68.073%" title="2026-07-31T19:19:17.742Z  +9470ms (proc)
+busywait_progress stdin_end
+elapsed: 3560ms"></div>
+          <div class="mark busywait" style="left:68.145%" title="2026-07-31T19:19:17.752Z  +9480ms (proc)
+busywait_progress stdin_end
+elapsed: 3570ms"></div>
+          <div class="mark busywait" style="left:68.217%" title="2026-07-31T19:19:17.762Z  +9490ms (proc)
+busywait_progress stdin_end
+elapsed: 3580ms"></div>
+          <div class="mark busywait" style="left:68.289%" title="2026-07-31T19:19:17.772Z  +9500ms (proc)
+busywait_progress stdin_end
+elapsed: 3590ms"></div>
+          <div class="mark busywait" style="left:68.361%" title="2026-07-31T19:19:17.782Z  +9510ms (proc)
+busywait_progress stdin_end
+elapsed: 3600ms"></div>
+          <div class="mark busywait" style="left:68.433%" title="2026-07-31T19:19:17.792Z  +9520ms (proc)
+busywait_progress stdin_end
+elapsed: 3610ms"></div>
+          <div class="mark busywait" style="left:68.505%" title="2026-07-31T19:19:17.802Z  +9530ms (proc)
+busywait_progress stdin_end
+elapsed: 3620ms"></div>
+          <div class="mark busywait" style="left:68.577%" title="2026-07-31T19:19:17.812Z  +9540ms (proc)
+busywait_progress stdin_end
+elapsed: 3630ms"></div>
+          <div class="mark busywait" style="left:68.648%" title="2026-07-31T19:19:17.822Z  +9550ms (proc)
+busywait_progress stdin_end
+elapsed: 3640ms"></div>
+          <div class="mark busywait" style="left:68.720%" title="2026-07-31T19:19:17.832Z  +9560ms (proc)
+busywait_progress stdin_end
+elapsed: 3650ms"></div>
+          <div class="mark busywait" style="left:68.792%" title="2026-07-31T19:19:17.842Z  +9570ms (proc)
+busywait_progress stdin_end
+elapsed: 3660ms"></div>
+          <div class="mark busywait" style="left:68.864%" title="2026-07-31T19:19:17.852Z  +9580ms (proc)
+busywait_progress stdin_end
+elapsed: 3670ms"></div>
+          <div class="mark busywait" style="left:68.936%" title="2026-07-31T19:19:17.862Z  +9590ms (proc)
+busywait_progress stdin_end
+elapsed: 3680ms"></div>
+          <div class="mark busywait" style="left:69.008%" title="2026-07-31T19:19:17.872Z  +9600ms (proc)
+busywait_progress stdin_end
+elapsed: 3690ms"></div>
+          <div class="mark busywait" style="left:69.080%" title="2026-07-31T19:19:17.882Z  +9610ms (proc)
+busywait_progress stdin_end
+elapsed: 3700ms"></div>
+          <div class="mark busywait" style="left:69.152%" title="2026-07-31T19:19:17.892Z  +9620ms (proc)
+busywait_progress stdin_end
+elapsed: 3710ms"></div>
+          <div class="mark busywait" style="left:69.224%" title="2026-07-31T19:19:17.902Z  +9630ms (proc)
+busywait_progress stdin_end
+elapsed: 3720ms"></div>
+          <div class="mark busywait" style="left:69.295%" title="2026-07-31T19:19:17.912Z  +9640ms (proc)
+busywait_progress stdin_end
+elapsed: 3730ms"></div>
+          <div class="mark busywait" style="left:69.367%" title="2026-07-31T19:19:17.922Z  +9650ms (proc)
+busywait_progress stdin_end
+elapsed: 3740ms"></div>
+          <div class="mark busywait" style="left:69.439%" title="2026-07-31T19:19:17.932Z  +9660ms (proc)
+busywait_progress stdin_end
+elapsed: 3750ms"></div>
+          <div class="mark busywait" style="left:69.511%" title="2026-07-31T19:19:17.942Z  +9670ms (proc)
+busywait_progress stdin_end
+elapsed: 3760ms"></div>
+          <div class="mark busywait" style="left:69.583%" title="2026-07-31T19:19:17.952Z  +9680ms (proc)
+busywait_progress stdin_end
+elapsed: 3770ms"></div>
+          <div class="mark busywait" style="left:69.655%" title="2026-07-31T19:19:17.962Z  +9690ms (proc)
+busywait_progress stdin_end
+elapsed: 3780ms"></div>
+          <div class="mark busywait" style="left:69.727%" title="2026-07-31T19:19:17.972Z  +9700ms (proc)
+busywait_progress stdin_end
+elapsed: 3790ms"></div>
+          <div class="mark busywait" style="left:69.799%" title="2026-07-31T19:19:17.982Z  +9710ms (proc)
+busywait_progress stdin_end
+elapsed: 3800ms"></div>
+          <div class="mark busywait" style="left:69.871%" title="2026-07-31T19:19:17.992Z  +9720ms (proc)
+busywait_progress stdin_end
+elapsed: 3810ms"></div>
+          <div class="mark busywait" style="left:69.942%" title="2026-07-31T19:19:18.002Z  +9730ms (proc)
+busywait_progress stdin_end
+elapsed: 3820ms"></div>
+          <div class="mark busywait" style="left:70.014%" title="2026-07-31T19:19:18.012Z  +9740ms (proc)
+busywait_progress stdin_end
+elapsed: 3830ms"></div>
+          <div class="mark busywait" style="left:70.086%" title="2026-07-31T19:19:18.022Z  +9750ms (proc)
+busywait_progress stdin_end
+elapsed: 3840ms"></div>
+          <div class="mark busywait" style="left:70.158%" title="2026-07-31T19:19:18.032Z  +9760ms (proc)
+busywait_progress stdin_end
+elapsed: 3850ms"></div>
+          <div class="mark busywait" style="left:70.230%" title="2026-07-31T19:19:18.042Z  +9770ms (proc)
+busywait_progress stdin_end
+elapsed: 3860ms"></div>
+          <div class="mark busywait" style="left:70.302%" title="2026-07-31T19:19:18.052Z  +9780ms (proc)
+busywait_progress stdin_end
+elapsed: 3870ms"></div>
+          <div class="mark busywait" style="left:70.374%" title="2026-07-31T19:19:18.062Z  +9790ms (proc)
+busywait_progress stdin_end
+elapsed: 3880ms"></div>
+          <div class="mark busywait" style="left:70.446%" title="2026-07-31T19:19:18.072Z  +9800ms (proc)
+busywait_progress stdin_end
+elapsed: 3890ms"></div>
+          <div class="mark busywait" style="left:70.518%" title="2026-07-31T19:19:18.082Z  +9810ms (proc)
+busywait_progress stdin_end
+elapsed: 3900ms"></div>
+          <div class="mark busywait" style="left:70.590%" title="2026-07-31T19:19:18.092Z  +9820ms (proc)
+busywait_progress stdin_end
+elapsed: 3910ms"></div>
+          <div class="mark busywait" style="left:70.661%" title="2026-07-31T19:19:18.102Z  +9830ms (proc)
+busywait_progress stdin_end
+elapsed: 3920ms"></div>
+          <div class="mark busywait" style="left:70.733%" title="2026-07-31T19:19:18.112Z  +9840ms (proc)
+busywait_progress stdin_end
+elapsed: 3930ms"></div>
+          <div class="mark busywait" style="left:70.805%" title="2026-07-31T19:19:18.122Z  +9850ms (proc)
+busywait_progress stdin_end
+elapsed: 3940ms"></div>
+          <div class="mark busywait" style="left:70.877%" title="2026-07-31T19:19:18.132Z  +9860ms (proc)
+busywait_progress stdin_end
+elapsed: 3950ms"></div>
+          <div class="mark busywait" style="left:70.949%" title="2026-07-31T19:19:18.142Z  +9870ms (proc)
+busywait_progress stdin_end
+elapsed: 3960ms"></div>
+          <div class="mark busywait" style="left:71.021%" title="2026-07-31T19:19:18.152Z  +9880ms (proc)
+busywait_progress stdin_end
+elapsed: 3970ms"></div>
+          <div class="mark busywait" style="left:71.093%" title="2026-07-31T19:19:18.162Z  +9890ms (proc)
+busywait_progress stdin_end
+elapsed: 3980ms"></div>
+          <div class="mark busywait" style="left:71.165%" title="2026-07-31T19:19:18.172Z  +9900ms (proc)
+busywait_progress stdin_end
+elapsed: 3990ms"></div>
+          <div class="mark busywait" style="left:71.237%" title="2026-07-31T19:19:18.182Z  +9910ms (proc)
+busywait_progress stdin_end
+elapsed: 4000ms"></div>
+          <div class="mark busywait" style="left:71.308%" title="2026-07-31T19:19:18.192Z  +9920ms (proc)
+busywait_progress stdin_end
+elapsed: 4010ms"></div>
+          <div class="mark busywait" style="left:71.380%" title="2026-07-31T19:19:18.202Z  +9930ms (proc)
+busywait_progress stdin_end
+elapsed: 4020ms"></div>
+          <div class="mark busywait" style="left:71.452%" title="2026-07-31T19:19:18.212Z  +9940ms (proc)
+busywait_progress stdin_end
+elapsed: 4030ms"></div>
+          <div class="mark busywait" style="left:71.524%" title="2026-07-31T19:19:18.222Z  +9950ms (proc)
+busywait_progress stdin_end
+elapsed: 4040ms"></div>
+          <div class="mark busywait" style="left:71.596%" title="2026-07-31T19:19:18.232Z  +9960ms (proc)
+busywait_progress stdin_end
+elapsed: 4050ms"></div>
+          <div class="mark busywait" style="left:71.668%" title="2026-07-31T19:19:18.242Z  +9970ms (proc)
+busywait_progress stdin_end
+elapsed: 4060ms"></div>
+          <div class="mark busywait" style="left:71.740%" title="2026-07-31T19:19:18.252Z  +9980ms (proc)
+busywait_progress stdin_end
+elapsed: 4070ms"></div>
+          <div class="mark busywait" style="left:71.812%" title="2026-07-31T19:19:18.262Z  +9990ms (proc)
+busywait_progress stdin_end
+elapsed: 4080ms"></div>
+          <div class="mark busywait" style="left:71.884%" title="2026-07-31T19:19:18.272Z  +10000ms (proc)
+busywait_progress stdin_end
+elapsed: 4090ms"></div>
+          <div class="mark busywait" style="left:71.955%" title="2026-07-31T19:19:18.282Z  +10010ms (proc)
+busywait_progress stdin_end
+elapsed: 4100ms"></div>
+          <div class="mark busywait" style="left:72.027%" title="2026-07-31T19:19:18.292Z  +10020ms (proc)
+busywait_progress stdin_end
+elapsed: 4110ms"></div>
+          <div class="mark busywait" style="left:72.099%" title="2026-07-31T19:19:18.302Z  +10030ms (proc)
+busywait_progress stdin_end
+elapsed: 4120ms"></div>
+          <div class="mark busywait" style="left:72.171%" title="2026-07-31T19:19:18.312Z  +10040ms (proc)
+busywait_progress stdin_end
+elapsed: 4130ms"></div>
+          <div class="mark busywait" style="left:72.243%" title="2026-07-31T19:19:18.322Z  +10050ms (proc)
+busywait_progress stdin_end
+elapsed: 4140ms"></div>
+          <div class="mark busywait" style="left:72.315%" title="2026-07-31T19:19:18.332Z  +10060ms (proc)
+busywait_progress stdin_end
+elapsed: 4150ms"></div>
+          <div class="mark busywait" style="left:72.387%" title="2026-07-31T19:19:18.342Z  +10070ms (proc)
+busywait_progress stdin_end
+elapsed: 4160ms"></div>
+          <div class="mark busywait" style="left:72.459%" title="2026-07-31T19:19:18.352Z  +10080ms (proc)
+busywait_progress stdin_end
+elapsed: 4170ms"></div>
+          <div class="mark busywait" style="left:72.531%" title="2026-07-31T19:19:18.362Z  +10090ms (proc)
+busywait_progress stdin_end
+elapsed: 4180ms"></div>
+          <div class="mark busywait" style="left:72.602%" title="2026-07-31T19:19:18.372Z  +10100ms (proc)
+busywait_progress stdin_end
+elapsed: 4190ms"></div>
+          <div class="mark busywait" style="left:72.674%" title="2026-07-31T19:19:18.382Z  +10110ms (proc)
+busywait_progress stdin_end
+elapsed: 4200ms"></div>
+          <div class="mark busywait" style="left:72.746%" title="2026-07-31T19:19:18.392Z  +10120ms (proc)
+busywait_progress stdin_end
+elapsed: 4210ms"></div>
+          <div class="mark busywait" style="left:72.818%" title="2026-07-31T19:19:18.402Z  +10130ms (proc)
+busywait_progress stdin_end
+elapsed: 4220ms"></div>
+          <div class="mark busywait" style="left:72.890%" title="2026-07-31T19:19:18.412Z  +10140ms (proc)
+busywait_progress stdin_end
+elapsed: 4230ms"></div>
+          <div class="mark busywait" style="left:72.962%" title="2026-07-31T19:19:18.422Z  +10150ms (proc)
+busywait_progress stdin_end
+elapsed: 4240ms"></div>
+          <div class="mark busywait" style="left:73.034%" title="2026-07-31T19:19:18.432Z  +10160ms (proc)
+busywait_progress stdin_end
+elapsed: 4250ms"></div>
+          <div class="mark busywait" style="left:73.106%" title="2026-07-31T19:19:18.442Z  +10170ms (proc)
+busywait_progress stdin_end
+elapsed: 4260ms"></div>
+          <div class="mark busywait" style="left:73.178%" title="2026-07-31T19:19:18.452Z  +10180ms (proc)
+busywait_progress stdin_end
+elapsed: 4270ms"></div>
+          <div class="mark busywait" style="left:73.249%" title="2026-07-31T19:19:18.462Z  +10190ms (proc)
+busywait_progress stdin_end
+elapsed: 4280ms"></div>
+          <div class="mark busywait" style="left:73.321%" title="2026-07-31T19:19:18.472Z  +10200ms (proc)
+busywait_progress stdin_end
+elapsed: 4290ms"></div>
+          <div class="mark busywait" style="left:73.393%" title="2026-07-31T19:19:18.482Z  +10210ms (proc)
+busywait_progress stdin_end
+elapsed: 4300ms"></div>
+          <div class="mark busywait" style="left:73.465%" title="2026-07-31T19:19:18.492Z  +10220ms (proc)
+busywait_progress stdin_end
+elapsed: 4310ms"></div>
+          <div class="mark busywait" style="left:73.537%" title="2026-07-31T19:19:18.502Z  +10230ms (proc)
+busywait_progress stdin_end
+elapsed: 4320ms"></div>
+          <div class="mark busywait" style="left:73.609%" title="2026-07-31T19:19:18.512Z  +10240ms (proc)
+busywait_progress stdin_end
+elapsed: 4330ms"></div>
+          <div class="mark busywait" style="left:73.681%" title="2026-07-31T19:19:18.522Z  +10250ms (proc)
+busywait_progress stdin_end
+elapsed: 4340ms"></div>
+          <div class="mark busywait" style="left:73.753%" title="2026-07-31T19:19:18.532Z  +10260ms (proc)
+busywait_progress stdin_end
+elapsed: 4350ms"></div>
+          <div class="mark busywait" style="left:73.825%" title="2026-07-31T19:19:18.542Z  +10270ms (proc)
+busywait_progress stdin_end
+elapsed: 4360ms"></div>
+          <div class="mark busywait" style="left:73.896%" title="2026-07-31T19:19:18.552Z  +10280ms (proc)
+busywait_progress stdin_end
+elapsed: 4370ms"></div>
+          <div class="mark busywait" style="left:73.968%" title="2026-07-31T19:19:18.562Z  +10290ms (proc)
+busywait_progress stdin_end
+elapsed: 4380ms"></div>
+          <div class="mark busywait" style="left:74.040%" title="2026-07-31T19:19:18.572Z  +10300ms (proc)
+busywait_progress stdin_end
+elapsed: 4390ms"></div>
+          <div class="mark busywait" style="left:74.112%" title="2026-07-31T19:19:18.582Z  +10310ms (proc)
+busywait_progress stdin_end
+elapsed: 4400ms"></div>
+          <div class="mark busywait" style="left:74.184%" title="2026-07-31T19:19:18.592Z  +10320ms (proc)
+busywait_progress stdin_end
+elapsed: 4410ms"></div>
+          <div class="mark busywait" style="left:74.256%" title="2026-07-31T19:19:18.602Z  +10330ms (proc)
+busywait_progress stdin_end
+elapsed: 4420ms"></div>
+          <div class="mark busywait" style="left:74.328%" title="2026-07-31T19:19:18.612Z  +10340ms (proc)
+busywait_progress stdin_end
+elapsed: 4430ms"></div>
+          <div class="mark busywait" style="left:74.400%" title="2026-07-31T19:19:18.622Z  +10350ms (proc)
+busywait_progress stdin_end
+elapsed: 4440ms"></div>
+          <div class="mark busywait" style="left:74.472%" title="2026-07-31T19:19:18.632Z  +10360ms (proc)
+busywait_progress stdin_end
+elapsed: 4450ms"></div>
+          <div class="mark busywait" style="left:74.543%" title="2026-07-31T19:19:18.642Z  +10370ms (proc)
+busywait_progress stdin_end
+elapsed: 4460ms"></div>
+          <div class="mark busywait" style="left:74.615%" title="2026-07-31T19:19:18.652Z  +10380ms (proc)
+busywait_progress stdin_end
+elapsed: 4470ms"></div>
+          <div class="mark busywait" style="left:74.687%" title="2026-07-31T19:19:18.662Z  +10390ms (proc)
+busywait_progress stdin_end
+elapsed: 4480ms"></div>
+          <div class="mark busywait" style="left:74.759%" title="2026-07-31T19:19:18.672Z  +10400ms (proc)
+busywait_progress stdin_end
+elapsed: 4490ms"></div>
+          <div class="mark busywait" style="left:74.831%" title="2026-07-31T19:19:18.682Z  +10410ms (proc)
+busywait_progress stdin_end
+elapsed: 4500ms"></div>
+          <div class="mark busywait" style="left:74.903%" title="2026-07-31T19:19:18.692Z  +10420ms (proc)
+busywait_progress stdin_end
+elapsed: 4510ms"></div>
+          <div class="mark busywait" style="left:74.975%" title="2026-07-31T19:19:18.702Z  +10430ms (proc)
+busywait_progress stdin_end
+elapsed: 4520ms"></div>
+          <div class="mark busywait" style="left:75.047%" title="2026-07-31T19:19:18.712Z  +10440ms (proc)
+busywait_progress stdin_end
+elapsed: 4530ms"></div>
+          <div class="mark busywait" style="left:75.119%" title="2026-07-31T19:19:18.722Z  +10450ms (proc)
+busywait_progress stdin_end
+elapsed: 4540ms"></div>
+          <div class="mark busywait" style="left:75.191%" title="2026-07-31T19:19:18.732Z  +10460ms (proc)
+busywait_progress stdin_end
+elapsed: 4550ms"></div>
+          <div class="mark busywait" style="left:75.262%" title="2026-07-31T19:19:18.742Z  +10470ms (proc)
+busywait_progress stdin_end
+elapsed: 4560ms"></div>
+          <div class="mark busywait" style="left:75.334%" title="2026-07-31T19:19:18.752Z  +10480ms (proc)
+busywait_progress stdin_end
+elapsed: 4570ms"></div>
+          <div class="mark busywait" style="left:75.406%" title="2026-07-31T19:19:18.762Z  +10490ms (proc)
+busywait_progress stdin_end
+elapsed: 4580ms"></div>
+          <div class="mark busywait" style="left:75.478%" title="2026-07-31T19:19:18.772Z  +10500ms (proc)
+busywait_progress stdin_end
+elapsed: 4590ms"></div>
+          <div class="mark busywait" style="left:75.550%" title="2026-07-31T19:19:18.782Z  +10510ms (proc)
+busywait_progress stdin_end
+elapsed: 4600ms"></div>
+          <div class="mark busywait" style="left:75.622%" title="2026-07-31T19:19:18.792Z  +10520ms (proc)
+busywait_progress stdin_end
+elapsed: 4610ms"></div>
+          <div class="mark busywait" style="left:75.694%" title="2026-07-31T19:19:18.802Z  +10530ms (proc)
+busywait_progress stdin_end
+elapsed: 4620ms"></div>
+          <div class="mark busywait" style="left:75.766%" title="2026-07-31T19:19:18.812Z  +10540ms (proc)
+busywait_progress stdin_end
+elapsed: 4630ms"></div>
+          <div class="mark busywait" style="left:75.838%" title="2026-07-31T19:19:18.822Z  +10550ms (proc)
+busywait_progress stdin_end
+elapsed: 4640ms"></div>
+          <div class="mark busywait" style="left:75.909%" title="2026-07-31T19:19:18.832Z  +10560ms (proc)
+busywait_progress stdin_end
+elapsed: 4650ms"></div>
+          <div class="mark busywait" style="left:75.981%" title="2026-07-31T19:19:18.842Z  +10570ms (proc)
+busywait_progress stdin_end
+elapsed: 4660ms"></div>
+          <div class="mark busywait" style="left:76.053%" title="2026-07-31T19:19:18.852Z  +10580ms (proc)
+busywait_progress stdin_end
+elapsed: 4670ms"></div>
+          <div class="mark busywait" style="left:76.125%" title="2026-07-31T19:19:18.862Z  +10590ms (proc)
+busywait_progress stdin_end
+elapsed: 4680ms"></div>
+          <div class="mark busywait" style="left:76.197%" title="2026-07-31T19:19:18.872Z  +10600ms (proc)
+busywait_progress stdin_end
+elapsed: 4690ms"></div>
+          <div class="mark busywait" style="left:76.269%" title="2026-07-31T19:19:18.882Z  +10610ms (proc)
+busywait_progress stdin_end
+elapsed: 4700ms"></div>
+          <div class="mark busywait" style="left:76.341%" title="2026-07-31T19:19:18.892Z  +10620ms (proc)
+busywait_progress stdin_end
+elapsed: 4710ms"></div>
+          <div class="mark busywait" style="left:76.413%" title="2026-07-31T19:19:18.902Z  +10630ms (proc)
+busywait_progress stdin_end
+elapsed: 4720ms"></div>
+          <div class="mark busywait" style="left:76.485%" title="2026-07-31T19:19:18.912Z  +10640ms (proc)
+busywait_progress stdin_end
+elapsed: 4730ms"></div>
+          <div class="mark busywait" style="left:76.556%" title="2026-07-31T19:19:18.922Z  +10650ms (proc)
+busywait_progress stdin_end
+elapsed: 4740ms"></div>
+          <div class="mark busywait" style="left:76.628%" title="2026-07-31T19:19:18.932Z  +10660ms (proc)
+busywait_progress stdin_end
+elapsed: 4750ms"></div>
+          <div class="mark busywait" style="left:76.700%" title="2026-07-31T19:19:18.942Z  +10670ms (proc)
+busywait_progress stdin_end
+elapsed: 4760ms"></div>
+          <div class="mark busywait" style="left:76.772%" title="2026-07-31T19:19:18.952Z  +10680ms (proc)
+busywait_progress stdin_end
+elapsed: 4770ms"></div>
+          <div class="mark busywait" style="left:76.844%" title="2026-07-31T19:19:18.962Z  +10690ms (proc)
+busywait_progress stdin_end
+elapsed: 4780ms"></div>
+          <div class="mark busywait" style="left:76.916%" title="2026-07-31T19:19:18.972Z  +10700ms (proc)
+busywait_progress stdin_end
+elapsed: 4790ms"></div>
+          <div class="mark busywait" style="left:76.988%" title="2026-07-31T19:19:18.982Z  +10710ms (proc)
+busywait_progress stdin_end
+elapsed: 4800ms"></div>
+          <div class="mark busywait" style="left:77.060%" title="2026-07-31T19:19:18.992Z  +10720ms (proc)
+busywait_progress stdin_end
+elapsed: 4810ms"></div>
+          <div class="mark busywait" style="left:77.132%" title="2026-07-31T19:19:19.002Z  +10730ms (proc)
+busywait_progress stdin_end
+elapsed: 4820ms"></div>
+          <div class="mark busywait" style="left:77.203%" title="2026-07-31T19:19:19.012Z  +10740ms (proc)
+busywait_progress stdin_end
+elapsed: 4830ms"></div>
+          <div class="mark busywait" style="left:77.275%" title="2026-07-31T19:19:19.022Z  +10750ms (proc)
+busywait_progress stdin_end
+elapsed: 4840ms"></div>
+          <div class="mark busywait" style="left:77.347%" title="2026-07-31T19:19:19.032Z  +10760ms (proc)
+busywait_progress stdin_end
+elapsed: 4850ms"></div>
+          <div class="mark busywait" style="left:77.419%" title="2026-07-31T19:19:19.042Z  +10770ms (proc)
+busywait_progress stdin_end
+elapsed: 4860ms"></div>
+          <div class="mark busywait" style="left:77.491%" title="2026-07-31T19:19:19.052Z  +10780ms (proc)
+busywait_progress stdin_end
+elapsed: 4870ms"></div>
+          <div class="mark busywait" style="left:77.563%" title="2026-07-31T19:19:19.062Z  +10790ms (proc)
+busywait_progress stdin_end
+elapsed: 4880ms"></div>
+          <div class="mark busywait" style="left:77.635%" title="2026-07-31T19:19:19.072Z  +10800ms (proc)
+busywait_progress stdin_end
+elapsed: 4890ms"></div>
+          <div class="mark busywait" style="left:77.707%" title="2026-07-31T19:19:19.082Z  +10810ms (proc)
+busywait_progress stdin_end
+elapsed: 4900ms"></div>
+          <div class="mark busywait" style="left:77.779%" title="2026-07-31T19:19:19.092Z  +10820ms (proc)
+busywait_progress stdin_end
+elapsed: 4910ms"></div>
+          <div class="mark busywait" style="left:77.850%" title="2026-07-31T19:19:19.102Z  +10830ms (proc)
+busywait_progress stdin_end
+elapsed: 4920ms"></div>
+          <div class="mark busywait" style="left:77.922%" title="2026-07-31T19:19:19.112Z  +10840ms (proc)
+busywait_progress stdin_end
+elapsed: 4930ms"></div>
+          <div class="mark busywait" style="left:77.994%" title="2026-07-31T19:19:19.122Z  +10850ms (proc)
+busywait_progress stdin_end
+elapsed: 4940ms"></div>
+          <div class="mark busywait" style="left:78.066%" title="2026-07-31T19:19:19.132Z  +10860ms (proc)
+busywait_progress stdin_end
+elapsed: 4950ms"></div>
+          <div class="mark busywait" style="left:78.138%" title="2026-07-31T19:19:19.142Z  +10870ms (proc)
+busywait_progress stdin_end
+elapsed: 4960ms"></div>
+          <div class="mark busywait" style="left:78.210%" title="2026-07-31T19:19:19.152Z  +10880ms (proc)
+busywait_progress stdin_end
+elapsed: 4970ms"></div>
+          <div class="mark busywait" style="left:78.282%" title="2026-07-31T19:19:19.162Z  +10890ms (proc)
+busywait_progress stdin_end
+elapsed: 4980ms"></div>
+          <div class="mark busywait" style="left:78.354%" title="2026-07-31T19:19:19.172Z  +10900ms (proc)
+busywait_progress stdin_end
+elapsed: 4990ms"></div>
+          <div class="mark busywait" style="left:78.426%" title="2026-07-31T19:19:19.182Z  +10910ms (proc)
+busywait_progress stdin_end
+elapsed: 5000ms"></div>
+          <div class="mark busywait" style="left:78.497%" title="2026-07-31T19:19:19.192Z  +10920ms (proc)
+busywait_progress stdin_end
+elapsed: 5010ms"></div>
+          <div class="mark busywait" style="left:78.569%" title="2026-07-31T19:19:19.202Z  +10930ms (proc)
+busywait_progress stdin_end
+elapsed: 5020ms"></div>
+          <div class="mark busywait" style="left:78.641%" title="2026-07-31T19:19:19.212Z  +10940ms (proc)
+busywait_progress stdin_end
+elapsed: 5030ms"></div>
+          <div class="mark busywait" style="left:78.713%" title="2026-07-31T19:19:19.222Z  +10950ms (proc)
+busywait_progress stdin_end
+elapsed: 5040ms"></div>
+          <div class="mark busywait" style="left:78.785%" title="2026-07-31T19:19:19.232Z  +10960ms (proc)
+busywait_progress stdin_end
+elapsed: 5050ms"></div>
+          <div class="mark busywait" style="left:78.857%" title="2026-07-31T19:19:19.242Z  +10970ms (proc)
+busywait_progress stdin_end
+elapsed: 5060ms"></div>
+          <div class="mark busywait" style="left:78.929%" title="2026-07-31T19:19:19.252Z  +10980ms (proc)
+busywait_progress stdin_end
+elapsed: 5070ms"></div>
+          <div class="mark busywait" style="left:79.001%" title="2026-07-31T19:19:19.262Z  +10990ms (proc)
+busywait_progress stdin_end
+elapsed: 5080ms"></div>
+          <div class="mark busywait" style="left:79.073%" title="2026-07-31T19:19:19.272Z  +11000ms (proc)
+busywait_progress stdin_end
+elapsed: 5090ms"></div>
+          <div class="mark busywait" style="left:79.145%" title="2026-07-31T19:19:19.282Z  +11010ms (proc)
+busywait_progress stdin_end
+elapsed: 5100ms"></div>
+          <div class="mark busywait" style="left:79.216%" title="2026-07-31T19:19:19.292Z  +11020ms (proc)
+busywait_progress stdin_end
+elapsed: 5110ms"></div>
+          <div class="mark busywait" style="left:79.288%" title="2026-07-31T19:19:19.302Z  +11030ms (proc)
+busywait_progress stdin_end
+elapsed: 5120ms"></div>
+          <div class="mark busywait" style="left:79.360%" title="2026-07-31T19:19:19.312Z  +11040ms (proc)
+busywait_progress stdin_end
+elapsed: 5130ms"></div>
+          <div class="mark busywait" style="left:79.432%" title="2026-07-31T19:19:19.322Z  +11050ms (proc)
+busywait_progress stdin_end
+elapsed: 5140ms"></div>
+          <div class="mark busywait" style="left:79.504%" title="2026-07-31T19:19:19.332Z  +11060ms (proc)
+busywait_progress stdin_end
+elapsed: 5150ms"></div>
+          <div class="mark busywait" style="left:79.576%" title="2026-07-31T19:19:19.342Z  +11070ms (proc)
+busywait_progress stdin_end
+elapsed: 5160ms"></div>
+          <div class="mark busywait" style="left:79.648%" title="2026-07-31T19:19:19.352Z  +11080ms (proc)
+busywait_progress stdin_end
+elapsed: 5170ms"></div>
+          <div class="mark busywait" style="left:79.720%" title="2026-07-31T19:19:19.362Z  +11090ms (proc)
+busywait_progress stdin_end
+elapsed: 5180ms"></div>
+          <div class="mark busywait" style="left:79.792%" title="2026-07-31T19:19:19.372Z  +11100ms (proc)
+busywait_progress stdin_end
+elapsed: 5190ms"></div>
+          <div class="mark busywait" style="left:79.863%" title="2026-07-31T19:19:19.382Z  +11110ms (proc)
+busywait_progress stdin_end
+elapsed: 5200ms"></div>
+          <div class="mark busywait" style="left:79.935%" title="2026-07-31T19:19:19.392Z  +11120ms (proc)
+busywait_progress stdin_end
+elapsed: 5210ms"></div>
+          <div class="mark busywait" style="left:80.007%" title="2026-07-31T19:19:19.402Z  +11130ms (proc)
+busywait_progress stdin_end
+elapsed: 5220ms"></div>
+          <div class="mark busywait" style="left:80.079%" title="2026-07-31T19:19:19.412Z  +11140ms (proc)
+busywait_progress stdin_end
+elapsed: 5230ms"></div>
+          <div class="mark busywait" style="left:80.151%" title="2026-07-31T19:19:19.422Z  +11150ms (proc)
+busywait_progress stdin_end
+elapsed: 5240ms"></div>
+          <div class="mark busywait" style="left:80.223%" title="2026-07-31T19:19:19.432Z  +11160ms (proc)
+busywait_progress stdin_end
+elapsed: 5250ms"></div>
+          <div class="mark busywait" style="left:80.295%" title="2026-07-31T19:19:19.442Z  +11170ms (proc)
+busywait_progress stdin_end
+elapsed: 5260ms"></div>
+          <div class="mark busywait" style="left:80.367%" title="2026-07-31T19:19:19.452Z  +11180ms (proc)
+busywait_progress stdin_end
+elapsed: 5270ms"></div>
+          <div class="mark busywait" style="left:80.439%" title="2026-07-31T19:19:19.462Z  +11190ms (proc)
+busywait_progress stdin_end
+elapsed: 5280ms"></div>
+          <div class="mark busywait" style="left:80.510%" title="2026-07-31T19:19:19.472Z  +11200ms (proc)
+busywait_progress stdin_end
+elapsed: 5290ms"></div>
+          <div class="mark busywait" style="left:80.582%" title="2026-07-31T19:19:19.482Z  +11210ms (proc)
+busywait_progress stdin_end
+elapsed: 5300ms"></div>
+          <div class="mark busywait" style="left:80.654%" title="2026-07-31T19:19:19.492Z  +11220ms (proc)
+busywait_progress stdin_end
+elapsed: 5310ms"></div>
+          <div class="mark busywait" style="left:80.726%" title="2026-07-31T19:19:19.502Z  +11230ms (proc)
+busywait_progress stdin_end
+elapsed: 5320ms"></div>
+          <div class="mark busywait" style="left:80.798%" title="2026-07-31T19:19:19.512Z  +11240ms (proc)
+busywait_progress stdin_end
+elapsed: 5330ms"></div>
+          <div class="mark busywait" style="left:80.870%" title="2026-07-31T19:19:19.522Z  +11250ms (proc)
+busywait_progress stdin_end
+elapsed: 5340ms"></div>
+          <div class="mark busywait" style="left:80.942%" title="2026-07-31T19:19:19.532Z  +11260ms (proc)
+busywait_progress stdin_end
+elapsed: 5350ms"></div>
+          <div class="mark busywait" style="left:81.014%" title="2026-07-31T19:19:19.542Z  +11270ms (proc)
+busywait_progress stdin_end
+elapsed: 5360ms"></div>
+          <div class="mark busywait" style="left:81.086%" title="2026-07-31T19:19:19.552Z  +11280ms (proc)
+busywait_progress stdin_end
+elapsed: 5370ms"></div>
+          <div class="mark busywait" style="left:81.157%" title="2026-07-31T19:19:19.562Z  +11290ms (proc)
+busywait_progress stdin_end
+elapsed: 5380ms"></div>
+          <div class="mark busywait" style="left:81.229%" title="2026-07-31T19:19:19.572Z  +11300ms (proc)
+busywait_progress stdin_end
+elapsed: 5390ms"></div>
+          <div class="mark busywait" style="left:81.301%" title="2026-07-31T19:19:19.582Z  +11310ms (proc)
+busywait_progress stdin_end
+elapsed: 5400ms"></div>
+          <div class="mark busywait" style="left:81.373%" title="2026-07-31T19:19:19.592Z  +11320ms (proc)
+busywait_progress stdin_end
+elapsed: 5410ms"></div>
+          <div class="mark busywait" style="left:81.445%" title="2026-07-31T19:19:19.602Z  +11330ms (proc)
+busywait_progress stdin_end
+elapsed: 5420ms"></div>
+          <div class="mark busywait" style="left:81.517%" title="2026-07-31T19:19:19.612Z  +11340ms (proc)
+busywait_progress stdin_end
+elapsed: 5430ms"></div>
+          <div class="mark busywait" style="left:81.589%" title="2026-07-31T19:19:19.622Z  +11350ms (proc)
+busywait_progress stdin_end
+elapsed: 5440ms"></div>
+          <div class="mark busywait" style="left:81.661%" title="2026-07-31T19:19:19.632Z  +11360ms (proc)
+busywait_progress stdin_end
+elapsed: 5450ms"></div>
+          <div class="mark busywait" style="left:81.733%" title="2026-07-31T19:19:19.642Z  +11370ms (proc)
+busywait_progress stdin_end
+elapsed: 5460ms"></div>
+          <div class="mark busywait" style="left:81.804%" title="2026-07-31T19:19:19.652Z  +11380ms (proc)
+busywait_progress stdin_end
+elapsed: 5470ms"></div>
+          <div class="mark busywait" style="left:81.876%" title="2026-07-31T19:19:19.662Z  +11390ms (proc)
+busywait_progress stdin_end
+elapsed: 5480ms"></div>
+          <div class="mark busywait" style="left:81.948%" title="2026-07-31T19:19:19.672Z  +11400ms (proc)
+busywait_progress stdin_end
+elapsed: 5490ms"></div>
+          <div class="mark busywait" style="left:82.020%" title="2026-07-31T19:19:19.682Z  +11410ms (proc)
+busywait_progress stdin_end
+elapsed: 5500ms"></div>
+          <div class="mark busywait" style="left:82.092%" title="2026-07-31T19:19:19.692Z  +11420ms (proc)
+busywait_progress stdin_end
+elapsed: 5510ms"></div>
+          <div class="mark busywait" style="left:82.164%" title="2026-07-31T19:19:19.702Z  +11430ms (proc)
+busywait_progress stdin_end
+elapsed: 5520ms"></div>
+          <div class="mark busywait" style="left:82.236%" title="2026-07-31T19:19:19.712Z  +11440ms (proc)
+busywait_progress stdin_end
+elapsed: 5530ms"></div>
+          <div class="mark busywait" style="left:82.308%" title="2026-07-31T19:19:19.722Z  +11450ms (proc)
+busywait_progress stdin_end
+elapsed: 5540ms"></div>
+          <div class="mark busywait" style="left:82.380%" title="2026-07-31T19:19:19.732Z  +11460ms (proc)
+busywait_progress stdin_end
+elapsed: 5550ms"></div>
+          <div class="mark busywait" style="left:82.451%" title="2026-07-31T19:19:19.742Z  +11470ms (proc)
+busywait_progress stdin_end
+elapsed: 5560ms"></div>
+          <div class="mark busywait" style="left:82.523%" title="2026-07-31T19:19:19.752Z  +11480ms (proc)
+busywait_progress stdin_end
+elapsed: 5570ms"></div>
+          <div class="mark busywait" style="left:82.595%" title="2026-07-31T19:19:19.762Z  +11490ms (proc)
+busywait_progress stdin_end
+elapsed: 5580ms"></div>
+          <div class="mark busywait" style="left:82.667%" title="2026-07-31T19:19:19.772Z  +11500ms (proc)
+busywait_progress stdin_end
+elapsed: 5590ms"></div>
+          <div class="mark busywait" style="left:82.739%" title="2026-07-31T19:19:19.782Z  +11510ms (proc)
+busywait_progress stdin_end
+elapsed: 5600ms"></div>
+          <div class="mark busywait" style="left:82.811%" title="2026-07-31T19:19:19.792Z  +11520ms (proc)
+busywait_progress stdin_end
+elapsed: 5610ms"></div>
+          <div class="mark busywait" style="left:82.883%" title="2026-07-31T19:19:19.802Z  +11530ms (proc)
+busywait_progress stdin_end
+elapsed: 5620ms"></div>
+          <div class="mark busywait" style="left:82.955%" title="2026-07-31T19:19:19.812Z  +11540ms (proc)
+busywait_progress stdin_end
+elapsed: 5630ms"></div>
+          <div class="mark busywait" style="left:83.027%" title="2026-07-31T19:19:19.822Z  +11550ms (proc)
+busywait_progress stdin_end
+elapsed: 5640ms"></div>
+          <div class="mark busywait" style="left:83.098%" title="2026-07-31T19:19:19.832Z  +11560ms (proc)
+busywait_progress stdin_end
+elapsed: 5650ms"></div>
+          <div class="mark busywait" style="left:83.170%" title="2026-07-31T19:19:19.842Z  +11570ms (proc)
+busywait_progress stdin_end
+elapsed: 5660ms"></div>
+          <div class="mark busywait" style="left:83.242%" title="2026-07-31T19:19:19.852Z  +11580ms (proc)
+busywait_progress stdin_end
+elapsed: 5670ms"></div>
+          <div class="mark busywait" style="left:83.314%" title="2026-07-31T19:19:19.862Z  +11590ms (proc)
+busywait_progress stdin_end
+elapsed: 5680ms"></div>
+          <div class="mark busywait" style="left:83.386%" title="2026-07-31T19:19:19.872Z  +11600ms (proc)
+busywait_progress stdin_end
+elapsed: 5690ms"></div>
+          <div class="mark busywait" style="left:83.458%" title="2026-07-31T19:19:19.882Z  +11610ms (proc)
+busywait_progress stdin_end
+elapsed: 5700ms"></div>
+          <div class="mark busywait" style="left:83.530%" title="2026-07-31T19:19:19.892Z  +11620ms (proc)
+busywait_progress stdin_end
+elapsed: 5710ms"></div>
+          <div class="mark busywait" style="left:83.602%" title="2026-07-31T19:19:19.902Z  +11630ms (proc)
+busywait_progress stdin_end
+elapsed: 5720ms"></div>
+          <div class="mark busywait" style="left:83.674%" title="2026-07-31T19:19:19.912Z  +11640ms (proc)
+busywait_progress stdin_end
+elapsed: 5730ms"></div>
+          <div class="mark busywait" style="left:83.746%" title="2026-07-31T19:19:19.922Z  +11650ms (proc)
+busywait_progress stdin_end
+elapsed: 5740ms"></div>
+          <div class="mark busywait" style="left:83.817%" title="2026-07-31T19:19:19.932Z  +11660ms (proc)
+busywait_progress stdin_end
+elapsed: 5750ms"></div>
+          <div class="mark busywait" style="left:83.889%" title="2026-07-31T19:19:19.942Z  +11670ms (proc)
+busywait_progress stdin_end
+elapsed: 5760ms"></div>
+          <div class="mark busywait" style="left:83.961%" title="2026-07-31T19:19:19.952Z  +11680ms (proc)
+busywait_progress stdin_end
+elapsed: 5770ms"></div>
+          <div class="mark busywait" style="left:84.033%" title="2026-07-31T19:19:19.962Z  +11690ms (proc)
+busywait_progress stdin_end
+elapsed: 5780ms"></div>
+          <div class="mark busywait" style="left:84.105%" title="2026-07-31T19:19:19.972Z  +11700ms (proc)
+busywait_progress stdin_end
+elapsed: 5790ms"></div>
+          <div class="mark busywait" style="left:84.177%" title="2026-07-31T19:19:19.982Z  +11710ms (proc)
+busywait_progress stdin_end
+elapsed: 5800ms"></div>
+          <div class="mark busywait" style="left:84.249%" title="2026-07-31T19:19:19.992Z  +11720ms (proc)
+busywait_progress stdin_end
+elapsed: 5810ms"></div>
+          <div class="mark busywait" style="left:84.321%" title="2026-07-31T19:19:20.002Z  +11730ms (proc)
+busywait_progress stdin_end
+elapsed: 5820ms"></div>
+          <div class="mark busywait" style="left:84.393%" title="2026-07-31T19:19:20.012Z  +11740ms (proc)
+busywait_progress stdin_end
+elapsed: 5830ms"></div>
+          <div class="mark busywait" style="left:84.464%" title="2026-07-31T19:19:20.022Z  +11750ms (proc)
+busywait_progress stdin_end
+elapsed: 5840ms"></div>
+          <div class="mark busywait" style="left:84.536%" title="2026-07-31T19:19:20.032Z  +11760ms (proc)
+busywait_progress stdin_end
+elapsed: 5850ms"></div>
+          <div class="mark busywait" style="left:84.608%" title="2026-07-31T19:19:20.042Z  +11770ms (proc)
+busywait_progress stdin_end
+elapsed: 5860ms"></div>
+          <div class="mark busywait" style="left:84.680%" title="2026-07-31T19:19:20.052Z  +11780ms (proc)
+busywait_progress stdin_end
+elapsed: 5870ms"></div>
+          <div class="mark busywait" style="left:84.752%" title="2026-07-31T19:19:20.062Z  +11790ms (proc)
+busywait_progress stdin_end
+elapsed: 5880ms"></div>
+          <div class="mark busywait" style="left:84.824%" title="2026-07-31T19:19:20.072Z  +11800ms (proc)
+busywait_progress stdin_end
+elapsed: 5890ms"></div>
+          <div class="mark busywait" style="left:84.896%" title="2026-07-31T19:19:20.082Z  +11810ms (proc)
+busywait_progress stdin_end
+elapsed: 5900ms"></div>
+          <div class="mark busywait" style="left:84.968%" title="2026-07-31T19:19:20.092Z  +11820ms (proc)
+busywait_progress stdin_end
+elapsed: 5910ms"></div>
+          <div class="mark busywait" style="left:85.040%" title="2026-07-31T19:19:20.102Z  +11830ms (proc)
+busywait_progress stdin_end
+elapsed: 5920ms"></div>
+          <div class="mark busywait" style="left:85.111%" title="2026-07-31T19:19:20.112Z  +11840ms (proc)
+busywait_progress stdin_end
+elapsed: 5930ms"></div>
+          <div class="mark busywait" style="left:85.183%" title="2026-07-31T19:19:20.122Z  +11850ms (proc)
+busywait_progress stdin_end
+elapsed: 5940ms"></div>
+          <div class="mark busywait" style="left:85.255%" title="2026-07-31T19:19:20.132Z  +11860ms (proc)
+busywait_progress stdin_end
+elapsed: 5950ms"></div>
+          <div class="mark busywait" style="left:85.327%" title="2026-07-31T19:19:20.142Z  +11870ms (proc)
+busywait_progress stdin_end
+elapsed: 5960ms"></div>
+          <div class="mark busywait" style="left:85.399%" title="2026-07-31T19:19:20.152Z  +11880ms (proc)
+busywait_progress stdin_end
+elapsed: 5970ms"></div>
+          <div class="mark busywait" style="left:85.471%" title="2026-07-31T19:19:20.162Z  +11890ms (proc)
+busywait_progress stdin_end
+elapsed: 5980ms"></div>
+          <div class="mark busywait" style="left:85.543%" title="2026-07-31T19:19:20.172Z  +11900ms (proc)
+busywait_progress stdin_end
+elapsed: 5990ms"></div>
+          <div class="mark busywait" style="left:85.615%" title="2026-07-31T19:19:20.182Z  +11910ms (proc)
+busywait_progress stdin_end
+elapsed: 6000ms"></div>
+          <div class="mark busywait" style="left:85.687%" title="2026-07-31T19:19:20.192Z  +11920ms (proc)
+busywait_progress stdin_end
+elapsed: 6010ms"></div>
+          <div class="mark busywait" style="left:85.758%" title="2026-07-31T19:19:20.202Z  +11930ms (proc)
+busywait_progress stdin_end
+elapsed: 6020ms"></div>
+          <div class="mark busywait" style="left:85.830%" title="2026-07-31T19:19:20.212Z  +11940ms (proc)
+busywait_progress stdin_end
+elapsed: 6030ms"></div>
+          <div class="mark busywait" style="left:85.902%" title="2026-07-31T19:19:20.222Z  +11950ms (proc)
+busywait_progress stdin_end
+elapsed: 6040ms"></div>
+          <div class="mark busywait" style="left:85.974%" title="2026-07-31T19:19:20.232Z  +11960ms (proc)
+busywait_progress stdin_end
+elapsed: 6050ms"></div>
+          <div class="mark busywait" style="left:86.046%" title="2026-07-31T19:19:20.242Z  +11970ms (proc)
+busywait_progress stdin_end
+elapsed: 6060ms"></div>
+          <div class="mark busywait" style="left:86.118%" title="2026-07-31T19:19:20.252Z  +11980ms (proc)
+busywait_progress stdin_end
+elapsed: 6070ms"></div>
+          <div class="mark busywait" style="left:86.190%" title="2026-07-31T19:19:20.262Z  +11990ms (proc)
+busywait_progress stdin_end
+elapsed: 6080ms"></div>
+          <div class="mark busywait" style="left:86.262%" title="2026-07-31T19:19:20.272Z  +12000ms (proc)
+busywait_progress stdin_end
+elapsed: 6090ms"></div>
+          <div class="mark busywait" style="left:86.334%" title="2026-07-31T19:19:20.282Z  +12010ms (proc)
+busywait_progress stdin_end
+elapsed: 6100ms"></div>
+          <div class="mark busywait" style="left:86.405%" title="2026-07-31T19:19:20.292Z  +12020ms (proc)
+busywait_progress stdin_end
+elapsed: 6110ms"></div>
+          <div class="mark busywait" style="left:86.477%" title="2026-07-31T19:19:20.302Z  +12030ms (proc)
+busywait_progress stdin_end
+elapsed: 6120ms"></div>
+          <div class="mark busywait" style="left:86.549%" title="2026-07-31T19:19:20.312Z  +12040ms (proc)
+busywait_progress stdin_end
+elapsed: 6130ms"></div>
+          <div class="mark busywait" style="left:86.621%" title="2026-07-31T19:19:20.322Z  +12050ms (proc)
+busywait_progress stdin_end
+elapsed: 6140ms"></div>
+          <div class="mark busywait" style="left:86.693%" title="2026-07-31T19:19:20.332Z  +12060ms (proc)
+busywait_progress stdin_end
+elapsed: 6150ms"></div>
+          <div class="mark busywait" style="left:86.765%" title="2026-07-31T19:19:20.342Z  +12070ms (proc)
+busywait_progress stdin_end
+elapsed: 6160ms"></div>
+          <div class="mark busywait" style="left:86.837%" title="2026-07-31T19:19:20.352Z  +12080ms (proc)
+busywait_progress stdin_end
+elapsed: 6170ms"></div>
+          <div class="mark busywait" style="left:86.909%" title="2026-07-31T19:19:20.362Z  +12090ms (proc)
+busywait_progress stdin_end
+elapsed: 6180ms"></div>
+          <div class="mark busywait" style="left:86.981%" title="2026-07-31T19:19:20.372Z  +12100ms (proc)
+busywait_progress stdin_end
+elapsed: 6190ms"></div>
+          <div class="mark busywait" style="left:87.052%" title="2026-07-31T19:19:20.382Z  +12110ms (proc)
+busywait_progress stdin_end
+elapsed: 6200ms"></div>
+          <div class="mark busywait" style="left:87.124%" title="2026-07-31T19:19:20.392Z  +12120ms (proc)
+busywait_progress stdin_end
+elapsed: 6210ms"></div>
+          <div class="mark busywait" style="left:87.196%" title="2026-07-31T19:19:20.402Z  +12130ms (proc)
+busywait_progress stdin_end
+elapsed: 6220ms"></div>
+          <div class="mark busywait" style="left:87.268%" title="2026-07-31T19:19:20.412Z  +12140ms (proc)
+busywait_progress stdin_end
+elapsed: 6230ms"></div>
+          <div class="mark busywait" style="left:87.340%" title="2026-07-31T19:19:20.422Z  +12150ms (proc)
+busywait_progress stdin_end
+elapsed: 6240ms"></div>
+          <div class="mark busywait" style="left:87.412%" title="2026-07-31T19:19:20.432Z  +12160ms (proc)
+busywait_progress stdin_end
+elapsed: 6250ms"></div>
+          <div class="mark busywait" style="left:87.484%" title="2026-07-31T19:19:20.442Z  +12170ms (proc)
+busywait_progress stdin_end
+elapsed: 6260ms"></div>
+          <div class="mark busywait" style="left:87.556%" title="2026-07-31T19:19:20.452Z  +12180ms (proc)
+busywait_progress stdin_end
+elapsed: 6270ms"></div>
+          <div class="mark busywait" style="left:87.628%" title="2026-07-31T19:19:20.462Z  +12190ms (proc)
+busywait_progress stdin_end
+elapsed: 6280ms"></div>
+          <div class="mark busywait" style="left:87.699%" title="2026-07-31T19:19:20.472Z  +12200ms (proc)
+busywait_progress stdin_end
+elapsed: 6290ms"></div>
+          <div class="mark busywait" style="left:87.771%" title="2026-07-31T19:19:20.482Z  +12210ms (proc)
+busywait_progress stdin_end
+elapsed: 6300ms"></div>
+          <div class="mark busywait" style="left:87.843%" title="2026-07-31T19:19:20.492Z  +12220ms (proc)
+busywait_progress stdin_end
+elapsed: 6310ms"></div>
+          <div class="mark busywait" style="left:87.915%" title="2026-07-31T19:19:20.502Z  +12230ms (proc)
+busywait_progress stdin_end
+elapsed: 6320ms"></div>
+          <div class="mark busywait" style="left:87.987%" title="2026-07-31T19:19:20.512Z  +12240ms (proc)
+busywait_progress stdin_end
+elapsed: 6330ms"></div>
+          <div class="mark busywait" style="left:88.059%" title="2026-07-31T19:19:20.522Z  +12250ms (proc)
+busywait_progress stdin_end
+elapsed: 6340ms"></div>
+          <div class="mark busywait" style="left:88.131%" title="2026-07-31T19:19:20.532Z  +12260ms (proc)
+busywait_progress stdin_end
+elapsed: 6350ms"></div>
+          <div class="mark busywait" style="left:88.203%" title="2026-07-31T19:19:20.542Z  +12270ms (proc)
+busywait_progress stdin_end
+elapsed: 6360ms"></div>
+          <div class="mark busywait" style="left:88.275%" title="2026-07-31T19:19:20.552Z  +12280ms (proc)
+busywait_progress stdin_end
+elapsed: 6370ms"></div>
+          <div class="mark busywait" style="left:88.347%" title="2026-07-31T19:19:20.562Z  +12290ms (proc)
+busywait_progress stdin_end
+elapsed: 6380ms"></div>
+          <div class="mark busywait" style="left:88.418%" title="2026-07-31T19:19:20.572Z  +12300ms (proc)
+busywait_progress stdin_end
+elapsed: 6390ms"></div>
+          <div class="mark busywait" style="left:88.490%" title="2026-07-31T19:19:20.582Z  +12310ms (proc)
+busywait_progress stdin_end
+elapsed: 6400ms"></div>
+          <div class="mark busywait" style="left:88.562%" title="2026-07-31T19:19:20.592Z  +12320ms (proc)
+busywait_progress stdin_end
+elapsed: 6410ms"></div>
+          <div class="mark busywait" style="left:88.634%" title="2026-07-31T19:19:20.602Z  +12330ms (proc)
+busywait_progress stdin_end
+elapsed: 6420ms"></div>
+          <div class="mark busywait" style="left:88.706%" title="2026-07-31T19:19:20.612Z  +12340ms (proc)
+busywait_progress stdin_end
+elapsed: 6430ms"></div>
+          <div class="mark busywait" style="left:88.778%" title="2026-07-31T19:19:20.622Z  +12350ms (proc)
+busywait_progress stdin_end
+elapsed: 6440ms"></div>
+          <div class="mark busywait" style="left:88.850%" title="2026-07-31T19:19:20.632Z  +12360ms (proc)
+busywait_progress stdin_end
+elapsed: 6450ms"></div>
+          <div class="mark busywait" style="left:88.922%" title="2026-07-31T19:19:20.642Z  +12370ms (proc)
+busywait_progress stdin_end
+elapsed: 6460ms"></div>
+          <div class="mark busywait" style="left:88.994%" title="2026-07-31T19:19:20.652Z  +12380ms (proc)
+busywait_progress stdin_end
+elapsed: 6470ms"></div>
+          <div class="mark busywait" style="left:89.065%" title="2026-07-31T19:19:20.662Z  +12390ms (proc)
+busywait_progress stdin_end
+elapsed: 6480ms"></div>
+          <div class="mark busywait" style="left:89.137%" title="2026-07-31T19:19:20.672Z  +12400ms (proc)
+busywait_progress stdin_end
+elapsed: 6490ms"></div>
+          <div class="mark busywait" style="left:89.209%" title="2026-07-31T19:19:20.682Z  +12410ms (proc)
+busywait_progress stdin_end
+elapsed: 6500ms"></div>
+          <div class="mark busywait" style="left:89.281%" title="2026-07-31T19:19:20.692Z  +12420ms (proc)
+busywait_progress stdin_end
+elapsed: 6510ms"></div>
+          <div class="mark busywait" style="left:89.353%" title="2026-07-31T19:19:20.702Z  +12430ms (proc)
+busywait_progress stdin_end
+elapsed: 6520ms"></div>
+          <div class="mark busywait" style="left:89.425%" title="2026-07-31T19:19:20.712Z  +12440ms (proc)
+busywait_progress stdin_end
+elapsed: 6530ms"></div>
+          <div class="mark busywait" style="left:89.497%" title="2026-07-31T19:19:20.722Z  +12450ms (proc)
+busywait_progress stdin_end
+elapsed: 6540ms"></div>
+          <div class="mark busywait" style="left:89.569%" title="2026-07-31T19:19:20.732Z  +12460ms (proc)
+busywait_progress stdin_end
+elapsed: 6550ms"></div>
+          <div class="mark busywait" style="left:89.641%" title="2026-07-31T19:19:20.742Z  +12470ms (proc)
+busywait_progress stdin_end
+elapsed: 6560ms"></div>
+          <div class="mark busywait" style="left:89.712%" title="2026-07-31T19:19:20.752Z  +12480ms (proc)
+busywait_progress stdin_end
+elapsed: 6570ms"></div>
+          <div class="mark busywait" style="left:89.784%" title="2026-07-31T19:19:20.762Z  +12490ms (proc)
+busywait_progress stdin_end
+elapsed: 6580ms"></div>
+          <div class="mark busywait" style="left:89.856%" title="2026-07-31T19:19:20.772Z  +12500ms (proc)
+busywait_progress stdin_end
+elapsed: 6590ms"></div>
+          <div class="mark busywait" style="left:89.928%" title="2026-07-31T19:19:20.782Z  +12510ms (proc)
+busywait_progress stdin_end
+elapsed: 6600ms"></div>
+          <div class="mark busywait" style="left:90.000%" title="2026-07-31T19:19:20.792Z  +12520ms (proc)
+busywait_progress stdin_end
+elapsed: 6610ms"></div>
+          <div class="mark busywait" style="left:90.072%" title="2026-07-31T19:19:20.802Z  +12530ms (proc)
+busywait_progress stdin_end
+elapsed: 6620ms"></div>
+          <div class="mark busywait" style="left:90.144%" title="2026-07-31T19:19:20.812Z  +12540ms (proc)
+busywait_progress stdin_end
+elapsed: 6630ms"></div>
+          <div class="mark busywait" style="left:90.216%" title="2026-07-31T19:19:20.822Z  +12550ms (proc)
+busywait_progress stdin_end
+elapsed: 6640ms"></div>
+          <div class="mark busywait" style="left:90.288%" title="2026-07-31T19:19:20.832Z  +12560ms (proc)
+busywait_progress stdin_end
+elapsed: 6650ms"></div>
+          <div class="mark busywait" style="left:90.359%" title="2026-07-31T19:19:20.842Z  +12570ms (proc)
+busywait_progress stdin_end
+elapsed: 6660ms"></div>
+          <div class="mark busywait" style="left:90.431%" title="2026-07-31T19:19:20.852Z  +12580ms (proc)
+busywait_progress stdin_end
+elapsed: 6670ms"></div>
+          <div class="mark busywait" style="left:90.503%" title="2026-07-31T19:19:20.862Z  +12590ms (proc)
+busywait_progress stdin_end
+elapsed: 6680ms"></div>
+          <div class="mark busywait" style="left:90.575%" title="2026-07-31T19:19:20.872Z  +12600ms (proc)
+busywait_progress stdin_end
+elapsed: 6690ms"></div>
+          <div class="mark busywait" style="left:90.647%" title="2026-07-31T19:19:20.882Z  +12610ms (proc)
+busywait_progress stdin_end
+elapsed: 6700ms"></div>
+          <div class="mark busywait" style="left:90.719%" title="2026-07-31T19:19:20.892Z  +12620ms (proc)
+busywait_progress stdin_end
+elapsed: 6710ms"></div>
+          <div class="mark busywait" style="left:90.791%" title="2026-07-31T19:19:20.902Z  +12630ms (proc)
+busywait_progress stdin_end
+elapsed: 6720ms"></div>
+          <div class="mark busywait" style="left:90.863%" title="2026-07-31T19:19:20.912Z  +12640ms (proc)
+busywait_progress stdin_end
+elapsed: 6730ms"></div>
+          <div class="mark busywait" style="left:90.935%" title="2026-07-31T19:19:20.922Z  +12650ms (proc)
+busywait_progress stdin_end
+elapsed: 6740ms"></div>
+          <div class="mark busywait" style="left:91.006%" title="2026-07-31T19:19:20.932Z  +12660ms (proc)
+busywait_progress stdin_end
+elapsed: 6750ms"></div>
+          <div class="mark busywait" style="left:91.078%" title="2026-07-31T19:19:20.942Z  +12670ms (proc)
+busywait_progress stdin_end
+elapsed: 6760ms"></div>
+          <div class="mark busywait" style="left:91.150%" title="2026-07-31T19:19:20.952Z  +12680ms (proc)
+busywait_progress stdin_end
+elapsed: 6770ms"></div>
+          <div class="mark busywait" style="left:91.222%" title="2026-07-31T19:19:20.962Z  +12690ms (proc)
+busywait_progress stdin_end
+elapsed: 6780ms"></div>
+          <div class="mark busywait" style="left:91.294%" title="2026-07-31T19:19:20.972Z  +12700ms (proc)
+busywait_progress stdin_end
+elapsed: 6790ms"></div>
+          <div class="mark busywait" style="left:91.366%" title="2026-07-31T19:19:20.982Z  +12710ms (proc)
+busywait_progress stdin_end
+elapsed: 6800ms"></div>
+          <div class="mark busywait" style="left:91.438%" title="2026-07-31T19:19:20.992Z  +12720ms (proc)
+busywait_progress stdin_end
+elapsed: 6810ms"></div>
+          <div class="mark busywait" style="left:91.510%" title="2026-07-31T19:19:21.002Z  +12730ms (proc)
+busywait_progress stdin_end
+elapsed: 6820ms"></div>
+          <div class="mark busywait" style="left:91.582%" title="2026-07-31T19:19:21.012Z  +12740ms (proc)
+busywait_progress stdin_end
+elapsed: 6830ms"></div>
+          <div class="mark busywait" style="left:91.653%" title="2026-07-31T19:19:21.022Z  +12750ms (proc)
+busywait_progress stdin_end
+elapsed: 6840ms"></div>
+          <div class="mark busywait" style="left:91.725%" title="2026-07-31T19:19:21.032Z  +12760ms (proc)
+busywait_progress stdin_end
+elapsed: 6850ms"></div>
+          <div class="mark busywait" style="left:91.797%" title="2026-07-31T19:19:21.042Z  +12770ms (proc)
+busywait_progress stdin_end
+elapsed: 6860ms"></div>
+          <div class="mark busywait" style="left:91.869%" title="2026-07-31T19:19:21.052Z  +12780ms (proc)
+busywait_progress stdin_end
+elapsed: 6870ms"></div>
+          <div class="mark busywait" style="left:91.941%" title="2026-07-31T19:19:21.062Z  +12790ms (proc)
+busywait_progress stdin_end
+elapsed: 6880ms"></div>
+          <div class="mark busywait" style="left:92.013%" title="2026-07-31T19:19:21.072Z  +12800ms (proc)
+busywait_progress stdin_end
+elapsed: 6890ms"></div>
+          <div class="mark busywait" style="left:92.085%" title="2026-07-31T19:19:21.082Z  +12810ms (proc)
+busywait_progress stdin_end
+elapsed: 6900ms"></div>
+          <div class="mark busywait" style="left:92.157%" title="2026-07-31T19:19:21.092Z  +12820ms (proc)
+busywait_progress stdin_end
+elapsed: 6910ms"></div>
+          <div class="mark busywait" style="left:92.229%" title="2026-07-31T19:19:21.102Z  +12830ms (proc)
+busywait_progress stdin_end
+elapsed: 6920ms"></div>
+          <div class="mark busywait" style="left:92.301%" title="2026-07-31T19:19:21.112Z  +12840ms (proc)
+busywait_progress stdin_end
+elapsed: 6930ms"></div>
+          <div class="mark busywait" style="left:92.380%" title="2026-07-31T19:19:21.123Z  +12851ms (proc)
+busywait_progress stdin_end
+elapsed: 6940ms"></div>
+          <div class="mark busywait" style="left:92.444%" title="2026-07-31T19:19:21.132Z  +12860ms (proc)
+busywait_progress stdin_end
+elapsed: 6950ms"></div>
+          <div class="mark busywait" style="left:92.516%" title="2026-07-31T19:19:21.142Z  +12870ms (proc)
+busywait_progress stdin_end
+elapsed: 6960ms"></div>
+          <div class="mark busywait" style="left:92.588%" title="2026-07-31T19:19:21.152Z  +12880ms (proc)
+busywait_progress stdin_end
+elapsed: 6970ms"></div>
+          <div class="mark busywait" style="left:92.660%" title="2026-07-31T19:19:21.162Z  +12890ms (proc)
+busywait_progress stdin_end
+elapsed: 6980ms"></div>
+          <div class="mark busywait" style="left:92.732%" title="2026-07-31T19:19:21.172Z  +12900ms (proc)
+busywait_progress stdin_end
+elapsed: 6990ms"></div>
+          <div class="mark busywait" style="left:92.804%" title="2026-07-31T19:19:21.182Z  +12910ms (proc)
+busywait_progress stdin_end
+elapsed: 7000ms"></div>
+          <div class="mark busywait" style="left:92.876%" title="2026-07-31T19:19:21.192Z  +12920ms (proc)
+busywait_progress stdin_end
+elapsed: 7010ms"></div>
+          <div class="mark busywait" style="left:92.948%" title="2026-07-31T19:19:21.202Z  +12930ms (proc)
+busywait_progress stdin_end
+elapsed: 7020ms"></div>
+          <div class="mark busywait" style="left:93.019%" title="2026-07-31T19:19:21.212Z  +12940ms (proc)
+busywait_progress stdin_end
+elapsed: 7030ms"></div>
+          <div class="mark busywait" style="left:93.091%" title="2026-07-31T19:19:21.222Z  +12950ms (proc)
+busywait_progress stdin_end
+elapsed: 7040ms"></div>
+          <div class="mark busywait" style="left:93.163%" title="2026-07-31T19:19:21.232Z  +12960ms (proc)
+busywait_progress stdin_end
+elapsed: 7050ms"></div>
+          <div class="mark busywait" style="left:93.235%" title="2026-07-31T19:19:21.242Z  +12970ms (proc)
+busywait_progress stdin_end
+elapsed: 7060ms"></div>
+          <div class="mark busywait" style="left:93.307%" title="2026-07-31T19:19:21.252Z  +12980ms (proc)
+busywait_progress stdin_end
+elapsed: 7070ms"></div>
+          <div class="mark busywait" style="left:93.379%" title="2026-07-31T19:19:21.262Z  +12990ms (proc)
+busywait_progress stdin_end
+elapsed: 7080ms"></div>
+          <div class="mark busywait" style="left:93.451%" title="2026-07-31T19:19:21.272Z  +13000ms (proc)
+busywait_progress stdin_end
+elapsed: 7090ms"></div>
+          <div class="mark busywait" style="left:93.523%" title="2026-07-31T19:19:21.282Z  +13010ms (proc)
+busywait_progress stdin_end
+elapsed: 7100ms"></div>
+          <div class="mark busywait" style="left:93.595%" title="2026-07-31T19:19:21.292Z  +13020ms (proc)
+busywait_progress stdin_end
+elapsed: 7110ms"></div>
+          <div class="mark busywait" style="left:93.666%" title="2026-07-31T19:19:21.302Z  +13030ms (proc)
+busywait_progress stdin_end
+elapsed: 7120ms"></div>
+          <div class="mark busywait" style="left:93.738%" title="2026-07-31T19:19:21.312Z  +13040ms (proc)
+busywait_progress stdin_end
+elapsed: 7130ms"></div>
+          <div class="mark busywait" style="left:93.810%" title="2026-07-31T19:19:21.322Z  +13050ms (proc)
+busywait_progress stdin_end
+elapsed: 7140ms"></div>
+          <div class="mark busywait" style="left:93.882%" title="2026-07-31T19:19:21.332Z  +13060ms (proc)
+busywait_progress stdin_end
+elapsed: 7150ms"></div>
+          <div class="mark busywait" style="left:93.954%" title="2026-07-31T19:19:21.342Z  +13070ms (proc)
+busywait_progress stdin_end
+elapsed: 7160ms"></div>
+          <div class="mark busywait" style="left:94.026%" title="2026-07-31T19:19:21.352Z  +13080ms (proc)
+busywait_progress stdin_end
+elapsed: 7170ms"></div>
+          <div class="mark busywait" style="left:94.098%" title="2026-07-31T19:19:21.362Z  +13090ms (proc)
+busywait_progress stdin_end
+elapsed: 7180ms"></div>
+          <div class="mark busywait" style="left:94.170%" title="2026-07-31T19:19:21.372Z  +13100ms (proc)
+busywait_progress stdin_end
+elapsed: 7190ms"></div>
+          <div class="mark busywait" style="left:94.242%" title="2026-07-31T19:19:21.382Z  +13110ms (proc)
+busywait_progress stdin_end
+elapsed: 7200ms"></div>
+          <div class="mark busywait" style="left:94.313%" title="2026-07-31T19:19:21.392Z  +13120ms (proc)
+busywait_progress stdin_end
+elapsed: 7210ms"></div>
+          <div class="mark busywait" style="left:94.385%" title="2026-07-31T19:19:21.402Z  +13130ms (proc)
+busywait_progress stdin_end
+elapsed: 7220ms"></div>
+          <div class="mark busywait" style="left:94.457%" title="2026-07-31T19:19:21.412Z  +13140ms (proc)
+busywait_progress stdin_end
+elapsed: 7230ms"></div>
+          <div class="mark busywait" style="left:94.529%" title="2026-07-31T19:19:21.422Z  +13150ms (proc)
+busywait_progress stdin_end
+elapsed: 7240ms"></div>
+          <div class="mark busywait" style="left:94.601%" title="2026-07-31T19:19:21.432Z  +13160ms (proc)
+busywait_progress stdin_end
+elapsed: 7250ms"></div>
+          <div class="mark busywait" style="left:94.673%" title="2026-07-31T19:19:21.442Z  +13170ms (proc)
+busywait_progress stdin_end
+elapsed: 7260ms"></div>
+          <div class="mark busywait" style="left:94.745%" title="2026-07-31T19:19:21.452Z  +13180ms (proc)
+busywait_progress stdin_end
+elapsed: 7270ms"></div>
+          <div class="mark busywait" style="left:94.817%" title="2026-07-31T19:19:21.462Z  +13190ms (proc)
+busywait_progress stdin_end
+elapsed: 7280ms"></div>
+          <div class="mark busywait" style="left:94.889%" title="2026-07-31T19:19:21.472Z  +13200ms (proc)
+busywait_progress stdin_end
+elapsed: 7290ms"></div>
+          <div class="mark busywait" style="left:94.960%" title="2026-07-31T19:19:21.482Z  +13210ms (proc)
+busywait_progress stdin_end
+elapsed: 7300ms"></div>
+          <div class="mark busywait" style="left:95.032%" title="2026-07-31T19:19:21.492Z  +13220ms (proc)
+busywait_progress stdin_end
+elapsed: 7310ms"></div>
+          <div class="mark busywait" style="left:95.104%" title="2026-07-31T19:19:21.502Z  +13230ms (proc)
+busywait_progress stdin_end
+elapsed: 7320ms"></div>
+          <div class="mark busywait" style="left:95.176%" title="2026-07-31T19:19:21.512Z  +13240ms (proc)
+busywait_progress stdin_end
+elapsed: 7330ms"></div>
+          <div class="mark busywait" style="left:95.248%" title="2026-07-31T19:19:21.522Z  +13250ms (proc)
+busywait_progress stdin_end
+elapsed: 7340ms"></div>
+          <div class="mark busywait" style="left:95.320%" title="2026-07-31T19:19:21.532Z  +13260ms (proc)
+busywait_progress stdin_end
+elapsed: 7350ms"></div>
+          <div class="mark busywait" style="left:95.392%" title="2026-07-31T19:19:21.542Z  +13270ms (proc)
+busywait_progress stdin_end
+elapsed: 7360ms"></div>
+          <div class="mark busywait" style="left:95.464%" title="2026-07-31T19:19:21.552Z  +13280ms (proc)
+busywait_progress stdin_end
+elapsed: 7370ms"></div>
+          <div class="mark busywait" style="left:95.536%" title="2026-07-31T19:19:21.562Z  +13290ms (proc)
+busywait_progress stdin_end
+elapsed: 7380ms"></div>
+          <div class="mark busywait" style="left:95.607%" title="2026-07-31T19:19:21.572Z  +13300ms (proc)
+busywait_progress stdin_end
+elapsed: 7390ms"></div>
+          <div class="mark busywait" style="left:95.679%" title="2026-07-31T19:19:21.582Z  +13310ms (proc)
+busywait_progress stdin_end
+elapsed: 7400ms"></div>
+          <div class="mark busywait" style="left:95.751%" title="2026-07-31T19:19:21.592Z  +13320ms (proc)
+busywait_progress stdin_end
+elapsed: 7410ms"></div>
+          <div class="mark busywait" style="left:95.823%" title="2026-07-31T19:19:21.602Z  +13330ms (proc)
+busywait_progress stdin_end
+elapsed: 7420ms"></div>
+          <div class="mark busywait" style="left:95.895%" title="2026-07-31T19:19:21.612Z  +13340ms (proc)
+busywait_progress stdin_end
+elapsed: 7430ms"></div>
+          <div class="mark busywait" style="left:95.967%" title="2026-07-31T19:19:21.622Z  +13350ms (proc)
+busywait_progress stdin_end
+elapsed: 7440ms"></div>
+          <div class="mark busywait" style="left:96.039%" title="2026-07-31T19:19:21.632Z  +13360ms (proc)
+busywait_progress stdin_end
+elapsed: 7450ms"></div>
+          <div class="mark busywait" style="left:96.111%" title="2026-07-31T19:19:21.642Z  +13370ms (proc)
+busywait_progress stdin_end
+elapsed: 7460ms"></div>
+          <div class="mark busywait" style="left:96.183%" title="2026-07-31T19:19:21.652Z  +13380ms (proc)
+busywait_progress stdin_end
+elapsed: 7470ms"></div>
+          <div class="mark busywait" style="left:96.254%" title="2026-07-31T19:19:21.662Z  +13390ms (proc)
+busywait_progress stdin_end
+elapsed: 7480ms"></div>
+          <div class="mark busywait" style="left:96.326%" title="2026-07-31T19:19:21.672Z  +13400ms (proc)
+busywait_progress stdin_end
+elapsed: 7490ms"></div>
+          <div class="mark busywait" style="left:96.398%" title="2026-07-31T19:19:21.682Z  +13410ms (proc)
+busywait_progress stdin_end
+elapsed: 7500ms"></div>
+          <div class="mark busywait" style="left:96.470%" title="2026-07-31T19:19:21.692Z  +13420ms (proc)
+busywait_progress stdin_end
+elapsed: 7510ms"></div>
+          <div class="mark busywait" style="left:96.542%" title="2026-07-31T19:19:21.702Z  +13430ms (proc)
+busywait_progress stdin_end
+elapsed: 7520ms"></div>
+          <div class="mark busywait" style="left:96.614%" title="2026-07-31T19:19:21.712Z  +13440ms (proc)
+busywait_progress stdin_end
+elapsed: 7530ms"></div>
+          <div class="mark busywait" style="left:96.686%" title="2026-07-31T19:19:21.722Z  +13450ms (proc)
+busywait_progress stdin_end
+elapsed: 7540ms"></div>
+          <div class="mark busywait" style="left:96.758%" title="2026-07-31T19:19:21.732Z  +13460ms (proc)
+busywait_progress stdin_end
+elapsed: 7550ms"></div>
+          <div class="mark busywait" style="left:96.830%" title="2026-07-31T19:19:21.742Z  +13470ms (proc)
+busywait_progress stdin_end
+elapsed: 7560ms"></div>
+          <div class="mark busywait" style="left:96.902%" title="2026-07-31T19:19:21.752Z  +13480ms (proc)
+busywait_progress stdin_end
+elapsed: 7570ms"></div>
+          <div class="mark busywait" style="left:96.973%" title="2026-07-31T19:19:21.762Z  +13490ms (proc)
+busywait_progress stdin_end
+elapsed: 7580ms"></div>
+          <div class="mark busywait" style="left:97.045%" title="2026-07-31T19:19:21.772Z  +13500ms (proc)
+busywait_progress stdin_end
+elapsed: 7590ms"></div>
+          <div class="mark busywait" style="left:97.117%" title="2026-07-31T19:19:21.782Z  +13510ms (proc)
+busywait_progress stdin_end
+elapsed: 7600ms"></div>
+          <div class="mark busywait" style="left:97.189%" title="2026-07-31T19:19:21.792Z  +13520ms (proc)
+busywait_progress stdin_end
+elapsed: 7610ms"></div>
+          <div class="mark busywait" style="left:97.261%" title="2026-07-31T19:19:21.802Z  +13530ms (proc)
+busywait_progress stdin_end
+elapsed: 7620ms"></div>
+          <div class="mark busywait" style="left:97.333%" title="2026-07-31T19:19:21.812Z  +13540ms (proc)
+busywait_progress stdin_end
+elapsed: 7630ms"></div>
+          <div class="mark busywait" style="left:97.405%" title="2026-07-31T19:19:21.822Z  +13550ms (proc)
+busywait_progress stdin_end
+elapsed: 7640ms"></div>
+          <div class="mark busywait" style="left:97.477%" title="2026-07-31T19:19:21.832Z  +13560ms (proc)
+busywait_progress stdin_end
+elapsed: 7650ms"></div>
+          <div class="mark busywait" style="left:97.549%" title="2026-07-31T19:19:21.842Z  +13570ms (proc)
+busywait_progress stdin_end
+elapsed: 7660ms"></div>
+          <div class="mark busywait" style="left:97.620%" title="2026-07-31T19:19:21.852Z  +13580ms (proc)
+busywait_progress stdin_end
+elapsed: 7670ms"></div>
+          <div class="mark busywait" style="left:97.692%" title="2026-07-31T19:19:21.862Z  +13590ms (proc)
+busywait_progress stdin_end
+elapsed: 7680ms"></div>
+          <div class="mark busywait" style="left:97.764%" title="2026-07-31T19:19:21.872Z  +13600ms (proc)
+busywait_progress stdin_end
+elapsed: 7690ms"></div>
+          <div class="mark busywait" style="left:97.836%" title="2026-07-31T19:19:21.882Z  +13610ms (proc)
+busywait_progress stdin_end
+elapsed: 7700ms"></div>
+          <div class="mark busywait" style="left:97.908%" title="2026-07-31T19:19:21.892Z  +13620ms (proc)
+busywait_progress stdin_end
+elapsed: 7710ms"></div>
+          <div class="mark busywait" style="left:97.980%" title="2026-07-31T19:19:21.902Z  +13630ms (proc)
+busywait_progress stdin_end
+elapsed: 7720ms"></div>
+          <div class="mark busywait" style="left:98.052%" title="2026-07-31T19:19:21.912Z  +13640ms (proc)
+busywait_progress stdin_end
+elapsed: 7730ms"></div>
+          <div class="mark busywait" style="left:98.124%" title="2026-07-31T19:19:21.922Z  +13650ms (proc)
+busywait_progress stdin_end
+elapsed: 7740ms"></div>
+          <div class="mark busywait" style="left:98.196%" title="2026-07-31T19:19:21.932Z  +13660ms (proc)
+busywait_progress stdin_end
+elapsed: 7750ms"></div>
+          <div class="mark busywait" style="left:98.267%" title="2026-07-31T19:19:21.942Z  +13670ms (proc)
+busywait_progress stdin_end
+elapsed: 7760ms"></div>
+          <div class="mark busywait" style="left:98.339%" title="2026-07-31T19:19:21.952Z  +13680ms (proc)
+busywait_progress stdin_end
+elapsed: 7770ms"></div>
+          <div class="mark busywait" style="left:98.411%" title="2026-07-31T19:19:21.962Z  +13690ms (proc)
+busywait_progress stdin_end
+elapsed: 7780ms"></div>
+          <div class="mark busywait" style="left:98.483%" title="2026-07-31T19:19:21.972Z  +13700ms (proc)
+busywait_progress stdin_end
+elapsed: 7790ms"></div>
+          <div class="mark busywait" style="left:98.555%" title="2026-07-31T19:19:21.982Z  +13710ms (proc)
+busywait_progress stdin_end
+elapsed: 7800ms"></div>
+          <div class="mark busywait" style="left:98.627%" title="2026-07-31T19:19:21.992Z  +13720ms (proc)
+busywait_progress stdin_end
+elapsed: 7810ms"></div>
+          <div class="mark busywait" style="left:98.699%" title="2026-07-31T19:19:22.002Z  +13730ms (proc)
+busywait_progress stdin_end
+elapsed: 7820ms"></div>
+          <div class="mark busywait" style="left:98.771%" title="2026-07-31T19:19:22.012Z  +13740ms (proc)
+busywait_progress stdin_end
+elapsed: 7830ms"></div>
+          <div class="mark busywait" style="left:98.843%" title="2026-07-31T19:19:22.022Z  +13750ms (proc)
+busywait_progress stdin_end
+elapsed: 7840ms"></div>
+          <div class="mark busywait" style="left:98.914%" title="2026-07-31T19:19:22.032Z  +13760ms (proc)
+busywait_progress stdin_end
+elapsed: 7850ms"></div>
+          <div class="mark busywait" style="left:98.986%" title="2026-07-31T19:19:22.042Z  +13770ms (proc)
+busywait_progress stdin_end
+elapsed: 7860ms"></div>
+          <div class="mark busywait" style="left:99.058%" title="2026-07-31T19:19:22.052Z  +13780ms (proc)
+busywait_progress stdin_end
+elapsed: 7870ms"></div>
+          <div class="mark busywait" style="left:99.130%" title="2026-07-31T19:19:22.062Z  +13790ms (proc)
+busywait_progress stdin_end
+elapsed: 7880ms"></div>
+          <div class="mark busywait" style="left:99.202%" title="2026-07-31T19:19:22.072Z  +13800ms (proc)
+busywait_progress stdin_end
+elapsed: 7890ms"></div>
+          <div class="mark busywait" style="left:99.274%" title="2026-07-31T19:19:22.082Z  +13810ms (proc)
+busywait_progress stdin_end
+elapsed: 7900ms"></div>
+          <div class="mark busywait" style="left:99.346%" title="2026-07-31T19:19:22.092Z  +13820ms (proc)
+busywait_progress stdin_end
+elapsed: 7910ms"></div>
+          <div class="mark busywait" style="left:99.418%" title="2026-07-31T19:19:22.102Z  +13830ms (proc)
+busywait_progress stdin_end
+elapsed: 7920ms"></div>
+          <div class="mark busywait" style="left:99.490%" title="2026-07-31T19:19:22.112Z  +13840ms (proc)
+busywait_progress stdin_end
+elapsed: 7930ms"></div>
+          <div class="mark busywait" style="left:99.561%" title="2026-07-31T19:19:22.122Z  +13850ms (proc)
+busywait_progress stdin_end
+elapsed: 7940ms"></div>
+          <div class="mark busywait" style="left:99.633%" title="2026-07-31T19:19:22.132Z  +13860ms (proc)
+busywait_progress stdin_end
+elapsed: 7950ms"></div>
+          <div class="mark busywait" style="left:99.705%" title="2026-07-31T19:19:22.142Z  +13870ms (proc)
+busywait_progress stdin_end
+elapsed: 7960ms"></div>
+          <div class="mark busywait" style="left:99.777%" title="2026-07-31T19:19:22.152Z  +13880ms (proc)
+busywait_progress stdin_end
+elapsed: 7970ms"></div>
+          <div class="mark busywait" style="left:99.849%" title="2026-07-31T19:19:22.162Z  +13890ms (proc)
+busywait_progress stdin_end
+elapsed: 7980ms"></div>
+          <div class="mark busywait" style="left:99.921%" title="2026-07-31T19:19:22.172Z  +13900ms (proc)
+busywait_progress stdin_end
+elapsed: 7990ms"></div>
+          <div class="mark busywait" style="left:99.993%" title="2026-07-31T19:19:22.182Z  +13910ms (proc)
+busywait_progress stdin_end
+elapsed: 8000ms"></div>
+          <div class="mark busywait" style="left:99.993%" title="2026-07-31T19:19:22.182Z  +13910ms (proc)
+busywait_complete stdin_end
+elapsed: 8000ms"></div>
+          <div class="mark teardown" style="left:100.000%" title="2026-07-31T19:19:22.183Z  +13911ms (proc)
+teardown_trigger stdin_close"></div>
+          <div class="mark teardown" style="left:100.000%" title="2026-07-31T19:19:22.183Z  +13911ms (proc)
+exit"></div>
+        </div>
+        <div class="ladder">ladder: <b>stdin_end</b> → <b>stdin_close</b></div>
+      </div>
+    </div>
+  </section>
+</main>

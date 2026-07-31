@@ -1,0 +1,9 @@
+# f1-ladder-print
+# exit code=0 signal=null elapsed=6036ms
+
+## stdout
+echo:f1
+
+
+## stderr
+

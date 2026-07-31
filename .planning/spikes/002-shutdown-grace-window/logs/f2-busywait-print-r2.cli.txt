@@ -1,0 +1,9 @@
+# f2-busywait-print-r2
+# exit code=0 signal=null elapsed=5252ms
+
+## stdout
+echo:f2r2
+
+
+## stderr
+
