@@ -55,6 +55,13 @@ the design note gets written back there in the same change — a stale note is w
 
 ## Why high priority
 
-It gates the phase that replaces the emulator access layer, and every phase from 2 onward drives
-VICE. Building the real proxy first and discovering the lifecycle is different means rewriting it,
-not adjusting it.
+**It gates Phase 1.2, not Phase 1.1.** That split is deliberate: 1.1 ships a proxy forwarding to a
+fixed port with no leasing, so it does not depend on any observation below — several proxies sharing
+one emulator is exactly the status quo. Every finding here could come back wrong and 1.1 would still
+be correct.
+
+1.2 is the opposite: on-demand launch, per-session leasing, automatic release and the TTL sweeper all
+rest on these observations. Building it first and discovering the lifecycle differs means rewriting
+it, not adjusting it — and every phase from 2 onward drives VICE.
+
+So this spike can run in parallel with 1.1, or right after it. It must not be skipped before 1.2.

@@ -6,6 +6,38 @@ context: /gsd-explore on removing the non-functional vice-session skill and repl
 
 # The `vice-session` skill is being replaced by a per-session MCP proxy over an on-demand broker
 
+## Phasing: what ships when, and why in that order
+
+The design below is the destination, not one deliverable. It is split so that the part carrying
+value ships without waiting on the part carrying risk.
+
+| | Phase 1.1 — Tool-Mediated Access | Phase 1.2 — Broker & Leasing | Seed — Instance handles |
+|---|---|---|---|
+| Scope | Diagnose the current failure, remove `vice-session`, one static `.mcp.json` entry, stdio proxy forwarding to a **fixed** host port, hazards enforced in code, three-state diagnostics | Host broker daemon, request/grant/lease protocol, on-demand launch, kill-on-release, N warm spares under a ceiling, TTL sweeper | Multiple concurrent emulators per session, addressed by handle |
+| Depends on unverified findings? | **No** | Yes — 4, 5, 7, 8 | Yes — 5 |
+| Gated by the spike? | No | **Yes** | — |
+| Changes the reset ritual? | No | Yes, narrows it | No |
+
+**Why 1.1 is immune.** Without leasing, it does not matter how many subprocesses exist per session,
+whether subagents share connections, or how long the shutdown grace window is. Every proxy forwards
+to the same fixed port, and several proxies sharing one emulator is exactly the status quo. Every
+MEDIUM finding could be wrong and 1.1 would still be correct.
+
+**Why that ordering is worth the extra phase.** Most of the value here is not concurrency — it is
+that the emulator stops being reached through `Bash` and the hazards stop being advisory. Both land
+in 1.1. Concurrency and fresh-boot isolation are real wins, but they are the parts that need a
+daemon, a sweeper, and four measured assumptions.
+
+**1.1 opens by diagnosing the existing failure**, not by building. The claim that `vice-session` does
+not work has never been diagnosed — only asserted and accepted. If the underlying cause is that the
+host emulator is unreachable from this container at all, the proxy fails identically, and 1.1 surfaces
+that at the lowest possible investment rather than after a broker exists.
+
+**Instance handles moved out to a seed.** No plan needs parallel emulator work today — `ROADMAP.md`
+explicitly serialises it — so building the mechanism now would be speculative scope resting on the
+finding with the weakest support. The design is recorded in
+`.planning/seeds/vice-instance-handles-for-parallel-emulator-work.md` with a trigger condition.
+
 ## What is wrong today
 
 `.claude/skills/vice-session/` exposes no MCP tools at all. Every emulator call is a bespoke
@@ -289,29 +321,16 @@ Two properties specific to an agent audience:
 This is the same channel the epoch hazard should use: a mid-session host restart becomes a loud,
 actionable tool result instead of silent blank-machine reads.
 
-## Instance handles: the resolution to the parallelism fork
+## Instance handles: deferred to a seed
 
-`tools/vice-pool.sh:33` justifies a pool partly on throughput — *"N instances interleave and scaling
-is near-linear."* That assumed several actors could each hold an instance. Researched finding 5
-below says they cannot: subagents and worktree executors share their parent session's MCP
-connections, and **MCP gives the proxy no way to tell which subagent is calling.** One session, one
-proxy, one emulator — a parallel executor wave would serialise.
+MCP gives the proxy no way to tell which subagent is calling (finding 5), so parallel emulator work
+inside one session needs the *caller* to carry its own identity — an `instance_open` handle passed as
+a tool argument. That design is recorded, with its guardrails and trigger condition, in
+`.planning/seeds/vice-instance-handles-for-parallel-emulator-work.md`.
 
-The fix is to stop trying to infer the caller and make it explicit. **The proxy exposes instance
-handles:** `mcp__vice__instance_open` returns a handle, and every tool takes it as a **required**
-parameter once more than one is open. A plan tells each executor which handle it owns. The proxy
-does not need to know who is calling because the caller carries its identity in the arguments.
-
-Under a fixed pool that is a rationing scheme with a hard cap. Under on-demand launch it is simply
-"open another one." This is what makes genuinely parallel emulator work reachable while keeping a
-single stable tool surface.
-
-Two guardrails the implementation must honour:
-
-- The handle parameter is **optional while exactly one instance is open, required beyond that**.
-  Optional-always invites an agent to omit it and silently clobber a sibling's emulator.
-- Handles, not ports, are the naming key for snapshots. The old convention of prefixing snapshot
-  names with the port breaks once ports are recycled across sessions.
+It is deliberately out of scope for both 1.1 and 1.2: nothing needs parallel VICE access today, and it
+rests on the finding with the weakest independent support. Verify finding 5 first-hand before building
+on it.
 
 ## Researched Claude Code mechanics (two rounds, 2026-07-31)
 
