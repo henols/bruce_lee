@@ -1,5 +1,6 @@
 {
   "schema_version": 1,
+  "schema_notes": "N-readiness: adding a release costs one releases[] entry plus one invocation, nothing else. Append an entry with just `id`, `disk_image` and `disk_sha256` set (every other field null or an empty array/string, matching the shape both danish and saeger started from before their first capture), then run `node tools/recover.mjs recover <id>` (or `reproduce <id>`). No file under tools/ may branch on a release id -- see check-parameterisation. Rehearsed against the real validator in recovery/saeger/NOTES.md §10: a probe entry produced exactly one validate error (the missing recovery/<id>/ directory), proving upsertRelease's null-tolerant shape needs no relaxing.",
   "releases": [
     {
       "id": "danish",
@@ -102,7 +103,7 @@
           {
             "address": "$08F4",
             "key": "SPACE",
-            "hit_count": 116,
+            "hit_count": 240,
             "delivery": "kernal-buffer"
           }
         ],
@@ -130,7 +131,7 @@
           "capture_record": "recovery/saeger/dumps/saeger-gameentry-run1.capture.json",
           "chip_state": "recovery/saeger/dumps/saeger-gameentry-run1.state.json",
           "range_manifest": "recovery/saeger/dumps/saeger-gameentry-run1.map.json",
-          "sha256": "f19320649edd0d9f96999413b3b1ff2b49c34459905e81a1923fc44539c8c44e",
+          "sha256": "425b6869b9311fd1d91563c9c9e5b5f8449197a8b6cbf371153f88132af92bd5",
           "load_event_ref": null
         },
         {
@@ -140,7 +141,7 @@
           "capture_record": "recovery/saeger/dumps/saeger-gameentry-run2.capture.json",
           "chip_state": "recovery/saeger/dumps/saeger-gameentry-run2.state.json",
           "range_manifest": "recovery/saeger/dumps/saeger-gameentry-run2.map.json",
-          "sha256": "8289eb271873c9e062f80f13965cbe326abda44436cd9c0b3983e2364252963c",
+          "sha256": "d44e6a1ecfd6cf3d3c49f0caf699624174dbac9d6af6198c3fb45275dc69e389",
           "load_event_ref": null
         },
         {
@@ -150,7 +151,7 @@
           "capture_record": "recovery/saeger/dumps/saeger-gameentry-run3.capture.json",
           "chip_state": "recovery/saeger/dumps/saeger-gameentry-run3.state.json",
           "range_manifest": "recovery/saeger/dumps/saeger-gameentry-run3.map.json",
-          "sha256": "4eef801b1a5cc493ce37116865d937c778a714b1fbc275390e09c1d9a12e22d7",
+          "sha256": "0d8e472b3f053de8c3ae357b72014c451b3641ea55d5d8edabcaebf357ed2c72",
           "load_event_ref": null
         }
       ],
@@ -168,7 +169,7 @@
       ],
       "tier2_evidence": [],
       "independence": null,
-      "notes": null
+      "notes": "recovery/saeger/NOTES.md"
     }
   ]
 }

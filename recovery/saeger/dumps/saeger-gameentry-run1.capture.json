@@ -14,7 +14,7 @@
   ],
   "chunk_size": 4096,
   "bytes_read": 65536,
-  "sha256": "f19320649edd0d9f96999413b3b1ff2b49c34459905e81a1923fc44539c8c44e",
+  "sha256": "425b6869b9311fd1d91563c9c9e5b5f8449197a8b6cbf371153f88132af92bd5",
   "instance_port": 6511,
   "pooled": true,
   "snapshot_name": "p6511_saeger_gameentry_run1",
@@ -24,7 +24,7 @@
   "vice_server_version": "3.10",
   "machine": "C64SC",
   "video_standard": "PAL",
-  "captured_at": "2026-07-31T08:08:11.862Z",
+  "captured_at": "2026-07-31T08:17:46.613Z",
   "tool_version": "1.0.0",
   "ram_vs_rom_e000": {
     "ram": "4C00E34C06E34C9EE426D7AAE626D7AA",

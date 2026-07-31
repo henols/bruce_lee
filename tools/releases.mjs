@@ -41,6 +41,20 @@ export function release(id) {
   return r;
 }
 
+/**
+ * The registry's own N-readiness documentation (01-03-PLAN.md's Task 2):
+ * a top-level `schema_notes` string, sibling to `schema_version` and
+ * `releases`, stating the mechanical claim that adding a release is one
+ * `releases[]` entry plus one invocation of `tools/recover.mjs`. Kept as a
+ * plain top-level field rather than a JSON comment (JSON has none) or a
+ * per-release field (it describes the registry's shape, not any one
+ * release). Rehearsed against the real validator in
+ * `recovery/saeger/NOTES.md` §10.
+ */
+export function schemaNotes() {
+  return loadRegistry().schema_notes ?? null;
+}
+
 export function releaseDir(id) {
   const reg = loadRegistry();
   assertKnownRelease(id, reg);
@@ -84,8 +98,10 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   } else if (cmd === "show") {
     if (!rest[0]) die("usage: show <release-id>");
     console.log(JSON.stringify(release(rest[0]), null, 2));
+  } else if (cmd === "schema-notes") {
+    console.log(schemaNotes() ?? "(no schema_notes field set)");
   } else {
-    console.log(`usage: node ${fileURLToPath(import.meta.url)} <list|show <id>>`);
+    console.log(`usage: node ${fileURLToPath(import.meta.url)} <list|show <id>|schema-notes>`);
     process.exit(cmd ? 1 : 0);
   }
 }

@@ -100,20 +100,6 @@
     },
     {
       "start": 265,
-      "end": 284,
-      "kind": "unused",
-      "source": "capture",
-      "note": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
-    },
-    {
-      "start": 285,
-      "end": 299,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
-    },
-    {
-      "start": 300,
       "end": 330,
       "kind": "unused",
       "source": "capture",
@@ -2004,132 +1990,132 @@
     },
     {
       "start": 51989,
-      "end": 52127,
+      "end": 52057,
       "kind": "unused",
       "source": "capture",
       "note": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+    },
+    {
+      "start": 52058,
+      "end": 52058,
+      "kind": "unclassified",
+      "source": "capture",
+      "note": "awaiting the loader/cracktro/game three-bucket partition"
+    },
+    {
+      "start": 52059,
+      "end": 52118,
+      "kind": "unused",
+      "source": "capture",
+      "note": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+    },
+    {
+      "start": 52119,
+      "end": 52127,
+      "kind": "unclassified",
+      "source": "capture",
+      "note": "awaiting the loader/cracktro/game three-bucket partition"
     },
     {
       "start": 52128,
-      "end": 52128,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
-    },
-    {
-      "start": 52129,
-      "end": 52174,
+      "end": 52226,
       "kind": "unused",
       "source": "capture",
       "note": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
     },
     {
-      "start": 52175,
-      "end": 52188,
+      "start": 52227,
+      "end": 52227,
       "kind": "unclassified",
       "source": "capture",
       "note": "awaiting the loader/cracktro/game three-bucket partition"
     },
     {
-      "start": 52189,
-      "end": 52392,
+      "start": 52228,
+      "end": 52359,
       "kind": "unused",
       "source": "capture",
       "note": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
     },
     {
-      "start": 52393,
-      "end": 52393,
+      "start": 52360,
+      "end": 52360,
       "kind": "unclassified",
       "source": "capture",
       "note": "awaiting the loader/cracktro/game three-bucket partition"
     },
     {
-      "start": 52394,
-      "end": 52472,
+      "start": 52361,
+      "end": 52376,
       "kind": "unused",
       "source": "capture",
       "note": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
     },
     {
-      "start": 52473,
-      "end": 52473,
+      "start": 52377,
+      "end": 52377,
       "kind": "unclassified",
       "source": "capture",
       "note": "awaiting the loader/cracktro/game three-bucket partition"
     },
     {
-      "start": 52474,
-      "end": 52563,
+      "start": 52378,
+      "end": 52653,
       "kind": "unused",
       "source": "capture",
       "note": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
     },
     {
-      "start": 52564,
-      "end": 52564,
+      "start": 52654,
+      "end": 52654,
       "kind": "unclassified",
       "source": "capture",
       "note": "awaiting the loader/cracktro/game three-bucket partition"
     },
     {
-      "start": 52565,
-      "end": 52814,
+      "start": 52655,
+      "end": 52802,
       "kind": "unused",
       "source": "capture",
       "note": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
     },
     {
-      "start": 52815,
-      "end": 52815,
+      "start": 52803,
+      "end": 52803,
       "kind": "unclassified",
       "source": "capture",
       "note": "awaiting the loader/cracktro/game three-bucket partition"
     },
     {
-      "start": 52816,
-      "end": 52849,
+      "start": 52804,
+      "end": 52827,
       "kind": "unused",
       "source": "capture",
       "note": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
     },
     {
-      "start": 52850,
-      "end": 52850,
+      "start": 52828,
+      "end": 52828,
       "kind": "unclassified",
       "source": "capture",
       "note": "awaiting the loader/cracktro/game three-bucket partition"
     },
     {
-      "start": 52851,
-      "end": 52934,
+      "start": 52829,
+      "end": 52891,
       "kind": "unused",
       "source": "capture",
       "note": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
     },
     {
-      "start": 52935,
-      "end": 52935,
+      "start": 52892,
+      "end": 52892,
       "kind": "unclassified",
       "source": "capture",
       "note": "awaiting the loader/cracktro/game three-bucket partition"
     },
     {
-      "start": 52936,
-      "end": 52953,
-      "kind": "unused",
-      "source": "capture",
-      "note": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
-    },
-    {
-      "start": 52954,
-      "end": 52954,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
-    },
-    {
-      "start": 52955,
+      "start": 52893,
       "end": 52991,
       "kind": "unused",
       "source": "capture",
@@ -2228,279 +2214,195 @@
     },
     {
       "start": 62908,
-      "end": 62992,
+      "end": 63011,
       "kind": "unused",
       "source": "capture",
       "note": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
     },
     {
-      "start": 62993,
-      "end": 62993,
+      "start": 63012,
+      "end": 63012,
       "kind": "unclassified",
       "source": "capture",
       "note": "awaiting the loader/cracktro/game three-bucket partition"
     },
     {
-      "start": 62994,
-      "end": 63030,
+      "start": 63013,
+      "end": 63205,
       "kind": "unused",
       "source": "capture",
       "note": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
     },
     {
-      "start": 63031,
-      "end": 63031,
+      "start": 63206,
+      "end": 63206,
       "kind": "unclassified",
       "source": "capture",
       "note": "awaiting the loader/cracktro/game three-bucket partition"
     },
     {
-      "start": 63032,
-      "end": 63071,
+      "start": 63207,
+      "end": 63355,
       "kind": "unused",
       "source": "capture",
       "note": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
     },
     {
-      "start": 63072,
-      "end": 63072,
+      "start": 63356,
+      "end": 63356,
       "kind": "unclassified",
       "source": "capture",
       "note": "awaiting the loader/cracktro/game three-bucket partition"
     },
     {
-      "start": 63073,
-      "end": 63133,
+      "start": 63357,
+      "end": 63393,
       "kind": "unused",
       "source": "capture",
       "note": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
     },
     {
-      "start": 63134,
-      "end": 63134,
+      "start": 63394,
+      "end": 63394,
       "kind": "unclassified",
       "source": "capture",
       "note": "awaiting the loader/cracktro/game three-bucket partition"
     },
     {
-      "start": 63135,
-      "end": 63170,
+      "start": 63395,
+      "end": 63425,
       "kind": "unused",
       "source": "capture",
       "note": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
     },
     {
-      "start": 63171,
-      "end": 63171,
+      "start": 63426,
+      "end": 63426,
       "kind": "unclassified",
       "source": "capture",
       "note": "awaiting the loader/cracktro/game three-bucket partition"
     },
     {
-      "start": 63172,
-      "end": 63313,
+      "start": 63427,
+      "end": 63474,
       "kind": "unused",
       "source": "capture",
       "note": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
     },
     {
-      "start": 63314,
-      "end": 63314,
+      "start": 63475,
+      "end": 63475,
       "kind": "unclassified",
       "source": "capture",
       "note": "awaiting the loader/cracktro/game three-bucket partition"
     },
     {
-      "start": 63315,
-      "end": 63418,
+      "start": 63476,
+      "end": 63504,
       "kind": "unused",
       "source": "capture",
       "note": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
     },
     {
-      "start": 63419,
-      "end": 63420,
+      "start": 63505,
+      "end": 63505,
       "kind": "unclassified",
       "source": "capture",
       "note": "awaiting the loader/cracktro/game three-bucket partition"
     },
     {
-      "start": 63421,
-      "end": 63464,
+      "start": 63506,
+      "end": 63552,
       "kind": "unused",
       "source": "capture",
       "note": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
     },
     {
-      "start": 63465,
-      "end": 63465,
+      "start": 63553,
+      "end": 63553,
       "kind": "unclassified",
       "source": "capture",
       "note": "awaiting the loader/cracktro/game three-bucket partition"
     },
     {
-      "start": 63466,
-      "end": 63580,
+      "start": 63554,
+      "end": 63733,
       "kind": "unused",
       "source": "capture",
       "note": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
     },
     {
-      "start": 63581,
-      "end": 63581,
+      "start": 63734,
+      "end": 63750,
       "kind": "unclassified",
       "source": "capture",
       "note": "awaiting the loader/cracktro/game three-bucket partition"
     },
     {
-      "start": 63582,
-      "end": 63669,
+      "start": 63751,
+      "end": 63920,
       "kind": "unused",
       "source": "capture",
       "note": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
     },
     {
-      "start": 63670,
-      "end": 63670,
+      "start": 63921,
+      "end": 63921,
       "kind": "unclassified",
       "source": "capture",
       "note": "awaiting the loader/cracktro/game three-bucket partition"
     },
     {
-      "start": 63671,
-      "end": 63708,
+      "start": 63922,
+      "end": 64060,
       "kind": "unused",
       "source": "capture",
       "note": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
     },
     {
-      "start": 63709,
-      "end": 63709,
+      "start": 64061,
+      "end": 64074,
       "kind": "unclassified",
       "source": "capture",
       "note": "awaiting the loader/cracktro/game three-bucket partition"
     },
     {
-      "start": 63710,
-      "end": 63917,
+      "start": 64075,
+      "end": 64203,
       "kind": "unused",
       "source": "capture",
       "note": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
     },
     {
-      "start": 63918,
-      "end": 63918,
+      "start": 64204,
+      "end": 64204,
       "kind": "unclassified",
       "source": "capture",
       "note": "awaiting the loader/cracktro/game three-bucket partition"
     },
     {
-      "start": 63919,
-      "end": 64192,
+      "start": 64205,
+      "end": 64393,
       "kind": "unused",
       "source": "capture",
       "note": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
     },
     {
-      "start": 64193,
-      "end": 64193,
+      "start": 64394,
+      "end": 64394,
       "kind": "unclassified",
       "source": "capture",
       "note": "awaiting the loader/cracktro/game three-bucket partition"
     },
     {
-      "start": 64194,
-      "end": 64243,
+      "start": 64395,
+      "end": 64801,
       "kind": "unused",
       "source": "capture",
       "note": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
     },
     {
-      "start": 64244,
-      "end": 64244,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
-    },
-    {
-      "start": 64245,
-      "end": 64289,
-      "kind": "unused",
-      "source": "capture",
-      "note": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
-    },
-    {
-      "start": 64290,
-      "end": 64290,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
-    },
-    {
-      "start": 64291,
-      "end": 64367,
-      "kind": "unused",
-      "source": "capture",
-      "note": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
-    },
-    {
-      "start": 64368,
-      "end": 64368,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
-    },
-    {
-      "start": 64369,
-      "end": 64421,
-      "kind": "unused",
-      "source": "capture",
-      "note": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
-    },
-    {
-      "start": 64422,
-      "end": 64425,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
-    },
-    {
-      "start": 64426,
-      "end": 64686,
-      "kind": "unused",
-      "source": "capture",
-      "note": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
-    },
-    {
-      "start": 64687,
-      "end": 64687,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
-    },
-    {
-      "start": 64688,
-      "end": 64794,
-      "kind": "unused",
-      "source": "capture",
-      "note": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
-    },
-    {
-      "start": 64795,
-      "end": 64795,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
-    },
-    {
-      "start": 64796,
-      "end": 64815,
-      "kind": "unused",
-      "source": "capture",
-      "note": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
-    },
-    {
-      "start": 64816,
+      "start": 64802,
       "end": 64847,
       "kind": "unclassified",
       "source": "capture",
@@ -2508,13 +2410,27 @@
     },
     {
       "start": 64848,
-      "end": 65023,
+      "end": 64917,
       "kind": "unused",
       "source": "capture",
       "note": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
     },
     {
-      "start": 65024,
+      "start": 64918,
+      "end": 64918,
+      "kind": "unclassified",
+      "source": "capture",
+      "note": "awaiting the loader/cracktro/game three-bucket partition"
+    },
+    {
+      "start": 64919,
+      "end": 65017,
+      "kind": "unused",
+      "source": "capture",
+      "note": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+    },
+    {
+      "start": 65018,
       "end": 65535,
       "kind": "unclassified",
       "source": "capture",
@@ -2522,5 +2438,5 @@
     }
   ],
   "note": "`unclassified` is a sixth, explicitly transient value on top of D-02's five (game/loader/cracktro/io/unused); `recovery-schema.mjs validate --final` rejects it, so it cannot survive to the end of the phase.",
-  "generated_at": "2026-07-31T08:09:18.086Z"
+  "generated_at": "2026-07-31T08:18:51.796Z"
 }
