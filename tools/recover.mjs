@@ -52,20 +52,51 @@ export const reset = syncReset;
 
 // -------------------------------------------------------------------- boot
 
+// KERNAL keyboard-buffer addresses and codes, used only by the
+// "kernal-buffer" gate delivery style below. NDX ($C6) is the KERNAL's own
+// count of buffered characters; KEYD ($0277) is the buffer itself. Small,
+// generic, symbolic-key-name-keyed map -- never release-id-keyed.
+const KERNAL_NDX = "$C6";
+const KERNAL_KEYD = "$0277";
+const KERNAL_BUFFER_CODES = { SPACE: 0x20 };
+
 /**
  * Attach + autostart the release's disk image via layer B's generic
  * `attachAndStart`, then walk whatever input gates that release's crack puts
  * in front of the game (a cracktro "hit any key" prompt, typically). Each
  * gate is a registry-declared {address, key} pair: we run to the address the
  * crack polls the key at -- so the press lands at a deterministic point in
- * EMULATED time rather than whenever wall-clock got there -- then press via
- * the keyboard MATRIX, because crack loaders poll $DC00/$DC01 directly and
- * never see the KERNAL buffer.
+ * EMULATED time rather than whenever wall-clock got there.
+ *
+ * Two delivery styles exist, chosen per-gate by the registry's own
+ * `delivery` field (default "matrix") -- never by a release-id conditional:
+ *
+ *   "matrix" (danish's $0900 gate): the crack polls $DC00/$DC01 directly, an
+ *     instantaneous hardware read, so pressing the MATRIX key and holding it
+ *     is deterministic -- the very next poll sees it, on the same cycle
+ *     every run.
+ *
+ *   "kernal-buffer" (saeger's $08F4 gate): the crack waits on the KERNAL's
+ *     own GETIN ($FFE4), which only returns a key once the KERNAL's
+ *     periodic keyboard-scan IRQ has noticed the matrix state and buffered
+ *     it -- a real-time-dependent number of cycles after the press, since
+ *     that scan runs on its own schedule, not in lockstep with when our RPC
+ *     call lands. Verified live against saeger: two of three otherwise-
+ *     identical cold-boot captures showed a small table (~$E104) with a
+ *     one-step phase shift from the third, and that third run's bytes were
+ *     byte-for-byte identical to danish's own fully-reproducible capture of
+ *     the same table -- i.e. the SAME table, just caught after a different
+ *     number of loop iterations, traced to exactly this scan-timing jitter.
+ *     Writing the KERNAL keyboard buffer directly (the same end state a real
+ *     keypress eventually produces) makes GETIN see the "key" on its very
+ *     next call, with no dependency on the scan IRQ's schedule at all --
+ *     removing the jitter at its source instead of tolerating it downstream.
  *
  * Gates live in the registry, not here: no release identifier appears in this
- * control flow, so a third release is one more registry entry. The held key
- * is released later, by the capture layer, at the trigger checkpoint -- see
- * `c64-ram-capture`'s `capture()` for the other half of that contract.
+ * control flow, so a third release is one more registry entry. A "matrix"
+ * gate's held key is released later, by the capture layer, at the trigger
+ * checkpoint -- see `c64-ram-capture`'s `capture()` for the other half of
+ * that contract. A "kernal-buffer" gate holds nothing to release.
  */
 export async function boot(releaseId) {
   const rel = release(releaseId);
@@ -80,6 +111,20 @@ export async function boot(releaseId) {
   for (const g of gates) {
     const addr = addrNum(g.address);
     const hit = await runToCheckpoint(addr, `gate ${g.note || g.key}`);
+    const delivery = g.delivery || "matrix";
+    if (delivery === "kernal-buffer") {
+      const code = KERNAL_BUFFER_CODES[g.key];
+      if (code == null) {
+        throw new Error(`boot: gate delivery "kernal-buffer" has no code mapping for key "${g.key}"`);
+      }
+      // Deterministic: write the exact end state GETIN checks for, so it is
+      // satisfied on its very next call rather than after however many extra
+      // loop iterations the scan IRQ's real schedule happens to cost.
+      await call("vice_memory_write", { address: KERNAL_KEYD, data: [code] });
+      await call("vice_memory_write", { address: KERNAL_NDX, data: [1] });
+      gatesWalked.push({ address: hex4(addr), key: g.key, hit_count: hit.hitCount, delivery });
+      continue;
+    }
     // Press and HOLD -- do not release here, and do not time the release.
     //
     // Two delivery mechanisms were measured, and neither works alone:
@@ -97,7 +142,7 @@ export async function boot(releaseId) {
     // capture()'s releaseKeys). Nothing in this path measures time.
     await call("vice_keyboard_matrix", { key: g.key, pressed: true });
     heldKeys.push(g.key);
-    gatesWalked.push({ address: hex4(addr), key: g.key, hit_count: hit.hitCount });
+    gatesWalked.push({ address: hex4(addr), key: g.key, hit_count: hit.hitCount, delivery });
   }
 
   const shotHost = await screenshot(join(releaseDir(releaseId), "dumps", `${releaseId}-boot.png`));
@@ -467,6 +512,17 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     if (cmd === "find-entry") {
       const releaseId = rest[0];
       if (!releaseId) die("usage: find-entry <release-id>");
+      // Bug fix (01-03): this verb previously called findEntry() directly,
+      // stepping whatever the machine happened to be doing rather than the
+      // named release's own boot. Verified live against saeger: without a
+      // reset+boot, the "stabilized" PC was $E5CD, KERNAL ROM's own
+      // keyboard-wait loop (LDA $C6/STA $CC/STA $0292/BEQ $E5CD) -- not game
+      // code at all, because no disk had been attached this session.
+      // `recover()` always does reset() -> boot() -> findEntry(); this
+      // standalone diagnostic verb now does the same so its output means
+      // the same thing.
+      await reset();
+      await boot(releaseId);
       const r = await findEntry();
       console.log(`find-entry: ${hex4(r.address)} -- ${r.howLocated}`);
       return;

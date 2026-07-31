@@ -1,0 +1,33 @@
+{
+  "release": "saeger",
+  "run_label": "run2",
+  "trigger_kind": "pc-exec-checkpoint",
+  "trigger_address": "$08B1",
+  "how_located": "Located empirically against a live host VICE 3.10 (C64SC, PAL) on 2026-07-31, mirroring the danish procedure with a hand-driven exploration session (this release's find-entry CLI verb needed a bug fix first -- see recover.mjs's find-entry verb comment -- and even fixed, its generic 400-step/150-batch search budget is far too small for an uncrunched raw-sector loader's much longer boot chain, so the landing address was confirmed by direct observation instead of trusted from the automated heuristic). After vice_disk_attach + vice_autostart + vice_execution_run, a cracktro screen reads 'BRUCE LEE / cracked in oktober 1984 by / SAEGER SOFT GROUP' (Tier-1 evidence). Unlike danish's crack, which polls $DC00/$DC01 directly, this crack's 'hit any key' gate at $08F4 is a standard KERNAL GETIN loop (LDA #$00 / JSR $FFE4 / CMP #$20 / BNE $08F4) -- confirmed via vice_disassemble of $08E0-$0900 and a checkpoint at $08F4 (hit_count grew every loop iteration, confirming a re-armable stop point). vice_keyboard_matrix SPACE (hardware-matrix level, not vice_keyboard_type) breaks the loop regardless of which polling style the crack uses. Past the gate, the machine reaches Datasoft's original, unmodified title screen ('DATASOFT PRESENTS / BRUCE LEE (TM) / BY RON J FORTIER / PRESS F1-1 PLAYER-2 PLAYERS / F3-COMPUTER OPPONENT / F7-TO BEGIN GAME'), byte-identical to danish's. vice_disassemble of $08B1-$08C7 shows this release's title-screen code is BYTE-FOR-BYTE IDENTICAL to danish's dispatcher: $08B1 LDA $49 / $08B3 ORA $4A / $08B5 BNE $08BA / $08B7 JMP $0531 / $08BA LDA #$00 / $08BC STA $010E / $08BF JSR $139E, and $139E itself (LDA $010C / BNE $13AD / LDA $DC00 / AND $DC01 / EOR #$FF) is also byte-identical -- both cracks preserve the original Datasoft game code at the same load addresses, so $08B1 is the SAME title-screen input dispatcher for this release too, distinct from this release's own loader/cracktro gate at $08F4. A checkpoint armed at $08B1 (vice_checkpoint_add exec:true, stop:true) was confirmed re-armable: hit_count grew to 114 while the title screen looped waiting for F1/F3/F7, matching danish's own re-armability evidence for the identical address.",
+  "port01_value": "35",
+  "ranges": [
+    {
+      "start": 0,
+      "end": 65535,
+      "bank": "ram"
+    }
+  ],
+  "chunk_size": 4096,
+  "bytes_read": 65536,
+  "sha256": "8289eb271873c9e062f80f13965cbe326abda44436cd9c0b3983e2364252963c",
+  "instance_port": 6511,
+  "pooled": true,
+  "snapshot_name": "p6511_saeger_gameentry_run2",
+  "snapshot_saved": false,
+  "snapshot_note": "Snapshot with this name already exists. Use a different name or delete the existing one first.",
+  "host_snapshot_dir": "/home/henrik/.config/vice/mcp_snapshots",
+  "vice_server_version": "3.10",
+  "machine": "C64SC",
+  "video_standard": "PAL",
+  "captured_at": "2026-07-31T08:08:43.993Z",
+  "tool_version": "1.0.0",
+  "ram_vs_rom_e000": {
+    "ram": "4C00E34C06E34C9EE426D7AAE626D7AA",
+    "rom": "8556200FBCA561C988900320D4BA20CC"
+  }
+}
