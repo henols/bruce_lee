@@ -100,15 +100,30 @@ hand, and the crash evidence is lost.
 
 ## 3. Wiring it into Claude Code
 
-**`.mcp.json` registers no server, on purpose.**
-[`.claude/skills/vice-session/scripts/vice.mjs`](../.claude/skills/vice-session/scripts/vice.mjs)
-is the *only* route from this container to the emulator (D-5) — every safety
-mechanism this project has built (the `vice_disk_list` deny-list, restart/
-epoch detection, pool leases) lives inside that one seam, and a direct
-`mcp__vice__*` tool call bypasses every one of them completely. Registering
-the server in `.mcp.json` would hand agents a second, unguarded path to the
-same emulator, so the registration was removed rather than left as an
-"advisory only" convention.
+**`.mcp.json` now registers exactly one server: `vice`. This resolves
+decision D-5, it does not reverse it.**
+
+D-5's original reasoning stands and stays visible here rather than being
+erased: a direct `mcp__vice__*` registration pointed at the host's HTTP
+endpoint would bypass the deny-list, restart/epoch detection and lease
+discipline that used to live only inside
+[`.claude/skills/vice-session/scripts/vice.mjs`](../.claude/skills/vice-session/scripts/vice.mjs)'s
+seam — which is exactly why `.mcp.json` was left empty for as long as it
+was.
+
+What changed (Phase 01.1): those mechanisms now live *inside the registered
+process itself*. `.mcp.json`'s `vice` entry is a `command`/`args` (stdio)
+registration whose `command` is
+[`.claude/skills/vice-mcp-selector/scripts/vice-proxy.mjs`](../.claude/skills/vice-mcp-selector/scripts/vice-proxy.mjs)
+— a stdio MCP server that imports the same `vice.mjs` transport module
+(`call()`, its retry ladder, the `vice_disk_list` deny-list, epoch checking)
+and delegates every forwarded `tools/call` through it. Registering that
+process does not create a second, unguarded path to the emulator; it makes
+the existing guarded seam the thing Claude Code actually talks to, instead
+of an unregistered script sitting beside an unguarded direct route. D-5's
+concern — "don't hand agents a second path that skips the guard" — is
+satisfied by construction: there is no longer any registered path that
+skips it.
 
 **Layout note:** `vice.mjs`, `vice-pool.mjs`, `vice-session.mjs` and their
 test file moved from this directory into
@@ -141,31 +156,32 @@ the moved modules via the same cross-tree path
 
 ```json
 {
-  "mcpServers": {}
-}
-```
-
-This takes effect only when the MCP client reloads (restart Claude Code, or
-whatever picked up `.mcp.json` originally) — editing the file mid-session
-does not retroactively revoke a connection already established.
-
-**One-step revert**, if a future need genuinely requires the direct MCP
-route back: paste this into `.mcp.json` in place of the empty object above,
-then restart the MCP client.
-
-```json
-{
   "mcpServers": {
     "vice": {
-      "type": "http",
-      "url": "http://host.docker.internal:6510/mcp"
+      "command": "node",
+      "args": [".claude/skills/vice-mcp-selector/scripts/vice-proxy.mjs"]
     }
   }
 }
 ```
 
-Transport is plain HTTP POST to `/mcp`. Two details in that block are
-load-bearing.
+No `url` field, no `type` field, no `env` block — the absence of `url` is
+load-bearing, not an omission. A server's `url` changing invalidates prior
+project-scope MCP approval; a stdio entry has none to change, so approval
+granted once for this exact `command`/`args` pair survives indefinitely, as
+long as nothing in the repo rewrites this file at runtime (nothing does).
+
+This takes effect only when a **new** Claude Code session starts — MCP
+server definitions are read once at session start, so the session that adds
+this entry cannot load it itself. Project-scope servers also require
+approval on first use in a session; the session making this edit is not the
+session that grants that approval either. Both of these are the same fact
+from two angles: expect the entry to do nothing until the *next* session,
+not this one.
+
+The proxy still forwards to VICE's HTTP endpoint underneath — that
+underlying transport, and how VICE itself is launched and reached on the
+host, are unchanged by this registration and covered in full below.
 
 ### `-mcpserverhost 0.0.0.0` is mandatory from a devcontainer
 
