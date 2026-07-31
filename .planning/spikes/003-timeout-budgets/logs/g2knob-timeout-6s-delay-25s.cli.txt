@@ -1,0 +1,10 @@
+# g2knob-timeout-6s-delay-25s
+# env: {"ECHO_CALL_DELAY_MS":"25000","MCP_TOOL_TIMEOUT":"6000"}
+# exit code=0 signal=null elapsed=11817ms
+
+## stdout
+The tool timed out after 6 seconds.
+
+
+## stderr
+

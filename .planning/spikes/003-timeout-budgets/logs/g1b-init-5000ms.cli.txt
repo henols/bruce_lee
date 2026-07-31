@@ -1,0 +1,19 @@
+# g1b-init-5000ms
+# env: {"ECHO_INIT_DELAY_MS":"5000"}
+# exit code=0 signal=null elapsed=3901ms
+
+## stdout
+<function_calls>
+<function_name>mcp__probe__echo_probe</function_name>
+<parameter name="text">g1b</parameter>
+</function_calls>
+<function_calls>
+<function_name>mcp__probe__echo_probe</function_name>
+<parameter name="text">g1b</parameter>
+</function_calls>
+
+g1b
+
+
+## stderr
+

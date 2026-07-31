@@ -1,0 +1,45 @@
+2026-07-31T19:22:25.538Z  [g3] idle reaping: holding a session open and idle for 40 minutes
+2026-07-31T19:23:09.165Z  [g1] startup budget: how long may `initialize` take?
+2026-07-31T19:23:14.039Z    [g1] init delay 3000ms -> client exit=0 in 4870ms; said: <function_calls> [{"tool_name": "mcp__probe__echo_probe", "arguments": {"text": "g1"}}] </function_calls> <function_call
+2026-07-31T19:23:18.102Z    [g1] init delay 20000ms -> client exit=0 in 4062ms; said: I'll call the echo probe tool for you.  <function_calls> [{"tool_name": "mcp__probe__echo_probe", "parameters": {"text":
+2026-07-31T19:23:22.493Z    [g1] init delay 35000ms -> client exit=0 in 4388ms; said: I'll call the echo probe tool for you. <function_calls> <invoke name="mcp__probe__echo_probe"> <parameter name="text">g1
+2026-07-31T19:23:31.065Z    [g1] init delay 65000ms -> client exit=0 in 8572ms; said: <function_calls> <invoke name="mcp__probe__echo_probe"> <parameter name="text">g1</parameter> </invoke> </function_calls
+2026-07-31T19:23:31.066Z  log: /workspaces/bruce_lee/.planning/spikes/003-timeout-budgets/logs/003-timeouts.jsonl
+2026-07-31T19:24:27.924Z  [g1b] pinning the startup budget between 3s and 20s (criterion: was tools/list requested?)
+2026-07-31T19:24:32.340Z    [g1b] init delay 8000ms -> client exit=0 in 4413ms
+2026-07-31T19:24:36.510Z    [g1b] init delay 12000ms -> client exit=0 in 4169ms
+2026-07-31T19:24:40.683Z    [g1b] init delay 16000ms -> client exit=0 in 4173ms
+2026-07-31T19:24:40.684Z  log: /workspaces/bruce_lee/.planning/spikes/003-timeout-budgets/logs/003-timeouts.jsonl
+2026-07-31T19:25:03.994Z  [g1b] pinning the startup budget between 3s and 20s (criterion: was tools/list requested?)
+2026-07-31T19:25:07.867Z    [g1b] init delay 4000ms -> client exit=0 in 3870ms
+2026-07-31T19:25:11.768Z    [g1b] init delay 5000ms -> client exit=0 in 3901ms
+2026-07-31T19:25:16.003Z    [g1b] init delay 6000ms -> client exit=0 in 4235ms
+2026-07-31T19:25:20.157Z    [g1b] init delay 7000ms -> client exit=0 in 4154ms
+2026-07-31T19:25:20.157Z  log: /workspaces/bruce_lee/.planning/spikes/003-timeout-budgets/logs/003-timeouts.jsonl
+2026-07-31T19:26:07.406Z  [g1c] does MCP_TIMEOUT raise the startup budget? 10s init delay, knob at 60s
+2026-07-31T19:26:10.794Z    [g1c] MCP_TIMEOUT=60000 vs 10s init -> exit=0 in 3387ms
+2026-07-31T19:26:10.795Z  log: /workspaces/bruce_lee/.planning/spikes/003-timeout-budgets/logs/003-timeouts.jsonl
+2026-07-31T19:26:25.770Z  [g1d] long-lived session, 10s init delay: is the server usable on a later turn?
+2026-07-31T19:26:55.800Z    [g1d] 30s elapsed, sending a second message on the same session
+2026-07-31T19:27:25.857Z    [g3] minute 5/40: client still alive, still idle
+2026-07-31T19:27:30.829Z    [g1d] done -- check the log for a tool_call_begin with text g1d-turn2
+2026-07-31T19:27:30.829Z  log: /workspaces/bruce_lee/.planning/spikes/003-timeout-budgets/logs/003-timeouts.jsonl
+2026-07-31T19:27:46.434Z  [g2] first-call budget: how long may a tools/call take?
+2026-07-31T19:28:23.469Z    [g2] call delay 30000ms -> client exit=0 in 37030ms; said: echo:g2
+2026-07-31T19:30:00.770Z    [g2] call delay 90000ms -> client exit=0 in 97300ms; said: echo:g2
+2026-07-31T19:32:26.157Z    [g3] minute 10/40: client still alive, still idle
+2026-07-31T19:32:36.278Z    [g2] call delay 150000ms -> client exit=0 in 155508ms; said: echo:g2
+2026-07-31T19:32:36.278Z  log: /workspaces/bruce_lee/.planning/spikes/003-timeout-budgets/logs/003-timeouts.jsonl
+2026-07-31T19:32:36.326Z  [g2knob] does MCP_TOOL_TIMEOUT cut a call short?
+2026-07-31T19:32:48.146Z    [g2knob] MCP_TOOL_TIMEOUT=6000 vs 25s delay -> exit=0 in 11817ms; said: The tool timed out after 6 seconds.
+2026-07-31T19:32:48.147Z  log: /workspaces/bruce_lee/.planning/spikes/003-timeout-budgets/logs/003-timeouts.jsonl
+2026-07-31T19:37:26.456Z    [g3] minute 15/40: client still alive, still idle
+2026-07-31T19:42:26.756Z    [g3] minute 20/40: client still alive, still idle
+2026-07-31T19:47:27.057Z    [g3] minute 25/40: client still alive, still idle
+2026-07-31T19:52:27.356Z    [g3] minute 30/40: client still alive, still idle
+2026-07-31T19:57:27.656Z    [g3] minute 35/40: client still alive, still idle
+2026-07-31T20:02:27.956Z    [g3] minute 40/40: client still alive, still idle
+2026-07-31T20:02:27.957Z    [g3] idle period over; ending the session by closing stdin
+2026-07-31T20:02:29.096Z    [g3] CLIENT EXITED after 40.1 min: code=0 signal=null
+2026-07-31T20:02:31.960Z    [g3] done
+2026-07-31T20:02:31.961Z  log: /workspaces/bruce_lee/.planning/spikes/003-timeout-budgets/logs/003-timeouts.jsonl

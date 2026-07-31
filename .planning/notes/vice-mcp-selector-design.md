@@ -214,6 +214,9 @@ half-written file. The pool already writes `registry.json` atomically, so the id
 4. **Proxy** reads the grant, connects to the port, forwards the pending call.
 5. **Steady state** — proxy touches `leases/<id>` on every call *and* on an interval timer. The
    timer matters: touch-on-call alone would let a session that is merely thinking look abandoned.
+   **Measured (16):** a 40-minute idle session is never reaped by the client, and a 60s interval timer
+   held its cadence to ±0.1s across 39 ticks — so the timer's only job is keeping the *broker's* TTL
+   sweeper away from a thinking session, not surviving anything the client does.
 6. **Session end** — `unlinkSync(leases/<id>)` in the shutdown handler, wired to **both** `SIGINT`/
    `SIGTERM` **and** stdin `end`/`close` (spike 002: each ending fires only one of the two). One
    syscall, nothing awaited, ~0.1ms of a ~490ms window.
@@ -385,6 +388,7 @@ their original tags.
 | 13 | **The client exports its own identity into every MCP server's environment**: `CLAUDE_CODE_SESSION_ID` (distinct per session), `CLAUDE_PID`, `CLAUDE_PROJECT_DIR`, `CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_EFFORT` | **MEASURED** (spike 001, new finding) |
 | 14 | **A slow handshake costs turns, not the session.** There is no client-side startup timeout that drops a server: a proxy that took 10s to answer `initialize` was still asked for `tools/list` and its tool was called successfully on the *next* turn of the same session. `MCP_TIMEOUT` did **not** change this. In print mode the session simply ends after one turn, which makes a slow start *look* like a ~3.5s timeout that does not exist | **MEASURED** (spike 003 g1/g1b/g1c/g1d, new finding) |
 | 15 | **The default tool-call budget is ≥150s.** Calls blocked for 30s, 90s and 150s all returned real results | **MEASURED** (spike 003 g2, new finding) |
+| 16 | **Nothing reaps an idle proxy.** A session held open and idle for **40.1 minutes** produced 39 heartbeats at a 60.1s interval with zero drift and **no signal of any kind**; teardown came only when the driver closed stdin, following the same graceful ladder as a 4-second-old session. Neither the CLI nor Node imposes an idle timeout | **MEASURED** (spike 003 g3, new finding — closes the "long session silently loses its lease" risk) |
 
 ### What each finding forces
 

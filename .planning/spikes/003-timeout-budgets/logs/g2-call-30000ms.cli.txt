@@ -1,0 +1,10 @@
+# g2-call-30000ms
+# env: {"ECHO_CALL_DELAY_MS":"30000"}
+# exit code=0 signal=null elapsed=37030ms
+
+## stdout
+echo:g2
+
+
+## stderr
+
