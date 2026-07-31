@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "probe": {
+      "command": "node",
+      "args": [
+        "/workspaces/bruce_lee/.planning/spikes/001-echo-proxy-lifecycle-harness/echo-proxy.mjs"
+      ]
+    }
+  }
+}

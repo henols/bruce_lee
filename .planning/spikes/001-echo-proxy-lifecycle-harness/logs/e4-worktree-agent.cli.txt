@@ -1,0 +1,10 @@
+# e4 worktree agent shares subprocess?
+# args: ["-p","Use the Agent tool with subagent_type \"echoer\", isolation \"worktree\", and run_in_background false, instructing it to call the probe tool with text \"from-worktree-agent\". Then reply with the word done.","--strict-mcp-config","--mcp-config","/workspaces/bruce_lee/.planning/spikes/001-echo-proxy-lifecycle-harness/logs/scratch-mcp.json","--model","haiku","--permission-mode","bypassPermissions","--tools","mcp__probe__echo_probe","Agent","--agents","{\"echoer\":{\"description\":\"Calls the echo probe tool once with the text it is given.\",\"tools\":[\"mcp__probe__echo_probe\"],\"prompt\":\"You have exactly one job. Call the mcp__probe__echo_probe tool once, with text set to the string in your instructions. Then reply with the tool's output verbatim. Do nothing else.\"}}"]
+# exit: code=0 signal=null elapsed=11968ms
+
+## stdout
+done
+
+
+## stderr
+

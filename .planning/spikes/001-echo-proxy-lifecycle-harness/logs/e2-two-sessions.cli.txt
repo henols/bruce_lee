@@ -1,0 +1,10 @@
+# e2 session A
+# args: ["-p","Call the mcp__probe__echo_probe tool once with text set to \"session-A\", then reply with just its output.","--strict-mcp-config","--mcp-config","/workspaces/bruce_lee/.planning/spikes/001-echo-proxy-lifecycle-harness/logs/scratch-mcp.json","--model","haiku","--permission-mode","bypassPermissions","--tools","mcp__probe__echo_probe"]
+# exit: code=0 signal=null elapsed=7239ms
+
+## stdout
+echo:session-A
+
+
+## stderr
+
