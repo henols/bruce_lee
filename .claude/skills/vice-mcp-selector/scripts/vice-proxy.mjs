@@ -15,7 +15,7 @@
 // it into this skill and rewrites this import to `./vice.mjs`. Until then
 // this is the same cross-skill shape `c64-ram-capture/scripts/ram-capture.mjs`
 // already uses for `devcontainer-host-path`.
-import { call, activeInstance, DENY_LIST } from "../../vice-session/scripts/vice.mjs";
+import { call, activeInstance, DENY_LIST, readEpoch, beginSession, MachineRestartedError } from "../../vice-session/scripts/vice.mjs";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
@@ -191,30 +191,143 @@ function handleToolsList() {
 
 // --------------------------------------------------------------- tools/call
 //
-// Delegates every real call to the reused `call()` -- the retry ladder,
-// deny-list refusal and epoch check all already live there (Pattern 1). Per
-// Pattern 2, EVERY outcome of a tool invocation attempt -- success or
-// failure -- becomes a JSON-RPC *result* carrying `content`/`isError`, never
-// a JSON-RPC `error` object. A JSON-RPC `error` is reserved for genuinely
-// missing/malformed `params` on this method itself, thrown as a
-// `ProtocolError` and caught one layer up in `handleMessage()`.
+// Delegates every real call to the reused `call()` -- the retry ladder
+// already lives there (Pattern 1). Per Pattern 2, EVERY outcome of a tool
+// invocation attempt -- success or failure -- becomes a JSON-RPC *result*
+// carrying `content`/`isError`, never a JSON-RPC `error` object. A JSON-RPC
+// `error` is reserved for genuinely missing/malformed `params` on this
+// method itself, thrown as a `ProtocolError` and caught one layer up in
+// `handleMessage()`.
+//
+// Two hazards are enforced HERE, at the proxy seam, as independent layers on
+// top of what `call()` already does internally:
+//
+//   1. vice_disk_list refusal. `call()` already refuses it (throwing a
+//      ViceError), but this proxy refuses it FIRST, before any forwarding
+//      logic runs and before any network attempt, so the refusal is
+//      observable with zero HTTP traffic and a well-formed MCP frame rather
+//      than one more layer of catch between the hazard and the answer.
+//
+//   2. Per-call epoch re-check (decision D-D). The proxy does NOT call
+//      assertSameMachine() and does NOT probe vice_checkpoint_list -- a
+//      state-reading call that pauses the emulated CPU and never resumes it,
+//      and the proxy arms no checkpoints of its own to probe with anyway.
+//      The narrowed contract is a plain readEpoch() comparison, before AND
+//      after every forwarded call: a changed epoch refuses the call (or
+//      discards its result, if the change happened mid-call) with a loud,
+//      evidence-carrying error naming both epoch values, then adopts the new
+//      value as the baseline so the SESSION stays usable -- a restart report
+//      is never cached, per criterion 6.
+let viceSession = null; // beginSession()'s return value, set lazily on the first forwarded call
+let epochBaseline = null; // the rolling comparison point; updated on every re-baseline
+
+function ensureViceSession() {
+  if (!viceSession) {
+    viceSession = beginSession();
+    epochBaseline = viceSession.baseline;
+  }
+}
+
+function currentEpoch() {
+  return readEpoch(viceSession.epochPath);
+}
+
+function epochChanged(baseline, current) {
+  return Boolean(baseline?.present) && Boolean(current?.present) && baseline.epoch !== current.epoch;
+}
+
+function epochDriftMessage(when, baseline, current) {
+  const pidNote = current && current.pid != null ? `, pid ${current.pid}` : "";
+  const spawnedNote = current && current.spawned_at ? `, spawned_at ${current.spawned_at}` : "";
+  return (
+    `vice-proxy: epoch drift detected ${when} -- the host VICE MCP server's epoch changed from ` +
+    `${baseline.epoch} to ${current.epoch}${pidNote}${spawnedNote}. Any work done since the previous ` +
+    `call may have hit a different, freshly-booted machine and should be redone.`
+  );
+}
+
+/**
+ * Compare the rolling baseline against a fresh epoch read. Returns an error
+ * MESSAGE string if the comparison proves a restart (and re-baselines to the
+ * new value so the next call is not refused again), or `null` if the call
+ * may proceed (including the "absent baseline, now present" case, which is
+ * adopted silently -- a supervisor merely started, not a restart, mirroring
+ * vice.mjs's own "only compare when both are present" rule).
+ */
+function checkEpochAndRebaseline(when) {
+  const current = currentEpoch();
+  if (epochChanged(epochBaseline, current)) {
+    const msg = epochDriftMessage(when, epochBaseline, current);
+    epochBaseline = current; // never cache a negative result (criterion 6)
+    return msg;
+  }
+  if (!epochBaseline.present && current.present) {
+    epochBaseline = current;
+  }
+  return null;
+}
+
+function isErrorText(text) {
+  return { content: [{ type: "text", text }], isError: true };
+}
+
 async function handleToolsCall(params) {
   const name = params && params.name;
   if (!name || typeof name !== "string") {
     throw new ProtocolError(-32602, "tools/call requires params.name to be a non-empty string");
   }
   const args = params && typeof params.arguments === "object" && params.arguments !== null ? params.arguments : {};
-  try {
-    const payload = await call(name, args);
-    const text = typeof payload === "string" ? payload : JSON.stringify(payload);
-    return { content: [{ type: "text", text }], isError: false };
-  } catch (e) {
-    // NEVER rethrow past this point -- a tool-execution failure (transport
-    // error, deny-list refusal, a rejected RPC) is a normal, expected
-    // outcome for this method and must come back as a well-formed result,
-    // not crash the read loop.
-    return { content: [{ type: "text", text: e && e.message ? e.message : String(e) }], isError: true };
+
+  // Layer 1: call-time deny-list refusal, before any forwarding logic and
+  // before any network attempt. Independent from handleToolsList()'s
+  // discovery-time filter -- removing either one leaves the other standing.
+  if (DENY_LIST.includes(name)) {
+    return isErrorText(
+      `${name} is permanently forbidden -- it is known to crash the shared host VICE MCP server. ` +
+        `Recovery requires a manual, host-side restart. This refusal is permanent; retrying will not help.`
+    );
   }
+
+  ensureViceSession();
+
+  const beforeDrift = checkEpochAndRebaseline("before forwarding");
+  if (beforeDrift) {
+    // Refused BEFORE any request is serialised -- the whole point of the
+    // pre-forward check.
+    return isErrorText(beforeDrift);
+  }
+
+  let payload;
+  try {
+    payload = await call(name, args);
+  } catch (e) {
+    if (e instanceof MachineRestartedError) {
+      // call()'s own post-reconnect fast path detected this first -- convert
+      // to the same isError frame shape and re-baseline identically. Two
+      // layers, one observable behaviour.
+      const current = currentEpoch();
+      epochBaseline = current;
+      return isErrorText(
+        `vice-proxy: epoch drift detected mid-call -- the host VICE MCP server's epoch changed from ` +
+          `${e.baselineEpoch} to ${e.currentEpoch}. Any work done since the previous call may have hit ` +
+          `a different, freshly-booted machine and should be redone. (${e.message})`
+      );
+    }
+    // NEVER rethrow past this point -- a tool-execution failure (transport
+    // error, a rejected RPC) is a normal, expected outcome for this method
+    // and must come back as a well-formed result, not crash the read loop.
+    return isErrorText(e && e.message ? e.message : String(e));
+  }
+
+  const afterDrift = checkEpochAndRebaseline("after the call returned");
+  if (afterDrift) {
+    // A payload read from a machine whose identity changed mid-call is not
+    // trustworthy -- return the restart frame INSTEAD OF the call's result.
+    return isErrorText(afterDrift);
+  }
+
+  const text = typeof payload === "string" ? payload : JSON.stringify(payload);
+  return { content: [{ type: "text", text }], isError: false };
 }
 
 // ---------------------------------------------------------- message dispatch
