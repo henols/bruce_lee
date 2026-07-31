@@ -36,10 +36,14 @@ import { promisify } from "node:util";
 import { createServer } from "node:http";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { mkdtempSync, writeFileSync, rmSync, readFileSync, readdirSync, existsSync, statSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, readdirSync, existsSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { hostPath } from "../../skills/devcontainer-host-path/scripts/hostpath.mjs";
 import { repoRoot } from "./repo-root.mjs";
+// Read-only import for test assertions only -- this test file does not
+// modify vice-broker-client.mjs (outside this plan's file-ownership set);
+// GRANT_POLL_TIMEOUT_MS is already exported for exactly this purpose.
+import { GRANT_POLL_TIMEOUT_MS } from "./vice-broker-client.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PROXY_PATH = join(HERE, "vice-proxy.mjs");
@@ -1478,6 +1482,17 @@ async function handshake(proxy) {
  * lease held before it can meaningfully assert that ending the session
  * releases it. */
 async function acquireLeaseViaBroker(proxy, dir, port, callId) {
+  // Plan 01.2-03 task 1: ensureBrokerLease() now classifies broker liveness
+  // BEFORE writing any request (C10) -- never_started returns immediately
+  // with no request written at all. A broker.json with a fresh heartbeat
+  // must therefore already exist for this helper's request-then-grant flow
+  // to reach the request-writing step -- runBrokerOnceDryRun() below would
+  // write one too, but only AFTER the broker has run a pass, which is too
+  // late for a request to have been written in the first place. Written
+  // directly (not via the real script) so this helper stays independent of
+  // needing the broker to have run first.
+  writeFileSync(join(dir, "broker.json"), JSON.stringify({ version: 1, pid: process.pid, heartbeat_at: new Date().toISOString() }), "utf8");
+
   proxy.send({ jsonrpc: "2.0", id: callId, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
 
   const reqDir = join(dir, "requests");
@@ -1713,4 +1728,328 @@ test("teardown region: no promise-awaiting construct, and releaseLease() called 
   // version of "exactly one filesystem call".
   const releaseLeaseCalls = region.match(/releaseLease\(/g) || [];
   assert.equal(releaseLeaseCalls.length, 1, "the teardown region must call releaseLease() exactly once");
+});
+
+// -----------------------------------------------------------------------
+// Plan 01.2-03 task 1: a missing/dead/denying on-demand broker produces one
+// of exactly three distinct, evidence-carrying diagnoses -- never-started,
+// dead-or-hung, launch-failed -- mirroring the host-unreachable triple
+// above (line ~1074) but answering a DIFFERENT question (is the BROKER
+// reachable, not the host VICE MCP server). never-started and dead-or-hung
+// both fail fast, with no request or lease ever written; launch-failed and
+// a warming timeout both clean up the request/lease they created. The
+// proxy stays alive and forwards successfully on the SAME process the
+// instant the broker is up (C11).
+// -----------------------------------------------------------------------
+
+test("broker three states: each broker-absent shape gets its own message and fix", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vice-proxy-broker3states-"));
+
+  // ---- Never started: no broker.json at all. ----
+  const proxy1 = startProxy({ VICE_POOL_DIR: dir, VICE_EPOCH_FILE: join(dir, "epoch.json") });
+  let neverStartedText;
+  try {
+    await handshake(proxy1);
+    const startedAt = Date.now();
+    proxy1.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
+    const resp = await proxy1.nextMessage(10000);
+    const elapsedMs = Date.now() - startedAt;
+    assert.equal(resp.result.isError, true);
+    neverStartedText = resp.result.content[0].text;
+    assert.match(neverStartedText, /never.*started/i, "the never-started shape must say the broker was never started");
+    assert.ok(
+      elapsedMs < GRANT_POLL_TIMEOUT_MS / 2,
+      `the never-started diagnosis must be fail-fast, well under half the grant-poll deadline (${GRANT_POLL_TIMEOUT_MS}ms) -- took ${elapsedMs}ms`
+    );
+    assert.equal(existsSync(join(dir, "requests")), false, "never-started must write no request file");
+    assert.equal(existsSync(join(dir, "leases")), false, "never-started must write no lease file");
+  } finally {
+    proxy1.child.kill("SIGKILL");
+  }
+
+  // ---- Dead or hung: broker.json exists but its heartbeat is stale. ----
+  const staleHeartbeat = new Date(Date.now() - 999999999).toISOString(); // far past any stale threshold
+  writeFileSync(join(dir, "broker.json"), JSON.stringify({ version: 1, pid: 7777, heartbeat_at: staleHeartbeat }), "utf8");
+  const proxy2 = startProxy({ VICE_POOL_DIR: dir, VICE_EPOCH_FILE: join(dir, "epoch2.json") });
+  let deadOrHungText;
+  try {
+    await handshake(proxy2);
+    proxy2.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
+    const resp = await proxy2.nextMessage(10000);
+    assert.equal(resp.result.isError, true);
+    deadOrHungText = resp.result.content[0].text;
+    assert.match(deadOrHungText, /dead or hung/i);
+    assert.match(deadOrHungText, /7777/, "the pid recorded in the planted broker.json must appear in the dead-or-hung message");
+    assert.equal(existsSync(join(dir, "requests")), false, "dead-or-hung must write no request file");
+  } finally {
+    proxy2.child.kill("SIGKILL");
+  }
+  rmSync(join(dir, "broker.json"), { force: true });
+
+  // ---- Alive, but the launch itself was denied. ----
+  const freshHeartbeat = new Date().toISOString();
+  writeFileSync(join(dir, "broker.json"), JSON.stringify({ version: 1, pid: 8888, heartbeat_at: freshHeartbeat }), "utf8");
+  const proxy3 = startProxy({ VICE_POOL_DIR: dir, VICE_EPOCH_FILE: join(dir, "epoch3.json") });
+  let launchFailedText;
+  try {
+    await handshake(proxy3);
+    proxy3.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
+
+    const reqDir = join(dir, "requests");
+    const reqFiles = await waitForCondition(() => {
+      if (!existsSync(reqDir)) return null;
+      const files = readdirSync(reqDir).filter((f) => f.endsWith(".json"));
+      return files.length > 0 ? files : null;
+    });
+    assert.ok(reqFiles, "a request file must appear before the denial is planted -- the broker is alive");
+    const deniedRequestId = reqFiles[0].replace(/\.json$/, "");
+    const deniedLeasePath = join(dir, "leases", deniedRequestId);
+    assert.ok(existsSync(deniedLeasePath), "a lease file must exist once the request has been written");
+
+    const denialsDirPath = join(dir, "denials");
+    mkdirSync(denialsDirPath, { recursive: true });
+    const marker = "MARKER-8f2c1a-no-free-ports-available";
+    writeFileSync(
+      join(denialsDirPath, `${deniedRequestId}.json`),
+      JSON.stringify({ version: 1, id: deniedRequestId, reason: marker, denied_at: new Date().toISOString() }),
+      "utf8"
+    );
+
+    const resp = await proxy3.nextMessage(10000);
+    assert.equal(resp.result.isError, true);
+    launchFailedText = resp.result.content[0].text;
+    assert.match(launchFailedText, new RegExp(marker), "the denial's own reason must appear unmodified in the result");
+    assert.doesNotMatch(launchFailedText, /restart/i, "the launch-failed message must NOT carry a restart instruction");
+
+    const gone = await waitForCondition(
+      () => !existsSync(deniedLeasePath) && !existsSync(join(reqDir, `${deniedRequestId}.json`))
+    );
+    assert.ok(gone, "a denied acquisition must clean up both the request file and the lease file it created");
+  } finally {
+    proxy3.child.kill("SIGKILL");
+  }
+
+  // ---- Cross-cutting assertions across all three shapes. ----
+  assert.notEqual(neverStartedText, deadOrHungText, "never-started and dead-or-hung messages must be pairwise distinct");
+  assert.notEqual(neverStartedText, launchFailedText, "never-started and launch-failed messages must be pairwise distinct");
+  assert.notEqual(deadOrHungText, launchFailedText, "dead-or-hung and launch-failed messages must be pairwise distinct");
+
+  for (const text of [neverStartedText, deadOrHungText, launchFailedText]) {
+    assert.match(text, /(^|\s)\/\S+/, "every broker-absent message must quote an absolute path");
+    assert.match(text, /only route/i, "every broker-absent message must state this is the only route");
+  }
+
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("broker never-cache: absent-then-alive-and-granted succeeds on the SAME process, no restart", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vice-proxy-broker-nevercache-"));
+  const { server } = startStandInServer();
+  const port = await listen(server);
+  const proxy = startProxy({
+    VICE_POOL_DIR: dir,
+    VICE_BROKER_BASE_PORT: String(port),
+    VICE_EPOCH_FILE: join(dir, "epoch.json"),
+  });
+  try {
+    await handshake(proxy);
+    const pidBefore = proxy.child.pid;
+
+    // Call 1: no broker.json at all -- must observe the never-started
+    // message. The proxy stays alive and caches nothing.
+    proxy.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
+    const down = await proxy.nextMessage(10000);
+    assert.equal(down.result.isError, true);
+    assert.match(down.result.content[0].text, /never.*started/i);
+    assert.equal(proxy.child.exitCode, null, "the proxy must still be running after the never-started diagnosis");
+
+    // Call 2, SAME process, no restart: runBrokerOnceDryRun() both marks the
+    // broker alive (writes broker.json) and grants the now-pending request.
+    const { leasePath } = await acquireLeaseViaBroker(proxy, dir, port, 4);
+    assert.ok(existsSync(leasePath), "the second call must succeed and hold a real lease, with no restart between calls");
+
+    assert.equal(proxy.child.pid, pidBefore, "both calls must have gone through the same child process -- no restart");
+    assert.equal(proxy.child.exitCode, null);
+  } finally {
+    proxy.child.kill("SIGKILL");
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("broker: a malformed broker.json (truncated, wrong type, empty) is treated as absent, never a throw", async () => {
+  const malformedShapes = [
+    { label: "truncated", content: '{"version": 1, "pid": 123, "heartbeat' },
+    { label: "wrong type", content: "[1, 2, 3]" },
+    { label: "empty", content: "" },
+  ];
+
+  for (const shape of malformedShapes) {
+    const dir = mkdtempSync(join(tmpdir(), `vice-proxy-broker-malformed-${shape.label.replace(/\s+/g, "-")}-`));
+    writeFileSync(join(dir, "broker.json"), shape.content, "utf8");
+    const proxy = startProxy({ VICE_POOL_DIR: dir, VICE_EPOCH_FILE: join(dir, "epoch.json") });
+    try {
+      await handshake(proxy);
+      proxy.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
+      const resp = await proxy.nextMessage(10000);
+      assert.equal(resp.result.isError, true, `a ${shape.label} broker.json must still answer isError:true, never crash`);
+      assert.match(
+        resp.result.content[0].text,
+        /never.*started/i,
+        `a ${shape.label} broker.json must be treated as absent (never-started), not a parse error`
+      );
+      assert.equal(proxy.child.exitCode, null, `the proxy must stay alive against a ${shape.label} broker.json`);
+    } finally {
+      proxy.child.kill("SIGKILL");
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
+
+test("broker warming: a poll timeout with no grant or denial is a warming-and-retry result, and cleans up after itself", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vice-proxy-broker-warming-"));
+  const freshHeartbeat = new Date().toISOString();
+  writeFileSync(join(dir, "broker.json"), JSON.stringify({ version: 1, pid: 9999, heartbeat_at: freshHeartbeat }), "utf8");
+
+  const proxy = startProxy({
+    VICE_POOL_DIR: dir,
+    VICE_EPOCH_FILE: join(dir, "epoch.json"),
+    VICE_BROKER_GRANT_TIMEOUT_MS: "300", // short deadline -- nothing will ever grant or deny this request
+  });
+  try {
+    await handshake(proxy);
+    proxy.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
+
+    const reqDir = join(dir, "requests");
+    const reqFiles = await waitForCondition(() => {
+      if (!existsSync(reqDir)) return null;
+      const files = readdirSync(reqDir).filter((f) => f.endsWith(".json"));
+      return files.length > 0 ? files : null;
+    });
+    assert.ok(reqFiles, "a request file must appear -- the broker is alive, so an attempt is made");
+    const requestId = reqFiles[0].replace(/\.json$/, "");
+    const leasePath = join(dir, "leases", requestId);
+    assert.ok(existsSync(leasePath), "a lease file must exist once the request has been written");
+
+    const resp = await proxy.nextMessage(10000);
+    assert.equal(resp.result.isError, true);
+    assert.match(resp.result.content[0].text, /warming/i, "a poll timeout with neither grant nor denial must read as warming-and-retry");
+    assert.match(resp.result.content[0].text, /retry/i);
+
+    const gone = await waitForCondition(
+      () => !existsSync(leasePath) && !existsSync(join(reqDir, `${requestId}.json`))
+    );
+    assert.ok(gone, "a warming timeout must clean up both the request file and the lease file it created");
+  } finally {
+    proxy.child.kill("SIGKILL");
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// -----------------------------------------------------------------------
+// Plan 01.2-03 task 2: the two client-side thresholds are set explicitly,
+// not inherited -- .mcp.json's per-server `timeout` is ordered correctly
+// against the proxy's own grant-poll deadline, and MAX_MCP_OUTPUT_TOKENS's
+// absence (a setting this repo structurally cannot commit -- see
+// .gitignore lines 62-67) is made observable on stderr rather than silent.
+// -----------------------------------------------------------------------
+
+function countStderrLinesMatching(proxy, pattern) {
+  return proxy.stderr.join("").split("\n").filter((line) => pattern.test(line)).length;
+}
+
+/** Walk up from `from` to the nearest `.git` ancestor. Deliberately NOT
+ * repoRoot() (repo-root.mjs): that module's documented CONTAINER_WORKSPACE_PATH
+ * precedence resolves to the shared devcontainer mount's MAIN checkout when
+ * run from inside a git worktree (see 01.2-01-SUMMARY.md's "Issues
+ * Encountered" -- a pre-existing, documented hazard this task does not fix),
+ * which would read the wrong .mcp.json when this test itself runs inside a
+ * worktree. Mirrors vice-mcp-selector-docs.test.mjs's own findRepoRoot(),
+ * anchored at THIS file's actual on-disk location instead. */
+function findWorktreeAwareRepoRoot(from) {
+  let dir = from;
+  while (true) {
+    if (existsSync(join(dir, ".git"))) return dir;
+    const parent = dirname(dir);
+    if (parent === dir) {
+      throw new Error(`findWorktreeAwareRepoRoot: no .git ancestor found above ${from}`);
+    }
+    dir = parent;
+  }
+}
+
+test("ordering: the proxy's own grant-poll deadline is strictly less than .mcp.json's timeout", () => {
+  const mcpJson = JSON.parse(readFileSync(join(findWorktreeAwareRepoRoot(HERE), ".mcp.json"), "utf8"));
+  const configuredTimeout = mcpJson.mcpServers.vice.timeout;
+  assert.equal(typeof configuredTimeout, "number", ".mcp.json's vice entry must carry a numeric timeout");
+  assert.ok(
+    GRANT_POLL_TIMEOUT_MS < configuredTimeout,
+    `the proxy's grant-poll deadline (${GRANT_POLL_TIMEOUT_MS}ms) must be strictly less than .mcp.json's ` +
+      `timeout (${configuredTimeout}ms), so the proxy's own warming-and-retry message is always what a ` +
+      `waiting caller sees rather than the client's own timeout`
+  );
+});
+
+test("output-limit warning: exactly one stderr line when MAX_MCP_OUTPUT_TOKENS is absent or insufficient, zero when sufficient", async () => {
+  const { server } = startStandInServer();
+  const port = await listen(server);
+
+  // Absent entirely -- and driven through SEVERAL messages, to prove the
+  // warning is a one-time startup event, not something re-emitted per call.
+  // Deleted from THIS test process's own env (restored in `finally` below),
+  // not merely omitted from the override object, so this assertion is not
+  // at the mercy of whatever the AMBIENT test-runner environment happens to
+  // already have set -- startProxy() merges `{...process.env, ...env}`, so
+  // an override object alone cannot force a key to be ABSENT if the real
+  // process.env already carries it.
+  const savedOutputTokens = process.env.MAX_MCP_OUTPUT_TOKENS;
+  delete process.env.MAX_MCP_OUTPUT_TOKENS;
+  const proxyAbsent = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${port}/mcp` });
+  try {
+    await handshake(proxyAbsent);
+    for (let i = 0; i < 3; i++) {
+      proxyAbsent.send({ jsonrpc: "2.0", id: 10 + i, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
+      await proxyAbsent.nextMessage();
+    }
+    await new Promise((r) => setTimeout(r, 100)); // let stderr settle
+    assert.equal(
+      countStderrLinesMatching(proxyAbsent, /MAX_MCP_OUTPUT_TOKENS/),
+      1,
+      "exactly one stderr line naming MAX_MCP_OUTPUT_TOKENS must appear, however many calls are made, when the setting is absent"
+    );
+  } finally {
+    proxyAbsent.child.kill("SIGKILL");
+    if (savedOutputTokens !== undefined) process.env.MAX_MCP_OUTPUT_TOKENS = savedOutputTokens;
+  }
+
+  // Present but below the required minimum.
+  const proxyLow = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${port}/mcp`, MAX_MCP_OUTPUT_TOKENS: "100" });
+  try {
+    await handshake(proxyLow);
+    await new Promise((r) => setTimeout(r, 100));
+    assert.equal(
+      countStderrLinesMatching(proxyLow, /MAX_MCP_OUTPUT_TOKENS/),
+      1,
+      "exactly one stderr line naming MAX_MCP_OUTPUT_TOKENS must appear when the setting is below the required minimum"
+    );
+  } finally {
+    proxyLow.child.kill("SIGKILL");
+  }
+
+  // Present and sufficient.
+  const proxySufficient = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${port}/mcp`, MAX_MCP_OUTPUT_TOKENS: "25000" });
+  try {
+    await handshake(proxySufficient);
+    proxySufficient.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
+    await proxySufficient.nextMessage();
+    await new Promise((r) => setTimeout(r, 100));
+    assert.equal(
+      countStderrLinesMatching(proxySufficient, /MAX_MCP_OUTPUT_TOKENS/),
+      0,
+      "zero stderr lines naming MAX_MCP_OUTPUT_TOKENS must appear when the setting is sufficient"
+    );
+  } finally {
+    proxySufficient.child.kill("SIGKILL");
+    await new Promise((resolve) => server.close(resolve));
+  }
 });

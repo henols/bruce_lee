@@ -464,3 +464,32 @@ by an agent executing a *documented, specific plan step* that names
 shortcut. If a document ever tells an agent to reach for this module as a
 generic alternative to `mcp__vice__*`, that is the regression
 `vice-mcp-selector-docs.test.mjs` exists to catch.
+
+---
+
+## 7. Per-machine setup: `MAX_MCP_OUTPUT_TOKENS`
+
+One client-side setting this project needs is deliberately **not** in this repo at all:
+`MAX_MCP_OUTPUT_TOKENS` is read from the Claude Code client's own process environment, set via
+`.claude/settings.json`'s `env` block — and that file is untracked by this repo's `.gitignore`
+(`.claude/*`, with only `.claude/skills/` and `.claude/mcp/` excepted), the same structural wall
+Phase 01.1 hit trying to commit `.claude/CLAUDE.md`. It cannot be committed here for you; set it
+yourself, once, on each machine you run this project from.
+
+Set it to at least **25000** in your own `settings.json` (global `~/.claude/settings.json`, or the
+workspace's own if it is not gitignored on your machine):
+
+```json
+{
+  "env": {
+    "MAX_MCP_OUTPUT_TOKENS": "25000"
+  }
+}
+```
+
+Why it matters: the measured inline-response ceiling for MCP tool results is **40–60KB** — roughly
+half what an earlier design note assumed — and a full 64K RAM read renders as ~192KB of hex, far
+above either figure. If this setting is absent or below 25000 on your machine, the registered `vice`
+server writes one line to its own stderr at startup naming what it found and the value it needs;
+nothing is refused and no call fails because of it, but a low ceiling makes a large tool result land
+somewhere less directly useful than an inline result would.

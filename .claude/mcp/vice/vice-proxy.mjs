@@ -34,8 +34,10 @@ import {
   releaseLease,
   pollGrant,
   startHeartbeat,
+  readBrokerLiveness,
+  requestsDir,
 } from "./vice-broker-client.mjs";
-import { readFileSync } from "node:fs";
+import { readFileSync, unlinkSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
 
@@ -156,6 +158,68 @@ const OUTPUT_CHAR_CAP = (() => {
   return Number.isFinite(n) && n > 0 ? n : 500000;
 })();
 
+// -------------------------------------------------- output-limit warning
+//
+// D-1.2-H (plan 01.2-03 task 2). MAX_MCP_OUTPUT_TOKENS genuinely governs
+// the CLIENT's own inline-response ceiling (measured at 40-60KB --
+// spike-findings-bruce-lee skill, large-response-chunking.md -- about half
+// the design's original ~100KB assumption; a 64K RAM read is ~192KB as
+// hex, far above either figure). It is read from the client's own process
+// environment, set via `.claude/settings.json`'s `env` block, which this
+// repo's `.gitignore` makes untrackable (`.claude/*`, `.gitignore` lines
+// 62-67) -- the same structural wall plan 01.1-04 hit with
+// `.claude/CLAUDE.md`. It genuinely cannot be committed, so this proxy
+// documents the required value in a tracked file (`tools/README.md`'s
+// "Per-machine setup" section) and makes its OWN inherited environment's
+// view of the setting OBSERVABLE on stderr, rather than silently assuming
+// it is set. This is a WARNING, never a refusal: nothing throws, no call is
+// rejected, and stdout carries only MCP messages (see the stdin-loop
+// comment below) -- exactly one stderr line, at most once per process.
+//
+// Deliberately NOT resolved here, per this task's own instruction: the
+// standing 32KB chunking non-negotiable and this proxy's own 500,000-char
+// `_meta` ceiling (OUTPUT_CHAR_CAP above) are only compatible if a per-tool
+// override is genuinely honoured, which was never measured -- the spike
+// bracketed the inline ceiling at 40-60KB with no override set. Recorded as
+// a deferred item in this plan's SUMMARY (both numbers, the one open
+// question), not fixed by this warning or by changing OUTPUT_CHAR_CAP.
+const REQUIRED_MAX_MCP_OUTPUT_TOKENS = 25000;
+let outputLimitWarned = false;
+
+function warnOnceAboutOutputLimit() {
+  if (outputLimitWarned) return;
+  outputLimitWarned = true;
+  const raw = process.env.MAX_MCP_OUTPUT_TOKENS;
+  const n = Number(raw);
+  const sufficient = raw !== undefined && Number.isFinite(n) && n >= REQUIRED_MAX_MCP_OUTPUT_TOKENS;
+  if (sufficient) return;
+  console.error(
+    `vice-proxy: MAX_MCP_OUTPUT_TOKENS is ${raw === undefined ? "not set" : `set to ${raw}`} in this ` +
+      `process's environment -- this project requires at least ${REQUIRED_MAX_MCP_OUTPUT_TOKENS}. Set it in ` +
+      `.claude/settings.json's "env" block (untracked -- see tools/README.md's "Per-machine setup" ` +
+      `section for why and the exact value).`
+  );
+}
+
+// Two client behaviours this proxy deliberately does NOT rely on, recorded
+// here so a later reader does not reach for either as a solution:
+//
+// 1. MCP_TIMEOUT does NOT extend the startup handshake. The measurement
+//    behind that claim tested only a 60s cap against a 10s delay, so it
+//    cannot distinguish "honoured but never reached" from "does nothing",
+//    and current official documentation describes it as a startup timeout
+//    -- genuinely OPEN, not settled. Moot for this proxy either way:
+//    handleInitialize() (above) answers with zero host I/O, so there is no
+//    slow handshake here that would need extending.
+// 2. Automatic backgrounding of long tool calls does NOT apply to this
+//    project's dominant call pattern. It covers only main-conversation
+//    calls and explicitly excludes calls originating from subagents, and
+//    this project's emulator work runs overwhelmingly through executor
+//    waves, which are subagent-driven and share their parent session's
+//    single proxy connection. brokerWarmingMessage() (below) is therefore
+//    the PRIMARY cold-path mechanism, not a fallback for something the
+//    client will handle on this project's behalf.
+
 // The synthetic continuation tool (task 3, decision D-E): served entirely
 // inside this proxy, NEVER forwarded to the host, and advertised in every
 // tools/list response exactly like a real tool so an agent can discover it
@@ -264,18 +328,25 @@ function handleToolsList() {
 //      evidence-carrying error naming both epoch values, then adopts the new
 //      value as the baseline so the SESSION stays usable -- a restart report
 //      is never cached, per criterion 6.
-// NEVER-CACHE-A-NEGATIVE-RESULT INVARIANT (plan 01.1-03 task 1, criterion 6):
-// nothing below this line may memoise "the host is down" as a fact that
-// outlives a single tools/call. There is no cached probe verdict, no sticky
-// "last known unreachable" flag, and no early-return short-circuit keyed off
-// a PREVIOUS failure -- every forwarded tools/call re-evaluates reachability
-// from scratch (the epoch check below reads the file fresh every time; the
-// liveness probe added in task 2 does its own fresh network round trip every
-// time; task 3's translation runs fresh every time). This is deliberate and
-// easy to break by a later, performance-minded edit ("let's skip the probe
-// if we just failed one 200ms ago") -- don't. A cached negative here is
-// exactly the "quiet wrong answer" failure class this codebase rejects
-// elsewhere (MachineRestartedError, the epoch re-check itself).
+// NEVER-CACHE-A-NEGATIVE-RESULT INVARIANT (plan 01.1-03 task 1, criterion 6;
+// extended to the broker path by plan 01.2-03 task 1, C11): nothing below
+// this line may memoise "the host is down" -- or, as of this extension,
+// "the broker is absent" -- as a fact that outlives a single tools/call.
+// There is no cached probe verdict, no sticky "last known unreachable" flag,
+// and no early-return short-circuit keyed off a PREVIOUS failure -- every
+// forwarded tools/call re-evaluates reachability from scratch (the epoch
+// check below reads the file fresh every time; the liveness probe added in
+// task 2 does its own fresh network round trip every time; task 3's
+// translation runs fresh every time; ensureBrokerLease()'s
+// readBrokerLiveness() call reads broker.json fresh every time it is
+// reached, never memoised at module scope). This is deliberate and easy to
+// break by a later, performance-minded edit ("let's skip the probe if we
+// just failed one 200ms ago", or "let's remember the broker was absent last
+// call so we don't bother checking again") -- don't, for either path. A
+// cached negative here is exactly the "quiet wrong answer" failure class
+// this codebase rejects elsewhere (MachineRestartedError, the epoch
+// re-check itself): the call after a human starts the broker must just
+// work, with no session restart required.
 let viceSession = null; // beginSession()'s return value, set lazily on the first forwarded call
 let epochBaseline = null; // the rolling comparison point; updated on every re-baseline
 
@@ -376,18 +447,92 @@ function brokerHostPath() {
   }
 }
 
-/** A single, undifferentiated broker-unavailable message (plan 04 splits
- * this into brokerNeverStartedMessage()/brokerDeadOrHungMessage()/
- * brokerLaunchFailedMessage(), mirroring the three-state diagnostics already
- * built for the supervisor above) -- this task only needs a well-formed
- * error naming the host launch path and the reason pollGrant() gave up. */
-function brokerUnavailableMessage(reason) {
+// ------------------------------------------------- broker-absent diagnostics
+//
+// Plan 01.2-03 task 1 / must_have C10. A missing broker answers exactly one
+// generic message two times out of three sends the reader to the wrong fix
+// -- mirrors the host-unreachable triple above (never-started /
+// dead-or-hung / alive-but-failed), but answers a DIFFERENT question ("is
+// the on-demand broker itself reachable" vs "is the host VICE MCP server
+// reachable"), so both triples stay in place side by side, not one
+// replacing the other. Every message here quotes brokerHostPath() (an
+// absolute HOST path, recomputed fresh -- see that function's own comment)
+// and the single shared ONLY_ROUTE_NOTE definition; no message below writes
+// its own second only-route sentence.
+
+/** State: readBrokerLiveness() found no broker.json at all -- the broker has
+ * never been started on this host. Nothing on the other side would ever
+ * read a request, so ensureBrokerLease() returns this BEFORE writing one. */
+function brokerNeverStartedMessage() {
   return (
-    `vice-proxy: could not acquire a broker-granted VICE instance -- ${reason}. Start the broker on ` +
-    `the host with:\n` +
+    `vice-proxy: the on-demand VICE broker has never been started on this host -- no broker.json ` +
+    `record exists at all. Start it on the host with:\n` +
     `  ${brokerHostPath()}\n` +
     ONLY_ROUTE_NOTE
   );
+}
+
+/** State: broker.json exists but its heartbeat is older than the stale
+ * threshold -- the broker process is dead or hung. Quotes the recorded pid
+ * (readBrokerLiveness()'s own field), since checking that pid is the first
+ * thing a human does on the host, mirroring deadOrHungMessage() above. */
+function brokerDeadOrHungMessage(liveness) {
+  const pidNote = liveness && liveness.pid != null ? ` (pid ${liveness.pid})` : "";
+  return (
+    `vice-proxy: the on-demand VICE broker appears to be dead or hung${pidNote} -- its last recorded ` +
+    `heartbeat is older than the stale threshold. Restart it on the host with:\n` +
+    `  ${brokerHostPath()}\n` +
+    ONLY_ROUTE_NOTE
+  );
+}
+
+/** State: the broker is alive and a request was polled, but it wrote a
+ * denial rather than a grant. Relays the denial's own `reason` field
+ * VERBATIM -- never paraphrased -- and deliberately carries no RESTART
+ * instruction, for the same reason aliveButFailedMessage() above carries
+ * none: restarting something that is answering correctly is the wrong fix.
+ * Still names an absolute path (the running broker's own launcher, purely
+ * as a reference, mirroring aliveButFailedMessage()'s `hostRef` note) and
+ * the only-route sentence, both required of every broker-absent-adjacent
+ * message this proxy emits. */
+function brokerLaunchFailedMessage(reason) {
+  const hostRef = brokerHostPath().split("\n")[0];
+  return (
+    `vice-proxy: the on-demand VICE broker (running via the host-side launcher at ${hostRef}) declined ` +
+    `to grant an instance for this session: ${reason} ${ONLY_ROUTE_NOTE}`
+  );
+}
+
+/** State: the broker is alive and a request was written, but neither a
+ * grant nor a denial appeared before pollGrant()'s own deadline -- an
+ * explicit warming-and-retry result, never a silent hang. A cold x64sc
+ * launch plus boot plus readiness is seconds (spike-findings-bruce-lee
+ * skill), well inside the client's own per-server timeout (.mcp.json's
+ * `timeout` field, task 2), so the correct next action is simply to retry
+ * the SAME call, not to treat this as a failure requiring a different fix. */
+function brokerWarmingMessage(elapsedMs) {
+  return (
+    `vice-proxy: the on-demand VICE broker is still warming up an instance for this session -- no ` +
+    `grant or denial appeared within ${elapsedMs}ms. This is expected for a cold start; retry the same ` +
+    `call now, it should succeed once the instance finishes booting.`
+  );
+}
+
+/** Removes requests/<id>.json, best-effort. Called when a poll resolves to
+ * a denial or a warming timeout, so a failed or still-warming acquisition
+ * leaves no orphan request for the sweeper to reap later -- the request
+ * file's own counterpart to releaseLease(id) (vice-broker-client.mjs),
+ * which already handles the lease half of this cleanup. Uses requestsDir()
+ * (already exported by vice-broker-client.mjs) rather than adding a new
+ * export there, so this task's file-ownership boundary (vice-proxy.mjs /
+ * vice-proxy.test.mjs only) stays intact. */
+function removeRequestFile(id) {
+  try {
+    unlinkSync(join(requestsDir(), `${id}.json`));
+  } catch {
+    // already gone -- the broker may have consumed/removed it, or this is a
+    // second cleanup attempt; either way there is nothing left to do.
+  }
 }
 
 // A causeCode-shaped reason string (e.g. "ECONNREFUSED", "ECONNRESET") is
@@ -688,6 +833,24 @@ async function ensureBrokerLease() {
   if (brokerLeaseId) return { ok: true };
   if (process.env.VICE_MCP_URL) return { ok: true }; // explicit override -- broker never contacted
 
+  // Classify liveness FIRST, before writing any request (C10). never_started
+  // and stale both return their message immediately, with no request
+  // written and no lease created -- there is nothing on the other side to
+  // read a request, so writing one would litter the directory and delay the
+  // diagnosis. readBrokerLiveness() re-reads broker.json fresh on every call
+  // (see its own implementation in vice-broker-client.mjs); nothing here
+  // memoises the verdict, so this is the broker-path instance of the same
+  // never-cache-a-negative-result invariant the comment above
+  // ensureViceSession() already states for the host path -- the call after a
+  // human starts the broker just works, with no session restart required.
+  const liveness = readBrokerLiveness();
+  if (liveness.state === "never_started") {
+    return { ok: false, message: brokerNeverStartedMessage() };
+  }
+  if (liveness.state === "stale") {
+    return { ok: false, message: brokerDeadOrHungMessage(liveness) };
+  }
+
   const id = newRequestId();
   const sessionId = process.env.CLAUDE_CODE_SESSION_ID || null;
   const clientPidRaw = Number(process.env.CLAUDE_PID);
@@ -696,14 +859,22 @@ async function ensureBrokerLease() {
   writeRequest({ id, sessionId, clientPid });
   createLease({ id, sessionId, clientPid }); // BEFORE pollGrant() -- see comment above
 
+  const acquireStartedAt = Date.now();
   const result = await pollGrant(id);
   if (!result.granted) {
+    // Neither a grant nor a lasting reason to keep this attempt's files
+    // around -- a denial or a warming timeout both leave no orphan for the
+    // sweeper to reap later.
     try {
       releaseLease(id); // no grant is coming for this id -- release the lease we already created
     } catch {
       /* best effort -- the lease may already be gone */
     }
-    return { ok: false, message: brokerUnavailableMessage(result.reason || "no grant or denial received") };
+    removeRequestFile(id);
+    if (result.denial) {
+      return { ok: false, message: brokerLaunchFailedMessage(result.reason || "denied with no reason recorded") };
+    }
+    return { ok: false, message: brokerWarmingMessage(Date.now() - acquireStartedAt) };
   }
 
   brokerLeaseId = id;
@@ -991,5 +1162,7 @@ process.on("SIGINT", () => onTeardown("SIGINT"));
 process.on("SIGTERM", () => onTeardown("SIGTERM"));
 process.on("SIGHUP", () => onTeardown("SIGHUP"));
 // TEARDOWN-REGION-END
+
+warnOnceAboutOutputLimit(); // D-1.2-H -- one stderr line, at most once per process, never a refusal
 
 console.error(`vice-proxy: ready, forwarding to ${activeInstance().url} (port ${activeInstance().port})`);
