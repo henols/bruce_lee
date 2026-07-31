@@ -29,9 +29,9 @@ import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
 
-import { call as defaultCall, useInstance } from "../.claude/skills/vice-session/scripts/vice.mjs";
-import { acquire } from "../.claude/skills/vice-session/scripts/vice-pool.mjs";
-import { hex4 } from "../.claude/skills/vice-session/scripts/vice-sync.mjs";
+import { call as defaultCall, useInstance } from "../.claude/skills/vice-mcp-selector/scripts/vice.mjs";
+import { acquire } from "../.claude/skills/vice-mcp-selector/scripts/vice-pool.mjs";
+import { hex4 } from "../.claude/skills/vice-mcp-selector/scripts/vice-sync.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, "..");

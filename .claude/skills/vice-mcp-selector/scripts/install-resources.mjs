@@ -104,12 +104,12 @@ export function hostLaunchInstructions(root) {
     displayPath = `${target}\n  (host path could not be determined -- ${SET_ENV_HINT})`;
   }
   return [
-    `vice-session: deployed host launcher scripts to ${installTargetDir(root)}`,
-    "vice-session: run the supervisor from the HOST workspace (never from inside this container), e.g.:",
+    `vice-mcp-selector: deployed host launcher scripts to ${installTargetDir(root)}`,
+    "vice-mcp-selector: run the supervisor from the HOST workspace (never from inside this container), e.g.:",
     `  ${displayPath}`,
-    "vice-session: this cannot run inside the container -- the container guard refuses it with exit 2.",
-    "vice-session: if it refuses when it should not, run it with --check-container for the full per-signal diagnostic.",
-    "vice-session: press Ctrl-C to stop it -- SIGINT/SIGTERM are handled and it shuts down cleanly.",
+    "vice-mcp-selector: this cannot run inside the container -- the container guard refuses it with exit 2.",
+    "vice-mcp-selector: if it refuses when it should not, run it with --check-container for the full per-signal diagnostic.",
+    "vice-mcp-selector: press Ctrl-C to stop it -- SIGINT/SIGTERM are handled and it shuts down cleanly.",
   ].join("\n");
 }
 

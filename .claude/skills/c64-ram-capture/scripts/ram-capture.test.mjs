@@ -14,8 +14,8 @@ import { join } from "node:path";
 
 import { assembleChunks, captureImage, voidRun, snapshotName } from "./ram-capture.mjs";
 import { classifyRuns, VOLATILE_RANGES } from "./ram-compare.mjs";
-import { beginSession, assertSameMachine, readEpoch, MachineRestartedError } from "../../vice-session/scripts/vice.mjs";
-import { DEFAULT_PORT } from "../../vice-session/scripts/vice-pool.mjs";
+import { beginSession, assertSameMachine, readEpoch, MachineRestartedError } from "../../vice-mcp-selector/scripts/vice.mjs";
+import { DEFAULT_PORT } from "../../vice-mcp-selector/scripts/vice-pool.mjs";
 
 const tmpEpochDir = () => mkdtempSync(join(tmpdir(), "vice-epoch-"));
 
