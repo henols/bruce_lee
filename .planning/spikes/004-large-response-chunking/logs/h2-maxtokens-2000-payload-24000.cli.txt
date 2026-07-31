@@ -1,0 +1,14 @@
+# h2-maxtokens-2000-payload-24000
+# env: {"ECHO_PAYLOAD_BYTES":"24000","MAX_MCP_OUTPUT_TOKENS":"2000"}
+# exit code=0 signal=null elapsed=25970ms
+
+## stdout
+(1) Cannot determine — the result was not displayed inline and I cannot read the saved file with available tools.
+
+(2) Yes: "result (23,999 characters across 3 lines) exceeds maximum allowed tokens. Output has been saved to /home/vscode/.claude/projects/-workspaces-bruce-lee--planning-spikes-004-large-response-chunking/cf27f063-21c6-43a2-a939-5e0adbdfc43a/tool-results/mcp-probe-echo_probe-1785526632504.txt."
+
+(3) Cannot determine — the result was not displayed inline and I cannot read the saved file with available tools.
+
+
+## stderr
+

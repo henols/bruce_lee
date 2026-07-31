@@ -1,0 +1,14 @@
+# h1-payload-80000
+# env: {"ECHO_PAYLOAD_BYTES":"80000"}
+# exit code=0 signal=null elapsed=10133ms
+
+## stdout
+(1) I cannot determine whether END_PAYLOAD was in the result, as the actual payload was redirected to a file and not displayed.
+
+(2) Yes: "Output has been saved to /home/vscode/.claude/projects/-workspaces-bruce-lee--planning-spikes-004-large-response-chunking/045f7a18-5524-4839-ac6b-39078feeceb4/tool-results/mcp-probe-echo_probe-1785526566357.txt."
+
+(3) The first 40 characters are not available, as the result was not displayed—it was written directly to the file due to exceeding the maximum token limit.
+
+
+## stderr
+

@@ -1,0 +1,18 @@
+# h1-payload-512000
+# env: {"ECHO_PAYLOAD_BYTES":"512000"}
+# exit code=0 signal=null elapsed=13700ms
+
+## stdout
+I need to read the saved file to answer your questions. Let me extract the first 40 characters and check for END_PAYLOAD.
+
+Looking at the notice from both tool calls: the result was too large and saved to a file, with the explicit notice: "Error: result (511,999 characters across 3 lines) exceeds maximum allowed tokens. Output has been saved to..."
+
+(1) **END_PAYLOAD marker present:** Cannot confirm without reading the file content.
+
+(2) **Truncation notice:** Yes. Verbatim: "Error: result (511,999 characters across 3 lines) exceeds maximum allowed tokens. Output has been saved to /home/vscode/.claude/projects/-workspaces-bruce-lee--planning-spikes-004-large-response-chunking/6bc49ed8-2cfa-42c3-9886-c8fdfa65f78a/tool-results/mcp-probe-echo_probe-1785526483920.txt."
+
+(3) **First 40 characters:** Unable to determine — file contains lines too long for standard chunked reads; would require shell access to extract character ranges, which is not available in the current tool set.
+
+
+## stderr
+

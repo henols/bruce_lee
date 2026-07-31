@@ -1,0 +1,14 @@
+# h1-payload-100000
+# env: {"ECHO_PAYLOAD_BYTES":"100000"}
+# exit code=0 signal=null elapsed=26180ms
+
+## stdout
+(1) No, the tool result did not contain the marker END_PAYLOAD.
+
+(2) Yes: "Error: result (99,999 characters across 3 lines) exceeds maximum allowed tokens. Output has been saved to /home/vscode/.claude/projects/-workspaces-bruce-lee--planning-spikes-004-large-response-chunking/0dcb4ca0-a06c-4610-9664-950666391848/tool-results/mcp-probe-echo_probe-1785526438278.txt."
+
+(3) I cannot determine the first 40 characters because the large payload was written to a file instead of returned directly, and I do not have file-reading capability available in this environment.
+
+
+## stderr
+

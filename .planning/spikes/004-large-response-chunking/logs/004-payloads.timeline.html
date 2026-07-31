@@ -1,0 +1,521 @@
+<title>MCP proxy lifecycle — 004-payloads.jsonl</title>
+<style>
+  :root {
+    --bg: #fbfbfa; --fg: #1b1a17; --muted: #6f6b63; --line: #d9d5cd; --card: #ffffff;
+    --rpc: #3b6ea5; --tool: #2f7d57; --teardown: #b3452f; --lease: #7a4fa3;
+    --busywait: #c07c1e; --heartbeat: #8a8578; --delay: #a06a2c; --meta: #8a8578;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16161a; --fg: #ece9e3; --muted: #9a958c; --line: #33323a; --card: #1e1e24;
+      --rpc: #7fb0e0; --tool: #6cc294; --teardown: #f08a6e; --lease: #bb92e0;
+      --busywait: #e5b25d; --heartbeat: #9a958c; --delay: #d9a05e; --meta: #9a958c;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #16161a; --fg: #ece9e3; --muted: #9a958c; --line: #33323a; --card: #1e1e24;
+    --rpc: #7fb0e0; --tool: #6cc294; --teardown: #f08a6e; --lease: #bb92e0;
+    --busywait: #e5b25d; --heartbeat: #9a958c; --delay: #d9a05e; --meta: #9a958c;
+  }
+  :root[data-theme="light"] {
+    --bg: #fbfbfa; --fg: #1b1a17; --muted: #6f6b63; --line: #d9d5cd; --card: #ffffff;
+    --rpc: #3b6ea5; --tool: #2f7d57; --teardown: #b3452f; --lease: #7a4fa3;
+    --busywait: #c07c1e; --heartbeat: #8a8578; --delay: #a06a2c; --meta: #8a8578;
+  }
+  body { margin: 0; padding: 2rem 1.25rem 4rem; background: var(--bg); color: var(--fg);
+    font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 1100px; margin: 0 auto; }
+  h1 { font-size: 1.4rem; margin: 0 0 .2rem; letter-spacing: -.01em; }
+  .sub { color: var(--muted); font-size: .85rem; margin-bottom: 2rem; }
+  .legend { display: flex; flex-wrap: wrap; gap: .75rem 1.25rem; margin: 0 0 2rem;
+    font-size: .78rem; color: var(--muted); }
+  .legend span { display: inline-flex; align-items: center; gap: .35rem; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+  .block { background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+    padding: 1.1rem 1.25rem 1.4rem; margin-bottom: 1.25rem; }
+  .block h2 { font-size: .95rem; margin: 0 0 .15rem; font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+  .meta { color: var(--muted); font-size: .8rem; margin-bottom: 1rem; }
+  .pill { display: inline-block; border: 1px solid var(--line); border-radius: 999px;
+    padding: .05rem .5rem; margin-right: .35rem; font-size: .75rem; }
+  .lane { margin: 1.1rem 0 0; }
+  .lanehead { display: flex; flex-wrap: wrap; gap: .5rem; align-items: baseline;
+    font-family: ui-monospace, Menlo, monospace; font-size: .78rem; color: var(--muted); margin-bottom: .3rem; }
+  .lanehead b { color: var(--fg); }
+  .track { position: relative; height: 34px; border-bottom: 1px solid var(--line); overflow: visible; }
+  .track::before { content: ""; position: absolute; left: 0; right: 0; top: 16px; height: 1px; background: var(--line); }
+  .mark { position: absolute; top: 11px; width: 11px; height: 11px; border-radius: 50%;
+    transform: translateX(-50%); cursor: help; border: 2px solid var(--card); }
+  .mark.rpc { background: var(--rpc); } .mark.tool { background: var(--tool); }
+  .mark.teardown { background: var(--teardown); width: 13px; height: 13px; top: 10px; }
+  .mark.lease { background: var(--lease); } .mark.busywait { background: var(--busywait); width: 7px; height: 7px; top: 13px; }
+  .mark.heartbeat { background: var(--heartbeat); width: 7px; height: 7px; top: 13px; }
+  .mark.delay { background: var(--delay); } .mark.meta { background: var(--meta); }
+  .ladder { font-family: ui-monospace, Menlo, monospace; font-size: .75rem; color: var(--muted); margin-top: .3rem; }
+  .ladder b { color: var(--teardown); }
+  .scroller { overflow-x: auto; }
+</style>
+<main>
+  <h1>Stdio MCP proxy lifecycle</h1>
+  <div class="sub">004-payloads.jsonl — 132 events, 9 experiments. Each lane is one proxy subprocess; time is normalised per experiment. Hover any mark for its raw record.</div>
+  <div class="legend">
+    <span><i class="dot" style="background:var(--rpc)"></i> JSON-RPC</span>
+    <span><i class="dot" style="background:var(--tool)"></i> tool call</span>
+    <span><i class="dot" style="background:var(--teardown)"></i> teardown / signal</span>
+    <span><i class="dot" style="background:var(--lease)"></i> lease</span>
+    <span><i class="dot" style="background:var(--busywait)"></i> shutdown busy-wait</span>
+    <span><i class="dot" style="background:var(--delay)"></i> injected delay</span>
+    <span><i class="dot" style="background:var(--heartbeat)"></i> heartbeat</span>
+  </div>
+  <section class="block">
+    <h2>h1-payload-24000</h2>
+    <div class="meta">
+      <span class="pill">1 proxy subprocess</span>
+      <span class="pill">11278 ms wall</span>
+    </div>
+    <div class="scroller">
+      <div class="lane">
+        <div class="lanehead"><b>pid 563066</b>
+          <span>1 tool call</span>
+          <span>ended: killed (no exit handler ran)</span>
+          
+        </div>
+        <div class="track">
+          <div class="mark meta" style="left:0.000%" title="2026-07-31T19:33:41.634Z  +1ms (proc)
+spawn"></div>
+          <div class="mark rpc" style="left:0.168%" title="2026-07-31T19:33:41.653Z  +19ms (proc)
+rpc_in initialize"></div>
+          <div class="mark rpc" style="left:0.177%" title="2026-07-31T19:33:41.654Z  +21ms (proc)
+rpc_out initialize"></div>
+          <div class="mark rpc" style="left:0.417%" title="2026-07-31T19:33:41.681Z  +47ms (proc)
+rpc_in notifications/initialized"></div>
+          <div class="mark rpc" style="left:0.417%" title="2026-07-31T19:33:41.681Z  +48ms (proc)
+notification_ignored notifications/initialized"></div>
+          <div class="mark rpc" style="left:0.417%" title="2026-07-31T19:33:41.681Z  +48ms (proc)
+rpc_in tools/list"></div>
+          <div class="mark rpc" style="left:0.417%" title="2026-07-31T19:33:41.681Z  +48ms (proc)
+rpc_out tools/list"></div>
+          <div class="mark rpc" style="left:30.200%" title="2026-07-31T19:33:45.040Z  +3407ms (proc)
+rpc_in tools/call"></div>
+          <div class="mark tool" style="left:30.209%" title="2026-07-31T19:33:45.041Z  +3408ms (proc)
+tool_call_begin
+text: big"></div>
+          <div class="mark rpc" style="left:30.209%" title="2026-07-31T19:33:45.041Z  +3408ms (proc)
+rpc_out tools/call"></div>
+          <div class="mark teardown" style="left:99.113%" title="2026-07-31T19:33:52.812Z  +11179ms (proc)
+teardown_trigger SIGINT"></div>
+          <div class="mark teardown" style="left:100.000%" title="2026-07-31T19:33:52.912Z  +11279ms (proc)
+teardown_trigger SIGTERM"></div>
+        </div>
+        <div class="ladder">ladder: <b>SIGINT</b> → <b>SIGTERM</b></div>
+      </div>
+    </div>
+  </section>
+  <section class="block">
+    <h2>h1-payload-100000</h2>
+    <div class="meta">
+      <span class="pill">1 proxy subprocess</span>
+      <span class="pill">24528 ms wall</span>
+    </div>
+    <div class="scroller">
+      <div class="lane">
+        <div class="lanehead"><b>pid 563185</b>
+          <span>2 tool calls</span>
+          <span>ended: killed (no exit handler ran)</span>
+          
+        </div>
+        <div class="track">
+          <div class="mark meta" style="left:0.000%" title="2026-07-31T19:33:54.690Z  +0ms (proc)
+spawn"></div>
+          <div class="mark rpc" style="left:0.143%" title="2026-07-31T19:33:54.725Z  +36ms (proc)
+rpc_in initialize"></div>
+          <div class="mark rpc" style="left:0.151%" title="2026-07-31T19:33:54.727Z  +37ms (proc)
+rpc_out initialize"></div>
+          <div class="mark rpc" style="left:0.204%" title="2026-07-31T19:33:54.740Z  +51ms (proc)
+rpc_in notifications/initialized"></div>
+          <div class="mark rpc" style="left:0.204%" title="2026-07-31T19:33:54.740Z  +51ms (proc)
+notification_ignored notifications/initialized"></div>
+          <div class="mark rpc" style="left:0.204%" title="2026-07-31T19:33:54.740Z  +51ms (proc)
+rpc_in tools/list"></div>
+          <div class="mark rpc" style="left:0.204%" title="2026-07-31T19:33:54.740Z  +51ms (proc)
+rpc_out tools/list"></div>
+          <div class="mark rpc" style="left:13.491%" title="2026-07-31T19:33:57.999Z  +3310ms (proc)
+rpc_in tools/call"></div>
+          <div class="mark tool" style="left:13.491%" title="2026-07-31T19:33:57.999Z  +3310ms (proc)
+tool_call_begin
+text: big"></div>
+          <div class="mark rpc" style="left:13.515%" title="2026-07-31T19:33:58.005Z  +3316ms (proc)
+rpc_out tools/call"></div>
+          <div class="mark rpc" style="left:28.217%" title="2026-07-31T19:34:01.611Z  +6921ms (proc)
+rpc_in tools/call"></div>
+          <div class="mark tool" style="left:28.217%" title="2026-07-31T19:34:01.611Z  +6921ms (proc)
+tool_call_begin
+text: head -c 40 /home/vscode/.claude/projects/-workspaces-bruce-lee--planning-spikes-004-large-response-chunking/0dcb4ca0-a06"></div>
+          <div class="mark rpc" style="left:28.229%" title="2026-07-31T19:34:01.614Z  +6924ms (proc)
+rpc_out tools/call"></div>
+          <div class="mark teardown" style="left:99.588%" title="2026-07-31T19:34:19.117Z  +24428ms (proc)
+teardown_trigger SIGINT"></div>
+          <div class="mark teardown" style="left:100.000%" title="2026-07-31T19:34:19.218Z  +24528ms (proc)
+teardown_trigger SIGTERM"></div>
+        </div>
+        <div class="ladder">ladder: <b>SIGINT</b> → <b>SIGTERM</b></div>
+      </div>
+    </div>
+  </section>
+  <section class="block">
+    <h2>h1-payload-192000</h2>
+    <div class="meta">
+      <span class="pill">1 proxy subprocess</span>
+      <span class="pill">14150 ms wall</span>
+    </div>
+    <div class="scroller">
+      <div class="lane">
+        <div class="lanehead"><b>pid 563346</b>
+          <span>3 tool calls</span>
+          <span>ended: killed (no exit handler ran)</span>
+          
+        </div>
+        <div class="track">
+          <div class="mark meta" style="left:0.000%" title="2026-07-31T19:34:21.253Z  +1ms (proc)
+spawn"></div>
+          <div class="mark rpc" style="left:0.353%" title="2026-07-31T19:34:21.303Z  +51ms (proc)
+rpc_in initialize"></div>
+          <div class="mark rpc" style="left:0.367%" title="2026-07-31T19:34:21.305Z  +52ms (proc)
+rpc_out initialize"></div>
+          <div class="mark rpc" style="left:0.622%" title="2026-07-31T19:34:21.341Z  +89ms (proc)
+rpc_in notifications/initialized"></div>
+          <div class="mark rpc" style="left:0.629%" title="2026-07-31T19:34:21.342Z  +89ms (proc)
+notification_ignored notifications/initialized"></div>
+          <div class="mark rpc" style="left:0.629%" title="2026-07-31T19:34:21.342Z  +89ms (proc)
+rpc_in tools/list"></div>
+          <div class="mark rpc" style="left:0.629%" title="2026-07-31T19:34:21.342Z  +90ms (proc)
+rpc_out tools/list"></div>
+          <div class="mark rpc" style="left:17.647%" title="2026-07-31T19:34:23.750Z  +2497ms (proc)
+rpc_in tools/call"></div>
+          <div class="mark tool" style="left:17.647%" title="2026-07-31T19:34:23.750Z  +2497ms (proc)
+tool_call_begin
+text: big"></div>
+          <div class="mark rpc" style="left:17.696%" title="2026-07-31T19:34:23.757Z  +2505ms (proc)
+rpc_out tools/call"></div>
+          <div class="mark rpc" style="left:40.481%" title="2026-07-31T19:34:26.981Z  +5729ms (proc)
+rpc_in tools/call"></div>
+          <div class="mark tool" style="left:40.481%" title="2026-07-31T19:34:26.981Z  +5729ms (proc)
+tool_call_begin
+text: big"></div>
+          <div class="mark rpc" style="left:40.544%" title="2026-07-31T19:34:26.990Z  +5738ms (proc)
+rpc_out tools/call"></div>
+          <div class="mark rpc" style="left:57.124%" title="2026-07-31T19:34:29.336Z  +8083ms (proc)
+rpc_in tools/call"></div>
+          <div class="mark tool" style="left:57.124%" title="2026-07-31T19:34:29.336Z  +8083ms (proc)
+tool_call_begin
+text: big"></div>
+          <div class="mark rpc" style="left:57.159%" title="2026-07-31T19:34:29.341Z  +8088ms (proc)
+rpc_out tools/call"></div>
+          <div class="mark teardown" style="left:99.293%" title="2026-07-31T19:34:35.303Z  +14051ms (proc)
+teardown_trigger SIGINT"></div>
+          <div class="mark teardown" style="left:100.000%" title="2026-07-31T19:34:35.403Z  +14151ms (proc)
+teardown_trigger SIGTERM"></div>
+        </div>
+        <div class="ladder">ladder: <b>SIGINT</b> → <b>SIGTERM</b></div>
+      </div>
+    </div>
+  </section>
+  <section class="block">
+    <h2>h1-payload-512000</h2>
+    <div class="meta">
+      <span class="pill">1 proxy subprocess</span>
+      <span class="pill">11657 ms wall</span>
+    </div>
+    <div class="scroller">
+      <div class="lane">
+        <div class="lanehead"><b>pid 563470</b>
+          <span>2 tool calls</span>
+          <span>ended: killed (no exit handler ran)</span>
+          
+        </div>
+        <div class="track">
+          <div class="mark meta" style="left:0.000%" title="2026-07-31T19:34:36.940Z  +0ms (proc)
+spawn"></div>
+          <div class="mark rpc" style="left:0.412%" title="2026-07-31T19:34:36.988Z  +48ms (proc)
+rpc_in initialize"></div>
+          <div class="mark rpc" style="left:0.420%" title="2026-07-31T19:34:36.989Z  +50ms (proc)
+rpc_out initialize"></div>
+          <div class="mark rpc" style="left:0.609%" title="2026-07-31T19:34:37.011Z  +72ms (proc)
+rpc_in notifications/initialized"></div>
+          <div class="mark rpc" style="left:0.609%" title="2026-07-31T19:34:37.011Z  +72ms (proc)
+notification_ignored notifications/initialized"></div>
+          <div class="mark rpc" style="left:0.618%" title="2026-07-31T19:34:37.012Z  +72ms (proc)
+rpc_in tools/list"></div>
+          <div class="mark rpc" style="left:0.618%" title="2026-07-31T19:34:37.012Z  +72ms (proc)
+rpc_out tools/list"></div>
+          <div class="mark rpc" style="left:27.443%" title="2026-07-31T19:34:40.139Z  +3199ms (proc)
+rpc_in tools/call"></div>
+          <div class="mark tool" style="left:27.443%" title="2026-07-31T19:34:40.139Z  +3199ms (proc)
+tool_call_begin
+text: big"></div>
+          <div class="mark rpc" style="left:27.640%" title="2026-07-31T19:34:40.162Z  +3223ms (proc)
+rpc_out tools/call"></div>
+          <div class="mark rpc" style="left:57.099%" title="2026-07-31T19:34:43.596Z  +6657ms (proc)
+rpc_in tools/call"></div>
+          <div class="mark tool" style="left:57.107%" title="2026-07-31T19:34:43.597Z  +6657ms (proc)
+tool_call_begin
+text: big"></div>
+          <div class="mark rpc" style="left:57.210%" title="2026-07-31T19:34:43.609Z  +6670ms (proc)
+rpc_out tools/call"></div>
+          <div class="mark teardown" style="left:99.142%" title="2026-07-31T19:34:48.497Z  +11557ms (proc)
+teardown_trigger SIGINT"></div>
+          <div class="mark teardown" style="left:100.000%" title="2026-07-31T19:34:48.597Z  +11657ms (proc)
+teardown_trigger SIGTERM"></div>
+        </div>
+        <div class="ladder">ladder: <b>SIGINT</b> → <b>SIGTERM</b></div>
+      </div>
+    </div>
+  </section>
+  <section class="block">
+    <h2>h1-payload-40000</h2>
+    <div class="meta">
+      <span class="pill">1 proxy subprocess</span>
+      <span class="pill">13134 ms wall</span>
+    </div>
+    <div class="scroller">
+      <div class="lane">
+        <div class="lanehead"><b>pid 563802</b>
+          <span>1 tool call</span>
+          <span>ended: killed (no exit handler ran)</span>
+          
+        </div>
+        <div class="track">
+          <div class="mark meta" style="left:0.000%" title="2026-07-31T19:35:27.268Z  +0ms (proc)
+spawn"></div>
+          <div class="mark rpc" style="left:0.198%" title="2026-07-31T19:35:27.294Z  +27ms (proc)
+rpc_in initialize"></div>
+          <div class="mark rpc" style="left:0.206%" title="2026-07-31T19:35:27.295Z  +27ms (proc)
+rpc_out initialize"></div>
+          <div class="mark rpc" style="left:0.327%" title="2026-07-31T19:35:27.311Z  +43ms (proc)
+rpc_in notifications/initialized"></div>
+          <div class="mark rpc" style="left:0.327%" title="2026-07-31T19:35:27.311Z  +43ms (proc)
+notification_ignored notifications/initialized"></div>
+          <div class="mark rpc" style="left:0.327%" title="2026-07-31T19:35:27.311Z  +43ms (proc)
+rpc_in tools/list"></div>
+          <div class="mark rpc" style="left:0.327%" title="2026-07-31T19:35:27.311Z  +43ms (proc)
+rpc_out tools/list"></div>
+          <div class="mark rpc" style="left:15.197%" title="2026-07-31T19:35:29.264Z  +1997ms (proc)
+rpc_in tools/call"></div>
+          <div class="mark tool" style="left:15.205%" title="2026-07-31T19:35:29.265Z  +1997ms (proc)
+tool_call_begin
+text: big"></div>
+          <div class="mark rpc" style="left:15.212%" title="2026-07-31T19:35:29.266Z  +1999ms (proc)
+rpc_out tools/call"></div>
+          <div class="mark teardown" style="left:99.239%" title="2026-07-31T19:35:40.302Z  +13034ms (proc)
+teardown_trigger SIGINT"></div>
+          <div class="mark teardown" style="left:100.000%" title="2026-07-31T19:35:40.402Z  +13134ms (proc)
+teardown_trigger SIGTERM"></div>
+        </div>
+        <div class="ladder">ladder: <b>SIGINT</b> → <b>SIGTERM</b></div>
+      </div>
+    </div>
+  </section>
+  <section class="block">
+    <h2>h1-payload-60000</h2>
+    <div class="meta">
+      <span class="pill">1 proxy subprocess</span>
+      <span class="pill">20124 ms wall</span>
+    </div>
+    <div class="scroller">
+      <div class="lane">
+        <div class="lanehead"><b>pid 563923</b>
+          <span>2 tool calls</span>
+          <span>ended: killed (no exit handler ran)</span>
+          
+        </div>
+        <div class="track">
+          <div class="mark meta" style="left:0.000%" title="2026-07-31T19:35:42.268Z  +1ms (proc)
+spawn"></div>
+          <div class="mark rpc" style="left:0.199%" title="2026-07-31T19:35:42.308Z  +40ms (proc)
+rpc_in initialize"></div>
+          <div class="mark rpc" style="left:0.204%" title="2026-07-31T19:35:42.309Z  +41ms (proc)
+rpc_out initialize"></div>
+          <div class="mark rpc" style="left:0.328%" title="2026-07-31T19:35:42.334Z  +66ms (proc)
+rpc_in notifications/initialized"></div>
+          <div class="mark rpc" style="left:0.328%" title="2026-07-31T19:35:42.334Z  +66ms (proc)
+notification_ignored notifications/initialized"></div>
+          <div class="mark rpc" style="left:0.328%" title="2026-07-31T19:35:42.334Z  +66ms (proc)
+rpc_in tools/list"></div>
+          <div class="mark rpc" style="left:0.328%" title="2026-07-31T19:35:42.334Z  +66ms (proc)
+rpc_out tools/list"></div>
+          <div class="mark rpc" style="left:13.377%" title="2026-07-31T19:35:44.960Z  +2692ms (proc)
+rpc_in tools/call"></div>
+          <div class="mark tool" style="left:13.377%" title="2026-07-31T19:35:44.960Z  +2693ms (proc)
+tool_call_begin
+text: big"></div>
+          <div class="mark rpc" style="left:13.412%" title="2026-07-31T19:35:44.967Z  +2700ms (proc)
+rpc_out tools/call"></div>
+          <div class="mark rpc" style="left:32.051%" title="2026-07-31T19:35:48.718Z  +6451ms (proc)
+rpc_in tools/call"></div>
+          <div class="mark tool" style="left:32.056%" title="2026-07-31T19:35:48.719Z  +6451ms (proc)
+tool_call_begin
+text: big"></div>
+          <div class="mark rpc" style="left:32.061%" title="2026-07-31T19:35:48.720Z  +6452ms (proc)
+rpc_out tools/call"></div>
+          <div class="mark teardown" style="left:99.503%" title="2026-07-31T19:36:02.292Z  +20024ms (proc)
+teardown_trigger SIGINT"></div>
+          <div class="mark teardown" style="left:100.000%" title="2026-07-31T19:36:02.392Z  +20124ms (proc)
+teardown_trigger SIGTERM"></div>
+        </div>
+        <div class="ladder">ladder: <b>SIGINT</b> → <b>SIGTERM</b></div>
+      </div>
+    </div>
+  </section>
+  <section class="block">
+    <h2>h1-payload-80000</h2>
+    <div class="meta">
+      <span class="pill">1 proxy subprocess</span>
+      <span class="pill">8304 ms wall</span>
+    </div>
+    <div class="scroller">
+      <div class="lane">
+        <div class="lanehead"><b>pid 564067</b>
+          <span>1 tool call</span>
+          <span>ended: killed (no exit handler ran)</span>
+          
+        </div>
+        <div class="track">
+          <div class="mark meta" style="left:0.000%" title="2026-07-31T19:36:04.129Z  +1ms (proc)
+spawn"></div>
+          <div class="mark rpc" style="left:0.530%" title="2026-07-31T19:36:04.173Z  +44ms (proc)
+rpc_in initialize"></div>
+          <div class="mark rpc" style="left:0.542%" title="2026-07-31T19:36:04.174Z  +46ms (proc)
+rpc_out initialize"></div>
+          <div class="mark rpc" style="left:0.903%" title="2026-07-31T19:36:04.204Z  +75ms (proc)
+rpc_in notifications/initialized"></div>
+          <div class="mark rpc" style="left:0.903%" title="2026-07-31T19:36:04.204Z  +75ms (proc)
+notification_ignored notifications/initialized"></div>
+          <div class="mark rpc" style="left:0.903%" title="2026-07-31T19:36:04.204Z  +75ms (proc)
+rpc_in tools/list"></div>
+          <div class="mark rpc" style="left:0.915%" title="2026-07-31T19:36:04.205Z  +76ms (proc)
+rpc_out tools/list"></div>
+          <div class="mark rpc" style="left:24.265%" title="2026-07-31T19:36:06.144Z  +2015ms (proc)
+rpc_in tools/call"></div>
+          <div class="mark tool" style="left:24.265%" title="2026-07-31T19:36:06.144Z  +2015ms (proc)
+tool_call_begin
+text: big"></div>
+          <div class="mark rpc" style="left:24.350%" title="2026-07-31T19:36:06.151Z  +2022ms (proc)
+rpc_out tools/call"></div>
+          <div class="mark teardown" style="left:98.796%" title="2026-07-31T19:36:12.333Z  +8204ms (proc)
+teardown_trigger SIGINT"></div>
+          <div class="mark teardown" style="left:100.000%" title="2026-07-31T19:36:12.433Z  +8304ms (proc)
+teardown_trigger SIGTERM"></div>
+        </div>
+        <div class="ladder">ladder: <b>SIGINT</b> → <b>SIGTERM</b></div>
+      </div>
+    </div>
+  </section>
+  <section class="block">
+    <h2>h2-maxtokens-2000-payload-100000</h2>
+    <div class="meta">
+      <span class="pill">1 proxy subprocess</span>
+      <span class="pill">15276 ms wall</span>
+    </div>
+    <div class="scroller">
+      <div class="lane">
+        <div class="lanehead"><b>pid 564252</b>
+          <span>3 tool calls</span>
+          <span>ended: killed (no exit handler ran)</span>
+          
+        </div>
+        <div class="track">
+          <div class="mark meta" style="left:0.000%" title="2026-07-31T19:36:24.004Z  +1ms (proc)
+spawn"></div>
+          <div class="mark rpc" style="left:0.445%" title="2026-07-31T19:36:24.072Z  +68ms (proc)
+rpc_in initialize"></div>
+          <div class="mark rpc" style="left:0.452%" title="2026-07-31T19:36:24.073Z  +70ms (proc)
+rpc_out initialize"></div>
+          <div class="mark rpc" style="left:0.700%" title="2026-07-31T19:36:24.111Z  +108ms (proc)
+rpc_in notifications/initialized"></div>
+          <div class="mark rpc" style="left:0.700%" title="2026-07-31T19:36:24.111Z  +108ms (proc)
+notification_ignored notifications/initialized"></div>
+          <div class="mark rpc" style="left:0.707%" title="2026-07-31T19:36:24.112Z  +108ms (proc)
+rpc_in tools/list"></div>
+          <div class="mark rpc" style="left:0.707%" title="2026-07-31T19:36:24.112Z  +108ms (proc)
+rpc_out tools/list"></div>
+          <div class="mark rpc" style="left:18.428%" title="2026-07-31T19:36:26.819Z  +2815ms (proc)
+rpc_in tools/call"></div>
+          <div class="mark tool" style="left:18.428%" title="2026-07-31T19:36:26.819Z  +2815ms (proc)
+tool_call_begin
+text: big"></div>
+          <div class="mark rpc" style="left:18.460%" title="2026-07-31T19:36:26.824Z  +2821ms (proc)
+rpc_out tools/call"></div>
+          <div class="mark rpc" style="left:45.699%" title="2026-07-31T19:36:30.985Z  +6981ms (proc)
+rpc_in tools/call"></div>
+          <div class="mark tool" style="left:45.699%" title="2026-07-31T19:36:30.985Z  +6982ms (proc)
+tool_call_begin
+text: tail -c +1 /home/vscode/.claude/projects/-workspaces-bruce-lee--planning-spikes-004-large-response-chunking/cefb2383-6d1"></div>
+          <div class="mark rpc" style="left:45.712%" title="2026-07-31T19:36:30.987Z  +6984ms (proc)
+rpc_out tools/call"></div>
+          <div class="mark rpc" style="left:63.878%" title="2026-07-31T19:36:33.762Z  +9758ms (proc)
+rpc_in tools/call"></div>
+          <div class="mark tool" style="left:63.878%" title="2026-07-31T19:36:33.762Z  +9758ms (proc)
+tool_call_begin
+text: grep &quot;END_PAYLOAD&quot; /home/vscode/.claude/projects/-workspaces-bruce-lee--planning-spikes-004-large-response-chunking/cefb"></div>
+          <div class="mark rpc" style="left:63.891%" title="2026-07-31T19:36:33.764Z  +9761ms (proc)
+rpc_out tools/call"></div>
+          <div class="mark teardown" style="left:99.345%" title="2026-07-31T19:36:39.180Z  +15176ms (proc)
+teardown_trigger SIGINT"></div>
+          <div class="mark teardown" style="left:100.000%" title="2026-07-31T19:36:39.280Z  +15276ms (proc)
+teardown_trigger SIGTERM"></div>
+        </div>
+        <div class="ladder">ladder: <b>SIGINT</b> → <b>SIGTERM</b></div>
+      </div>
+    </div>
+  </section>
+  <section class="block">
+    <h2>h2-maxtokens-2000-payload-24000</h2>
+    <div class="meta">
+      <span class="pill">1 proxy subprocess</span>
+      <span class="pill">24142 ms wall</span>
+    </div>
+    <div class="scroller">
+      <div class="lane">
+        <div class="lanehead"><b>pid 564539</b>
+          <span>2 tool calls</span>
+          <span>ended: killed (no exit handler ran)</span>
+          
+        </div>
+        <div class="track">
+          <div class="mark meta" style="left:0.000%" title="2026-07-31T19:37:06.099Z  +1ms (proc)
+spawn"></div>
+          <div class="mark rpc" style="left:0.311%" title="2026-07-31T19:37:06.174Z  +75ms (proc)
+rpc_in initialize"></div>
+          <div class="mark rpc" style="left:0.319%" title="2026-07-31T19:37:06.176Z  +77ms (proc)
+rpc_out initialize"></div>
+          <div class="mark rpc" style="left:0.580%" title="2026-07-31T19:37:06.239Z  +140ms (proc)
+rpc_in notifications/initialized"></div>
+          <div class="mark rpc" style="left:0.580%" title="2026-07-31T19:37:06.239Z  +140ms (proc)
+notification_ignored notifications/initialized"></div>
+          <div class="mark rpc" style="left:0.580%" title="2026-07-31T19:37:06.239Z  +141ms (proc)
+rpc_in tools/list"></div>
+          <div class="mark rpc" style="left:0.580%" title="2026-07-31T19:37:06.239Z  +141ms (proc)
+rpc_out tools/list"></div>
+          <div class="mark rpc" style="left:12.004%" title="2026-07-31T19:37:08.997Z  +2899ms (proc)
+rpc_in tools/call"></div>
+          <div class="mark tool" style="left:12.004%" title="2026-07-31T19:37:08.997Z  +2899ms (proc)
+tool_call_begin
+text: big"></div>
+          <div class="mark rpc" style="left:12.008%" title="2026-07-31T19:37:08.998Z  +2900ms (proc)
+rpc_out tools/call"></div>
+          <div class="mark rpc" style="left:25.744%" title="2026-07-31T19:37:12.314Z  +6216ms (proc)
+rpc_in tools/call"></div>
+          <div class="mark tool" style="left:25.744%" title="2026-07-31T19:37:12.314Z  +6216ms (proc)
+tool_call_begin
+text: big"></div>
+          <div class="mark rpc" style="left:25.748%" title="2026-07-31T19:37:12.315Z  +6216ms (proc)
+rpc_out tools/call"></div>
+          <div class="mark teardown" style="left:99.586%" title="2026-07-31T19:37:30.141Z  +24042ms (proc)
+teardown_trigger SIGINT"></div>
+          <div class="mark teardown" style="left:100.000%" title="2026-07-31T19:37:30.241Z  +24142ms (proc)
+teardown_trigger SIGTERM"></div>
+        </div>
+        <div class="ladder">ladder: <b>SIGINT</b> → <b>SIGTERM</b></div>
+      </div>
+    </div>
+  </section>
+</main>
