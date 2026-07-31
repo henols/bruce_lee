@@ -1,3 +1,8 @@
 {
-  "mcpServers": {}
+  "mcpServers": {
+    "vice": {
+      "command": "node",
+      "args": [".claude/skills/vice-mcp-selector/scripts/vice-proxy.mjs"]
+    }
+  }
 }
