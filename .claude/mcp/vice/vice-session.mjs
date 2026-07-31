@@ -2,7 +2,7 @@
 // The container-side session layer for tools/vice.mjs (D-1).
 //
 // WHY THIS FILE EXISTS AT ALL: the agent's shell environment does NOT
-// persist between Bash invocations -- every `node .claude/skills/vice-mcp-selector/scripts/vice.mjs ...` call
+// persist between Bash invocations -- every `node .claude/mcp/vice/vice.mjs ...` call
 // is a brand-new process with no memory of anything an earlier call
 // `export`ed. So a "session" that is supposed to survive across separate
 // commands cannot live in an environment variable; it has to be a FILE that
@@ -131,7 +131,7 @@ export async function acquireSession({ ttlMs = DEFAULT_TTL_MS, dir = poolDir(), 
   if (existing.present && !isExpired(existing)) {
     throw new Error(
       `a session is already active (id ${existing.session_id}, port ${existing.port}, expires ${existing.expires_at}) -- ` +
-        `release it first: \`node .claude/skills/vice-mcp-selector/scripts/vice.mjs session release\`. Refusing to silently steal an active session.`
+        `release it first: \`node .claude/mcp/vice/vice.mjs session release\`. Refusing to silently steal an active session.`
     );
   }
 
@@ -217,7 +217,7 @@ export function sessionStatus({ sessionPath = sessionFilePath() } = {}) {
  *   3. Otherwise, the default -- port 6510, the default endpoint, no lease.
  *      This is exactly today's zero-configuration behaviour (D-1, HARD
  *      REQUIREMENT): with no session file present, nothing about this
- *      resolution step may change what a bare `node .claude/skills/vice-mcp-selector/scripts/vice.mjs ping`
+ *      resolution step may change what a bare `node .claude/mcp/vice/vice.mjs ping`
  *      does.
  *
  * An EXPIRED session file is an ERROR, not a silent fallback: retargeting
@@ -274,8 +274,8 @@ export function resolveInstance({ sessionPath = sessionFilePath() } = {}) {
   if (isExpired(s)) {
     throw new Error(
       `session ${s.session_id} (port ${s.port}) expired at ${s.expires_at} -- refusing to fall back to the ` +
-        `default instance silently. Recover with: \`node .claude/skills/vice-mcp-selector/scripts/vice.mjs session release\` then ` +
-        `\`node .claude/skills/vice-mcp-selector/scripts/vice.mjs session acquire\`.`
+        `default instance silently. Recover with: \`node .claude/mcp/vice/vice.mjs session release\` then ` +
+        `\`node .claude/mcp/vice/vice.mjs session acquire\`.`
     );
   }
 
@@ -304,8 +304,8 @@ function assertEpochContinuity(s) {
       throw new Error(
         `session ${s.session_id} (port ${s.port}): the emulator restarted since this session was acquired -- ` +
           `epoch changed from ${baseline.epoch} to ${current.epoch}. This session's results are suspect; do not ` +
-          `trust them. Recover with: \`node .claude/skills/vice-mcp-selector/scripts/vice.mjs session release\` then ` +
-          `\`node .claude/skills/vice-mcp-selector/scripts/vice.mjs session acquire\`.`
+          `trust them. Recover with: \`node .claude/mcp/vice/vice.mjs session release\` then ` +
+          `\`node .claude/mcp/vice/vice.mjs session acquire\`.`
       );
     }
     return; // both present, both equal -- proven same machine, proceed silently

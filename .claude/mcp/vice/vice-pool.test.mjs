@@ -935,8 +935,8 @@ test("path agreement (D-3, D-6, THE regression this task exists to catch): super
   // makes that loud (ENOENT-shaped) rather than a silent script-not-found.
   const supervisorScript = join(repoRoot(), "tools", "vice-supervisor.sh");
   const poolScript = join(repoRoot(), "tools", "vice-pool.sh");
-  const resourcesSupervisorScript = join(repoRoot(), ".claude", "skills", "vice-mcp-selector", "resources", "vice-supervisor.sh");
-  const resourcesPoolScript = join(repoRoot(), ".claude", "skills", "vice-mcp-selector", "resources", "vice-pool.sh");
+  const resourcesSupervisorScript = join(repoRoot(), ".claude", "mcp", "vice", "resources", "vice-supervisor.sh");
+  const resourcesPoolScript = join(repoRoot(), ".claude", "mcp", "vice", "resources", "vice-pool.sh");
   assert.ok(existsSync(supervisorScript), `expected ${supervisorScript} to exist (resolved via repoRoot())`);
   assert.ok(existsSync(poolScript), `expected ${poolScript} to exist (resolved via repoRoot())`);
   assert.ok(existsSync(resourcesSupervisorScript), `expected ${resourcesSupervisorScript} to exist (resolved via repoRoot())`);
@@ -999,7 +999,7 @@ test("path agreement (D-3, D-6, THE regression this task exists to catch): super
 });
 
 test("path agreement without CONTAINER_WORKSPACE_PATH (D-6): the .git-walk branch -- the ONLY branch that ever runs on the real host -- still agrees between resources/ and tools/", async () => {
-  const resourcesSupervisorScript = join(repoRoot(), ".claude", "skills", "vice-mcp-selector", "resources", "vice-supervisor.sh");
+  const resourcesSupervisorScript = join(repoRoot(), ".claude", "mcp", "vice", "resources", "vice-supervisor.sh");
   const supervisorScript = join(repoRoot(), "tools", "vice-supervisor.sh");
 
   const hostEnv = { ...process.env };
@@ -1046,27 +1046,28 @@ test("repoRoot() ladder: a .git ancestor resolves with no env set; a containing 
   }
 });
 
-test("repoRoot() last-resort fallback (quick-260730-r0u, path-anchor regression): climbs FOUR levels from a <root>/.claude/skills/<skill>/scripts path, not three", () => {
+test("repoRoot() last-resort fallback (quick-260731-p8a, path-anchor regression): climbs THREE levels from a <root>/.claude/mcp/<server> path, not four", () => {
   // Deliberately has no .git ancestor and no CONTAINER_WORKSPACE_PATH, so the
   // ladder falls all the way through to branch 4 -- the fixed-hop last
-  // resort this move touched. A naive move that kept the old three-level
-  // hop would land on <tmpdir>/.claude/skills/vice-session instead of
-  // <tmpdir> itself, which is exactly the silent-wrong-directory failure
-  // this file's header forbids.
-  const root = mkdtempSync(join(tmpdir(), "reporoot-fourlevel-"));
-  const scriptsDir = join(root, ".claude", "skills", "vice-session", "scripts");
-  mkdirSync(scriptsDir, { recursive: true });
+  // resort this move touched. The relocated tree is one level shallower than
+  // the old <root>/.claude/skills/<skill>/scripts shape (scripts/ was
+  // flattened away), so a naive move that kept the old four-level hop would
+  // land on <tmpdir>/.claude/mcp instead of <tmpdir> itself, which is exactly
+  // the silent-wrong-directory failure this file's header forbids.
+  const root = mkdtempSync(join(tmpdir(), "reporoot-threelevel-"));
+  const moduleDir = join(root, ".claude", "mcp", "vice");
+  mkdirSync(moduleDir, { recursive: true });
 
   const originalError = console.error;
   console.error = () => {};
   try {
-    assert.equal(repoRoot({ from: scriptsDir, env: {} }), root);
+    assert.equal(repoRoot({ from: moduleDir, env: {} }), root);
   } finally {
     console.error = originalError;
   }
 });
 
-test("no-configuration fallback: the CLI's no-argument usage output reports port 6510 from the new .claude/skills/vice-session location", async () => {
+test("no-configuration fallback: the CLI's no-argument usage output reports port 6510 from the .claude/mcp/vice location", async () => {
   const dir = mkdtempSync(join(tmpdir(), "vice-noconfig-"));
   const env = { ...process.env, VICE_POOL_DIR: dir, VICE_SESSION_FILE: join(dir, "session.json") };
   delete env.VICE_MCP_URL;
@@ -1607,7 +1608,7 @@ test("CLI `pool status`: prints port/alive/leased/supervised and completes in un
 // repo's tools/ -- matching this file's own existing temp-directory idiom.
 // ============================================================================
 
-test("RESOURCES_DIR (quick-260730-r0u, path-anchor regression): points at the SKILL ROOT's resources/, not a scripts/-relative directory", () => {
+test("RESOURCES_DIR (quick-260731-p8a, path-anchor regression): points at the MODULE DIRECTORY's resources/, not a scripts/-relative directory", () => {
   // A wrong hop count here is SILENT, because ensureResourcesInstalled()
   // swallows every error by contract -- see install-resources.mjs's header.
   // Asserting the exact entry set (not just "no throw") is what makes this
@@ -1615,8 +1616,8 @@ test("RESOURCES_DIR (quick-260730-r0u, path-anchor regression): points at the SK
   // subdirectory makes readdirSync() throw loudly inside resourceEntries(),
   // so this test dies instead of quietly comparing two empty lists.
   assert.ok(
-    RESOURCES_DIR.endsWith(join("vice-mcp-selector", "resources")),
-    `expected RESOURCES_DIR to end with vice-mcp-selector/resources, got ${RESOURCES_DIR}`
+    RESOURCES_DIR.endsWith(join("mcp", "vice", "resources")),
+    `expected RESOURCES_DIR to end with mcp/vice/resources, got ${RESOURCES_DIR}`
   );
   assert.ok(
     !RESOURCES_DIR.split(sep).includes("scripts"),

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# .claude/skills/vice-mcp-selector/resources/vice-pool.sh
+# .claude/mcp/vice/resources/vice-pool.sh
 #
 # This is the TRACKED source of truth. It runs unchanged from either this
 # location or its deployed copy at <repo>/tools/vice-pool.sh -- the skill's
@@ -17,7 +17,7 @@
 # supervises ONE x64sc instance on one port. This script launches N of them
 # in parallel, each its own supervised instance with its own port, supervisor
 # dir (epoch file, logs, crash log), and coordinates with container-side
-# code (.claude/skills/vice-mcp-selector/scripts/vice-pool.mjs) via a registry.json file written on the same
+# code (.claude/mcp/vice/vice-pool.mjs) via a registry.json file written on the same
 # bind mount vice-supervisor.sh's epoch.json already uses (D-2) --
 # deliberately NOT a new port, socket, or IPC mechanism.
 #
@@ -76,7 +76,7 @@ tools/vice-pool.sh <subcommand> [...].
 
 HOST-ONLY. Launches, tracks, and tears down N supervised x64sc MCP instances
 in parallel (D-1), coordinating with container-side harness code
-(.claude/skills/vice-mcp-selector/scripts/vice-pool.mjs) over a registry.json file on the shared bind mount
+(.claude/mcp/vice/vice-pool.mjs) over a registry.json file on the shared bind mount
 (D-2) -- the same channel tools/vice-supervisor.sh's epoch.json already
 uses. \`.mcp.json\` is not touched: instance 0 is always the default port
 (6510), so the existing single-instance workflow keeps working untouched
@@ -531,7 +531,7 @@ cmd_status() {
   # (quick-260730-p5x) -- pids, epoch files and lease files are all this
   # script can see from the host; whether VICE is actually up is answered
   # container-side.
-  echo "vice-pool: for actual VICE liveness (not just supervisor-pid liveness), run inside the container: node .claude/skills/vice-mcp-selector/scripts/vice.mjs pool status"
+  echo "vice-pool: for actual VICE liveness (not just supervisor-pid liveness), run inside the container: node .claude/mcp/vice/vice.mjs pool status"
 
   if [ "$stale" -eq 1 ]; then
     exit 5

@@ -41,8 +41,8 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-import { call, beginSession, assertSameMachine, serverInfo, readEpoch, lastToolCall } from "../../vice-mcp-selector/scripts/vice.mjs";
-import { addrNum, hex4, waitCheckpointHit, armedCheckpoints } from "../../vice-mcp-selector/scripts/vice-sync.mjs";
+import { call, beginSession, assertSameMachine, serverInfo, readEpoch, lastToolCall } from "../../../mcp/vice/vice.mjs";
+import { addrNum, hex4, waitCheckpointHit, armedCheckpoints } from "../../../mcp/vice/vice-sync.mjs";
 import { tryHostPaths } from "../../devcontainer-host-path/scripts/hostpath.mjs";
 
 export { classifyRuns, VOLATILE_RANGES } from "./ram-compare.mjs";

@@ -169,6 +169,13 @@ test("criterion 8: no enumerated document instructs an agent to invoke the trans
 function enumerateModules() {
   return [
     ...walkFiles(join(REPO_ROOT, ".claude", "skills"), (p) => p.endsWith(".mjs")),
+    // quick-260731-p8a: the vice MCP implementation relocated out of the
+    // skills tree into this new, non-skill directory. Without this line the
+    // relocated modules would fall outside every enumeration below, silently
+    // vacating criterion 9's hostpath-consumer closure and the vice-session
+    // import ban -- a security control that would pass while enforcing
+    // nothing on the modules it used to cover.
+    ...walkFiles(join(REPO_ROOT, ".claude", "mcp"), (p) => p.endsWith(".mjs")),
     ...walkFiles(join(REPO_ROOT, "tools"), (p) => p.endsWith(".mjs")),
   ];
 }

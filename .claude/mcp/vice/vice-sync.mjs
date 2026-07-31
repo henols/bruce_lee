@@ -33,18 +33,18 @@
 //
 // `tryHostPaths` (used by screenshot() below) comes from the sibling
 // `devcontainer-host-path` skill -- and that is not a new dependency this
-// module introduces. This skill's own resource-deployment path already pulls
-// it in: `vice.mjs` statically imports `repo-root.mjs`, which statically
+// module introduces. This module tree's own resource-deployment path already
+// pulls it in: `vice.mjs` statically imports `repo-root.mjs`, which statically
 // imports `install-resources.mjs`, which imports
-// `../../devcontainer-host-path/scripts/hostpath.mjs` -- a mandatory edge on
-// every entry into this skill. screenshot() is simply its second consumer.
-// A future maintainer should neither believe this module introduced that
-// edge nor "fix" it by hand-rolling a second path translator.
+// `../../skills/devcontainer-host-path/scripts/hostpath.mjs` -- a mandatory
+// edge on every entry into this tree. screenshot() is simply its second
+// consumer. A future maintainer should neither believe this module introduced
+// that edge nor "fix" it by hand-rolling a second path translator.
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 
 import { call } from "./vice.mjs";
-import { tryHostPaths } from "../../devcontainer-host-path/scripts/hostpath.mjs";
+import { tryHostPaths } from "../../skills/devcontainer-host-path/scripts/hostpath.mjs";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 

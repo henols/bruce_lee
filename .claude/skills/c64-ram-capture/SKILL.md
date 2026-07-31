@@ -110,5 +110,8 @@ not a complete one.
 
 ## Copying this skill elsewhere
 
-This skill depends on the sibling `vice-mcp-selector` and `devcontainer-host-path`
-skills — copy all three into another project together, not this one alone.
+This skill depends on the `.claude/mcp/vice/` VICE MCP implementation
+(not a sibling skill — it lives outside `.claude/skills/`, see
+quick-260731-p8a) and the sibling `devcontainer-host-path` skill — copy this
+skill, that directory, and that skill into another project together, not
+this skill alone.
