@@ -58,3 +58,35 @@ The observable signal that the trigger has fired: `acquire: no free instance wit
 appearing in normal work rather than as a symptom of dead instances. Check the per-candidate
 reasons in that message to tell the two apart — `leased by pid ...` on every candidate means
 genuine contention, `no answer` means the instances are dead and this seed is not what fired.
+
+## Correction, 2026-07-31 — there is only one actor class, not three
+
+The actor-class list above is wrong, and it was the basis for the starvation arithmetic
+("three actively-working actors renew their leases indefinitely, while a fourth waits").
+
+Researched Claude Code behaviour (HIGH confidence; recorded in
+`.planning/notes/vice-mcp-selector-design.md`, finding 5): **subagents do not spawn their own MCP
+connections.** They are additional model loops inside the *same* session process, and their MCP
+tool calls route over the parent session's already-initialised client connections. `isolation:
+"worktree"` swaps the filesystem view, not the MCP wiring. Nested subagents follow the same rule.
+
+So of the three listed classes:
+
+| Claimed actor class | Actually |
+|---|---|
+| GSD worktree executors | Same process as their parent session — **share** its emulator access |
+| Subagents within one turn | Same process — **share** |
+| Separate Claude sessions | Genuinely independent — one instance each |
+
+Contention pressure is therefore far lower than this seed assumed: a 3-instance pool serves 3
+concurrent Claude Code *sessions*, and any amount of subagent fan-out inside a session consumes
+one instance, not N.
+
+The policy question ("a busy holder never yields") still stands — it just fires later and needs
+fewer instances than feared. **But the correction opens a sharper question in its place:** if a
+whole parallel wave shares one instance, the pool buys crash isolation and cross-session
+concurrency but **not** intra-session throughput, which is one of the two rationales in
+`tools/vice-pool.sh:33`. That fork is unresolved and is carried in the design note, not here.
+
+Trigger condition, updated: fires when concurrent Claude Code *sessions* (not agents) exceed the
+launched instance count.

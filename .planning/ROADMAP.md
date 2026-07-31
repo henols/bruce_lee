@@ -12,7 +12,7 @@ These apply across every phase and every plan; `/gsd-plan-phase` should inherit 
 
 | Constraint | Consequence for planning |
 |---|---|
-| **VICE is a single shared host instance reached only over MCP** | `parallelization: true` does **not** extend to emulator work. Any two plans that both drive VICE must be serialised, and each must open with the reset/clear-checkpoints/reload ritual before trusting emulator state. Plans marked parallel below are parallel in *authoring*; their VICE steps still queue. |
+| **VICE is a single shared host instance reached only over MCP** | `parallelization: true` does **not** extend to emulator work. Any two plans that both drive VICE must be serialised, and each must open with the reset/clear-checkpoints/reload ritual before trusting emulator state. Plans marked parallel below are parallel in *authoring*; their VICE steps still queue. **Phase 1.1 revisits whether this can be relaxed** — a pooled emulator makes cross-*session* concurrency real, but researched MCP behaviour says subagents share their parent session's connections, so intra-session parallelism may stay impossible. See the fork in `.planning/notes/vice-mcp-selector-design.md`; until Phase 1.1 lands, this constraint stands exactly as written. |
 | **`vice_disk_list` crashes the host MCP server** | Never called. Disk directory inspection is done by parsing `.d64` bytes directly. Recovery from an accidental call needs a manual host-side VICE restart. |
 | **Host-side tools need translated paths** | Every artifact a host-side tool touches stays inside the workspace and goes through the `devcontainer-host-path` skill. |
 | **All ACME warnings are build-blocking; `--strict-segments` always** | Established as a gate in Phase 4 and inherited by every later phase. The `acme-build` skill's wrapper does not currently expose `--strict-segments` or a warning-gated exit — Phase 4 must extend it (or wrap it) rather than assume the flag is reachable. |
@@ -48,6 +48,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 ### Milestone v1.0 — Pipeline Proven *(active)*
 
 - [ ] **Phase 1: Recovery & Provenance** - Defeat both crack loaders, capture a clean canonical memory image, and give every byte range a provenance verdict
+- [ ] **Phase 1.1: Emulator Access Layer — MCP Proxy & Instance Leasing** *(INSERTED)* - Replace the non-functional `vice-session` skill with `vice-mcp-selector`: a per-session stdio MCP proxy that leases one pooled VICE instance, surfaces the emulator as real `mcp__vice__*` tools, and enforces the known hazards structurally instead of by convention
 - [ ] **Phase 2: Coverage, Hazards & Memory Map** - Classify every byte as code/data/untouched by live trace, label every reachable routine, catalogue every reconstruction hazard, document the memory map
 - [ ] **Phase 3: Verification Harness & Original Baselines** - Build the deterministic replay harness and record the original's checkpoint baselines, before any rebuild exists
 - [ ] **Phase 4: Vertical Slice — Sprite & Display Pilot** - Prove the whole pipeline end-to-end on one subsystem: trace → annotate → document → extract → ACME → `.prg` → verified against baseline
@@ -322,6 +323,7 @@ Two cross-phase overlaps are intended and should be honoured when scheduling wor
 | Milestone | Phase | Plans Complete | Status | Completed |
 |-----------|-------|----------------|--------|-----------|
 | v1.0 | 1. Recovery & Provenance | 3/6 | In Progress|  |
+| v1.0 | 1.1. Emulator Access Layer (INSERTED) | 0/4 | Not started | - |
 | v1.0 | 2. Coverage, Hazards & Memory Map | 0/5 | Not started | - |
 | v1.0 | 3. Verification Harness & Original Baselines | 0/4 | Not started | - |
 | v1.0 | 4. Vertical Slice — Sprite & Display Pilot | 0/5 | Not started | - |
@@ -329,11 +331,17 @@ Two cross-phase overlaps are intended and should be honoured when scheduling wor
 | v2.0 | 6. World, Audio & Shell + Data Format Validation | 0/5 | Not started | - |
 | v2.0 | 7. Complete Source Tree, Bootable Disk & Full-Suite Verification | 0/5 | Not started | - |
 
-**v1.0 progress:** 0/20 plans · **v2.0 progress:** 0/15 plans
+**v1.0 progress:** 0/24 plans · **v2.0 progress:** 0/15 plans
+
+*Phase 1.1's 0/4 is an estimate placed at insertion time; `/gsd-plan-phase` sets the real count.*
 
 ## Requirement Coverage
 
 All 44 requirements map to exactly one phase. No orphans, no duplicates.
+
+**Phase 1.1 carries no requirements**, by design — it is tooling that changes how every later phase
+reaches the emulator, not a deliverable the requirements describe. The coverage invariant above is
+unaffected: no requirement moved, and none was added.
 
 | Milestone | Phase | Requirements | Count |
 |-----------|-------|--------------|-------|
