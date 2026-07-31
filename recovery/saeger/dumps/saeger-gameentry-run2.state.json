@@ -1,0 +1,329 @@
+{
+  "schema_version": 1,
+  "release": "saeger",
+  "label": "run2",
+  "snapshot_name": "p6511_saeger_gameentry_run2",
+  "registers": {
+    "vicii": {
+      "raster_line": 311,
+      "video_mode": 1,
+      "screen_enabled": true,
+      "25_rows": true,
+      "y_scroll": 3,
+      "x_scroll": 0,
+      "border_color": 246,
+      "background_color_0": 246,
+      "background_color_1": 255,
+      "background_color_2": 255,
+      "background_color_3": 243,
+      "sprite_sprite_collision": 0,
+      "sprite_background_collision": 0,
+      "irq_status": 120,
+      "irq_enabled": 241,
+      "memory_pointers": 49,
+      "registers": [
+        10,
+        86,
+        52,
+        225,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        155,
+        55,
+        93,
+        180,
+        1,
+        216,
+        0,
+        49,
+        120,
+        241,
+        0,
+        0,
+        1,
+        0,
+        0,
+        246,
+        246,
+        255,
+        255,
+        243,
+        244,
+        240,
+        255,
+        240,
+        245,
+        240,
+        240,
+        246,
+        247,
+        252
+      ]
+    },
+    "sid": {
+      "voices": [
+        {
+          "voice": 1,
+          "frequency": 0,
+          "pulse_width": 2050,
+          "noise": false,
+          "pulse": false,
+          "sawtooth": false,
+          "triangle": false,
+          "test": false,
+          "ring_mod": false,
+          "sync": false,
+          "gate": false,
+          "attack": 0,
+          "decay": 0,
+          "sustain": 0,
+          "release": 0
+        },
+        {
+          "voice": 2,
+          "frequency": 0,
+          "pulse_width": 1230,
+          "noise": false,
+          "pulse": false,
+          "sawtooth": false,
+          "triangle": false,
+          "test": false,
+          "ring_mod": false,
+          "sync": false,
+          "gate": false,
+          "attack": 0,
+          "decay": 0,
+          "sustain": 0,
+          "release": 0
+        },
+        {
+          "voice": 3,
+          "frequency": 0,
+          "pulse_width": 1230,
+          "noise": false,
+          "pulse": false,
+          "sawtooth": false,
+          "triangle": false,
+          "test": false,
+          "ring_mod": false,
+          "sync": false,
+          "gate": false,
+          "attack": 0,
+          "decay": 0,
+          "sustain": 0,
+          "release": 0
+        }
+      ],
+      "filter_cutoff_low": 0,
+      "filter_cutoff_high": 0,
+      "filter_resonance": 0,
+      "filter_voice3": false,
+      "filter_voice2": false,
+      "filter_voice1": false,
+      "filter_ext": false,
+      "voice3_off": false,
+      "highpass": false,
+      "bandpass": false,
+      "lowpass": false,
+      "volume": 0
+    },
+    "cia1": {
+      "port_a": 255,
+      "port_b": 255,
+      "ddr_a": 0,
+      "ddr_b": 0,
+      "timer_a": 10811,
+      "timer_b": 1279,
+      "tod_10ths": 0,
+      "tod_seconds": 0,
+      "tod_minutes": 0,
+      "tod_hours": 1,
+      "serial_data": 0,
+      "interrupt_control": 1,
+      "control_a": 1,
+      "control_b": 8
+    },
+    "cia2": {
+      "port_a": 193,
+      "port_b": 255,
+      "ddr_a": 63,
+      "ddr_b": 0,
+      "timer_a": 65535,
+      "timer_b": 65535,
+      "tod_10ths": 0,
+      "tod_seconds": 0,
+      "tod_minutes": 0,
+      "tod_hours": 1,
+      "serial_data": 0,
+      "interrupt_control": 0,
+      "control_a": 8,
+      "control_b": 8
+    }
+  },
+  "sprites": [
+    {
+      "sprite_data": {
+        "sprite": 0,
+        "x": 266,
+        "y": 86,
+        "enabled": true,
+        "multicolor": false,
+        "expand_x": true,
+        "expand_y": false,
+        "priority_foreground": true,
+        "color": 255
+      }
+    },
+    {
+      "sprite_data": {
+        "sprite": 1,
+        "x": 52,
+        "y": 225,
+        "enabled": false,
+        "multicolor": false,
+        "expand_x": false,
+        "expand_y": false,
+        "priority_foreground": true,
+        "color": 240
+      }
+    },
+    {
+      "sprite_data": {
+        "sprite": 2,
+        "x": 0,
+        "y": 0,
+        "enabled": false,
+        "multicolor": false,
+        "expand_x": false,
+        "expand_y": false,
+        "priority_foreground": true,
+        "color": 245
+      }
+    },
+    {
+      "sprite_data": {
+        "sprite": 3,
+        "x": 0,
+        "y": 0,
+        "enabled": false,
+        "multicolor": false,
+        "expand_x": false,
+        "expand_y": false,
+        "priority_foreground": true,
+        "color": 240
+      }
+    },
+    {
+      "sprite_data": {
+        "sprite": 4,
+        "x": 0,
+        "y": 0,
+        "enabled": false,
+        "multicolor": false,
+        "expand_x": false,
+        "expand_y": false,
+        "priority_foreground": true,
+        "color": 240
+      }
+    },
+    {
+      "sprite_data": {
+        "sprite": 5,
+        "x": 0,
+        "y": 0,
+        "enabled": false,
+        "multicolor": false,
+        "expand_x": false,
+        "expand_y": false,
+        "priority_foreground": true,
+        "color": 246
+      }
+    },
+    {
+      "sprite_data": {
+        "sprite": 6,
+        "x": 0,
+        "y": 0,
+        "enabled": false,
+        "multicolor": false,
+        "expand_x": false,
+        "expand_y": false,
+        "priority_foreground": true,
+        "color": 247
+      }
+    },
+    {
+      "sprite_data": {
+        "sprite": 7,
+        "x": 0,
+        "y": 0,
+        "enabled": false,
+        "multicolor": false,
+        "expand_x": false,
+        "expand_y": false,
+        "priority_foreground": true,
+        "color": 252
+      }
+    }
+  ],
+  "cpu": {
+    "PC": 5141,
+    "A": 0,
+    "X": 0,
+    "Y": 248,
+    "SP": 249,
+    "N": false,
+    "V": false,
+    "B": false,
+    "D": false,
+    "I": false,
+    "Z": true,
+    "C": false
+  },
+  "derived": {
+    "port01": {
+      "raw": 53,
+      "loram": true,
+      "hiram": false,
+      "charen": true
+    },
+    "dd00_raw": 193,
+    "dd00_direct_read": 193,
+    "vic_bank": 2,
+    "d018_raw": 49,
+    "screen_base": 35840,
+    "charset_base": 32768,
+    "sprite_pointers": [
+      15,
+      7,
+      15,
+      15,
+      15,
+      15,
+      15,
+      15
+    ],
+    "sprite_data_addresses": [
+      33728,
+      33216,
+      33728,
+      33728,
+      33728,
+      33728,
+      33728,
+      33728
+    ]
+  },
+  "captured_at": "2026-07-31T08:18:20.697Z"
+}
