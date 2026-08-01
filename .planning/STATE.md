@@ -90,10 +90,17 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-5 pending — see `.planning/todos/pending/`. Most recent: **Make the broker cross-project via shared
-home-dir state** (2026-08-01, tooling, minor) — broker coordination state is workspace-scoped, so a
-second project cannot reach it; pairs with orphan reaping that must spare a hand-started emulator,
-and subsumes `01.2-REVIEW.md` CR-01 (no singleton guard on `vice-broker.sh start`).
+6 pending — see `.planning/todos/pending/`. Two captured 2026-08-01, on the same theme and needed
+together — sharing state without sharing code means N drifting implementations; sharing code without
+sharing state means N brokers racing:
+
+- **Extract the VICE MCP into its own project and publish it as an installable package** (tooling,
+  major) — `.claude/mcp/vice/` is ~14,650 vendored lines with no `package.json`; copying is the only
+  way to reuse it, and copies drift on guarantees like the `vice_disk_list` deny-list.
+- **Make the broker cross-project via shared home-dir state** (tooling, minor) — coordination state
+  is workspace-scoped, so a second project cannot reach it; pairs with orphan reaping that must
+  spare a hand-started emulator, and subsumes `01.2-REVIEW.md` CR-01 (no singleton guard on
+  `vice-broker.sh start`).
 
 ### Blockers/Concerns
 
