@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: Pipeline Proven *
-current_phase: 1
-current_phase_name: Recovery & Provenance
-status: executing
-stopped_at: "Replanned 01-04-PLAN.md against the acquisition-seam decision; 01-04/01-05/01-06 still unexecuted"
-last_updated: "2026-08-01T13:14:30.820Z"
+current_phase: 01
+current_phase_name: recovery-provenance
+status: blocked
+stopped_at: "Wave 4 halted before any executor completed. mcp__vice__* is now the only permitted emulator route, which invalidates 01-04's design, SKELETON.md's runnable-command decision, and the D-11/VERIFY-01 dependencies. Phase 01 needs replanning before 01-04/01-05/01-06 can run."
+last_updated: "2026-08-01T14:55:00.000Z"
 last_activity: 2026-08-01
-last_activity_desc: Phase 1 plan 01-04 replanned after its revert; ready to execute
+last_activity_desc: "Legacy VICE tooling and skills deleted; phase 01 execution halted pending replan against the MCP-only rule"
 progress:
   total_phases: 3
   completed_phases: 2
@@ -25,15 +25,15 @@ See: .planning/PROJECT.md (updated 2026-07-31)
 
 **Core value:** An ACME source tree that rebuilds a Bruce Lee which plays identically to the original, where every gameplay system is explained well enough that someone could change it.
 **Current milestone:** v1.0 — Pipeline Proven (Phases 1–4, 24 requirements)
-**Current focus:** Phase 1 — Recovery & Provenance (plans 01-04 → 01-06 outstanding)
+**Current focus:** Phase 1 — Recovery & Provenance (plans 01-04 → 01-06 outstanding, all three need replanning)
 
 ## Current Position
 
 Milestone: v1.0 — Pipeline Proven (Phases 1–4 of 7 total)
 Phase: 1 — Recovery & Provenance
-Plan: 01-04 (replanned 2026-08-01 after its revert; 3/6 plans executed)
-Status: Ready to execute
-Last activity: 2026-08-01 — Phase 1 plan 01-04 replanned against the acquisition-seam decision
+Plan: 01-04 (3/6 plans executed; 01-04/01-05/01-06 blocked pending replan)
+Status: BLOCKED — replan required before execution resumes
+Last activity: 2026-08-01 — legacy VICE tooling and skills deleted; wave 4 halted before any executor completed
 
 Progress (v1.0): [████░░░░░░] 35% — 7/20 plans
 Progress (overall): [██░░░░░░░░] 20% — 7/35 plans
@@ -87,6 +87,9 @@ Recent decisions affecting current work:
 - [Phase ?]: [quick-260730-u9w]: Checkpoint-synchronisation primitives (reset, readCheckpoint, waitCheckpointHit, runToCheckpoint, screenshot, addrNum, hex4, POLL_WINDOWS_MS, PING_INTERVAL_MS, armedCheckpoints) moved from tools/recover.mjs into a new sibling module .claude/skills/vice-session/scripts/vice-sync.mjs — a third structurally-isolated concern alongside vice.mjs's transport seam and vice-probe.mjs's liveness probe. armedCheckpoints became a singleton tracker (track/untrack/ids/clear) so both runToCheckpoint() and recover.mjs's hand-rolled capture() write through one door. A durable, directory-enumerating node:test gate (skill-docs.test.mjs) replaces a one-shot grep keeping module names out of SKILL.md; INTERNALS.md stays deleted and no companion maintainer document was created.
 - [Phase ?]: [Phase 01.2]: VICE standing constraint narrowed, not retired (D-1.2-C) — per-session boot-fresh access makes cross-session concurrency real; the reset/clear-checkpoints/reload ritual narrows to within-session reuse only. Proven by 01.2-CRITERION-13-EVIDENCE.md: two concurrent sessions held two different broker-granted instances (bookkeeping + $033C marker cross-read), kill-never-recycle confirmed, broker-stop leaves granted sessions running.
 - [Phase ?]: [Phase 01.2]: Corrects spike finding 12 further — a 16,384-byte vice_memory_read (~82,000 chars) arrived inline through the broker-granted proxy route, above the spike's measured 40-60KB ceiling. The 32KB chunking rule remains more conservative than the transport requires; the true boundary was not bisected.
+- [Phase 1, 2026-08-01]: **HARD RULE — `mcp__vice__*` is the only permitted route to the emulator.** No script, module, test or driver may open its own connection to host VICE, read broker state to find a port, or import a transport module as a library. Reimplementing the route cleanly counts as the same violation as importing it. This supersedes the Phase 01.1 "programmatic seam" carve-out that let standalone pipelines import the transport directly. Consequence, accepted deliberately: emulator-driving work is performed by the agent through tool calls, and `tools/` holds **pure logic only** over data the agent fetched and passed in.
+- [Phase 1, 2026-08-01]: **Legacy VICE tooling deleted, not migrated** (`d963c5b`, `096ac26`). Gone: `tools/recover.mjs`, `tools/chip-state.mjs`, `tools/recover.test.mjs` (the only `tools/` files importing the transport) and `tools/README.md` (it documented the prohibited second route). `tools/` now holds four pure-Node files with zero emulator contact: `releases.mjs`, `d64-parse.mjs` + test, `recovery-schema.mjs`. The gitignored host shell scripts are untouched. **Cost, unresolved:** the depack-by-execution procedure behind plans 01-01/01-02/01-03 is no longer runnable as a command, so success criterion 1 ("a stranger can re-run this to byte-identical output") has no mechanism. The recovered artifacts themselves are committed and unaffected.
+- [Phase 1, 2026-08-01]: **Skill tree cleaned** (`db9eed3`). Deleted `vice-mcp-selector` (prose over a tool surface the agent already has typed schemas for) and `spike-findings-bruce-lee` (17 files of completed-phase spike output). `c64-ram-capture` reduced to a single SKILL.md — positive instruction, no rationale, no internals — with its scripts deleted because they reached the emulator as a library. `devcontainer-host-path` **kept under protest**: `.claude/mcp/vice/` statically imports it (`vice-proxy.mjs:23,31`, `vice-sync.mjs:47`, `install-resources.mjs:26`), so deleting it now would stop the vice MCP server from starting. It goes once those importers are unwired on the owning side.
 
 ### Pending Todos
 
@@ -110,6 +113,12 @@ drifting implementations while sharing code without sharing state means N broker
 
 ### Blockers/Concerns
 
+- **[BLOCKER — Phase 1, 2026-08-01]: phase 01 execution is halted; plans 01-04, 01-05 and 01-06 need replanning against the MCP-only rule.** Wave 4 stopped before any executor completed, so no partial plan work exists to reconcile — the three plans are simply unexecuted. What the replan has to settle, none of it resolvable inside a single plan:
+  1. **01-04's file-level design is dead.** It specifies CLI verbs (`node tools/watch-loads.mjs disarm --json` in Task 3, and Task 4's acceptance criteria) and reuse of a Node `capture()` primitive for supplementary dumps. Nothing under `tools/` can contact the emulator any more, so `watch-loads.mjs` can only hold pure logic — sentinel resolution, boundary/overlap attribution, hit ordering, report rendering — over data the agent fetched through `mcp__vice__*`. Its *intent* (earn the armed set, calibrate idle to zero, attribute every hit before classifying it, prove teardown by enumeration, record absence as evidence) is unaffected and should survive intact.
+  2. **SKELETON.md's architectural decision is now impossible.** It commits this phase to "a runnable command rather than an agent transcript" for emulator control. Retire it explicitly rather than letting it rot.
+  3. **Two downstream dependencies dangle.** D-11 hands plan 02-02 a command to re-arm the watch set during Phase 2's all-chambers trace; Phase 3's VERIFY-01 wants a replay driver over the same surface. Both assumed a runnable command exists. Decide what they get instead.
+  4. **Success criterion 1 has no mechanism.** "A stranger can re-run this procedure to byte-identical output" was carried by the deleted `tools/recover.mjs`. Either re-express the criterion against a tool-call procedure the agent performs, or accept and record that it is not met for 01-01/01-02/01-03.
+  5. **A prior attempt already went wrong here, twice.** The reverted run (`bb0b1f7`) left 174 checkpoints armed because arm and disarm addressed different instances. Then on 2026-08-01 an executor, following an orchestrator instruction to "build a clean transport that does not import the blocked tree", wrote a fresh `fetch()` bypass straight to the host endpoint plus broker-grant discovery — discarded unmerged. Phrase the constraint as *"the only route is `mcp__vice__*`"*, never as *"don't import X"*.
 - **[MAJOR FINDING — Phase 1, 2026-07-30]: the recovery procedure IS deterministic for the program image.** Confirmed on two independent cold-boot run pairs of `danish.d64`: **`$0400–$CB66` (~51 KB of loaded game code+data) and zero page `$0002–$00FF` are byte-identical**; 65,320 of 65,536 bytes match. Every difference is a 6510 port register, volatile scratch (`$0100–$03FF`), or never-written RAM.
 - **[MAJOR FINDING — Phase 1, 2026-07-30]: never-written RAM drifts CONTINUOUSLY while the emulator runs, so full-64K byte-identity is impossible in principle.** Measured three ways with **no game involved**: 994 and 1014 bytes differing between two 20 s idle runs, and **993 between two back-to-back power-on "baseline" captures with the machine never deliberately run** — drift accumulates *during* a capture. Consequences, all learned the hard way: (a) `mode:"hard"` reports "Machine power cycled" but does **not** restore pristine RAM once the machine has run — real hardware behaves the same, reset does not clear DRAM; (b) **there is no stable reference image at any instant**, so baseline-diff classification cannot work; (c) drift is **stochastic per run** — an idle control yielding 1014 drift-prone addresses covered only **2 of 137** real diffs, so it can never be excluded by address list. Developer approved redefining criterion 1 over the program image.
 - **[Phase 1, 2026-07-30]: the working drift discriminator is a property of the VALUE, not the address.** Drift flips *individual bits* — all 137 diffs in one run pair were Hamming distance exactly 1, while a program writing different data differs in ~4 bits on average. So multi-bit differences fail and the contract stays falsifiable. A power-on-pattern **block-fill heuristic was REJECTED** despite scoring 134/137: it is threshold-tunable, and tuning until green manufactures the false confidence this phase exists to prevent. `$0000–$0001` are excluded structurally (6510 on-chip I/O port registers, not memory). **Open gap:** one 2-bit drift byte (`$FDD9`, provably inside a power-on pattern block) still fails, so the Hamming-1 rule is slightly too tight — the fix is a design decision (structural never-written detection vs an N-run agreement rule), deliberately not resolved by widening the threshold.
