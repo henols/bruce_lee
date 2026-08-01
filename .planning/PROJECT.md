@@ -102,6 +102,10 @@ Driver 1 sets documentation depth. Driver 2 sets source structure and pushes the
 | Hazards enforced in code, with guard-removal-sensitive tests | A documented prohibition regresses silently; a test that only passes while the guard exists cannot. `vice_disk_list` is refused at three independent layers off one `DENY_LIST` definition. | ✓ Shipped — Phase 01.1 |
 | Path translation lives in the proxy seam, not in callers (Phase 01.1) | Container→host path correctness applied per-caller is a discipline that a fifth caller breaks. Applied structurally at the one place that sees every forwarded call, it holds by construction — and the `devcontainer-host-path` skill stays, since the proxy is a third consumer rather than a replacement. | ✓ Shipped — Phase 01.1; residual: relative paths deliberately untranslated |
 | Static proxy first; broker and leasing deferred to Phase 01.2 | Phase 01.1 is deliberately immune to every unverified assumption about host lifecycle — no leasing, no broker, one fixed port. Concurrency is a separate, gated phase so a lifecycle unknown cannot block tool-mediated access. | ✓ Shipped — Phase 01.1; Phase 01.2 gated by the lifecycle spike |
+| Emulator access is per-session and boot-fresh, granted by a host-side broker (Phase 01.2) | Each session's first forwarded tool call is granted its own freshly launched `x64sc`, killed when that session ends — never recycled, since returning a used instance to the spare pool would leak one session's emulator state into the next. Cross-*session* concurrency becomes real: two plans in two different sessions no longer serialise on one emulator. | ✓ Shipped — Phase 01.2; 13/13 criteria, 212/212 tests |
+| The reset/clear-checkpoints/reload ritual is **narrowed, not retired** (D-1.2-C) | A fresh boot removes cross-session contamination structurally, but not contamination within one session that reuses its instance across several plans. Declaring the ritual dead would have been the convenient reading; the evidence only supports narrowing it. A constraint declared obsolete but left standing gets re-inherited by the next planner, so the ROADMAP row was edited in place rather than annotated. | ✓ Shipped — Phase 01.2 |
+| Intra-session parallelism stays out of scope | Subagents share their parent session's single proxy connection and therefore its single instance, so a parallel executor wave inside one session still shares one emulator and its steps still queue. Deferred by design rather than left ambiguous. | ○ Deferred — see `.planning/seeds/vice-instance-handles-for-parallel-emulator-work.md` |
+| Criterion 13 proven by live two-session checkpoint, not by test code | MCP server definitions are read once at session start and the broker runs on the host, so "two sessions hold two different instances" is unobservable from inside any single session. A `blocking-human` gate was the only honest way to establish it — recording the verdict before observing it was the failure mode to avoid. | ✓ Shipped — Phase 01.2; `01.2-CRITERION-13-EVIDENCE.md` |
 
 ## Evolution
 
@@ -121,4 +125,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-07-31 after Phase 01.1*
+*Last updated: 2026-08-01 after Phase 01.2*
