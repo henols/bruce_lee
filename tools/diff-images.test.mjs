@@ -20,6 +20,7 @@ import {
   countPatches,
   bucketManifest,
   findPrintableRuns,
+  findCracktroRuns,
   renderLedger,
   enumerateManifests,
 } from "./diff-images.mjs";
@@ -374,6 +375,24 @@ test("findPrintableRuns ignores a printable run shorter than minLength", () => {
   assert.equal(runs.length, 0);
 });
 
+// -------------------------------------------------------------- findCracktroRuns
+
+test("findCracktroRuns matches a printable run containing a recognised crack-credit word", () => {
+  const buf = Buffer.alloc(64, 0x00);
+  Buffer.from("BRUCE LEE CRACKED BY").copy(buf, 10);
+  const runs = findCracktroRuns(buf, { minLength: 8 });
+  assert.equal(runs.length, 1);
+});
+
+test("findCracktroRuns does NOT match the game's own title-screen text -- a real false positive found live against the two committed dumps (DATASOFT PRESENTS / DIABOLO PRESENTS at $4771), fixed here", () => {
+  const buf = Buffer.alloc(64, 0x00);
+  Buffer.from("DATASOFT PRESENTS").copy(buf, 10);
+  const runsPlain = findPrintableRuns(buf, { minLength: 8 });
+  assert.equal(runsPlain.length, 1, "the plain scan does find this run -- it is genuinely printable text");
+  const runsCracktro = findCracktroRuns(buf, { minLength: 8 });
+  assert.equal(runsCracktro.length, 0, "but it must not be classified as cracktro credit content -- it's the game's own presentation text");
+});
+
 // -------------------------------------------------------------- bucketManifest
 
 test("bucketManifest reclassifies an unclassified range against loader_ranges, seeding 'loader' from the registry, never NOTES.md prose", () => {
@@ -431,6 +450,33 @@ test("bucketManifest's output ranges form a complete, gapless, non-overlapping p
     expected = r.end + 1;
   }
   assert.equal(expected, 65536);
+});
+
+test("bucketManifest is idempotent -- re-running it on an already-bucketed manifest preserves game/loader/cracktro ranges rather than discarding them", () => {
+  const image = Buffer.alloc(65536, 0x00);
+  const manifest = {
+    ranges: [
+      { start: 0, end: 15, kind: "unused" },
+      { start: 16, end: 999, kind: "unclassified" },
+    ],
+  };
+  const firstPass = bucketManifest(image, manifest, { loaderRanges: [{ start: "$0020", end: "$003F" }] });
+  assert.equal(firstPass.classification_state, "bucketed");
+  const kindsAfterFirst = new Set(firstPass.ranges.map((r) => r.kind));
+  assert.ok(kindsAfterFirst.has("game"));
+  assert.ok(kindsAfterFirst.has("loader"));
+
+  // Re-run on the manifest bucketManifest itself just produced.
+  const secondPass = bucketManifest(image, firstPass, { loaderRanges: [{ start: "$0020", end: "$003F" }] });
+  const kindsAfterSecond = new Set(secondPass.ranges.map((r) => r.kind));
+  assert.ok(kindsAfterSecond.has("game"), "a second bucketing pass must not discard the game range");
+  assert.ok(kindsAfterSecond.has("loader"), "a second bucketing pass must not discard the loader range");
+  assert.ok(kindsAfterSecond.has("unused"));
+  assert.deepEqual(
+    [...firstPass.ranges].sort((a, b) => a.start - b.start),
+    [...secondPass.ranges].sort((a, b) => a.start - b.start),
+    "bucketing an already-bucketed manifest must be a no-op"
+  );
 });
 
 // -------------------------------------------------------------- renderLedger
@@ -499,12 +545,16 @@ test("enumerateManifests reads every dumps[] entry's range_manifest from the reg
 // ------------------------------------------------- real-dump integration case
 
 test("anchorSearch against the two real committed run1 dumps finds unique agreeing anchors (offset 0)", () => {
+  // Positional, never a release-id comparison (check-parameterisation scans
+  // every file under tools/, including this one): the reference is simply
+  // registry.releases[0], and "the other one" is anything that isn't it.
   const registry = JSON.parse(readFileSync(join(REPO_ROOT, "recovery", "RELEASES.json"), "utf8"));
-  const danish = registry.releases.find((r) => r.id === "danish");
-  const other = registry.releases.find((r) => r.id !== "danish");
-  const danishDump = danish.dumps.find((d) => d.label === "run1");
+  assert.ok(registry.releases.length >= 2, "this integration case needs at least two committed releases");
+  const reference = registry.releases[0];
+  const other = registry.releases.find((r) => r !== reference);
+  const referenceDump = reference.dumps.find((d) => d.label === "run1");
   const otherDump = other.dumps.find((d) => d.label === "run1");
-  const source = readFileSync(join(REPO_ROOT, danishDump.bin));
+  const source = readFileSync(join(REPO_ROOT, referenceDump.bin));
   const target = readFileSync(join(REPO_ROOT, otherDump.bin));
   assert.equal(source.length, 65536);
   assert.equal(target.length, 65536);

@@ -5,14 +5,14 @@
   "snapshot_name": "p6512_danish_gameentry_run2",
   "image_bytes": 65536,
   "offset_equals_address": true,
-  "classification_state": "ranges-only",
+  "classification_state": "bucketed",
   "ranges": [
     {
       "start": 0,
       "end": 21,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 22,
@@ -24,9 +24,9 @@
     {
       "start": 40,
       "end": 74,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 75,
@@ -38,9 +38,9 @@
     {
       "start": 96,
       "end": 102,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 103,
@@ -52,9 +52,9 @@
     {
       "start": 149,
       "end": 164,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 165,
@@ -66,9 +66,9 @@
     {
       "start": 182,
       "end": 182,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 183,
@@ -80,9 +80,9 @@
     {
       "start": 209,
       "end": 209,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 210,
@@ -93,10 +93,24 @@
     },
     {
       "start": 236,
+      "end": 831,
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
+    },
+    {
+      "start": 832,
+      "end": 862,
+      "kind": "loader",
+      "source": "diff-images:loader_ranges",
+      "note": "seeded from recovery/RELEASES.json's earned loader_ranges (live disassembly evidence, never NOTES.md prose): cassette-buffer region, a classic loader-stub location; holds stale $01-byte data at steady state (not the power-on $00/$FF pattern), i.e. leftover raw-sector-loader scratch never reclaimed by the game"
+    },
+    {
+      "start": 863,
       "end": 928,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 929,
@@ -108,9 +122,9 @@
     {
       "start": 1024,
       "end": 17189,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 17190,
@@ -122,9 +136,9 @@
     {
       "start": 17209,
       "end": 19608,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 19609,
@@ -136,9 +150,9 @@
     {
       "start": 19634,
       "end": 20204,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 20205,
@@ -150,9 +164,9 @@
     {
       "start": 20296,
       "end": 20305,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 20306,
@@ -164,9 +178,9 @@
     {
       "start": 20456,
       "end": 23750,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 23751,
@@ -178,9 +192,9 @@
     {
       "start": 23768,
       "end": 23772,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 23773,
@@ -192,9 +206,9 @@
     {
       "start": 23802,
       "end": 23820,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 23821,
@@ -206,9 +220,9 @@
     {
       "start": 23837,
       "end": 23842,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 23843,
@@ -220,9 +234,9 @@
     {
       "start": 23871,
       "end": 23876,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 23877,
@@ -234,9 +248,9 @@
     {
       "start": 23933,
       "end": 25322,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 25323,
@@ -248,9 +262,9 @@
     {
       "start": 25346,
       "end": 25406,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 25407,
@@ -262,9 +276,9 @@
     {
       "start": 25431,
       "end": 25662,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 25663,
@@ -276,9 +290,9 @@
     {
       "start": 25692,
       "end": 25725,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 25726,
@@ -290,9 +304,9 @@
     {
       "start": 25754,
       "end": 33151,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 33152,
@@ -304,9 +318,9 @@
     {
       "start": 33740,
       "end": 33749,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 33750,
@@ -318,9 +332,9 @@
     {
       "start": 33796,
       "end": 36239,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 36240,
@@ -332,9 +346,9 @@
     {
       "start": 36330,
       "end": 36355,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 36356,
@@ -346,9 +360,9 @@
     {
       "start": 36404,
       "end": 36434,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 36435,
@@ -360,9 +374,9 @@
     {
       "start": 36490,
       "end": 36508,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 36509,
@@ -374,9 +388,9 @@
     {
       "start": 36840,
       "end": 36916,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 36917,
@@ -388,9 +402,9 @@
     {
       "start": 36960,
       "end": 37012,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 37013,
@@ -402,9 +416,9 @@
     {
       "start": 37093,
       "end": 37094,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 37095,
@@ -416,9 +430,9 @@
     {
       "start": 37158,
       "end": 37204,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 37205,
@@ -430,9 +444,9 @@
     {
       "start": 37248,
       "end": 37300,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 37301,
@@ -444,9 +458,9 @@
     {
       "start": 37344,
       "end": 37396,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 37397,
@@ -458,9 +472,9 @@
     {
       "start": 37440,
       "end": 37488,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 37489,
@@ -472,9 +486,9 @@
     {
       "start": 37538,
       "end": 37556,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 37557,
@@ -486,9 +500,9 @@
     {
       "start": 37575,
       "end": 37587,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 37588,
@@ -500,9 +514,9 @@
     {
       "start": 37634,
       "end": 37648,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 37649,
@@ -514,9 +528,9 @@
     {
       "start": 37672,
       "end": 37684,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 37685,
@@ -528,9 +542,9 @@
     {
       "start": 37731,
       "end": 37774,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 37775,
@@ -542,9 +556,9 @@
     {
       "start": 37831,
       "end": 37876,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 37877,
@@ -556,9 +570,9 @@
     {
       "start": 37922,
       "end": 37970,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 37971,
@@ -570,9 +584,9 @@
     {
       "start": 38018,
       "end": 38027,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 38028,
@@ -584,9 +598,9 @@
     {
       "start": 38049,
       "end": 38064,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 38065,
@@ -598,9 +612,9 @@
     {
       "start": 38112,
       "end": 38162,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 38163,
@@ -612,9 +626,9 @@
     {
       "start": 38208,
       "end": 38254,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 38255,
@@ -626,9 +640,9 @@
     {
       "start": 38306,
       "end": 38355,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 38356,
@@ -640,9 +654,9 @@
     {
       "start": 38400,
       "end": 38452,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 38453,
@@ -654,9 +668,9 @@
     {
       "start": 38496,
       "end": 38509,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 38510,
@@ -668,9 +682,9 @@
     {
       "start": 38529,
       "end": 38548,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 38549,
@@ -682,9 +696,9 @@
     {
       "start": 38593,
       "end": 38644,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 38645,
@@ -696,9 +710,9 @@
     {
       "start": 38689,
       "end": 38733,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 38734,
@@ -710,9 +724,9 @@
     {
       "start": 38786,
       "end": 38835,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 38836,
@@ -724,9 +738,9 @@
     {
       "start": 38880,
       "end": 38898,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 38899,
@@ -738,9 +752,9 @@
     {
       "start": 38921,
       "end": 38932,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 38933,
@@ -752,9 +766,9 @@
     {
       "start": 38983,
       "end": 38996,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 38997,
@@ -766,9 +780,9 @@
     {
       "start": 39018,
       "end": 39021,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 39022,
@@ -780,9 +794,9 @@
     {
       "start": 39081,
       "end": 39122,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 39123,
@@ -794,9 +808,9 @@
     {
       "start": 39178,
       "end": 39188,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 39189,
@@ -808,9 +822,9 @@
     {
       "start": 39208,
       "end": 39218,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 39219,
@@ -822,9 +836,9 @@
     {
       "start": 39278,
       "end": 39282,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 39283,
@@ -836,9 +850,9 @@
     {
       "start": 39311,
       "end": 39313,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 39314,
@@ -850,9 +864,9 @@
     {
       "start": 39375,
       "end": 39380,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 39381,
@@ -864,9 +878,9 @@
     {
       "start": 39407,
       "end": 39409,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 39410,
@@ -878,9 +892,9 @@
     {
       "start": 39456,
       "end": 39508,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 39509,
@@ -892,9 +906,9 @@
     {
       "start": 39554,
       "end": 39604,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 39605,
@@ -906,9 +920,9 @@
     {
       "start": 39656,
       "end": 39669,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 39670,
@@ -920,9 +934,9 @@
     {
       "start": 39690,
       "end": 39701,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 39702,
@@ -934,9 +948,9 @@
     {
       "start": 39744,
       "end": 39796,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 39797,
@@ -948,9 +962,9 @@
     {
       "start": 39840,
       "end": 39892,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 39893,
@@ -962,9 +976,9 @@
     {
       "start": 39937,
       "end": 39987,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 39988,
@@ -976,9 +990,9 @@
     {
       "start": 40032,
       "end": 40084,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 40085,
@@ -990,9 +1004,9 @@
     {
       "start": 40129,
       "end": 40180,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 40181,
@@ -1004,9 +1018,9 @@
     {
       "start": 40225,
       "end": 40275,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 40276,
@@ -1018,9 +1032,9 @@
     {
       "start": 40320,
       "end": 40367,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 40368,
@@ -1032,9 +1046,9 @@
     {
       "start": 40416,
       "end": 40468,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 40469,
@@ -1046,9 +1060,9 @@
     {
       "start": 40513,
       "end": 40564,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 40565,
@@ -1060,9 +1074,9 @@
     {
       "start": 40621,
       "end": 40622,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 40623,
@@ -1074,9 +1088,9 @@
     {
       "start": 40650,
       "end": 40659,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 40660,
@@ -1088,9 +1102,9 @@
     {
       "start": 40704,
       "end": 40756,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 40757,
@@ -1102,9 +1116,9 @@
     {
       "start": 40800,
       "end": 40849,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 40850,
@@ -1116,9 +1130,9 @@
     {
       "start": 40897,
       "end": 40959,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 40960,
@@ -1130,9 +1144,9 @@
     {
       "start": 41016,
       "end": 41663,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 41664,
@@ -1144,9 +1158,9 @@
     {
       "start": 41688,
       "end": 41863,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 41864,
@@ -1158,9 +1172,9 @@
     {
       "start": 41888,
       "end": 41983,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 41984,
@@ -1172,9 +1186,9 @@
     {
       "start": 42056,
       "end": 42223,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 42224,
@@ -1186,9 +1200,9 @@
     {
       "start": 42240,
       "end": 43703,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 43704,
@@ -1200,9 +1214,9 @@
     {
       "start": 43728,
       "end": 43879,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 43880,
@@ -1214,9 +1228,9 @@
     {
       "start": 43896,
       "end": 44021,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 44022,
@@ -1228,9 +1242,9 @@
     {
       "start": 44040,
       "end": 44647,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 44648,
@@ -1242,9 +1256,9 @@
     {
       "start": 44664,
       "end": 44845,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 44846,
@@ -1256,9 +1270,9 @@
     {
       "start": 44864,
       "end": 45071,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 45072,
@@ -1270,9 +1284,9 @@
     {
       "start": 45088,
       "end": 45135,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 45136,
@@ -1284,9 +1298,9 @@
     {
       "start": 45158,
       "end": 45767,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 45768,
@@ -1298,9 +1312,9 @@
     {
       "start": 45784,
       "end": 45895,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 45896,
@@ -1312,9 +1326,9 @@
     {
       "start": 45916,
       "end": 46095,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 46096,
@@ -1326,9 +1340,9 @@
     {
       "start": 46112,
       "end": 46127,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 46128,
@@ -1340,9 +1354,9 @@
     {
       "start": 46144,
       "end": 47119,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 47120,
@@ -1354,9 +1368,9 @@
     {
       "start": 47136,
       "end": 47183,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 47184,
@@ -1368,9 +1382,9 @@
     {
       "start": 47206,
       "end": 47463,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 47464,
@@ -1382,9 +1396,9 @@
     {
       "start": 47486,
       "end": 47815,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 47816,
@@ -1396,9 +1410,9 @@
     {
       "start": 47832,
       "end": 47943,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 47944,
@@ -1410,9 +1424,9 @@
     {
       "start": 47964,
       "end": 48143,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 48144,
@@ -1424,9 +1438,9 @@
     {
       "start": 48160,
       "end": 48175,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 48176,
@@ -1438,9 +1452,9 @@
     {
       "start": 48192,
       "end": 48205,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 48206,
@@ -1452,9 +1466,9 @@
     {
       "start": 48226,
       "end": 48967,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 48968,
@@ -1466,9 +1480,9 @@
     {
       "start": 48984,
       "end": 49204,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 49205,
@@ -1480,9 +1494,9 @@
     {
       "start": 49248,
       "end": 49300,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 49301,
@@ -1494,9 +1508,9 @@
     {
       "start": 49345,
       "end": 49396,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 49397,
@@ -1508,9 +1522,9 @@
     {
       "start": 49441,
       "end": 49492,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 49493,
@@ -1522,9 +1536,9 @@
     {
       "start": 49536,
       "end": 49588,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 49589,
@@ -1536,9 +1550,9 @@
     {
       "start": 49632,
       "end": 49683,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 49684,
@@ -1550,9 +1564,9 @@
     {
       "start": 49728,
       "end": 49780,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 49781,
@@ -1564,9 +1578,9 @@
     {
       "start": 49824,
       "end": 49876,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 49877,
@@ -1578,9 +1592,9 @@
     {
       "start": 49920,
       "end": 49972,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 49973,
@@ -1592,9 +1606,9 @@
     {
       "start": 50020,
       "end": 50060,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 50061,
@@ -1606,9 +1620,9 @@
     {
       "start": 50114,
       "end": 50144,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 50145,
@@ -1620,9 +1634,9 @@
     {
       "start": 50161,
       "end": 50164,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 50165,
@@ -1634,9 +1648,9 @@
     {
       "start": 50225,
       "end": 50228,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 50229,
@@ -1648,9 +1662,9 @@
     {
       "start": 50253,
       "end": 50261,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 50262,
@@ -1662,9 +1676,9 @@
     {
       "start": 50307,
       "end": 50356,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 50357,
@@ -1676,9 +1690,9 @@
     {
       "start": 50402,
       "end": 50452,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 50453,
@@ -1690,9 +1704,9 @@
     {
       "start": 50497,
       "end": 50545,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 50546,
@@ -1704,9 +1718,9 @@
     {
       "start": 50596,
       "end": 50644,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 50645,
@@ -1718,9 +1732,9 @@
     {
       "start": 50688,
       "end": 50737,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 50738,
@@ -1732,9 +1746,9 @@
     {
       "start": 50786,
       "end": 50836,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 50837,
@@ -1746,9 +1760,9 @@
     {
       "start": 50880,
       "end": 50929,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 50930,
@@ -1760,9 +1774,9 @@
     {
       "start": 50980,
       "end": 51028,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 51029,
@@ -1774,9 +1788,9 @@
     {
       "start": 51074,
       "end": 51124,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 51125,
@@ -1788,9 +1802,9 @@
     {
       "start": 51170,
       "end": 51220,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 51221,
@@ -1802,9 +1816,9 @@
     {
       "start": 51266,
       "end": 51316,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 51317,
@@ -1816,9 +1830,9 @@
     {
       "start": 51360,
       "end": 51412,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 51413,
@@ -1830,9 +1844,9 @@
     {
       "start": 51457,
       "end": 51508,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 51509,
@@ -1844,9 +1858,9 @@
     {
       "start": 51565,
       "end": 51565,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 51566,
@@ -1858,9 +1872,9 @@
     {
       "start": 51591,
       "end": 51601,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 51602,
@@ -1872,9 +1886,9 @@
     {
       "start": 51664,
       "end": 51668,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 51669,
@@ -1886,9 +1900,9 @@
     {
       "start": 51687,
       "end": 51700,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 51701,
@@ -1900,9 +1914,9 @@
     {
       "start": 51792,
       "end": 51796,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 51797,
@@ -1914,9 +1928,9 @@
     {
       "start": 51851,
       "end": 51860,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 51861,
@@ -1928,9 +1942,9 @@
     {
       "start": 51883,
       "end": 51888,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 51889,
@@ -1942,9 +1956,9 @@
     {
       "start": 51938,
       "end": 51988,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 51989,
@@ -1956,9 +1970,9 @@
     {
       "start": 52490,
       "end": 52490,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 52491,
@@ -1970,9 +1984,9 @@
     {
       "start": 52621,
       "end": 52621,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 52622,
@@ -1984,9 +1998,9 @@
     {
       "start": 52922,
       "end": 52922,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 52923,
@@ -1998,9 +2012,9 @@
     {
       "start": 52992,
       "end": 53034,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 53035,
@@ -2012,9 +2026,9 @@
     {
       "start": 53055,
       "end": 53226,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 53227,
@@ -2026,9 +2040,9 @@
     {
       "start": 53247,
       "end": 53247,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 53248,
@@ -2040,9 +2054,9 @@
     {
       "start": 57344,
       "end": 61952,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 61953,
@@ -2054,9 +2068,9 @@
     {
       "start": 62012,
       "end": 62021,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 62022,
@@ -2068,9 +2082,9 @@
     {
       "start": 62227,
       "end": 62227,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 62228,
@@ -2082,9 +2096,9 @@
     {
       "start": 62394,
       "end": 62394,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 62395,
@@ -2096,9 +2110,9 @@
     {
       "start": 62617,
       "end": 62617,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 62618,
@@ -2110,9 +2124,9 @@
     {
       "start": 62697,
       "end": 62697,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 62698,
@@ -2124,9 +2138,9 @@
     {
       "start": 62722,
       "end": 62722,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 62723,
@@ -2138,9 +2152,9 @@
     {
       "start": 63262,
       "end": 63262,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 63263,
@@ -2152,9 +2166,9 @@
     {
       "start": 63468,
       "end": 63468,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 63469,
@@ -2166,9 +2180,9 @@
     {
       "start": 63508,
       "end": 63508,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 63509,
@@ -2180,9 +2194,9 @@
     {
       "start": 63527,
       "end": 63527,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 63528,
@@ -2194,9 +2208,9 @@
     {
       "start": 63588,
       "end": 63588,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 63589,
@@ -2208,9 +2222,9 @@
     {
       "start": 63970,
       "end": 63970,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 63971,
@@ -2222,9 +2236,9 @@
     {
       "start": 64020,
       "end": 64020,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 64021,
@@ -2236,9 +2250,9 @@
     {
       "start": 64066,
       "end": 64066,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 64067,
@@ -2250,9 +2264,9 @@
     {
       "start": 64093,
       "end": 64093,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 64094,
@@ -2264,9 +2278,9 @@
     {
       "start": 64113,
       "end": 64113,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 64114,
@@ -2278,9 +2292,9 @@
     {
       "start": 64140,
       "end": 64140,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 64141,
@@ -2292,9 +2306,9 @@
     {
       "start": 64216,
       "end": 64216,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 64217,
@@ -2306,9 +2320,9 @@
     {
       "start": 64238,
       "end": 64238,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 64239,
@@ -2320,9 +2334,9 @@
     {
       "start": 64315,
       "end": 64315,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 64316,
@@ -2334,9 +2348,9 @@
     {
       "start": 64404,
       "end": 64404,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 64405,
@@ -2348,9 +2362,9 @@
     {
       "start": 64499,
       "end": 64530,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 64531,
@@ -2362,9 +2376,9 @@
     {
       "start": 64816,
       "end": 64847,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 64848,
@@ -2376,9 +2390,9 @@
     {
       "start": 64879,
       "end": 64879,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 64880,
@@ -2390,9 +2404,9 @@
     {
       "start": 65119,
       "end": 65119,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 65120,
@@ -2404,9 +2418,9 @@
     {
       "start": 65145,
       "end": 65145,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 65146,
@@ -2418,9 +2432,9 @@
     {
       "start": 65246,
       "end": 65246,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     },
     {
       "start": 65247,
@@ -2432,9 +2446,9 @@
     {
       "start": 65530,
       "end": 65535,
-      "kind": "unclassified",
-      "source": "capture",
-      "note": "awaiting the loader/cracktro/game three-bucket partition"
+      "kind": "game",
+      "source": "diff-images:trace-remainder",
+      "note": "reached by the trace/entry point; not classified loader, cracktro, io, or unused"
     }
   ],
   "note": "`unclassified` is a sixth, explicitly transient value on top of D-02's five (game/loader/cracktro/io/unused); `recovery-schema.mjs validate --final` rejects it, so it cannot survive to the end of the phase.",

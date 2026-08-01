@@ -275,7 +275,7 @@ function isPrintableByte(b) {
   return b >= 0x20 && b <= 0x7e;
 }
 
-/** Plain buffer scan for runs of printable-ASCII bytes -- the seed for the cracktro bucket (banner/credit text), per D-02/D-05. */
+/** Plain buffer scan for runs of printable-ASCII bytes. NOT by itself the cracktro bucket's seed -- see findCracktroRuns below. */
 export function findPrintableRuns(buffer, { minLength = 8 } = {}) {
   const runs = [];
   let i = 0;
@@ -287,6 +287,36 @@ export function findPrintableRuns(buffer, { minLength = 8 } = {}) {
     i = j;
   }
   return runs;
+}
+
+// A short, explicitly-sourced vocabulary of crack-credit vocabulary, drawn
+// from what BOTH releases' own already-verified `tier1_evidence` in
+// recovery/RELEASES.json actually record as cracktro-specific text (the
+// bullets that do NOT describe the confirmed-original title screen):
+// danish's "Danish Crackers Presents...", "DC-011/P" release id, and
+// "DC - They make'em, We break'em."; saeger's "cracked in oktober 1984 by
+// SAEGER SOFT GROUP". Deliberately does NOT include a literal release id or
+// company name as a bare word (so it stays release-agnostic vocabulary, not
+// an id comparison) -- a real live capture (see below) proved this
+// distinction matters: a blind "any printable run" scan misclassifies the
+// GAME's OWN title text ("DATASOFT PRESENTS" / "DIABOLO PRESENTS", found to
+// genuinely differ between the two releases at $4771-$4779) as cracktro
+// content, which it is not.
+export const CRACKTRO_SIGNATURE_WORDS = ["CRACKED", "CRACKERS", "SOFT GROUP", "DC-011", "BREAK'EM", "MAKE'EM", "PRESENTS BY", "CRACKED BY"];
+
+/**
+ * The actual seed for the cracktro bucket: printable-ASCII runs whose
+ * decoded text contains at least one recognised crack-credit vocabulary
+ * word. Narrower than `findPrintableRuns` on purpose -- see
+ * CRACKTRO_SIGNATURE_WORDS's comment for why a bare printable-run scan is
+ * not enough by itself.
+ */
+export function findCracktroRuns(buffer, { minLength = 8, signatures = CRACKTRO_SIGNATURE_WORDS } = {}) {
+  const upperSignatures = signatures.map((s) => s.toUpperCase());
+  return findPrintableRuns(buffer, { minLength }).filter((r) => {
+    const text = buffer.subarray(r.start, r.end + 1).toString("latin1").toUpperCase();
+    return upperSignatures.some((sig) => text.includes(sig));
+  });
 }
 
 // ------------------------------------------------------------- diffRanges
@@ -332,10 +362,18 @@ export function diffRanges(images, { gapTolerance = 16 } = {}) {
     } else {
       const allEqual = available.every((a) => a.value === available[0].value);
       if (allEqual) {
+        // Deliberately does NOT quote the specific byte value: this record
+        // gets collapsed with its neighbours into a multi-address range
+        // (potentially spanning many different byte values, all agreeing
+        // internally at their own address), so an evidence string tied to
+        // one address's value would be both wrong for the range and would
+        // silently defeat collapsing (no two addresses would ever compare
+        // equal on evidence text, discovered live while running this tool
+        // against the real dumps -- see .planning/RE-FINDINGS.md).
         rec = {
           verdict: "ORIGINAL",
           agreeing_releases: available.length,
-          evidence: `byte $${available[0].value.toString(16).padStart(2, "0").toUpperCase()} identical across ${available.length} independently-cracked releases (${available.map((a) => a.id).join(", ")})`,
+          evidence: `identical across ${available.length} independently-cracked releases (${available.map((a) => a.id).join(", ")}), at the anchor-proven offset`,
           reason: "",
         };
       } else {
@@ -376,11 +414,14 @@ export function diffRanges(images, { gapTolerance = 16 } = {}) {
             reason: "",
           };
         } else {
+          // Same reasoning as the ORIGINAL branch above: no per-address byte
+          // value is quoted, so this record can collapse with adjacent
+          // same-signature UNKNOWN records into one range.
           rec = {
             verdict: "UNKNOWN",
             agreeing_releases: 0,
             evidence: "",
-            reason: `differs across ${available.length} release(s) (${available.map((a) => `${a.id}=$${a.value.toString(16).padStart(2, "0").toUpperCase()}`).join(", ")}) with no recognised cracker signature (not inside any release's loader_ranges or cracktro scan). ${RULED_OUT_ALTERNATIVES}`,
+            reason: `differs across ${available.length} release(s) (${available.map((a) => a.id).join(", ")}) with no recognised cracker signature (not inside any release's loader_ranges or cracktro scan). ${RULED_OUT_ALTERNATIVES}`,
           };
         }
       }
@@ -536,14 +577,21 @@ function lookupKind(sortedRanges, address) {
  * never edited; only the manifest's own `kind` field changes.
  */
 export function bucketManifest(image, manifest, { loaderRanges, cracktroMinLength = 8 } = {}) {
-  const cracktroRuns = findPrintableRuns(image, { minLength: cracktroMinLength });
+  const cracktroRuns = findCracktroRuns(image, { minLength: cracktroMinLength });
   const loaderNumeric = loaderRanges.map((lr) => ({
     start: addrNum(lr.start),
     end: addrNum(lr.end),
     note: lr.note ?? "",
     evidence: lr.evidence ?? "",
   }));
-  const kept = manifest.ranges.filter((r) => r.kind === "unused" || r.kind === "io");
+  // Keep every already-classified range verbatim (unused/io from D-02's
+  // byte-level pass, or -- on a re-run of an already-bucketed manifest --
+  // game/loader/cracktro from a prior run of this same function). Only
+  // "unclassified" is ever re-partitioned. Filtering "kept" down to just
+  // unused/io would silently discard game/loader/cracktro ranges on a
+  // second run, since nothing would remain to reclassify them from -- an
+  // idempotency bug caught before it ever reached a committed manifest.
+  const kept = manifest.ranges.filter((r) => r.kind !== "unclassified");
   const toBucket = manifest.ranges.filter((r) => r.kind === "unclassified");
   const newRanges = kept.map((r) => ({ ...r }));
 
@@ -647,7 +695,7 @@ function loadImagesForDiff(registry) {
     const dump = primaryDumpEntry(r);
     const bytes = readImage(dump.bin);
     const loaderRanges = (r.loader_ranges ?? []).map((lr) => ({ start: addrNum(lr.start), end: addrNum(lr.end), note: lr.note, evidence: lr.evidence }));
-    const cracktroRuns = findPrintableRuns(bytes, { minLength: 8 });
+    const cracktroRuns = findCracktroRuns(bytes, { minLength: 8 });
     return { id: r.id, bytes, offset: offsets[r.id] ?? 0, loaderRanges, cracktroRuns };
   });
 }

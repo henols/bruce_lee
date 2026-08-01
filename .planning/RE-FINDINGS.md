@@ -750,6 +750,101 @@ not surprising noise.
 cost the rest of attempt 4's live budget for BOTH releases (danish's Task 3 was never reached).
 Logged as a new pending todo cross-referencing attempt 3's.
 
+### 2026-08-01 — a genuine, previously-undiscovered text divergence: "DATASOFT PRESENTS" (danish) vs "DIABOLO  PRESENTS" (saeger) at $4771-$4779, in a region that is neither loader nor cracktro
+
+**Type:** confirmation / open question (real mechanical finding, not yet explained)
+**Evidence:** live -- `node tools/diff-images.mjs diff --gap-tolerance 16` run against the two
+committed `run1` primary dumps (01-05 Task 2); directly re-read with `Buffer.subarray` to confirm
+byte-for-byte (not a rendering artifact): danish reads
+`29292929a0a6a044415441534f46542050524553454e5453a027` (`...DATASOFT PRESENTS.'`), saeger reads
+`29292929a0a6a0444941424f4c4f202050524553454e5453a027` (`...DIABOLO  PRESENTS.'`) at the identical
+address range in both images
+**Confidence:** HIGH for the byte-level fact (directly read from both committed `.bin` files);
+LOW for any interpretation of *why* -- recorded as an open question, not a conclusion
+
+At address $4771 (danish) / the identical address in saeger (proven offset 0, so this is a true
+same-address comparison, not a relocation artifact), the two releases' game images hold different
+text: danish's copy reads "DATASOFT PRESENTS", saeger's reads "DIABOLO  PRESENTS" (note: "DIABOLO"
+is 7 characters + 2 spaces = 9, matching "DATASOFT" 8 characters + 1 space = 9, before "PRESENTS"
+starts at the same byte offset in both -- a deliberate, alignment-preserving substitution, not
+accidental corruption). This is **not** the cracktro banner (that's already documented separately:
+"Danish Crackers Presents..." / "...SAEGER SOFT GROUP", found at different addresses during boot,
+per each release's own `tier1_evidence`) and it is **not** inside either release's earned
+`loader_ranges`. It sits inside what the trace/entry point reaches as ordinary game data (bucketed
+`game` by `tools/diff-images.mjs`'s `bucketManifest`).
+
+This appears to directly complicate the previously-recorded claim (`recovery/saeger/NOTES.md` §8,
+screenshot-based) that "the post-cracktro title screen is Datasoft's original and unmodified —
+byte-for-byte the same screen text as danish's." That claim was verified against the **rendered
+screen** at the title-screen dump point, not this underlying source-text table at $4771 — so the
+two observations are not necessarily in direct conflict (this table may hold text for a screen
+never actually visited during either release's boot capture, e.g. a credits/loading screen, or may
+be dead/unused leftover data from a different repackaging), but it is a genuine, mechanically
+verified divergence in the game's own data, not the cracktro or loader, and it was **not** caught
+by the earlier screenshot-based Tier-1 evidence gathering. **Recorded as `UNKNOWN` in
+`recovery/PROVENANCE.md`, not `CRACKER-PATCH`** — the diff tool cannot mechanically confirm this
+matches a "recognised cracker technique" (rebrand/relabel is plausible per Pitfall 4, but asserting
+it with `CRACKER-PATCH`'s confidence marker would be exactly the kind of inferred-as-evidenced
+claim this project's prohibition forbids without stronger corroboration, e.g. live disassembly
+confirming which code path actually reads this text and whether it is ever rendered).
+
+**Saves/costs:** a future live session investigating saeger's provenance (or the game's title-
+screen code path) should check whether this text is ever actually displayed, and if so on what
+screen -- this could indicate saeger's disk derives from a rebranded/relabelled release (published
+under a "Diabolo" label) rather than merely being a different *crack* of the same Datasoft-branded
+release, which would be a materially different provenance story than "two independent cracks of
+the same original." Costs nothing to defer: `recovery/PROVENANCE.md`'s `UNKNOWN` verdict here is
+honest and does not block anything downstream.
+
+### 2026-08-01 — a blind "any printable ASCII run" heuristic misclassifies the game's own title text as cracktro content; fixed with a crack-credit-vocabulary filter
+
+**Type:** dead end (own tool-design mistake) / hazard, caught before commit
+**Evidence:** live -- the finding immediately above, discovered while running `tools/diff-images.mjs
+diff` against the real committed dumps; `tools/diff-images.mjs`'s first `bucketManifest`/`diffRanges`
+draft used a bare `findPrintableRuns` scan as the cracktro bucket's seed
+**Confidence:** HIGH
+
+The plan's own instruction ("seed the cracktro bucket from banner and credit text located by a
+plain buffer scan for printable runs") is correct in general, but a bare "printable ASCII, length >=
+minLength" predicate cannot distinguish crack-credit text from the *original game's own* printable
+text -- and this game's data genuinely has both (the $4771 "DATASOFT PRESENTS" / "DIABOLO  PRESENTS"
+divergence above is exactly such game-owned text). The first draft classified this address as
+`CRACKER-PATCH` with the reason "intro/cracktro splice", which would have been a confidently-wrong
+verdict shipped straight into the ledger. **Fix:** narrowed the scan to `findCracktroRuns`, which
+additionally requires the printable run's decoded text to contain at least one word from a short,
+explicitly-sourced crack-credit vocabulary (`CRACKED`, `CRACKERS`, `SOFT GROUP`, `DC-011`,
+`BREAK'EM`, `MAKE'EM`, `PRESENTS BY`, `CRACKED BY`) drawn from what both releases' own already-
+verified `tier1_evidence` in `recovery/RELEASES.json` record as the actual cracktro text -- and
+deliberately does not include either release's own name as a bare word. After the fix, this
+address (and every other candidate in this steady-state dump) is bucketed `game`, not `cracktro`,
+and `recovery/PROVENANCE.md`'s ledger correctly reports zero `CRACKER-PATCH` rows for this pass
+rather than one false positive. **Saves:** the next tool doing content-based classification from a
+plain-text scan (anywhere in this project) should reach for a vocabulary/signature filter rather
+than trusting "printable and long enough" as sufficient on its own -- the false positive here was
+found only because the plan required running the tool against real data before trusting it, not
+because the design was reviewed and caught in the abstract.
+
+### 2026-08-01 — `check-parameterisation` catches a real release-id conditional in a TEST file, not just implementation code
+
+**Type:** confirmation (the gate works as designed, including where it wasn't specifically aimed)
+**Evidence:** live -- `node tools/recovery-schema.mjs check-parameterisation` run after adding
+`tools/diff-images.test.mjs`'s real-dump integration test
+**Confidence:** HIGH
+
+`checkParameterisation` in `tools/recovery-schema.mjs` scans every `.mjs` file under `tools/` --
+which includes test files, not only the implementation modules a plan author might picture when
+writing the N-readiness rule. A first draft of `diff-images.test.mjs`'s real-dump integration test
+picked the two releases with `registry.releases.find(r => r.id === "danish")` /
+`registry.releases.find(r => r.id !== "danish")` -- convenient shorthand, and exactly the
+release-id conditional the gate exists to catch. The gate flagged both occurrences immediately and
+by name (file + release id + matched pattern), and the fix was purely positional:
+`registry.releases[0]` as the reference release, `registry.releases.find(r => r !== reference)` as
+"the other one" (object-identity comparison, not a string literal, so it doesn't match the gate's
+regexes at all). **Saves:** a future test needing "pick a specific release and a different one"
+should default to positional/first-vs-not-first logic rather than reaching for a literal id string,
+even in test code -- the gate does not exempt tests, and re-discovering that by tripping it is a
+five-minute detour, not a costly one, but avoidable.
+
 ### 2026-08-01 — anchor-proven provenance offset is 0 for danish vs saeger, confirmed mechanically (not just by the earlier byte-for-byte inspection)
 
 **Type:** confirmation
