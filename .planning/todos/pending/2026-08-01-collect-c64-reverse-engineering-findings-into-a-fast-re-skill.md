@@ -83,12 +83,154 @@ it is an hour of reasoning each time.
   there. Common for animation frame pointers.
 - Zero-page: the game's hot variables. Highest-frequency ZP addresses in a trace are the
   state worth naming first.
-- Graphics data discovery: `$D018` (screen/charset base) plus `$DD00` bits 0-1 (VIC bank)
-  resolve every graphics pointer to an absolute address. Sprite pointers sit at screen base
-  `+$03F8`.
+- Graphics and sound data discovery: see the three chip sections below — this is the largest
+  block of the method and does not compress into a bullet.
 - Code/data separation: the project's own standing rule already says a range never hit as an
   instruction stream across full gameplay coverage is data regardless of what the tracer
   guessed. That rule belongs in the skill, not just in CLAUDE.md.
+
+### VIC-II — finding charsets, screens, bitmaps and sprites
+
+The whole point: **graphics data is not searched for, it is computed.** Every pointer the VIC
+follows is derived from two registers plus a bank, so five reads locate every byte of graphics
+the game is currently displaying. Getting this written down is most of the value of the skill.
+
+**Step 1 — the VIC bank, because every other pointer is relative to it.** `$DD00` bits 0-1
+(CIA#2 port A), and they are *inverted*:
+
+| `$DD00 & 3` | Bank | Base |
+|---|---|---|
+| `%11` | 0 | `$0000` |
+| `%10` | 1 | `$4000` |
+| `%01` | 2 | `$8000` |
+| `%00` | 3 | `$C000` |
+
+Bank is the single most common source of a wrong answer here — read it first, every time.
+
+**Step 2 — `$D018` splits into two pointers.**
+- Bits 4-7 = VM, video matrix (screen RAM) base = bank + VM × `$0400`
+- Bits 1-3 = CB, character generator base = bank + CB × `$0800`
+- Bit 0 unused
+
+**Step 3 — the character ROM shadow, which breaks the arithmetic if you forget it.** The VIC
+sees character ROM at `$1000-$1FFF` (bank 0) and `$9000-$9FFF` (bank 2) *regardless of the
+`$01` banking the CPU sees*. If CB resolves into either window the game is using ROM
+characters and there is no charset in RAM to extract. This is the classic wasted hour.
+
+**Step 4 — which mode, because it changes what the bytes mean.** Three bits, `$D011` bit 6
+(ECM), `$D011` bit 5 (BMM), `$D016` bit 4 (MCM):
+
+| ECM | BMM | MCM | Mode |
+|---|---|---|---|
+| 0 | 0 | 0 | Standard text |
+| 0 | 0 | 1 | Multicolor text |
+| 0 | 1 | 0 | Standard bitmap |
+| 0 | 1 | 1 | Multicolor bitmap |
+| 1 | 0 | 0 | Extended background text |
+| 1 | 1 | 0 | Invalid — screen goes black |
+| 1 | 0 | 1 | Invalid — screen goes black |
+| 1 | 1 | 1 | Invalid — screen goes black |
+
+In bitmap mode `$D018` bit 3 selects the 8K half the bitmap lives in; the video matrix then
+holds colour pairs, not character codes. Multicolor halves horizontal resolution and reads
+bit *pairs*, which is why a multicolor sprite decoded as hires comes out as garbage twice as
+wide as it should be.
+
+**Step 5 — sprites.**
+- `$D015` — enable mask. Start here; a disabled sprite's other registers are stale noise.
+- Sprite pointers: **video matrix base + `$03F8`**, 8 bytes. Each pointer × 64 = the sprite's
+  data address *within the current bank*. 63 bytes used of the 64 allocated.
+- `$D000-$D00F` X/Y pairs, `$D010` the X bit-8 mask (sprites past X=255).
+- `$D01C` multicolor per sprite, `$D017`/`$D01D` Y/X expand, `$D01B` sprite-background priority.
+- `$D027-$D02E` per-sprite colour; `$D025`/`$D026` the two shared multicolor registers.
+
+**Step 6 — colour.** Colour RAM is fixed at `$D800-$DBFF` and is **not** banked — it does not
+move with the VIC bank, and only the low nybble of each byte exists. `$D020` border,
+`$D021-$D024` backgrounds 0-3 (2-3 used only in ECM).
+
+**Hazard — two VIC registers are destroyed by reading them.** `$D01E` (sprite-sprite
+collision) and `$D01F` (sprite-background collision) **clear on read**. Reading them while the
+game runs steals the collision the game was about to act on, which can make a running game
+behave differently *because you looked at it*. Prefer `vice_vicii_get_state`, and treat
+"is the monitor's read side-effect-free?" as something the skill tells the reader to verify
+rather than assume.
+
+**Where this leads in the disassembly.** A watch on `$D018` finds the screen-setup routine,
+which in a room- or level-based game is usually the room loader — one of the highest-value
+routines to locate early. A watch on the sprite pointer block (VM + `$03F8`) finds the
+animation driver, since that is what rewrites pointers frame to frame.
+
+### SID — finding the music player and the sound effects
+
+`$D400-$D41C`, write-only apart from the last four registers. Three voices at 7 bytes each:
+
+| Offset | Register |
+|---|---|
+| +0 / +1 | Frequency lo / hi |
+| +2 / +3 | Pulse width lo / hi |
+| +4 | Control — gate (bit 0), sync, ring, test, then waveform bits: triangle, saw, pulse, noise |
+| +5 | Attack / Decay |
+| +6 | Sustain / Release |
+
+Voice 1 at `$D400`, voice 2 at `$D407`, voice 3 at `$D40E`. Then `$D415`/`$D416` filter cutoff
+lo/hi, `$D417` resonance + which voices route through the filter, `$D418` volume (bits 0-3),
+filter mode (bits 4-6), and voice-3-disconnect (bit 7).
+
+Read-only: `$D419`/`$D41A` paddles, `$D41B` voice 3 oscillator, `$D41C` voice 3 envelope.
+
+What matters for RE:
+- **The player is whoever writes `$D400-$D418` from inside the IRQ handler.** A watch on
+  `$D404` (voice 1 control — gate changes every note) lands on the play routine directly.
+  Separating `init` from `play` follows from there: `init` is called once from the main code,
+  `play` once per frame from the IRQ.
+- **`$D41B` read = random number generator.** Reading voice 3's oscillator is the standard C64
+  RNG idiom. Code reading `$D41B` is almost never doing audio — it is enemy AI, spawn
+  placement, or a title-screen effect. Worth recognising on sight; it is easy to misread as
+  sound code and file in the wrong place.
+- **`$D418` written alone, at high frequency, with no voice setup = 4-bit sample playback.**
+  A different subsystem from the music player, and it usually runs off a fast CIA timer rather
+  than the frame IRQ.
+- Note voice 3 disconnect (`$D418` bit 7) is often set precisely *because* voice 3 is being
+  used as the RNG rather than as audio.
+
+### CIA 6526 — input, timing, banking, and the serial bus
+
+Two of them, and they do almost entirely different jobs. Confusing which is which is a
+frequent early error, because their register layouts are identical.
+
+**CIA#1 at `$DC00` — keyboard, joysticks, and the IRQ line.**
+- `$DC00` port A: keyboard **column** select, and joystick port 2
+- `$DC01` port B: keyboard **row** read, and joystick port 1
+- `$DC02`/`$DC03` data direction A/B — which way each port's pins face
+- `$DC04-$DC07` timer A/B lo-hi; `$DC0E`/`$DC0F` the control registers that start them
+- `$DC08-$DC0B` TOD clock; `$DC0C` serial shift register
+- `$DC0D` interrupt control/status: bit 0 timer A, bit 1 timer B, bit 2 TOD alarm, bit 3 SP,
+  bit 4 FLAG, bit 7 "an IRQ occurred" on read / set-clear on write
+
+**CIA#2 at `$DD00` — VIC bank, serial bus, user port, and the NMI line.**
+- `$DD00` port A: bits 0-1 the VIC bank (inverted, see above); bits 3-5 serial bus ATN/CLK/DATA
+  out; bits 6-7 serial in
+- `$DD01` port B: user port / RS-232
+- `$DD04-$DD07`, `$DD0E`/`$DD0F` timers — these drive **NMI**, not IRQ
+- `$DD0D` interrupt control, same bit layout as `$DC0D`
+
+What matters for RE:
+- **Direct `$DC00`/`$DC01` polling is the norm in games and cracks**, bypassing the KERNAL
+  keyboard buffer entirely. This project already proved it the hard way: `vice_keyboard_type`
+  is invisible to the crack because the crack reads the matrix directly (recorded in STATE.md).
+  The skill must carry that, because it is the difference between working input injection and
+  an afternoon lost.
+- **A game that never touches `$DC0D` is on a raster IRQ**; one that programs `$DC04-$DC07`
+  and enables timer A is running its own timebase. Reading the two enable registers settles
+  the question in one call.
+- **`$DD00` is dual-purpose and that trips people up** — the same register carries the VIC
+  bank *and* the serial bus lines, so a write to it during disk access also moves the VIC's
+  view of memory unless the code is careful. Loader code writing `$DD00` is usually talking to
+  the drive, not switching banks; check the mask.
+- **Hazard, same shape as the VIC collision registers:** reading `$DC0D`/`$DD0D` **clears the
+  interrupt flags** on real hardware, so a raw memory read can steal an interrupt the game was
+  about to service. Prefer `vice_cia_get_state`; flag the monitor's exact behaviour as
+  verify-don't-assume.
 
 ### Which tool answers which question
 
@@ -102,7 +244,16 @@ Nothing new needs installing; the gap is that the mapping is not written down.
 - `mcp__vice__vice_checkpoint_add` + `vice_run_until` + `vice_registers_get` — the main-loop
   test. A checkpoint on a suspected loop head that fires exactly once per frame proves it.
 - `mcp__vice__vice_watch_add` — finds *writers*. Point it at a ZP address or at `$D012` and
-  the code that drives the thing shows itself.
+  the code that drives the thing shows itself. The three highest-value watch targets found
+  above: `$D018` → the screen/room setup routine, VM+`$03F8` → the animation driver, `$D404`
+  → the music play routine.
+- `mcp__vice__vice_vicii_get_state` / `vice_sid_get_state` / `vice_cia_get_state` — **use
+  these in preference to raw reads of the chip registers.** Two reasons: one call returns the
+  whole chip instead of a dozen reads, and it avoids the read-clears-it hazard on `$D01E`,
+  `$D01F`, `$DC0D` and `$DD0D`.
+- `mcp__vice__vice_sprite_get` / `vice_sprite_inspect` — decode sprite data without
+  hand-implementing the pointer arithmetic or the multicolor bit-pair unpacking. Verify what
+  they return the first time against a hand-resolved pointer, then trust them.
 - `mcp__vice__vice_memory_search` — locate a known byte pattern (a sprite, a string, a table)
   once its shape is known from elsewhere.
 - `mcp__vice__vice_symbols_load` / `vice_symbols_lookup` — carry ACME `--vicelabels` output
@@ -135,8 +286,25 @@ for the full derivation):
 
 A useful shape to aim at: a decision-ordered procedure with a short table of "question →
 address to read → what each answer means", which hands off to `c64-memory-mapping` for
-per-address detail and to `c64-ram-capture` for image acquisition. If it grows past ~150 lines
-it has probably started narrating instead of deciding.
+per-address detail and to `c64-ram-capture` for image acquisition.
+
+**On size.** An earlier draft of this todo set a ~150-line ceiling. With the VIC-II, SID and
+CIA material added that ceiling is wrong, and the honest reading is that the skill has two
+halves with different economics:
+
+- **The control-flow half** (entry point → vectors → IRQ source → main loop) is pure decision
+  procedure and stays small. The 150-line instinct was right *for this half*.
+- **The chip half** (graphics, sound, input) is partly derivation tables — the `$DD00` bank
+  map, the ECM/BMM/MCM matrix, the SID voice layout. Those are lookup, and lookup is
+  `c64-memory-mapping`'s job.
+
+So the split to aim for is: **derivation tables into `c64-memory-mapping`** if it does not
+already carry them, **the order and the hazards into the new skill**. "Read `$DD00` before
+anything else or your pointers are wrong", "`$D01E`/`$D01F` clear on read", "CB landing in
+`$1000`/`$9000` means ROM characters and there is nothing to extract", "`$D41B` is the RNG,
+not audio" — none of that is a table, all of it is judgement, and it is what the reader
+actually cannot derive from a register list. Check `c64-memory-mapping` first; every table
+the new skill would restate is a sign the content belongs there instead.
 
 ### Where the findings already are
 
@@ -161,13 +329,24 @@ TBD. Suggested order:
    `c64-memory-mapping` (extend it there if a gap shows). Anything that is "what do I do next"
    is the new skill.
 3. **Draft the decision procedure**, in the order entry point → vectors → IRQ source → main
-   loop → structure. Each step: the read to make, the tool that makes it, what each outcome
-   rules in or out.
-4. **Test it against this project's own game.** Run the procedure cold on the depacked Bruce
+   loop → code structure → VIC-II (bank → `$D018` → mode → sprites → colour) → SID → CIA.
+   Each step: the read to make, the tool that makes it, what each outcome rules in or out.
+   The chip steps come last because they are cheap once the IRQ handler is known — the handler
+   is where most chip writes happen.
+4. **Audit `c64-memory-mapping` for the derivation tables** before writing them anywhere. If it
+   already resolves `$D018`, `$DD00` bit inversion and the SID voice offsets, the new skill
+   cites it. If it does not, extend it there — a second copy of a register table is exactly the
+   drift this project keeps paying for.
+5. **Test it against this project's own game.** Run the procedure cold on the depacked Bruce
    Lee image and see whether it lands on the same answers the phase-01 work already
-   established. A method that does not reproduce known-good results is not ready.
-5. **Check it against the keep/cut criterion** from the skills-audit todo before committing —
+   established. The chip half has an unusually good test available: the procedure should
+   independently rediscover the game's charset, sprite set and screen layout, and those are
+   checkable against what the extraction work already produced. A method that does not
+   reproduce known-good results is not ready.
+6. **Check it against the keep/cut criterion** from the skills-audit todo before committing —
    if the result reads as narration of the tool list, cut it back to the decision points.
-6. Consider whether the general-purpose parts (nothing Bruce-Lee-specific in the vector table
-   or the main-loop signatures) make this a candidate for the same
-   extract-as-a-package question as [[2026-08-01-extract-the-vice-mcp-into-an-installable-package]].
+7. The general-purpose parts are now the clear majority — nothing in the vector table, the
+   main-loop signatures, the VIC-II derivation chain, the SID layout or the CIA split is
+   Bruce-Lee-specific. That strengthens the case for shipping this in the RE package
+   ([[2026-08-01-pack-the-whole-c64-re-toolkit-including-the-vice-mcp-into-one-package]]),
+   whose skills layer this skill is a named candidate for.
