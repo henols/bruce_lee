@@ -279,3 +279,36 @@ test("every import specifier in watch-loads.mjs and dump-artifacts.mjs is a node
   }
   assert.ok(totalSpecifiers > 0, "at least one specifier must have been checked across both modules");
 });
+
+// ----------------------------------------------------------------- renderLoading
+
+test("renderLoading flags a blocked run's zero count as unevidenced rather than rendering it as a plain zero", async () => {
+  const { renderLoading } = await import("./watch-loads.mjs");
+  const blockedLog = {
+    machine: "C64SC",
+    video_standard: "PAL",
+    vice_version: "3.10",
+    run_status: "blocked",
+    run_status_note: "Boot never progressed past its pre-loader state; two independent cycles_advanced brackets both measured zero.",
+    armed: [],
+    idle_calibration: { cycles_advanced: 0, sentinels: [] },
+    hits: [],
+  };
+  const md = renderLoading([{ id: "example", log: blockedLog }]);
+  assert.match(md, /NOT AN EVIDENCED ZERO/, "a blocked run must not render its zero count as a plain, unqualified result");
+  assert.match(md, /never progressed past its pre-loader state/, "the blocked-run reason must be surfaced in the rendered document");
+});
+
+test("renderLoading does NOT add the blocked-run warning for an ordinary (non-blocked) log", async () => {
+  const { renderLoading } = await import("./watch-loads.mjs");
+  const normalLog = {
+    machine: "C64SC",
+    video_standard: "PAL",
+    vice_version: "3.10",
+    armed: [],
+    idle_calibration: { cycles_advanced: 100, sentinels: [] },
+    hits: [],
+  };
+  const md = renderLoading([{ id: "example", log: normalLog }]);
+  assert.doesNotMatch(md, /NOT AN EVIDENCED ZERO/, "an ordinary log must not be flagged as a blocked run");
+});
