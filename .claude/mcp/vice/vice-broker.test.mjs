@@ -1389,3 +1389,50 @@ test("spare warming: when every candidate port is bound, the pass says so once a
     for (const r of releases) await r();
   }
 });
+
+// ---------------------------------------------------------------------------
+// `start N` must actually drive the spare target. Plan 02 validated the
+// positional while no warm-spares logic existed for it to drive (and said so
+// in a comment); plan 04 added that logic and did not come back to wire it.
+// Net effect until fixed: `start 2` wrote "spares_target": 3 to broker.json
+// and warmed three instances, while reporting nothing amiss -- a
+// validated-then-ignored argument, which is worse than an unsupported one.
+
+/** Runs `start [N]` as a one-shot dry run in an isolated pool dir and returns
+ * the spares_target broker.json recorded. */
+async function spareTargetFor(args, extraEnv = {}) {
+  const dir = tmpPoolDir();
+  const env = {
+    ...process.env,
+    VICE_SUPERVISOR_ALLOW_CONTAINER: "1",
+    VICE_POOL_DIR: dir,
+    VICE_BROKER_BASE_PORT: "9800",
+    ...extraEnv,
+  };
+  await execFileP("bash", [BROKER_SCRIPT, ...args, "--once", "--dry-run"], { env });
+  const bj = JSON.parse(readFileSync(join(dir, "broker.json"), "utf8"));
+  return bj.spares_target;
+}
+
+test("start N: the positional instance count actually drives the spare target", async () => {
+  assert.equal(await spareTargetFor(["start", "1"]), 1, "start 1 must target 1 spare");
+  assert.equal(await spareTargetFor(["start", "2"]), 2, "start 2 must target 2 spares");
+  assert.equal(await spareTargetFor(["start", "5"]), 5, "start 5 must target 5 spares");
+});
+
+test("start N: a bare start keeps the documented default of 3", async () => {
+  assert.equal(await spareTargetFor(["start"]), 3, "bare start must keep the documented default");
+});
+
+test("start N: an explicit positional beats the VICE_BROKER_SPARES env knob", async () => {
+  assert.equal(
+    await spareTargetFor(["start", "2"], { VICE_BROKER_SPARES: "7" }),
+    2,
+    "an explicit CLI count must win over the ambient env knob"
+  );
+  assert.equal(
+    await spareTargetFor(["start"], { VICE_BROKER_SPARES: "7" }),
+    7,
+    "with no positional the env knob still applies"
+  );
+});

@@ -355,10 +355,12 @@ if [ "$CHECK_CONTAINER" -eq 0 ]; then
 fi
 
 # N (start's optional positional) validated exactly like vice-pool.sh's own
-# start [N] -- an integer 1..16, same message shape. Deliberately NOT wired
-# to VICE_BROKER_SPARES (a completely separate env knob, read further down):
-# no warm-spares logic exists yet in this version for N to drive, so this is
-# CLI-shape parity for the future loop (plan 02), not a live behaviour.
+# start [N] -- an integer 1..16, same message shape. It is WIRED to
+# VICE_BROKER_SPARES immediately after that knob's default is resolved below;
+# see the assignment there for why. (Plan 02 validated N while no warm-spares
+# logic existed for it to drive and said so here; plan 04 added that logic and
+# did not come back to wire it, so `start 2` silently warmed 3 until this was
+# fixed during the criterion-13 checkout.)
 if [ "$SUBCOMMAND" = "start" ] && [ -n "$N_ARG" ]; then
   if ! [[ "$N_ARG" =~ ^[0-9]+$ ]] || [ "$N_ARG" -lt 1 ] || [ "$N_ARG" -gt 16 ]; then
     echo "usage error: instance count must be an integer 1..16, got: $N_ARG" >&2
@@ -382,6 +384,16 @@ container_guard_enforce "vice-broker.sh" "$HOST_EXAMPLE_PATH"
 
 # ---------------------------------------------------------------- configuration
 VICE_BROKER_SPARES="${VICE_BROKER_SPARES:-3}"
+# `start N` is the documented CLI surface (ROADMAP criterion 1's vice-pool.sh
+# parity) and it has to actually take effect -- a validated-then-ignored
+# argument is worse than no argument, because `start 2` reported
+# "spares_target": 3 in broker.json and warmed three instances while looking
+# like it had honoured the request. Explicit CLI beats ambient env, matching
+# vice-pool.sh's own `start [N]`: the env knob remains the way to set it
+# without a positional (e.g. from a test harness or a service unit).
+if [ -n "$N_ARG" ]; then
+  VICE_BROKER_SPARES="$N_ARG"
+fi
 VICE_BROKER_MAX="${VICE_BROKER_MAX:-16}"
 VICE_BROKER_TTL_S="${VICE_BROKER_TTL_S:-180}"
 VICE_BROKER_BASE_PORT="${VICE_BROKER_BASE_PORT:-6510}"
