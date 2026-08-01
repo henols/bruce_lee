@@ -663,3 +663,25 @@ The value is which call to reach for first.
 Standing constraint: `mcp__vice__*` is the only route to the emulator. Any step of this method
 that would want a Node process talking to VICE is dead on arrival and must be expressed as
 agent-performed tool calls — the same rule that reduced `c64-ram-capture` to a procedure.
+
+### 2026-08-01 — a silent stall outlives the subagent that hit it, confirmed from the orchestrator side
+
+**Type:** hazard (confirms the "abandon the session" rule live, from the other side of the agent boundary)
+**Evidence:** live. Plan 01-04 attempt 3's executor halted on a silent stall. After it returned and
+its worktree was merged and removed, the **orchestrator** ran its own bracket in the same session:
+`cycles_stopwatch reset` → `execution_run` → 3× `vice_ping` → `read` = **exactly 0 cycles**, while
+all three pings reported `execution: "running"`. The same bracket in this same session before
+dispatch read 21,551,860 cycles, so the instance was healthy at dispatch and stalled during the run.
+**Confidence:** HIGH — measured directly, twice in one session, with a known-good reading as control.
+**Saves/costs:** one bracket (4 calls) tells you whether a session still has an emulator before you
+spend an executor dispatch on it. Skipping it costs a whole dispatch and produces a halt.
+
+**The operational rule this confirms:** a stalled instance is a property of the *session*, not of
+the agent that was unlucky. It does not clear when the subagent exits, and the container cannot
+repair it — the proxy never re-requests a grant, so host-side repair does not reach an
+already-granted session either. There is no in-session recovery. Abandon the session and open a
+fresh one; the first forwarded call takes a new boot-fresh grant.
+
+**Corollary for orchestrators:** re-dispatching an executor after a stall-halt is guaranteed to
+fail, because the subagent inherits its session's dead instance. Run the bracket *before*
+re-dispatch and treat zero as "stop and hand off", not as "retry".
