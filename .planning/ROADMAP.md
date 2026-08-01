@@ -103,7 +103,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 01-04: Mechanical on-demand-load detector, bounded play-through, `LOADING.md` absence-as-evidence record, supplementary dumps (RECOVER-04) — *sequential; has a blocking human-verify checkpoint*
+- [ ] 01-04: Instance-acquisition seam, earned on-demand-load detector, bounded play-through for both releases, `LOADING.md` absence-as-evidence record, supplementary dumps (RECOVER-04) — *sequential; replanned 2026-08-01 after the first run was reverted (`bb0b1f7`); two blocking checkpoints — a decision gate on the acquisition route, then a human-verify gate on the coverage claim*
 
 **Wave 5** *(blocked on Wave 4 completion)*
 

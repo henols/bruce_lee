@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: Pipeline Proven *
-current_phase: 2
-current_phase_name: Coverage, Hazards & Memory Map
-status: planning
-stopped_at: "Completed 01.2-05-PLAN.md: two-session leasing proven, VICE standing constraint narrowed (D-1.2-C)"
-last_updated: "2026-08-01T11:52:29.468Z"
+current_phase: 1
+current_phase_name: Recovery & Provenance
+status: executing
+stopped_at: "Replanned 01-04-PLAN.md against the acquisition-seam decision; 01-04/01-05/01-06 still unexecuted"
+last_updated: "2026-08-01T13:14:30.820Z"
 last_activity: 2026-08-01
-last_activity_desc: Phase 01.2 complete, transitioned to Phase 2
+last_activity_desc: Phase 1 plan 01-04 replanned after its revert; ready to execute
 progress:
   total_phases: 3
   completed_phases: 2
@@ -25,15 +25,15 @@ See: .planning/PROJECT.md (updated 2026-07-31)
 
 **Core value:** An ACME source tree that rebuilds a Bruce Lee which plays identically to the original, where every gameplay system is explained well enough that someone could change it.
 **Current milestone:** v1.0 — Pipeline Proven (Phases 1–4, 24 requirements)
-**Current focus:** Phase 01.2 — On-Demand Broker and Per-Session Leasing
+**Current focus:** Phase 1 — Recovery & Provenance (plans 01-04 → 01-06 outstanding)
 
 ## Current Position
 
 Milestone: v1.0 — Pipeline Proven (Phases 1–4 of 7 total)
-Phase: 2 — Coverage, Hazards & Memory Map
-Plan: Not started
-Status: Ready to plan
-Last activity: 2026-08-01 — Phase 01.2 complete, transitioned to Phase 2
+Phase: 1 — Recovery & Provenance
+Plan: 01-04 (replanned 2026-08-01 after its revert; 3/6 plans executed)
+Status: Ready to execute
+Last activity: 2026-08-01 — Phase 1 plan 01-04 replanned against the acquisition-seam decision
 
 Progress (v1.0): [████░░░░░░] 35% — 7/20 plans
 Progress (overall): [██░░░░░░░░] 20% — 7/35 plans
@@ -102,6 +102,7 @@ drifting implementations while sharing code without sharing state means N broker
 - **Extract the VICE MCP into its own project and publish it as an installable package** (tooling,
   major) — `.claude/mcp/vice/` is ~14,650 vendored lines with no `package.json`; copying is the only
   way to reuse it, and copies drift on guarantees like the `vice_disk_list` deny-list.
+
 - **Make the broker cross-project via shared home-dir state** (tooling, minor) — coordination state
   is workspace-scoped, so a second project cannot reach it; pairs with orphan reaping that must
   spare a hand-started emulator, and subsumes `01.2-REVIEW.md` CR-01 (no singleton guard on

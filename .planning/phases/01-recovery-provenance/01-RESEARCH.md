@@ -4,6 +4,18 @@
 **Domain:** Live-memory recovery of a cracked 1984 C64 game via VICE-over-MCP, plus two-image provenance diffing
 **Confidence:** HIGH for the VICE MCP tool surface (directly probed, live, this session) and ACME/CLAUDE.md-adjacent facts; MEDIUM for crack-independence evidence (one release externally corroborated, one not yet found); MEDIUM-LOW for anything requiring actual gameplay (untested — no play-through has happened yet)
 
+> **Refreshed 2026-08-01 (targeted, RECOVER-04 / plan 01-04 only).** Plans 01-01/01-02/01-03 executed
+> successfully and their research below is unchanged and still authoritative. Plan 01-04 executed,
+> found real defects, then was **reverted** (`bb0b1f7`) because its capture/detection tooling ran
+> against the pre-01.2 shared VICE **pool** (`vice-pool.mjs`), which hung host-side mid-run — not
+> because of the broker. Phase 01.2 (on-demand broker, per-session boot-fresh leasing) shipped in the
+> interim and is a **structurally separate code path** from the pool the reverted run used; it does
+> **not** automatically apply to the standalone `tools/*.mjs` CLI pipeline 01-01–01-03 built. See the
+> new **`## Phase 01-04 Redo — Broker-Route Findings (Refreshed 2026-08-01)`** section, inserted after
+> "Non-VICE toolchain confirmation" below, for the full analysis. Do not re-derive any of the
+> pre-01.2 findings above without reading that section first — several of them (the acquisition route
+> in particular) are exactly what changed.
+
 <user_constraints>
 ## User Constraints (from CONTEXT.md)
 
@@ -232,6 +244,16 @@ Live `vice_snapshot_list` right now: `{"snapshots":[],"directory":"/home/henrik/
 
 ### On-demand load detection (RECOVER-04, D-10/D-11)
 
+> **Refreshed 2026-08-01:** the tool signatures below are still accurate and still HIGH confidence —
+> `vice_watch_add`/`vice_checkpoint_add` did not change. What changed is *which instance* they get
+> aimed at and *how the resolved sentinel data was found to be wrong once actually exercised live*.
+> See `## Phase 01-04 Redo — Broker-Route Findings` for the corrected `loader_ranges` data, the
+> attribution requirement the reverted run skipped, and the acquisition-route decision the planner
+> must make explicit. Do not re-arm `recovery/RELEASES.json`'s current `danish`/`saeger` watch data
+> verbatim without reading that section — the reverted run found and partially fixed a real defect in
+> it (`$08F5-$08F7` misclassified as loader code) before the rest of the run was reverted along with
+> the fix.
+
 - `vice_watch_add({address, size, type: read|write|both, condition?})` — arm on `$DD00` (CIA2 PRA: VIC bank bits *and*, for a raw-sector custom loader bypassing the KERNAL, very plausibly the bit-banged serial-bus CLK/DATA/ATN lines a fastloader toggles directly) with `type: "both"` as the primary on-demand-load sentinel, since custom loaders in this project's disks explicitly bypass KERNAL IEC routines (no standard `$FFD5`/serial-bus KERNAL vector activity to watch instead).
 - A standing `vice_checkpoint_add({start: loaderStart, end: loaderEnd, exec: true, stop: true})` over the already-defeated loader's own code range doubles as a "did we re-enter the loader" sentinel — per D-10, it should never fire again post-dump; if it does, that is itself evidence of a second load pass.
 - `vice_checkpoint_set_condition`/`set_ignore_count` exist if a watch/checkpoint needs to be conditioned (e.g. "only break if `A == $xx`") or allowed a bounded number of expected benign hits before it becomes meaningful — available but likely unnecessary for a first pass given D-11's bounded-play scope.
@@ -258,6 +280,366 @@ No emulator tool is needed for this step — it is pure Node-side data processin
 - `python3 --version` → `3.13.5` [VERIFIED, in-container] — present, but per D-18 deliberately not used this phase (deferred to Phase 4).
 - `node --version` → `v24.18.1` [VERIFIED, in-container] — this is what all Phase 1 tooling runs on.
 - No `wine`/`unp64`/`exomizer`/`c1541`/`petcat` install attempted or needed — Phase 1's scope (per REQUIREMENTS.md's Out-of-Scope table and D-18) is live-memory recovery only; the optional "five-minute Wine/unp64 experiment" ARCHITECTURE.md/STACK.md mention as cheap insurance is explicitly *not* required for this phase's success criteria and can be skipped without any gap in coverage.
+
+## Phase 01-04 Redo — Broker-Route Findings (Refreshed 2026-08-01)
+
+> This whole section is new. It targets the RECOVER-04 refresh only; nothing above this point (or
+> in the "Normalisation and diffing" / "Crack-independence evidence" subsections, which belong to
+> 01-05/01-06) was rewritten.
+
+### Q1 — The hang, diagnosed: pause-without-resume vs. genuine host hang vs. pool contamination
+
+**[VERIFIED: git history + STATE.md, this session]** The reverted run's own final commit message
+(`7da03fc`, before revert) states the exact symptom: *"after the F7 probe, all three VICE pool
+instances were found hung (`vice_ping` reports `"running"` but `vice_cycles_stopwatch` shows zero
+cycles elapsing, and a hard reset does not recover it)."* Three independent, previously-established
+facts let this be triaged precisely rather than left as a vague "VICE flaked again":
+
+1. **(a) Pause-without-resume is ruled out, not merely unlikely.** This project settled the
+   pause-on-state-read discipline in plan 01-01 (poll with `vice_ping`, which does not pause the
+   machine, and resume exactly once before it — see `01-01-SUMMARY.md`'s "Notes for Future Phases").
+   The reverted run's own commit messages show this discipline was already in active use
+   (`cfc9d83`/`067c0d9`/`7da03fc` all describe checkpoint-gated, non-sleep synchronisation). More
+   decisively: `vice_ping` reporting `"running"` is itself inconsistent with "someone forgot to
+   resume" — an un-resumed machine reports `execution: "paused"` (see the original research's live
+   sample above), not `"running"`. The symptom is a contradiction between two things VICE itself
+   reported (running, yet zero cycles), not an omitted resume call.
+2. **(b) Genuine host-side VICE hang is the best-supported explanation, and it is NOT new.**
+   STATE.md already carries an unresolved, six-outage history from *before* 01-04 even started
+   (`[HOST INSTABILITY — Phase 1, 2026-07-30]`), with four of six outages self-recovering and two
+   needing a manual host restart, and an explicit note that "root cause remains unknown." The 01-04
+   hang matches this pattern's shape exactly (a `vice_ping`-alive-but-non-advancing machine that a
+   `machine_reset` — the "hard reset" — did not fix) and is best read as the **same unresolved
+   host-side fault recurring**, not a new failure mode 01-04 introduced.
+3. **(c) Shared-pool cross-contamination is a plausible *contributing* factor but is not proven, and
+   is distinct from (b).** All **three** pool instances (ports 6510/6511/6512) hung
+   **simultaneously**. Three independent x64sc processes failing at once is unusual for an
+   independent per-process bug, and is more consistent with a **host-level resource or scheduling
+   event** (CPU starvation, memory pressure, a host sleep/suspend cycle) affecting all three at once
+   than with one session's *actions* corrupting a *different* session's leased instance in the sense
+   "cross-contamination" usually means. **[ASSUMED — LOW confidence]:** this project has no
+   instrumentation that distinguishes "one host-level event took down three processes" from "the
+   third leased instance was independently unlucky at the same moment." Treat root cause as
+   genuinely open, per STATE.md's own standing admission, not as solved by this refresh.
+
+**The load-bearing answer to "does the broker fix this or relocate it":** **neither, cleanly — it
+changes the *exposure*, not the *mechanism*.** Three independent facts, all `[VERIFIED: code
+inspection, this session]`, establish this:
+
+- `tools/recover.mjs`, `tools/chip-state.mjs`, and the reverted `tools/watch-loads.mjs` all import
+  `acquire` from `.claude/mcp/vice/vice-pool.mjs` (`tools/recover.mjs:21`) — the **pre-01.2 fixed
+  pool** (`vice-pool.sh`, long-running supervised instances on fixed ports). None of them import
+  anything from `vice-broker-client.mjs`.
+- Every one of Phase 01.2's five plan summaries states, verbatim, in its "Next Phase Readiness"
+  section: *"`vice-pool.sh`, `vice-pool.mjs`, `tools/recover.mjs`, `tools/chip-state.mjs`,
+  `tools/watch-loads.mjs` remain completely untouched... the non-MCP recovery pipeline's own lease
+  mechanism is unaffected."* This is not an oversight; `tools/README.md:443` documents it as a
+  **deliberate** design: *"a programmatic seam: two library consumers that are not the proxy."*
+- The broker (`vice-broker.sh` / `vice-broker-client.mjs`) is wired into exactly one consumer:
+  `.claude/mcp/vice/vice-proxy.mjs`, the stdio MCP server `.mcp.json` registers as `"vice"` — i.e.
+  the tools the **live agent** calls directly as `mcp__vice__*` during a conversation. It is not
+  reachable from a `node tools/whatever.mjs` script invoked over Bash unless that script is
+  explicitly rewritten to speak the broker protocol itself (see Q9).
+
+So: **if the 01-04 redo keeps driving detection/play-through through `tools/recover.mjs`-style
+standalone Node CLI verbs unchanged, it is running on the exact same pool infrastructure that hung
+— the broker changes nothing for it.** The broker only "replaces the shared-pool infrastructure that
+failed" if the redo's mechanical work (arming, play-through, detection) is done via the live agent's
+own `mcp__vice__*` tool calls (which *do* go through `vice-proxy.mjs` → the broker automatically), or
+via new standalone-script plumbing that explicitly acquires a broker lease (Q9). This is the single
+biggest architecture decision the planner must make explicit — it is not a detail the executor can
+improvise, because the two routes have different failure exposure:
+
+| Property | Pool route (`vice-pool.mjs`, pre-01.2, what hung) | Broker route (`vice-proxy.mjs`, Phase 01.2) |
+|---|---|---|
+| Instance lifetime | Long-running, shared across many sessions/scripts | Boot-fresh per session, torn down at session end |
+| Concurrent x64sc processes | 3, always running | 1 per active session, 0 when idle (plus warm spares if configured) |
+| Cross-session contamination | Possible (same instance reused across unrelated work) | Structurally removed (D-1.2-C) |
+| The specific "3 pool instances hung" failure | Reproduces exactly as observed | Cannot recur in the same shape (only ever 1 instance per session) — but a *single* boot-fresh instance can still hang for the same unresolved host-side reason |
+| Underlying root cause (six unexplained host outages) | Unaddressed | Unaddressed — the broker was never designed to fix this, only to change resource-sharing shape |
+
+**Conclusion, stated plainly:** switching to the broker route removes the "three simultaneous
+victims" shape of this specific failure and removes stale-session cross-contamination as a
+contributing cause, both genuine wins. It does **not** resolve the underlying, still-unexplained
+host VICE hang risk documented across six prior outages — that risk transfers to a single instance
+per session rather than three. **[ASSUMED — LOW confidence, flagged for the planner rather than
+smoothed over]:** whether a single freshly-booted instance hangs at a materially lower rate than a
+long-running pool instance is not measured anywhere in this project; it is a plausible inference
+(less accumulated state, less concurrent host load), not a verified fact.
+
+### Q2 — Liveness under the broker: two different signals, both needed, neither is the other
+
+Two genuinely different questions hide under "is it alive," and this project has separate,
+already-established answers for each:
+
+**(A) Is the *emulator* advancing, as distinct from merely answering `vice_ping`?**
+`vice_ping` reports the MCP server's own view of `execution` state (`"running"`/`"paused"`) — this is
+process-alive-and-responsive, not proof the 6502 is retiring instructions. The reverted run's own
+hang signature (`vice_ping` "running", `vice_cycles_stopwatch` flat) is the textbook case this
+distinction exists to catch. **Mechanical recipe, `[VERIFIED: tool schema, this session]`:**
+```
+vice_cycles_stopwatch({action: "reset"})
+# ... drive one scripted input / advance to the next checkpoint ...
+vice_cycles_stopwatch({action: "read"})   # or use "reset_and_read" for the bracket in one call
+```
+A non-increasing (or zero) cycle count across a window where input was scripted to occur is the
+hang signature, and is the check the reverted run's own `067c0d9`/`7da03fc` did NOT bracket
+*continuously* through the play-through (it was only discovered post-hoc, "after the F7 probe").
+The redo should bracket cycles across every scripted input, not just check it reactively once
+something already looks wrong.
+
+**(B) Has the underlying machine *restarted* mid-run (a different process/epoch), so results since
+then are void?** This is what the project's epoch mechanism answers, and it is a **different**
+question from (A) — a restart changes epoch; a hang does not (the process never died, so nothing
+re-spawned, so nothing increments the epoch counter). **This is the sharp distinction the research
+question asks for and it must not be collapsed:** a cycles-flat/`vice_ping`-alive hang is invisible
+to epoch checking, and an epoch change is invisible to a single cycles snapshot (a freshly restarted
+machine still reads *some* cycle count from zero — only a *before/after* bracket across a suspected
+restart catches it, and even then a fast restart can look like slow-but-nonzero progress). Both
+checks are required; neither subsumes the other.
+
+Under the broker route specifically, epoch-drift detection is **already wired automatically** and is
+a genuine improvement over the old per-process route:
+`[VERIFIED: code inspection, this session]` `vice-proxy.mjs`'s `handleToolsCall` calls
+`checkEpochAndRebaseline("before forwarding")` on **every** forwarded `tools/call` (`vice-proxy.mjs`
+around line 1090), refusing with an evidence-carrying error (both epoch values named) if drift is
+detected — this happens for *every* live-agent `mcp__vice__*` call with zero extra code from the
+executor. Contrast with the pool-route's `tools/vice.mjs`, whose epoch baseline lives in **per-process
+module state** (`beginSession()`/`assertSameMachine()`) and resets on every separate `node
+tools/whatever.mjs` invocation — so a standalone-script-driven play-through only gets epoch
+protection *within one Node process's lifetime*, and only re-checks it after a **transport-forced
+reconnect** actually happened, not continuously. This is a concrete, non-cosmetic reason to prefer
+the live-agent-driven route for a long play-through, independent of the pool-vs-broker instance
+question above.
+
+**Executor-liveness (a different layer again — orchestrator, not emulator):** `[VERIFIED: STATE.md
++ git show b66b72f, this session]` this is the commit the objective points at, and it answers a
+**third** question — not "is VICE advancing" but "is the *executor process running this plan* still
+alive." Its finding, which must not be re-derived or contradicted: `readlink /proc/*/cwd` (and
+worktree-write / commit activity) are **not** reliable negative liveness signals for an
+emulator-driving executor, because legitimate long emulator work over HTTP produces **no** worktree
+writes, no commits, and no cwd-holding process for many minutes at a stretch — exactly the shape of
+a real, long play-through. Acting on this signal previously caused an orchestrator watchdog to
+force-remove a *live* executor's worktree after 772s of quiet. **Consequences that bind the 01-04
+redo directly:** (1) there is no known cheap negative test for executor liveness during this kind of
+plan — absence of worktree activity is not evidence of death; (2) never destroy a worktree on
+inferred death; (3) any stall check for a plan like this must be advisory (surface and ask) — never
+actuating. If the redone 01-04 plan is executed under the same orchestration harness, this
+constraint must be respected by whatever runs it, independent of anything VICE-side.
+
+### Q3 — Lease lifetime vs. play-through duration
+
+**A full bounded play-through (title → chamber transition → both opponents → death → game over →
+restart) comfortably fits inside a single broker lease, with wide margin, `[VERIFIED: spike-findings
++ 01.2 code, this session]`:**
+
+- The lease is refreshed by **two** independent mechanisms while a session is active:
+  `touchLease(brokerLeaseId)` on **every forwarded tool call** (`vice-proxy.mjs`, "touch-on-every-
+  forwarded-call") and an **unref'd heartbeat timer** (`startHeartbeat`, default 60s interval,
+  `vice-broker-client.mjs`).
+  `VICE_BROKER_TTL_S` (lease staleness threshold, default **180s / 3 minutes**) is checked by the
+  broker's sweep; 60s heartbeats leave 3× headroom even with *zero* tool calls in between.
+- `spike-findings-bruce-lee` measured a live session held **completely idle for 40.1 minutes** with
+  **zero** signals and continuous 60.1s-interval heartbeats — i.e. nothing reaps an idle *proxy*
+  process either. A play-through with regular tool-call activity (checkpoints, screenshots, joystick
+  input) is strictly *more* active than that idle case, so it is not at risk of the proxy-side timer
+  either.
+- The per-call tool-call budget is **≥150s** (measured floor, not a ceiling) — every individual
+  `mcp__vice__*` call in a play-through (a checkpoint arm, a `run_until`, a screenshot) is
+  sub-second-to-seconds of real work, nowhere near that floor.
+
+**So a single lease does survive the whole bounded play-through, by a wide margin — no
+resumable-segment strategy is *forced* by lease math.** What a resumable-segment strategy is still
+good defence against is orthogonal to lease TTL: (a) the executor-liveness watchdog risk from Q2,
+(b) a genuine host VICE hang from Q1 forcing an abort mid-run, (c) ordinary session/context loss.
+**Recommendation, `[ASSUMED — reasoned from existing project patterns, not separately measured]`:**
+snapshot state at each milestone boundary (title-armed, first chamber transition, each opponent,
+death, game over, restart) using `vice_snapshot_save` with a **session-scoped** name — not a
+port-prefixed one. This is not a new convention: `vice-mcp-selector/SKILL.md` already states *"Namespace
+snapshot names by something session-scoped, never by port — ports are recycled across sessions under
+on-demand launch, so a port-prefixed snapshot name can collide with an unrelated later session"* —
+directly applicable here, and a real behaviour change from the pre-broker pool convention (which *did*
+namespace by port, safely, because pool ports were not recycled the way broker ports are). Pair each
+snapshot name with a written progress record (which milestone, its cycle count, its screenshot
+filename) in a file — not just conversational state — so a resumed session (fresh lease, fresh boot)
+can `vice_snapshot_load` the last proven milestone rather than restarting from the title screen.
+
+### Q4 — Detecting an on-demand load mechanically, in real `mcp__vice__*` calls, with false-negative modes
+
+The mechanism itself does not change from the original research (`vice_watch_add`/
+`vice_checkpoint_add`, reasoned about in the "On-demand load detection" subsection above) — what
+changed is **empirical knowledge about this specific game's code that the reverted run surfaced
+live**, which the redo must incorporate rather than re-discover:
+
+**Concrete config, carried forward `[VERIFIED: STATE.md + reverted commit cfc9d83, this session]`:**
+- `danish`'s corrected `loader_ranges` (post-fix, pre-revert): `$0340-035E`, `$0900-0901`,
+  `$0D64-0D82` — all three read **0** hits during the (truncated) play-through, which is the correct,
+  clean signal.
+- **`$08F5-$08F7` is NOT loader code** — it is the game's own **permanent joystick-poll instruction**
+  inside the title dispatcher's steady-state loop (`$08F5: LDA $DC01 / AND #$10 / BNE $08B1`),
+  confirmed by live disassembly. Left armed, it logs a false hit on **every ordinary idle loop
+  iteration** (measured: 113 hits from nothing else happening). It was misclassified because of an
+  imprecise reading of `recovery/danish/NOTES.md` prose, not a wrong tool. **The redo must not
+  re-arm the current `recovery/RELEASES.json` verbatim** — the raw data still carries the pre-fix
+  set unless the fix commit's data change is manually reapplied (the fix commit itself, `cfc9d83`,
+  was reverted along with everything else).
+- `saeger`'s wider `$08E0-$0900` `loader_ranges` window **also contains this address range** and was
+  never exercised in the truncated run — verify it the same way (live disassembly of the boundary
+  addresses) before arming saeger's set, not by inheriting danish's fix by analogy.
+- **Every `unused`-range write-watch hit needs attribution before being called a load event, not
+  just a count.** A concrete false positive was found and traced: an `$8E9D-$8FE7` hit traced to
+  ordinary room-drawing code (`STA ($04),Y`/`STA ($08),Y` character-plot loop) — structurally
+  inevitable because the dumps were captured at the **title screen**, so any RAM that only gets
+  written once real gameplay starts reads as "never-populated" in the range manifest and is
+  guaranteed to fire the first time gameplay actually runs. **An unattributed non-zero count is as
+  worthless as an unearned zero** (STATE.md's own words) — the redo's detector must call
+  `vice_backtrace`/`vice_disassemble` at the PC when a watch fires and record what code caused the
+  write, before logging it as evidence either for or against an on-demand load.
+
+**False-negative modes, reasoned from the mechanism's own shape (no additional live testing
+performed this session — these are structural, not measured):**
+- The `$DD00` (CIA2 port A) watch only catches a loader that toggles VIC-bank bits or bit-bangs the
+  serial bus through *that specific register*. A hypothetical in-game loader using a different
+  mechanism entirely would not trip it.
+- Loader re-entry exec checkpoints only cover **address ranges already observed executing during
+  boot**. A distinct in-game loading routine that was never exercised during boot (and therefore
+  never recorded in `NOTES.md`/`loader_ranges`) would not be covered.
+- Unused-range write-watches only catch writes into ranges that were **genuinely unpopulated at the
+  specific dump-point capture**. A load that overwrites a range already touched by some unrelated
+  boot-time initialisation would not be flagged as "unused," producing a silent miss.
+- Bounded (not exhaustive) play coverage means anything outside the states actually reached is
+  simply unknown, not ruled out — this is already handled honestly by D-11's "coverage not reached"
+  requirement and should stay that way.
+
+### Q5 — Absence as evidence: what must be recorded for a null result to be honest
+
+The shape required by success criterion 2 and D-10/D-11/D-12 (armed set, coverage reached with
+per-milestone screenshot proof, coverage not reached) is unchanged and still the right target — see
+the original `01-04-PLAN.md`'s must_haves, which remain valid design even though the plan's *code*
+was reverted. **What Q4's findings add, refreshed:** a "zero found" claim is only honest if the
+armed set itself has been verified correct first. Given the loader-range misclassification found
+live, the redo's evidence trail should explicitly show, for every entry in the armed set: (a) the
+address range, (b) **why** it's believed to be loader/cracktro code (a disassembly excerpt or a
+backtrace, not just an inherited prose claim), and (c) its hit count. This turns "we armed X, Y, Z
+and nothing fired" into a claim that can be checked against the *evidence for X, Y, Z being the
+right things to arm*, not just against the fact that arming happened. Coverage-reached proof
+(screenshot hash / RAM signature / checkpoint hit) is unchanged from the original design: a
+screenshot per milestone, named for what it shows, cross-checked by the same `checkpoint:human-verify`
+gate the original plan already specified (Task 3) — that gate's design was sound; only the tooling
+underneath the play-through needs to change.
+
+### Q6 — Driving the play-through without wall-clock sleeps; recovering a missed input
+
+The established pattern (checkpoint/`run_until` on a known address or frame position,
+`vice_joystick_tap`/`vice_joystick_set`, `vice_ping`-based polling that doesn't pause the machine) is
+unchanged and correctly specified by D-12 and the original research. **Recovering from a missed
+input is genuinely unresolved by this project's evidence** — the reverted run never progressed past
+the title screen, so no real missed-input recovery was ever exercised. `[ASSUMED — LOW confidence,
+no empirical basis in this project]`: the generally sound pattern is to verify the *expected state
+transition* after each scripted input (e.g. re-read PC, or a screenshot/RAM signature specific to
+the expected next state) before advancing to the next input in the sequence, and retry the same
+input a bounded number of times if the expected transition didn't occur, rather than proceeding
+blindly on a fixed input schedule. This is an open question for the planner to make an explicit,
+bounded decision about (e.g. "retry up to N times, then treat as a checkpoint-worthy blocker"),
+not something to leave implicit in the executor's judgement.
+
+### Q7 — Supplementary dumps: reuse `c64-ram-capture`, do not build a second capture path
+
+**Reuse, don't reinvent — `[VERIFIED: code inspection, this session]`.** `.claude/skills/c64-ram-
+capture/scripts/ram-capture.mjs` exports exactly the primitives a supplementary dump needs:
+`capture()` (checkpoint + read + chip-state, releasing held keys at the trigger, per its own SKILL.md),
+`classifyRuns()` (the reproducibility verdict: `ok`/`decayCandidates`/`volatileDiffs`/
+`programMismatches`), and `voidRun()` (rename-and-annotate on a proven-bad run). These are the exact
+same functions 01-01/01-02/01-03 already validated against the primary game-entry dumps; a
+supplementary dump at a load-event milestone is mechanically the same operation at a different
+trigger address, and should call the same `capture()` — not a parallel hand-rolled read loop.
+
+**Composition with the registry, unchanged from the original (reverted) plan's design:** register as
+a `dumps[]` entry with `kind: "supplementary"` and a `load_event_ref` pointing at the hit record —
+`recovery-schema.mjs validate` already understands `dumps[]` as a set (per 01-02), so this needs no
+new schema, only new entries.
+
+**Open question this refresh surfaces and does not resolve — flag for the planner:** does a
+supplementary dump need the same **N≥3, program-image-identity-under-drift** reproducibility bar
+01-01 established for the primary game-entry dumps, or is a single capture sufficient because it is
+evidence "a load happened at this observed moment," not a claim of a reproducible steady state? The
+primary dump's reproducibility bar exists because the *canonical* image must be provably stable;
+a supplementary dump's role (Q13/success-criterion-2 evidence, not a round-trip diff target per se,
+unless D-13 resolves to "absorb") may not need the same bar. This is exactly the kind of decision
+D-13 was deliberately left open for — the planner should decide it explicitly, not let the executor
+infer it.
+
+**Byte-identical-under-drift, if reproducibility is required:** reuse `classifyRuns()` exactly as
+01-01 did — same volatile-range exclusions, same single-bit-decay tolerance, same "a real divergence
+differs in several bits" rule. No new drift classifier logic should be written for this.
+
+### Q8 — What 01-04 must NOT rebuild — file paths
+
+| Machinery | Path | Reuse as |
+|---|---|---|
+| Capture/reproduce/boot/find-entry CLI | `tools/recover.mjs` | The proven capture procedure — if the acquisition-route decision (Q1/Q9) keeps the pool route, call it unchanged; if it moves to the broker route, only its **acquisition call** needs a broker-lease equivalent, not its capture logic |
+| Chip-state sidecar + range manifest | `tools/chip-state.mjs` | `captureChipState`, `buildRangeManifest` — unchanged |
+| Registry read/write | `tools/releases.mjs` | `release()`, `upsertRelease()`, `schemaNotes()` — unchanged |
+| Schema/parameterisation gate | `tools/recovery-schema.mjs` | `validate`, `validate --final`, `check-parameterisation` — unchanged |
+| RAM capture + drift classification | `.claude/skills/c64-ram-capture/scripts/ram-capture.mjs` (+ `ram-compare.mjs`) | `capture`, `attachAndStart`, `findEntry`, `voidRun`, `classifyRuns`, `VOLATILE_RANGES` — unchanged, see Q7 |
+| MCP transport seam (pool route) | `.claude/mcp/vice/vice.mjs` | `call()`, `useInstance()`, `activeInstance()`, `DENY_LIST`, `readEpoch`, `beginSession`, `assertSameMachine`, `MachineRestartedError` — this is the seam a broker-lease helper would still redirect via `useInstance()`, exactly as `vice-proxy.mjs` does |
+| Old fixed-pool client | `.claude/mcp/vice/vice-pool.mjs` | Only if the planner explicitly keeps the pool route (not recommended, see Q1) |
+| Broker protocol primitives | `.claude/mcp/vice/vice-broker-client.mjs` | `newRequestId`, `writeRequest`, `createLease`, `pollGrant`, `touchLease`, `releaseLease`, `startHeartbeat`, `readBrokerLiveness` — the primitives a new broker-lease helper for standalone scripts would compose (see Q9); nothing here is proxy-private |
+| Grant host→container coordinate translation | `.claude/mcp/vice/vice-proxy.mjs`'s `containerizeGrant()` (private, ~line 887) | **Not currently exported/reusable** — a gap; a standalone broker-lease helper needs this logic too and it would need extracting or duplicating (see Q9) |
+| Registry data | `recovery/RELEASES.json` | The release registry — **but its `loader_ranges` for `danish` need the `$08F5-$08F7` fix reapplied before re-arming** (Q4); do not treat current file contents as already-correct |
+| Range manifests (unused-range source) | `recovery/danish/dumps/*.map.json`, `recovery/saeger/dumps/*.map.json` | Already committed by 01-02, unchanged, the source of the `unused`-range watch list |
+
+A plan that reimplements the capture path, the drift classifier, the registry schema, or the deny-list
+enforcement is wrong — none of that broke, and the revert did not touch it.
+
+### Q9 — Rebuilding `tools/watch-loads.mjs`: what to keep, what to change
+
+Read directly (`git show bb0b1f7^:tools/watch-loads.mjs`), `[VERIFIED: this session]`:
+
+**Keep verbatim — this logic was correct and is exactly why it should not be redesigned:**
+- The pure resolution functions: `WATCH_SET(releaseId)` (building the sentinel list from
+  `recovery/RELEASES.json`'s `loader_ranges` and the range manifest's `unused` ranges, never
+  hardcoded), `attributeAddress` (exactly-one-owner-per-address, abutting ranges stay separate),
+  `reportHits` (cycle-then-address deterministic ordering).
+- `disarmAll`'s enumerate-then-delete-individually pattern (`vice_checkpoint_list` +
+  `vice_checkpoint_delete` per id) — there is still no bulk-clear tool.
+- `armWatchSet`'s call-`disarmAll`-on-partial-failure guard (T-01-17) — still correct, still needed.
+- The `checkpoint_num` (not `id`/`number`) field name for `vice_checkpoint_delete` — a real API fact,
+  independent of the revert.
+
+**Must change:**
+1. **The acquisition call.** Line ~343-344 of the reverted file: `const lease = await
+   acquire();` (from `vice-pool.mjs`) `useInstance(lease);`. This is the one line that ties the tool
+   to the infrastructure that hung. Two options, and the planner must pick one explicitly:
+   - **(Recommended) Drive arming/play-through/detection via the live agent's own `mcp__vice__*`
+     tool calls directly, with no standalone `watch-loads.mjs` CLI invocation at all** — this
+     automatically rides the broker (Q1/Q2's automatic epoch-drift wins apply for free) and needs no
+     new plumbing. The pure logic (`WATCH_SET`, `attributeAddress`, `reportHits`) can still live in
+     `tools/watch-loads.mjs` as an importable, emulator-independent module the executor's own
+     reasoning is checked against — it just stops being a thing invoked over Bash as `node
+     tools/watch-loads.mjs arm ...` against a live emulator.
+   - **(Alternative, more plumbing) Give the standalone CLI its own broker-lease acquisition**,
+     mirroring what `vice-proxy.mjs` already does: `newRequestId()` → `writeRequest()` →
+     `createLease()` → `pollGrant()` → containerize the grant's coordinates (duplicating or
+     extracting `containerizeGrant()`, currently private to `vice-proxy.mjs`) → `useInstance()` →
+     ... → `releaseLease()` at the end. This keeps the CLI-tool shape but requires new code that does
+     not exist yet anywhere in the tree.
+2. **The `disarm` verb's target-instance handling.** The reverted version's `disarm` acquired its
+   **own fresh pool lease** rather than tearing down the specific instance `arm` had used, and
+   separately did not honour a `VICE_MCP_URL` override — STATE.md records both as real, found bugs
+   (`174` checkpoints left armed on port 6511 with the override set). Whichever acquisition route is
+   chosen, `arm` and `disarm` must operate against the **same** instance/lease — never re-acquire.
+   Under the live-agent-driven recommendation above this class of bug is structurally avoided (one
+   session, one lease, one instance for the whole procedure); under the standalone-CLI alternative it
+   must be handled explicitly (persist the lease id/instance between `arm` and `disarm` invocations).
+3. **The `loader_ranges` data itself**, per Q4 — reapply the `$08F5-$08F7` exclusion for `danish`
+   before re-arming, and verify `saeger`'s wider range live before trusting it.
+4. **Attribution on every non-loader hit**, per Q4/Q5 — add a `vice_backtrace`/`vice_disassemble`
+   call at the PC when an `unused`-range watch fires, and record the causing code alongside the hit,
+   before it is reported as a load-event candidate.
+5. **Always confirm teardown with an explicit read-only `vice_checkpoint_list` after `disarm`**,
+   rather than trusting the disarm call's own return value — STATE.md's own recommendation, carried
+   forward independent of which acquisition route is chosen.
 
 ## Architecture Patterns
 
@@ -345,6 +727,8 @@ vice_memory_read({address:"$A000", size:8192, bank:"ram", encoding:"hex"})
 | `.d64` directory parsing | Any dependence on `vice_disk_list` | Direct byte parsing of the `.d64` file in Node (35 tracks, BAM at 18/0, dir chain from 18/1) or `vice_disk_read_sector` for the live-drive view | `vice_disk_list` is a known, unconditional hazard — crashes the host MCP server. |
 | SHA-256 hashing for D-09's reproducibility check | A third-party hashing library | Node's built-in `crypto.createHash('sha256')` | Zero-install, standard, sufficient. |
 | Byte-pattern search across a dump | A custom diffing/search library | Node `Buffer.indexOf`, or `vice_memory_search` while still live in the emulator | Both are already available and sufficient for this phase's data volumes (64KB images). |
+| *Refreshed 2026-08-01 — broker-lease acquisition for a standalone script* | A brand-new HTTP client re-implementing request/grant/lease semantics | Compose `.claude/mcp/vice/vice-broker-client.mjs`'s existing primitives (`newRequestId`, `writeRequest`, `createLease`, `pollGrant`, `touchLease`, `releaseLease`) plus `.claude/mcp/vice/vice.mjs`'s `useInstance()`, the exact same seam `vice-proxy.mjs` already uses | The protocol is already implemented and tested (44+ tests across `vice-broker-client.test.mjs`/`vice-broker.test.mjs`); the only genuinely missing piece is `containerizeGrant()`'s host→container coordinate translation, currently private to `vice-proxy.mjs` — extract or duplicate it, do not re-derive the translation logic (see Q9). |
+| *Refreshed 2026-08-01 — mechanical "is the emulator actually advancing" check* | A custom polling/timing harness | `vice_cycles_stopwatch({action: "reset"})` / `{action: "read"}` bracketing each scripted input | Already a real tool in the 64-tool surface, documented for exactly this ("measuring, not gating"); reusing it directly is how the reverted run's own hang was eventually diagnosed — the redo should bracket it proactively, not just reactively. |
 
 **Key insight:** Every capability this phase needs is either (a) already exposed by the live `vice_*` MCP surface, confirmed by direct testing, or (b) trivial in vanilla Node against small (64KB-scale) byte buffers. There is no dependency gap to fill for RECOVER-01 through RECOVER-08.
 
@@ -380,6 +764,20 @@ vice_memory_read({address:"$A000", size:8192, bank:"ram", encoding:"hex"})
 **What goes wrong:** Because D-08's `$01`-write fallback is no longer the primary path, a plan that still writes "set `$01` to bank in RAM, then dump, then restore `$01`" as the main procedure adds unnecessary complexity and an unnecessary invasive step for no benefit.
 **Why it happens:** Written before the `bank: "ram"` parameter was confirmed live.
 **How to avoid:** Default the capture procedure to `bank: "ram"` reads only; keep the `$01`-write approach documented as a named, guarded contingency (per D-08) rather than the everyday path.
+
+### Pitfall 5 (Refreshed 2026-08-01): Assuming Phase 01.2's broker automatically covers the standalone recovery tooling
+
+**What goes wrong:** A plan or task description says "01-04 now runs on the broker route" and treats that as achieved simply because Phase 01.2 shipped, without checking that `tools/recover.mjs`/`tools/chip-state.mjs`/a rebuilt `watch-loads.mjs` still import `acquire` from `vice-pool.mjs` (the old fixed pool), not anything from `vice-broker-client.mjs`.
+**Why it happens:** Phase 01.2's own summaries describe the broker as replacing "the shared-pool infrastructure," which reads as a wholesale replacement, but every one of its five plan summaries explicitly states the standalone `tools/*.mjs` pipeline was left "completely untouched" by design (`tools/README.md`'s documented "two library consumers that are not the proxy" seam).
+**How to avoid:** Treat the acquisition route as an explicit decision the plan must state and implement (see Q1/Q9 above), not an ambient consequence of Phase 01.2 existing. If the redo continues to invoke standalone Node CLI verbs against `vice-pool.mjs`, it is running on the exact infrastructure that hung — verify this is not happening by grepping for `vice-pool.mjs` imports in whatever new/changed code the redo introduces.
+**Warning signs:** A rebuilt `watch-loads.mjs` (or any new tool) imports `acquire` from `.claude/mcp/vice/vice-pool.mjs`; a plan task says "on the broker route" but its `<action>` describes calling `node tools/watch-loads.mjs arm ...` as a Bash command with no mention of how that command reaches a broker-granted instance.
+
+### Pitfall 6 (Refreshed 2026-08-01): Misreading a loader-code range from prose instead of live disassembly
+
+**What goes wrong:** A range gets added to `loader_ranges` (or `unused` ranges get trusted at face value) because a `NOTES.md` description said so, without independently confirming via `vice_disassemble`/`vice_backtrace` at the range's boundary addresses that the code there is genuinely defeated loader/cracktro code and not permanent game logic.
+**Why it happens:** `NOTES.md`'s prose describing the boot/cracktro sequence is necessarily an approximation written once, early; a later precise disassembly can reveal it was imprecise at the boundary. This is exactly what happened with `$08F5-$08F7` in `danish` — the range was accurate in spirit ("this is near the loader") but wrong in exact boundary (it actually landed on a permanent game-code instruction one byte inside a still-legitimate-looking range).
+**How to avoid:** Before arming any loader-reentry checkpoint or unused-range watch, disassemble its boundary addresses live and confirm the classification, rather than trusting the registry's inherited data. Treat any hit (loader-reentry or unused-range) as attribution work, not just a count — see Q4/Q5.
+**Warning signs:** A watch or checkpoint fires far more often than plausible for "loader code that should never execute again" (the `$08F5-$08F7` case logged 113 hits from ordinary idling); a hit's cause, when disassembled, turns out to be ordinary gameplay code rather than loader/cracktro code.
 
 ## Code Examples
 
@@ -433,6 +831,10 @@ const hash = createHash("sha256").update(readFileSync("recovery/danish/dumps/run
 | A2 | `bank: "ram"` behaves identically once a real game is loaded and running (vs. the untested, default pre-boot state this session observed it in) | Complete RAM capture section | If the bank read behaves differently once code has actually banked things in dynamically (e.g. cartridge-adjacent behavior, or a region the game itself remaps), D-08's `$01`-write fallback becomes load-bearing again rather than a rarely-needed contingency — re-verify in 01-02 against the actual running game, not just the idle machine. |
 | A3 | The `saeger.d64` release has a discoverable CSDb (or other scene-record) entry corroborating SSG/XIDEX attribution | Crack-independence section | If no record exists, RECOVER-07's verdict leans more heavily on Tier 1 (binary-only) evidence — still valid per D-15, just carries less external corroboration on one side than the other. |
 | A4 | A single `vice_memory_read` call can handle chunk sizes up to (at least) a few KB without transport-imposed truncation | Code Examples section | If the real per-call limit is smaller than assumed, `dump-capture.mjs`'s chunk size needs tuning down — cheap to discover and fix in 01-02, not a structural risk. |
+| A5 *(2026-08-01)* | A single, freshly-booted, per-session broker instance hangs at a materially lower rate than a long-running shared pool instance did | Q1, "Phase 01-04 Redo" section | If false, the redo simply relocates the hang risk to a single point of failure per session instead of eliminating exposure — no measurement in this project distinguishes "less accumulated state helps" from "the underlying host fault is unrelated to instance age/sharing." The redo should still include a liveness check (Q2) regardless, since this assumption is not load-bearing for correctness, only for expected frequency. |
+| A6 *(2026-08-01)* | All three pool instances hanging simultaneously in the reverted run was a host-level event (resource/scheduling), not three independent per-instance faults | Q1 | If false (three genuinely independent faults), the pool-vs-broker distinction in Q1's table is less protective than stated, since a single broker instance could still be as failure-prone per-hour as any one pool instance was. Either way the recommendation (move off the pool route) is unaffected — only the *size* of the improvement is uncertain. |
+| A7 *(2026-08-01)* | The generally-sound "verify state transition after each input, retry bounded" pattern is an adequate missed-input recovery strategy for this game's play-through | Q6 | Never empirically tested in this project (the reverted run never left the title screen). If the game's actual input timing is more finicky than assumed, a bounded retry could still miss a required transition; this needs the planner to pick concrete retry/timeout parameters rather than leaving it open. |
+| A8 *(2026-08-01)* | A supplementary dump does not need the same N≥3 program-image-identity reproducibility bar as the primary game-entry dumps | Q7 | If the planner (or a later phase) actually needs a supplementary dump to be provably reproducible (e.g. if D-13 resolves to "absorb" and Phase 4's round-trip diff needs it), a single-capture supplementary dump would be insufficient evidence and would need redoing with the full 01-01-style N≥3 procedure. |
 
 ## Open Questions
 
@@ -455,6 +857,11 @@ const hash = createHash("sha256").update(readFileSync("recovery/danish/dumps/run
    - What we know: `danish.d64`'s BASIC stub is `SYS 2073` at t17/s0 (loader/decruncher stub, not the final game address); `saeger.d64`'s is `SYS 2161` at t1/s0.
    - What's unclear: the actual post-decrunch/post-load entry address for the real game code in each case — this is exactly what 01-01/01-02/01-03's stepping-and-backtracing work is for.
    - Recommendation: locate empirically via `vice_execution_step`/`vice_backtrace`/`vice_disassemble`, exactly as D-06 already specifies; no shortcut exists.
+
+5. **(2026-08-01) Which acquisition route does the 01-04 redo actually use — live-agent `mcp__vice__*` calls (broker, automatic) or a standalone-script broker-lease helper (new plumbing)?**
+   - What we know: the pool route (what hung) and the broker route (Phase 01.2) are structurally separate; the broker is wired only into `vice-proxy.mjs`; the standalone `tools/*.mjs` pipeline was explicitly left untouched by Phase 01.2.
+   - What's unclear: whether the planner wants to keep a scriptable `tools/watch-loads.mjs` CLI (requiring new broker-lease plumbing plus extracting/duplicating `containerizeGrant()`) or drive the whole procedure through the live agent's own tool calls (no new plumbing, but less scriptable/re-runnable as a single command).
+   - Recommendation: make this an explicit plan decision (see Q1/Q9 in the "Phase 01-04 Redo" section) rather than leaving it to the executor to infer — the two options have different file lists, different test strategies, and different failure-recovery properties.
 
 ## Environment Availability
 
@@ -487,7 +894,7 @@ const hash = createHash("sha256").update(readFileSync("recovery/danish/dumps/run
 | RECOVER-01 | Both disks boot via a documented MCP-only procedure, never calling `vice_disk_list` | manual (one-time, scripted) | `node tools/hostpath-boot.mjs danish.d64` then check `vice_registers_get` PC moved | ❌ Wave 0 |
 | RECOVER-02 | `danish.d64` dump captured with recorded trigger/`$01`/ranges | scripted capture + SHA-256 | `node tools/dump-capture.mjs danish` | ❌ Wave 0 |
 | RECOVER-03 | `saeger.d64` dump captured under same procedure | scripted capture + SHA-256 | `node tools/dump-capture.mjs saeger` | ❌ Wave 0 |
-| RECOVER-04 | On-demand load detection via watches during bounded play | scripted watch-arm + manual play, log to `LOADING.md` | `node tools/watch-loads.mjs` (arms watches, reports hits) | ❌ Wave 0 |
+| RECOVER-04 | On-demand load detection via watches during bounded play | scripted watch-arm + manual play, log to `LOADING.md` | `node tools/watch-loads.mjs` (arms watches, reports hits) — *Refreshed 2026-08-01: file was reverted, still doesn't exist; command shape depends on the acquisition-route decision in Open Question 5* | ❌ Wave 0 |
 | RECOVER-05 | Both images normalised to common base/state before diff | scripted anchor-search + offset proof | `node tools/diff-images.mjs --anchor-search danish.bin saeger.bin` | ❌ Wave 0 |
 | RECOVER-06 | Every byte range carries a provenance verdict + evidence | scripted coalesced-diff → `PROVENANCE.md` | `node tools/diff-images.mjs --gap-tolerance 16` | ❌ Wave 0 |
 | RECOVER-07 | Crack-independence verdict recorded with evidence/confidence weight | manual (CSDb search + binary inspection), written to `PROVENANCE.md` | n/a — analytical, not automatable | ❌ Wave 0 |
@@ -525,12 +932,29 @@ const hash = createHash("sha256").update(readFileSync("recovery/danish/dumps/run
 ### Tertiary (LOW confidence)
 - General web search for a CSDb entry corresponding to `saeger.d64`/SSG/XIDEX — no result found; flagged as an open item for 01-05, not a negative finding.
 
+### Refresh sources, 2026-08-01 (RECOVER-04 targeted pass)
+
+**Primary (HIGH confidence) — direct code/history inspection, this session:**
+- `git show bb0b1f7` / `git show bb0b1f7^:tools/watch-loads.mjs` — the revert commit's full diff and the deleted file's pre-revert content (acquisition call, pure-logic functions).
+- `git show 28a4db3`, `git show b66b72f`, `git log --oneline` around commits `4192a3e`/`cfc9d83`/`067c0d9`/`7da03fc` — the reverted run's own commit messages, which are the primary source for the hang symptom and the loader-range/attribution defects.
+- `.planning/STATE.md` — the `[HOST INSTABILITY]`, `[PROCESS — CORRECTION]`, and the three `[Phase 1, 2026-07-31]` defect entries (loader-range misclassification, unused-range attribution, `watch-loads.mjs disarm`'s `VICE_MCP_URL` bug).
+- `.claude/mcp/vice/vice.mjs`, `vice-pool.mjs`, `vice-session.mjs`, `vice-broker-client.mjs`, `vice-proxy.mjs`, `resources/vice-broker.sh` — direct read of the acquisition-route split, the epoch-drift mechanism, the lease/heartbeat/TTL constants, and `containerizeGrant()`.
+- `tools/recover.mjs`'s import statements — confirms the pool-route dependency directly (`vice-pool.mjs`'s `acquire`).
+- `.planning/phases/01.2-on-demand-broker-and-per-session-leasing/01.2-{01,02,04,05}-SUMMARY.md` — each independently states the standalone recovery pipeline was left untouched; the lease-lifetime/TTL/heartbeat constants; the D-1.2-C narrowing verdict; the session-scoped-snapshot-naming guidance.
+- `Skill("spike-findings-bruce-lee")` (`shutdown-and-lease-release.md`, `timeout-and-latency-budgets.md`, `large-response-chunking.md`) — the idle-session/heartbeat/tool-call-budget measurements underpinning Q3.
+- `.planning/seeds/ram-capture-as-proxy-tools.md`, `.planning/seeds/vice-pool-contention-and-starvation.md`, `.planning/todos/pending/2026-08-01-absorb-the-ram-capture-and-host-path-skills-into-the-vice-mcp.md` — confirm the "two library consumers, not the proxy" seam is a documented, deliberate decision, and that absorbing the standalone tooling into the MCP surface is a known, not-yet-executed todo.
+
+### Tertiary (LOW confidence), refresh
+- The root cause of all three pool instances hanging simultaneously (Q1's assumption A6) — not measured or explained anywhere in this project; recorded as an open gap, not resolved by this refresh.
+- Missed-input recovery strategy for the play-through (Q6's assumption A7) — no empirical basis; the reverted run never reached a state where this could be tested.
+
 ## Metadata
 
 **Confidence breakdown:**
 - VICE MCP tool surface & bootstrap/capture mechanics: HIGH — directly probed, live, this session, against the actual project endpoint.
 - Crack-independence evidence: MEDIUM — one side externally corroborated (Tier 2), one side an open, bounded, small task for 01-05.
 - Gameplay-dependent findings (on-demand load behavior, actual entry-point addresses, in-game `bank:"ram"` behavior once a game is running): LOW/untested — nothing in this research pass involved actually running the game, since doing so live would have mutated the shared VICE instance's state ahead of the real execution plans. Flagged explicitly wherever this applies (Open Questions 1, 3, 4).
+- **Refreshed 2026-08-01 — Phase 01-04 Redo section:** the acquisition-route split (pool vs. broker) and the specific defects found (loader-range misclassification, unused-range attribution gap, `disarm`'s env-var bug) are HIGH confidence — directly read from git history and current code, not inferred. The hang's root cause (Q1's items (b)/(c)) and the broker's actual effect on hang *frequency* (A5/A6) remain genuinely LOW confidence / unresolved, and are presented as such rather than smoothed into a false "the broker fixes it" conclusion.
 
-**Research date:** 2026-07-30
-**Valid until:** Tool-surface findings (schemas, bank behavior against the idle machine) are stable indefinitely absent a VICE MCP server upgrade — re-check `vice_ping`'s `version` field if research is reused after a long gap. Gameplay-dependent findings should be re-verified the moment 01-01/01-02 actually runs a disk, not assumed to still hold.
+**Research date:** 2026-07-30 (original); **2026-08-01** (targeted RECOVER-04 / Phase 01-04 Redo refresh)
+**Valid until:** Tool-surface findings (schemas, bank behavior against the idle machine) are stable indefinitely absent a VICE MCP server upgrade — re-check `vice_ping`'s `version` field if research is reused after a long gap. Gameplay-dependent findings should be re-verified the moment 01-01/01-02 actually runs a disk, not assumed to still hold. **The 2026-08-01 refresh should be re-checked if Phase 01.2's todos (`absorb the ram-capture and host-path skills into the VICE MCP`, `extract the VICE MCP into its own project`) execute before 01-04's redo does** — either would change the exact file paths cited in Q8/Q9's tables, though not the underlying acquisition-route decision itself.
