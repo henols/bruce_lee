@@ -378,6 +378,36 @@ function brokerCopyWithStubSupervisor() {
   return join(dir, "vice-broker.sh");
 }
 
+/** Copies the WHOLE resources/ directory into a fresh temp dir and REPLACES
+ * vice-supervisor.sh with a stub that traps TERM/INT/HUP and sleeps 300s --
+ * a genuinely LIVE process whose `ps` args name the COPY's own supervisor
+ * path, which is exactly what signal_recorded_pid()'s identity check
+ * requires. Distinct from brokerCopyWithStubSupervisor() above (which exits
+ * immediately -- fine for exercising the LAUNCH path, useless here, since
+ * there would be nothing left alive to signal by the time any test could
+ * observe it). Returns { brokerScript, supervisorScript }: the copy's own
+ * vice-broker.sh path (pass as `script` to runBrokerOnce()) and its own
+ * vice-supervisor.sh stub path (for spawning a live "supervisor" directly,
+ * for tests that need one without a broker's own launch path in the loop at
+ * all). The caller is responsible for `rmSync(dirname(brokerScript), {
+ * recursive: true, force: true })` once done. */
+function brokerCopyWithSleepingSupervisor() {
+  const dir = mkdtempSync(join(tmpdir(), "vice-broker-sleepsuper-"));
+  cpSync(join(HERE, "resources"), dir, { recursive: true });
+  const stub = join(dir, "vice-supervisor.sh");
+  writeFileSync(
+    stub,
+    "#!/usr/bin/env bash\n" +
+      "# test stub: a genuinely live process that traps signals and sleeps,\n" +
+      "# so ps -o args= names THIS copy's own supervisor script path.\n" +
+      "trap 'exit 0' TERM INT HUP\n" +
+      "sleep 300 &\n" +
+      "wait $!\n"
+  );
+  chmodSync(stub, 0o755);
+  return { brokerScript: join(dir, "vice-broker.sh"), supervisorScript: stub };
+}
+
 /** Binds a real TCP listener on 127.0.0.1:<port> so port_in_use()'s
  * /dev/tcp probe genuinely succeeds. Returns a closer. */
 async function occupyPort(port) {
@@ -739,13 +769,236 @@ test("status: prints the broker's own liveness line plus one line per broker-ins
   }
 });
 
-test("stop: with no broker.json present, exits 0 with a plain message that there is nothing to stop", async () => {
+test("stop: with no broker.json present, still terminates a live recorded supervisor and purges protocol state", async () => {
+  const dir = tmpPoolDir();
+  const { brokerScript, supervisorScript } = brokerCopyWithSleepingSupervisor();
+  let stubPid;
+  try {
+    const stub = spawn("bash", [supervisorScript], { stdio: "ignore", detached: true });
+    stubPid = stub.pid;
+    await waitFor(() => {
+      try {
+        process.kill(stubPid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+
+    // A live, genuinely-running "supervisor" recorded in a grant, with NO
+    // broker.json anywhere -- the exact shape of the ghost-grant incident
+    // (a broker restarted, or never started this session, against
+    // bookkeeping from an earlier one). `stop` must still reap this.
+    const grantPath = writeGrantFile(dir, "req-qpq-1-9200-aaaaaaaa", { port: 9200, supervisorPid: stubPid, dryRun: false });
+    assert.equal(existsSync(join(dir, "broker.json")), false, "sanity: no broker.json must exist for this scenario");
+
+    const { stdout } = await execFileP("bash", [brokerScript, "stop"], {
+      env: { ...process.env, VICE_SUPERVISOR_ALLOW_CONTAINER: "1", VICE_POOL_DIR: dir },
+    });
+
+    assert.match(stdout, /reap saw \d+ recorded instance/, "stop must report the reap even with no broker.json present");
+    assert.equal(existsSync(grantPath), false, "the grant must be purged");
+
+    const stubGone = await waitFor(() => {
+      try {
+        process.kill(stubPid, 0);
+        return false;
+      } catch {
+        return true;
+      }
+    });
+    assert.ok(stubGone, "the orphaned supervisor must be terminated even though no broker.json existed");
+  } finally {
+    if (stubPid) {
+      try {
+        process.kill(stubPid, "SIGKILL");
+      } catch {
+        /* already gone */
+      }
+    }
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(dirname(brokerScript), { recursive: true, force: true });
+  }
+});
+
+test("stop: a supervisor pid whose ps identity does not match the supervisor script is refused, not signalled -- the process is still alive afterward and the refusal is logged", async () => {
   const dir = tmpPoolDir();
   try {
+    // process.pid (this very test runner) is a REAL, ALIVE pid whose own
+    // `ps` args do not mention vice-supervisor.sh -- exactly the "possible
+    // pid reuse" shape signal_recorded_pid() must refuse to signal.
+    const grantPath = writeGrantFile(dir, "req-qpq-2-9300-bbbbbbbb", { port: 9300, supervisorPid: process.pid, dryRun: false });
     const { stderr } = await execFileP("bash", [BROKER_SCRIPT, "stop"], {
       env: { ...process.env, VICE_SUPERVISOR_ALLOW_CONTAINER: "1", VICE_POOL_DIR: dir },
     });
-    assert.match(stderr, /nothing to stop/);
+    assert.match(stderr, new RegExp(`refusing to signal pid ${process.pid}`));
+    // This very process must still be alive -- kill(pid, 0) throws if not.
+    process.kill(process.pid, 0);
+    // purge_protocol_state() still removes the whole grants/ directory
+    // unconditionally, in EVERY case (matching cmd_start's broker_shutdown) --
+    // the refusal above is what proves the kill itself was skipped, not
+    // whether the bookkeeping file survives.
+    assert.equal(existsSync(grantPath), false, "protocol state is still purged even when a signal was refused");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("shutdown: a daemon sent SIGTERM terminates the supervisor pid recorded in spares/ and exits with all protocol state gone", async () => {
+  const dir = tmpPoolDir();
+  const { brokerScript, supervisorScript } = brokerCopyWithSleepingSupervisor();
+  let stubPid;
+  let daemon;
+  try {
+    const stub = spawn("bash", [supervisorScript], { stdio: "ignore", detached: true });
+    stubPid = stub.pid;
+    await waitFor(() => {
+      try {
+        process.kill(stubPid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+
+    // state "launching", NOT "ready": drop_dead_instance_records()'s own
+    // additional ready-spare/port_in_use() check (a separate must_have,
+    // covered by its own test below) would otherwise drop this record
+    // before broker_shutdown ever gets a chance to signal it -- this test's
+    // sleeping stub never actually listens on a port, so it would look like
+    // exactly the ghost-grant shape that check exists to catch. "launching"
+    // is subject only to the pid liveness/identity check, which the live
+    // stub genuinely satisfies.
+    writeSpareFile(dir, 9100, { state: "launching", supervisorPid: stubPid, dryRun: false });
+
+    daemon = spawn("bash", [brokerScript, "start"], {
+      env: {
+        ...process.env,
+        VICE_SUPERVISOR_ALLOW_CONTAINER: "1",
+        VICE_POOL_DIR: dir,
+        VICE_BROKER_BASE_PORT: "9100",
+        VICE_BROKER_SPARES: "0",
+        VICE_BROKER_POLL_MS: "100",
+      },
+      stdio: "ignore",
+    });
+
+    const brokerJsonSeen = await waitFor(() => existsSync(join(dir, "broker.json")));
+    assert.ok(brokerJsonSeen, "the daemon must write broker.json before this test proceeds");
+
+    daemon.kill("SIGTERM");
+
+    const daemonExited = await waitFor(() => daemon.exitCode !== null, { timeoutMs: 8000 });
+    assert.ok(daemonExited, "the daemon must exit after SIGTERM");
+
+    const stubGone = await waitFor(() => {
+      try {
+        process.kill(stubPid, 0);
+        return false;
+      } catch {
+        return true;
+      }
+    });
+    assert.ok(stubGone, "the recorded spare's supervisor pid must be terminated");
+
+    for (const sub of ["spares", "grants", "requests", "leases"]) {
+      assert.equal(existsSync(join(dir, sub)), false, `${sub}/ must be removed on shutdown`);
+    }
+    assert.equal(existsSync(join(dir, "broker.json")), false, "broker.json must be removed on shutdown");
+    assert.equal(existsSync(join(dir, "broker-instances.json")), false, "broker-instances.json must be removed on shutdown");
+  } finally {
+    if (daemon && daemon.exitCode === null) {
+      try {
+        daemon.kill("SIGKILL");
+      } catch {
+        /* already gone */
+      }
+    }
+    if (stubPid) {
+      try {
+        process.kill(stubPid, "SIGKILL");
+      } catch {
+        /* already gone */
+      }
+    }
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(dirname(brokerScript), { recursive: true, force: true });
+  }
+});
+
+test("start --once: drops a non-dry-run record whose recorded pid is dead, drops a spare recorded ready whose port has no listener, and leaves a grant whose pid is a live, identity-matching supervisor untouched", async () => {
+  const dir = tmpPoolDir();
+  const { brokerScript, supervisorScript } = brokerCopyWithSleepingSupervisor();
+  let stubPid;
+  try {
+    const stub = spawn("bash", [supervisorScript], { stdio: "ignore", detached: true });
+    stubPid = stub.pid;
+    await waitFor(() => {
+      try {
+        process.kill(stubPid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+
+    // A dead pid -- chosen large and re-checked to be genuinely unused, not
+    // just "probably" free, so this assertion cannot flake onto a real
+    // process this host happens to be running.
+    const deadPid = 999999;
+    let deadPidIsFree = false;
+    try {
+      process.kill(deadPid, 0);
+    } catch {
+      deadPidIsFree = true;
+    }
+    assert.ok(deadPidIsFree, `test precondition failed: pid ${deadPid} is unexpectedly alive on this host`);
+
+    // Case 1: pid is dead outright -- dropped regardless of state.
+    const deadSparePath = writeSpareFile(dir, 9400, { state: "ready", supervisorPid: deadPid, dryRun: false });
+    // Case 2: pid is genuinely alive and identity-matching, but recorded
+    // "ready" while the sleeping stub never actually listens on its port --
+    // exactly the ghost shape from the 2026-08-01 incident (bookkeeping
+    // said ready; nothing answered). Must be dropped too.
+    const ghostReadySparePath = writeSpareFile(dir, 9401, { state: "ready", supervisorPid: stubPid, dryRun: false });
+    // Case 3: pid is genuinely alive and identity-matching, recorded as a
+    // GRANT (leased) rather than a spare -- grants are validated on pid
+    // liveness/identity only, never a port probe, so this must survive.
+    const liveGrantPath = writeGrantFile(dir, "req-qpq-4-9402-dddddddd", { port: 9402, supervisorPid: stubPid, dryRun: false });
+
+    await runBrokerOnce(dir, { basePort: 9403, spares: 0, dryRun: false, script: brokerScript });
+
+    assert.equal(existsSync(deadSparePath), false, "a record whose pid is dead must be dropped at start time");
+    assert.equal(existsSync(ghostReadySparePath), false, "a spare recorded ready whose port has no listener must be dropped, even with a live pid");
+    assert.ok(existsSync(liveGrantPath), "a grant whose pid is a live, identity-matching supervisor must survive");
+  } finally {
+    if (stubPid) {
+      try {
+        process.kill(stubPid, "SIGKILL");
+      } catch {
+        /* already gone */
+      }
+    }
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(dirname(brokerScript), { recursive: true, force: true });
+  }
+});
+
+test("start --once --dry-run: leaves dry-run grant and spare records untouched", async () => {
+  const dir = tmpPoolDir();
+  try {
+    // No supervisor_pid at all is recorded for a dry-run entry in real use
+    // (see launch_instance()'s own dry-run branch), but even a garbage /
+    // clearly-dead pid on a dry_run:true record must be exempt from
+    // drop_dead_instance_records() -- validating it at all would delete
+    // every dry-run fixture this file's own suite depends on.
+    const grantPath = writeGrantFile(dir, "req-qpq-3-9500-cccccccc", { port: 9500, supervisorPid: 999999, dryRun: true });
+    const sparePath = writeSpareFile(dir, 9501, { state: "ready", supervisorPid: 999999, dryRun: true });
+
+    await runBrokerOnce(dir, { basePort: 9500, spares: 0, dryRun: true });
+
+    assert.ok(existsSync(grantPath), "a dry-run grant record must survive start-time validation");
+    assert.ok(existsSync(sparePath), "a dry-run spare record must survive start-time validation");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

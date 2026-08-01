@@ -81,6 +81,26 @@
 # worse than the alternative. See probe_ready()'s and maintain_spares()'s own
 # comments below for the reasoning in full.
 #
+# SHUTDOWN CONTRACT REVERSED 2026-08-01 (quick-260801-qpq): every earlier
+# version of this script left granted/spare instances running when the
+# broker itself stopped -- the reasoning on record was "the broker stopping
+# is not the same event as a session ending". That trade is now reversed:
+# the broker terminates every instance it knows about (signal_recorded_pid(),
+# reap_all_instances(), purge_protocol_state() below) on a trapped signal, on
+# any other exit from the long-lived daemon loop, and on `stop` -- REGARDLESS
+# of whether broker.json exists or names a live pid. Why: on 2026-08-01 the
+# host warmed three x64sc instances simultaneously (see maintain_spares()'s
+# own serialisation comment), all three died in a GPU/audio race, and a
+# `state granted` record for a long-dead pid then survived a broker `stop`, a
+# broker `start`, and a full host restart -- the broker kept reporting
+# success and launching nothing, and recovery took roughly two hours. An
+# orphaned instance outliving the session that wanted it, and then blocking
+# every later launch, costs more than an interrupted session does. Start-time
+# validation (drop_dead_instance_records()) is the backstop for the one exit
+# path no trap can catch: a `kill -9` on the broker itself, or a full host
+# power loss -- both skip every trap below entirely, so a stale record from
+# either has to be caught on the NEXT `start` instead.
+#
 # Run the DEPLOYED copy from the HOST workspace, e.g.:
 #   /home/henrik/dev/henrik/git/bruce_lee/tools/vice-broker.sh start
 # i.e. <host workspace>/tools/vice-broker.sh -- never from inside
@@ -150,18 +170,28 @@ Subcommands:
                 pending requests, tear down released/stale grants), and
                 sleeping VICE_BROKER_POLL_MS -- with the same
                 consecutive-failure backoff shape vice-supervisor.sh's own
-                respawn loop already uses. A signal trap (SIGINT/SIGTERM)
-                removes broker.json and exits 0 cleanly, leaving any granted
-                instances running untouched -- the broker stopping is not
-                the same event as a session ending. [N] is an optional
+                respawn loop already uses. A trap on EXIT/HUP/INT/TERM
+                terminates every instance this broker knows about (grants/
+                and spares/ alike) and removes its own protocol state
+                (spares/, grants/, requests/, leases/, broker.json,
+                broker-instances.json) before exiting 0 -- reversed
+                2026-08-01: an orphaned instance outliving the broker that
+                started it costs more than an interrupted session does (see
+                the header comment's shutdown-contract note). This trap is
+                NOT installed on the --once path -- --once is a single pass
+                of a broker that is not ending. [N] is an optional
                 spares-target positional, validated as an integer 1..16
                 exactly like vice-pool.sh's own start [N]; it is not yet
                 consumed by any spares logic in this version (no warm spares
                 exist yet).
   stop          Best-effort stop of the long-lived broker process recorded
                 in broker.json, if one exists and its pid's identity checks
-                out via ps. Exits 0 with a plain message if there is nothing
-                to stop.
+                out via ps -- then, in EVERY case (a live broker stopped just
+                now, a dead or unidentifiable pid, no pid recorded, or no
+                broker.json at all), terminates every instance this broker
+                knows about and purges its own protocol state, exactly like
+                the shutdown trap above. There is no case in which `stop`
+                reports success while leaving an orphaned instance running.
   status        Prints the broker's own liveness line (pid, heartbeat age)
                 followed by one line per broker-instances.json entry naming
                 its port, state and lease id.
@@ -214,6 +244,12 @@ Configuration (all environment-overridable):
                             times the 60s heartbeat interval, D-1.2-G; a
                             reasoned default, not a measured constant -- see
                             the reversibility note in 01.2-02-PLAN.md).
+  VICE_BROKER_KILL_WAIT_S  Seconds a signalled instance (or, for `stop`, the
+                            broker process itself) is given to exit after
+                            SIGTERM before SIGKILL escalates (default: 5).
+                            Polled every 200ms; never a `wait`, since these
+                            supervisors are nohup'd/disown'ed and are not a
+                            waitable child of a later invocation.
   VICE_BROKER_BASE_PORT    First candidate port a granted instance is
                             allocated at (default: 6510); the next free port
                             at or above this value is chosen per request.
@@ -396,6 +432,7 @@ if [ -n "$N_ARG" ]; then
 fi
 VICE_BROKER_MAX="${VICE_BROKER_MAX:-16}"
 VICE_BROKER_TTL_S="${VICE_BROKER_TTL_S:-180}"
+VICE_BROKER_KILL_WAIT_S="${VICE_BROKER_KILL_WAIT_S:-5}"
 VICE_BROKER_BASE_PORT="${VICE_BROKER_BASE_PORT:-6510}"
 VICE_BROKER_MCP_HOST="${VICE_BROKER_MCP_HOST:-0.0.0.0}"
 VICE_BROKER_POLL_MS="${VICE_BROKER_POLL_MS:-500}"
@@ -1215,6 +1252,154 @@ teardown() {
   echo "vice-broker: $id -- $reason"
 }
 
+# Signals a recorded pid ONLY after verifying its identity via `ps -o args=`
+# against $SUPERVISOR_SCRIPT -- the SAME check teardown() above already
+# performs (T-qpq-01), reused as its own helper here rather than re-derived,
+# so every caller below gets the identical guarantee: a mismatched pid is
+# logged and left alone, never signalled. $1 = pid, $2 = label (log lines
+# only). Returns non-zero WITHOUT signalling when the pid is empty, the
+# string "null", already dead (kill -0 fails -- nothing to do, not a
+# failure), or fails the identity check (logged as a refusal, "possible pid
+# reuse", exactly like teardown()'s own wording). Only on a genuine match
+# does it proceed: SIGTERM, then POLL `kill -0` every 200ms up to
+# VICE_BROKER_KILL_WAIT_S (default 5s) -- never `wait`, since a supervisor
+# launched by launch_instance() was nohup'd and disown'ed, so it is never a
+# waitable child of a LATER invocation such as a fresh `stop` or a signal
+# handler running in a different process than the one that spawned it --
+# escalating to SIGKILL for a survivor. The SIGKILL escalation is reachable
+# ONLY after a match; there is no path here that skips straight to it.
+signal_recorded_pid() {
+  local pid="$1" label="$2"
+  [ -n "$pid" ] && [ "$pid" != "null" ] || return 1
+  kill -0 "$pid" 2>/dev/null || return 1
+
+  local args
+  args="$(ps -o args= -p "$pid" 2>/dev/null || true)"
+  case "$args" in
+    *"$SUPERVISOR_SCRIPT"*)
+      ;;
+    *)
+      echo "vice-broker: refusing to signal pid $pid for $label -- ps reports \"$args\", which does not match $SUPERVISOR_SCRIPT (possible pid reuse)" >&2
+      return 1
+      ;;
+  esac
+
+  kill -TERM "$pid" 2>/dev/null || true
+  local waited_ms=0 limit_ms=$((VICE_BROKER_KILL_WAIT_S * 1000))
+  while kill -0 "$pid" 2>/dev/null; do
+    if [ "$waited_ms" -ge "$limit_ms" ]; then
+      echo "vice-broker: pid $pid ($label) did not exit within ${VICE_BROKER_KILL_WAIT_S}s of SIGTERM -- sending SIGKILL" >&2
+      kill -KILL "$pid" 2>/dev/null || true
+      break
+    fi
+    sleep 0.2
+    waited_ms=$((waited_ms + 200))
+  done
+  return 0
+}
+
+# Walks EVERY grants/*.json and spares/*.json record, reading each one's
+# supervisor_pid and handing it to signal_recorded_pid() above -- this is
+# what makes shutdown and `stop` terminate BOTH leased and warm-spare
+# instances, not just one or the other. A missing directory is normal (a
+# broker that never ran a pass has neither), not an error. Safe to call
+# twice: a second call finds nothing left to signal and reports 0/0. Echoes
+# ONE summary line naming how many records it saw and how many processes it
+# actually terminated, so an operator watching a shutdown or `stop` can tell
+# "reaped everything" from "found nothing to reap" at a glance.
+reap_all_instances() {
+  local d f pid seen=0 signalled=0
+  for d in "$GRANTS_DIR" "$SPARES_DIR"; do
+    [ -d "$d" ] || continue
+    for f in "$d"/*.json; do
+      [ -e "$f" ] || continue
+      seen=$((seen + 1))
+      pid="$(grep -o '"supervisor_pid": *\(null\|[0-9]\+\)' "$f" 2>/dev/null | sed 's/.*: *//' || true)"
+      if signal_recorded_pid "$pid" "$(basename "$f")"; then
+        signalled=$((signalled + 1))
+      fi
+    done
+  done
+  echo "vice-broker: reap saw $seen recorded instance(s), terminated $signalled"
+}
+
+# Removes every protocol-state directory/file this script owns: $SPARES_DIR,
+# $GRANTS_DIR, $REQUESTS_DIR, $LEASES_DIR (recursively) and $INSTANCES_JSON,
+# $BROKER_JSON (by name) -- ALWAYS via these already-resolved variables,
+# NEVER a path built by string concatenation at the call site (T-qpq-02).
+# Refuses loudly (logs, returns 1, deletes nothing) when VICE_POOL_DIR is
+# somehow empty -- an empty base for a recursive removal is exactly the
+# failure mode this guard exists to prevent. $DENIALS_DIR is DELIBERATELY
+# NOT included: a denial is a message already addressed to a container that
+# has not read it yet, not live state a shutdown should discard out from
+# under it. Safe to call when everything is already gone (`rm -rf`/`rm -f`
+# on an absent path is a no-op, not an error).
+purge_protocol_state() {
+  if [ -z "$VICE_POOL_DIR" ]; then
+    echo "vice-broker: refusing to purge protocol state -- VICE_POOL_DIR is empty" >&2
+    return 1
+  fi
+  rm -rf "$SPARES_DIR" "$GRANTS_DIR" "$REQUESTS_DIR" "$LEASES_DIR"
+  rm -f "$INSTANCES_JSON" "$BROKER_JSON"
+  echo "vice-broker: purged protocol state under $VICE_POOL_DIR"
+}
+
+# Start-time validation -- the ONLY backstop that survives an exit path no
+# trap can catch: a `kill -9` on the broker itself, or a full host power
+# loss, both of which skip broker_shutdown() below entirely. Called ONCE
+# from cmd_start, before the first pass, on both the --once and daemon
+# paths. For each grants/*.json and spares/*.json record NOT marked
+# dry_run:true (a dry-run record never had a real process, so there is
+# nothing to validate, and validating it would delete every fixture this
+# file's own test corpus depends on -- see the header comment's own note on
+# this), drops the record when: supervisor_pid is absent or null; OR
+# `kill -0` fails on it; OR `ps -o args=` does not name $SUPERVISOR_SCRIPT.
+# Additionally drops a SPARE recorded "ready" whose port has no listener per
+# port_in_use() -- a record saying ready with nothing answering its port is
+# the exact ghost-grant shape that survived a broker stop, a broker start,
+# and a full host restart on 2026-08-01. Logs one line per drop naming the
+# port, the pid, and which reason fired.
+drop_dead_instance_records() {
+  local d f port pid dry_run state args reason
+  for d in "$GRANTS_DIR" "$SPARES_DIR"; do
+    [ -d "$d" ] || continue
+    for f in "$d"/*.json; do
+      [ -e "$f" ] || continue
+
+      dry_run="$(grep -o '"dry_run": *\(true\|false\)' "$f" 2>/dev/null | sed 's/.*: *//' || true)"
+      [ "$dry_run" = "true" ] && continue
+
+      port="$(grep -o '"port": *[0-9]\+' "$f" 2>/dev/null | head -1 | grep -o '[0-9]\+$' || true)"
+      pid="$(grep -o '"supervisor_pid": *\(null\|[0-9]\+\)' "$f" 2>/dev/null | sed 's/.*: *//' || true)"
+      reason=""
+
+      if [ -z "$pid" ] || [ "$pid" = "null" ]; then
+        reason="no supervisor_pid recorded"
+      elif ! kill -0 "$pid" 2>/dev/null; then
+        reason="pid $pid is not running"
+      else
+        args="$(ps -o args= -p "$pid" 2>/dev/null || true)"
+        case "$args" in
+          *"$SUPERVISOR_SCRIPT"*) : ;;
+          *) reason="pid $pid does not match $SUPERVISOR_SCRIPT (possible pid reuse)" ;;
+        esac
+      fi
+
+      if [ -z "$reason" ] && [ "$d" = "$SPARES_DIR" ]; then
+        state="$(read_spare_field "$f" state)"
+        if [ "$state" = "ready" ] && [ -n "$port" ] && ! port_in_use "$port"; then
+          reason="recorded ready but port $port has no listener"
+        fi
+      fi
+
+      if [ -n "$reason" ]; then
+        echo "vice-broker: dropping dead record (port ${port:-?}, pid ${pid:-?}) -- $reason" >&2
+        rm -f "$f"
+      fi
+    done
+  done
+}
+
 # One pass over every live grant: lease absent -> tear down as "released";
 # lease present but past VICE_BROKER_TTL_S -> the lease itself is removed
 # FIRST (converting stale-but-present into missing), THEN the exact same
@@ -1266,26 +1451,45 @@ broker_once() {
 # respawn loop already uses, so a transient filesystem error slows the loop
 # rather than killing it. --once short-circuits to exactly one pass (the
 # seam every test in this file's own *.test.mjs drives).
+# The signal/EXIT handler for the long-lived daemon (`start`, without
+# --once) -- registered as `trap broker_shutdown EXIT HUP INT TERM`
+# immediately before the `while true` loop in cmd_start below, and ONLY
+# there (see that trap's own comment for why --once is excluded). Disarms
+# itself FIRST (`trap - EXIT HUP INT TERM`) so its own `exit` cannot
+# re-enter it, then reaps every instance this broker knows about and purges
+# its own protocol state, then exits 0. See the header comment's
+# "SHUTDOWN CONTRACT REVERSED 2026-08-01" note for why this now terminates
+# instances instead of leaving them running.
+broker_shutdown() {
+  trap - EXIT HUP INT TERM
+  echo "vice-broker: shutting down -- reaping instances and purging protocol state" >&2
+  reap_all_instances
+  purge_protocol_state
+  exit 0
+}
+
 cmd_start() {
   local started_at
   started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
-  # Removes broker.json and exits 0, leaving any granted instances running
-  # UNTOUCHED: the broker stopping is a DIFFERENT event from a session
-  # ending, and killing live sessions' emulators on an operator's Ctrl-C
-  # would be a surprise no one asked for.
-  cleanup() {
-    rm -f "$BROKER_JSON"
-    echo "vice-broker: caught signal, removed $BROKER_JSON (granted instances left running)" >&2
-    exit 0
-  }
-  trap cleanup INT TERM
+  # Start-time validation: the only backstop that survives an exit path no
+  # trap below can catch (a `kill -9` on THIS process, or a full host power
+  # loss). Runs once, before the first pass, on BOTH the --once and daemon
+  # paths -- see drop_dead_instance_records()'s own header comment.
+  drop_dead_instance_records
 
   if [ "$ONCE" -eq 1 ]; then
     write_broker_json "$started_at"
     broker_once
     return 0
   fi
+
+  # broker_shutdown() (defined above, beside reap_all_instances() and
+  # purge_protocol_state()) is registered ONLY on this long-lived daemon
+  # path -- deliberately NOT on --once above, which is a single pass of a
+  # broker that is not ending; purging protocol state there would destroy
+  # the seam every test in this file's own *.test.mjs suite drives.
+  trap broker_shutdown EXIT HUP INT TERM
 
   local consecutive_failures=0 backoff=1
   while true; do
@@ -1316,31 +1520,52 @@ sleep_ms() {
 }
 
 cmd_stop() {
-  if [ ! -f "$BROKER_JSON" ]; then
-    echo "vice-broker: no $BROKER_JSON -- nothing to stop" >&2
-    exit 0
+  # Best-effort stop of the long-lived broker PROCESS first, so it cannot
+  # warm a fresh spare while the reap below is running -- but every branch
+  # below, live broker or not, falls through to the SAME
+  # reap_all_instances/purge_protocol_state pair cmd_start's broker_shutdown
+  # uses. There is no early exit here: a broker.json naming a dead pid, a
+  # missing broker.json, or a pid whose identity does not match are all
+  # still full reap-and-purge passes, never a report of success that leaves
+  # an orphaned instance running (the exact defect this reversed 2026-08-01;
+  # see the header comment's own note).
+  if [ -f "$BROKER_JSON" ]; then
+    local pid args
+    pid="$(grep -o '"pid": *[0-9]\+' "$BROKER_JSON" 2>/dev/null | head -1 | grep -o '[0-9]\+$' || true)"
+    if [ -n "$pid" ]; then
+      args="$(ps -o args= -p "$pid" 2>/dev/null || true)"
+      case "$args" in
+        *"vice-broker.sh"*)
+          echo "vice-broker: stopping broker pid $pid"
+          kill -TERM "$pid" 2>/dev/null || true
+          local waited_ms=0 limit_ms=$((VICE_BROKER_KILL_WAIT_S * 1000))
+          while kill -0 "$pid" 2>/dev/null; do
+            if [ "$waited_ms" -ge "$limit_ms" ]; then
+              echo "vice-broker: broker pid $pid did not exit within ${VICE_BROKER_KILL_WAIT_S}s of SIGTERM -- sending SIGKILL" >&2
+              kill -KILL "$pid" 2>/dev/null || true
+              break
+            fi
+            sleep 0.2
+            waited_ms=$((waited_ms + 200))
+          done
+          ;;
+        *)
+          if [ -n "$args" ]; then
+            echo "vice-broker: refusing to signal broker pid $pid -- ps reports \"$args\", which does not match vice-broker.sh (possible pid reuse)" >&2
+          else
+            echo "vice-broker: broker pid $pid from $BROKER_JSON is not running" >&2
+          fi
+          ;;
+      esac
+    else
+      echo "vice-broker: $BROKER_JSON has no pid recorded" >&2
+    fi
+  else
+    echo "vice-broker: no $BROKER_JSON present -- reaping and purging any protocol state left behind anyway" >&2
   fi
-  local pid args
-  pid="$(grep -o '"pid": *[0-9]\+' "$BROKER_JSON" 2>/dev/null | head -1 | grep -o '[0-9]\+$' || true)"
-  if [ -z "$pid" ]; then
-    echo "vice-broker: $BROKER_JSON has no pid recorded -- nothing to stop" >&2
-    exit 0
-  fi
-  args="$(ps -o args= -p "$pid" 2>/dev/null || true)"
-  case "$args" in
-    *"vice-broker.sh"*)
-      echo "vice-broker: stopping broker pid $pid"
-      kill -TERM "$pid" 2>/dev/null || true
-      ;;
-    *)
-      if [ -n "$args" ]; then
-        echo "vice-broker: refusing to signal pid $pid -- ps reports \"$args\", which does not match vice-broker.sh (possible pid reuse)" >&2
-      else
-        echo "vice-broker: pid $pid from $BROKER_JSON is not running -- nothing to stop (removing the stale broker.json)" >&2
-        rm -f "$BROKER_JSON"
-      fi
-      ;;
-  esac
+
+  reap_all_instances
+  purge_protocol_state
 }
 
 cmd_status() {
