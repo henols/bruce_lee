@@ -4,17 +4,40 @@
 **Domain:** Live-memory recovery of a cracked 1984 C64 game via VICE-over-MCP, plus two-image provenance diffing
 **Confidence:** HIGH for the VICE MCP tool surface (directly probed, live, this session) and ACME/CLAUDE.md-adjacent facts; MEDIUM for crack-independence evidence (one release externally corroborated, one not yet found); MEDIUM-LOW for anything requiring actual gameplay (untested — no play-through has happened yet)
 
-> **Refreshed 2026-08-01 (targeted, RECOVER-04 / plan 01-04 only).** Plans 01-01/01-02/01-03 executed
-> successfully and their research below is unchanged and still authoritative. Plan 01-04 executed,
-> found real defects, then was **reverted** (`bb0b1f7`) because its capture/detection tooling ran
-> against the pre-01.2 shared VICE **pool** (`vice-pool.mjs`), which hung host-side mid-run — not
-> because of the broker. Phase 01.2 (on-demand broker, per-session boot-fresh leasing) shipped in the
-> interim and is a **structurally separate code path** from the pool the reverted run used; it does
-> **not** automatically apply to the standalone `tools/*.mjs` CLI pipeline 01-01–01-03 built. See the
-> new **`## Phase 01-04 Redo — Broker-Route Findings (Refreshed 2026-08-01)`** section, inserted after
-> "Non-VICE toolchain confirmation" below, for the full analysis. Do not re-derive any of the
-> pre-01.2 findings above without reading that section first — several of them (the acquisition route
-> in particular) are exactly what changed.
+> **Refreshed 2026-08-01, 12:46 (targeted, RECOVER-04 / plan 01-04 only) — NOW ITSELF SUPERSEDED, see
+> below.** Plans 01-01/01-02/01-03 executed successfully and the research from the original
+> 2026-07-30 pass is unchanged and still authoritative (VICE MCP tool surface, bank-scoped RAM
+> capture, the `$08B1` trigger, the snapshot-export limitation, the drift/Hamming-1 discriminator,
+> the pause-on-state-read finding, Pitfalls 1–4 and 6). The 12:46 refresh analysed plan 01-04's
+> revert (`bb0b1f7`) as a **pool-vs-broker acquisition-route** question — whether standalone
+> `tools/*.mjs` CLI verbs should reach the emulator via the pre-01.2 fixed pool or via Phase 01.2's
+> on-demand broker — and recommended building a new `tools/lib/vice-acquire.mjs` seam module for the
+> standalone CLI to adopt a broker-granted instance. **That entire premise is now dead.**
+>
+> **Refreshed again 2026-08-01, after 14:57 (this refresh, current).** A hard rule landed the same
+> day at 14:57 (commits `db9eed3`, `4f9e397`), now in `.claude/CLAUDE.md` § "Emulator Access": **the
+> `mcp__vice__*` tools are the only permitted route to the emulator, full stop — no script, module,
+> test or driver may open its own connection to host VICE, read broker state to find a port, or
+> import a transport module as a library, and reimplementing that route cleanly counts as the same
+> violation as importing it.** This does not merely re-open the pool-vs-broker question the 12:46
+> refresh answered — it makes the question moot, because *neither* route is a standalone script's
+> to take any more. Concretely, in the same window `tools/recover.mjs`, `tools/chip-state.mjs`,
+> `tools/recover.test.mjs` and `tools/README.md` were **deleted, not migrated** (`d963c5b`,
+> `096ac26`), and the `vice-mcp-selector` and `spike-findings-bruce-lee` skills were deleted;
+> `c64-ram-capture` was reduced to a single `SKILL.md` with its scripts removed. `tools/` now holds
+> only `releases.mjs`, `d64-parse.mjs` (+test) and `recovery-schema.mjs` — zero files that import a
+> transport, by construction.
+>
+> The **`## Phase 01-04 Redo — Broker-Route Findings (Refreshed 2026-08-01)`** section below (Q1
+> through Q9), inserted after "Non-VICE toolchain confirmation", is now marked **SUPERSEDED** at its
+> own banner and left in place rather than deleted, because its diagnostic content (the six
+> unexplained host-VICE-hang outages, the corrected loader-range and unused-range attribution
+> defects, the two-liveness-signal distinction, the missed-input-recovery gap) is still real and
+> still needed — only its acquisition-route framing (Q1, Q3, Q7, Q8, Q9, and the "Recommended tooling
+> layout" and Node-orchestration code example that followed it) is dead. A new section, **`## Phase
+> 01-04 Redo — MCP-Only-Rule Findings (Refreshed 2026-08-01, post-14:57)`**, inserted immediately
+> after the superseded one, gives the current, plan-ready answers. Read the new section first; it
+> tells you which parts of the old one to still rely on.
 
 <user_constraints>
 ## User Constraints (from CONTEXT.md)
@@ -95,6 +118,16 @@ Third, I found external, Tier-2 corroborating evidence for one side of the crack
 | Byte diffing / provenance ledger generation | Node tooling (container) | — | Pure data-processing over two already-captured `.bin` files; no emulator involvement once both dumps exist. |
 | Dump-trigger discovery (finding the "loader is done" address) | VICE (host emulator, via MCP), driven interactively | — | Requires live single-stepping/backtracing; nothing static can locate this for a crunched, custom-loaded target. |
 | Crack-independence evidence gathering | External research (CSDb, web) | Binary inspection (VICE-read strings/loader bytes) | Tier 1 (binary itself) and Tier 2 (scene records) per D-15; both are non-emulator-execution activities. |
+
+> **Refreshed 2026-08-01, post-14:57 — read "VICE (host emulator, via MCP)" literally as "the
+> executing agent's own direct `mcp__vice__*` tool calls" in every row above, never as a Node script
+> speaking to the emulator on the agent's behalf.** The "Node tooling (container)" secondary tier in
+> the RAM/chip-state-capture row is correspondingly narrower than it reads: it is pure post-processing
+> over data the agent already fetched and handed in (assembling a buffer from hex chunks, hashing it,
+> writing sidecars) — it holds no MCP call of its own, not even one wrapped behind an injected
+> function parameter. This map's tier assignments are otherwise unaffected by the 14:57 rule; only
+> the *mechanism* by which the primary tier is reached changed (agent tool calls, not a transport
+> module), which is exactly why this map's rows didn't need to move.
 
 ## Package Legitimacy Audit
 
@@ -281,13 +314,45 @@ No emulator tool is needed for this step — it is pure Node-side data processin
 - `node --version` → `v24.18.1` [VERIFIED, in-container] — this is what all Phase 1 tooling runs on.
 - No `wine`/`unp64`/`exomizer`/`c1541`/`petcat` install attempted or needed — Phase 1's scope (per REQUIREMENTS.md's Out-of-Scope table and D-18) is live-memory recovery only; the optional "five-minute Wine/unp64 experiment" ARCHITECTURE.md/STACK.md mention as cheap insurance is explicitly *not* required for this phase's success criteria and can be skipped without any gap in coverage.
 
-## Phase 01-04 Redo — Broker-Route Findings (Refreshed 2026-08-01)
+## Phase 01-04 Redo — Broker-Route Findings (Refreshed 2026-08-01, 12:46) — SUPERSEDED 2026-08-01, post-14:57
 
-> This whole section is new. It targets the RECOVER-04 refresh only; nothing above this point (or
-> in the "Normalisation and diffing" / "Crack-independence evidence" subsections, which belong to
-> 01-05/01-06) was rewritten.
+> **SUPERSEDED.** This whole section reasons about which acquisition route (`vice-pool.mjs`
+> vs. Phase 01.2's broker) a standalone `tools/*.mjs` CLI should use to reach the emulator. The
+> 14:57 hard rule (`.claude/CLAUDE.md` § "Emulator Access") makes both routes equally prohibited —
+> no standalone script may reach the emulator at all, by either route, and reimplementing the route
+> cleanly (which is exactly what Q1/Q9's recommended `tools/lib/vice-acquire.mjs` seam would have
+> done) is explicitly named as the same violation as importing the transport directly. **Do not build
+> anything this section recommends building.** See the new `## Phase 01-04 Redo — MCP-Only-Rule
+> Findings` section immediately below for what replaces it.
+>
+> Kept for the facts that remain true and useful regardless of acquisition route, each re-flagged
+> inline where it appears: the six-outage host-VICE-hang diagnosis and its cycles-flat/`vice_ping`
+> "running" signature (Q1's diagnostic content, not its acquisition recommendation); the two
+> independent liveness signals and why neither subsumes the other (Q2); the corrected `loader_ranges`
+> data and the requirement that every hit be attributed before it is called anything (Q4); the
+> absence-as-evidence shape a null result must take (Q5); the open, unmeasured missed-input-recovery
+> question (Q6). Q1's acquisition-route table, Q3's lease-lifetime analysis, Q7's "reuse
+> `ram-capture.mjs`'s `capture()`" recommendation, Q8's do-not-rebuild file table and Q9's
+> `watch-loads.mjs` keep/change list are **all dead** — every one of them assumes a standalone script
+> can hold or adopt a transport, which is now false by construction (`tools/` holds three files,
+> none of which import a transport, and `c64-ram-capture`'s scripts — including `ram-capture.mjs`
+> itself — no longer exist).
+>
+> This section targeted the RECOVER-04 refresh only; nothing above this point (or in the
+> "Normalisation and diffing" / "Crack-independence evidence" subsections, which belong to
+> 01-05/01-06) was rewritten by either refresh.
 
 ### Q1 — The hang, diagnosed: pause-without-resume vs. genuine host hang vs. pool contamination
+
+> **SUPERSEDED — the diagnosis below (items (a)/(b)/(c) and the six-outage history) is still true
+> and still relevant background; the "does the broker fix this" framing and the closing
+> pool-vs-broker property table are moot.** Under the 14:57 rule there is no standalone script
+> acquiring anything — the agent's own tool calls always go through `vice-proxy.mjs`, which has
+> always spoken the broker protocol since Phase 01.2 shipped. There is no second route to compare it
+> against any more. What survives: the host VICE hang is real, unexplained, and predates and
+> postdates this entire acquisition question — treat it as an operational risk the redo must detect
+> (Q2's cycle bracket) and recover from (checkpoint/snapshot resumability), not as something the
+> acquisition choice fixes.
 
 **[VERIFIED: git history + STATE.md, this session]** The reverted run's own final commit message
 (`7da03fc`, before revert) states the exact symptom: *"after the F7 probe, all three VICE pool
@@ -429,6 +494,17 @@ constraint must be respected by whatever runs it, independent of anything VICE-s
 
 ### Q3 — Lease lifetime vs. play-through duration
 
+> **SUPERSEDED.** This entire analysis is about a standalone script acquiring and holding its own
+> broker lease across a long play-through — not applicable when the agent's own tool calls are the
+> only thing ever touching the emulator. The agent's session *is* the lease; `vice-proxy.mjs` manages
+> its heartbeat and touch-on-every-call refresh automatically, with zero code for anyone to write.
+> The one number worth carrying forward as background confidence: a full bounded play-through
+> (title → chamber transition → both opponents → death → game over → restart) is comfortably short
+> relative to the measured idle-session and per-call time budgets this section found, so nothing
+> about session/lease lifetime is expected to constrain the agent-driven redo. The milestone-snapshot
+> recommendation (save state at each play-through milestone, name it session-scoped, record the name
+> plus progress in a file) is still good practice and is carried into the new section below.
+
 **A full bounded play-through (title → chamber transition → both opponents → death → game over →
 restart) comfortably fits inside a single broker lease, with wide margin, `[VERIFIED: spike-findings
 + 01.2 code, this session]`:**
@@ -545,6 +621,17 @@ not something to leave implicit in the executor's judgement.
 
 ### Q7 — Supplementary dumps: reuse `c64-ram-capture`, do not build a second capture path
 
+> **SUPERSEDED — the recommended reuse target no longer exists.** `.claude/skills/c64-ram-
+> capture/scripts/ram-capture.mjs` and every function this subsection names (`capture()`,
+> `classifyRuns()`, `voidRun()`) were **deleted** on 2026-08-01 along with the rest of the skill's
+> scripts (`db9eed3`) — `[VERIFIED: this session, ls .claude/skills/c64-ram-capture/ shows only
+> SKILL.md]`. The skill was not removed, only its code: `SKILL.md` now documents the identical
+> procedure — boot, capture-at-a-trigger, find-entry, prove-no-identity-change, void-a-run,
+> compare-two-captures, establish-a-drift-floor — as a sequence of direct `mcp__vice__*` tool calls
+> for the **agent** to perform, not a function to import. "Reuse, don't reinvent" still applies, but
+> what is reused is the *procedure* (read `SKILL.md`, follow its steps live) rather than a Node
+> function. See the new section below for the concrete shape.
+
 **Reuse, don't reinvent — `[VERIFIED: code inspection, this session]`.** `.claude/skills/c64-ram-
 capture/scripts/ram-capture.mjs` exports exactly the primitives a supplementary dump needs:
 `capture()` (checkpoint + read + chip-state, releasing held keys at the trigger, per its own SKILL.md),
@@ -575,6 +662,17 @@ differs in several bits" rule. No new drift classifier logic should be written f
 
 ### Q8 — What 01-04 must NOT rebuild — file paths
 
+> **SUPERSEDED — most of this table names files that have since been deleted, and its remaining
+> living entries (`releases.mjs`, `recovery-schema.mjs`, `RELEASES.json`, the two `.map.json`
+> manifests) are trivially still correct and did not need this table to establish. Do not use this
+> table to decide what to import** — `tools/recover.mjs`, `tools/chip-state.mjs`,
+> `.claude/skills/c64-ram-capture/scripts/ram-capture.mjs`, `.claude/mcp/vice/vice.mjs`,
+> `vice-pool.mjs` and `vice-broker-client.mjs` are all either deleted or off-limits to `tools/`
+> under the 14:57 rule regardless of whether anything "broke." The one still-relevant instruction
+> this table encoded — do not reimplement the capture path, the drift classifier, the registry
+> schema or the deny-list enforcement — is restated in the new section below without reference to
+> any deleted file.
+
 | Machinery | Path | Reuse as |
 |---|---|---|
 | Capture/reproduce/boot/find-entry CLI | `tools/recover.mjs` | The proven capture procedure — if the acquisition-route decision (Q1/Q9) keeps the pool route, call it unchanged; if it moves to the broker route, only its **acquisition call** needs a broker-lease equivalent, not its capture logic |
@@ -593,6 +691,19 @@ A plan that reimplements the capture path, the drift classifier, the registry sc
 enforcement is wrong — none of that broke, and the revert did not touch it.
 
 ### Q9 — Rebuilding `tools/watch-loads.mjs`: what to keep, what to change
+
+> **SUPERSEDED — "Must change" item 1 (the acquisition call) is now answered differently: there is
+> no acquisition call, in either recommended or alternative form.** Both options this subsection
+> offered (`adopt-seam`'s new broker-lease helper, or `keep-pool`) required a standalone script to
+> hold a transport; the hard rule forecloses both, leaving only what this subsection already called
+> the "more plumbing-averse, less scriptable" third path — driving everything through the agent's own
+> tool calls — as the *only* legal option, not one of three. Items 2–5 below (the `disarm`
+> target-instance bug class, the `loader_ranges` data fix, per-hit attribution, and enumeration-
+> proven teardown) are still exactly right and are restated, adapted to the agent-driven shape, in
+> the new section below. The "keep verbatim" pure-logic functions (`attributeAddress`, `reportHits`)
+> remain a sound design for a pure, emulator-free module — what changes is that such a module can
+> never itself arm, disarm, or otherwise call the transport, not even behind an injected function
+> parameter that nothing in `tools/` is permitted to fill with a real implementation.
 
 Read directly (`git show bb0b1f7^:tools/watch-loads.mjs`), `[VERIFIED: this session]`:
 
@@ -641,9 +752,300 @@ Read directly (`git show bb0b1f7^:tools/watch-loads.mjs`), `[VERIFIED: this sess
    rather than trusting the disarm call's own return value — STATE.md's own recommendation, carried
    forward independent of which acquisition route is chosen.
 
+## Phase 01-04 Redo — MCP-Only-Rule Findings (Refreshed 2026-08-01, post-14:57)
+
+> **This is the current, authoritative analysis for replanning 01-04/01-05/01-06.** It supersedes
+> the section above in every place they disagree. Everything below was reasoned about statically —
+> by reading committed code, git history and this project's own `CLAUDE.md`/`STATE.md` — not
+> verified by making any `mcp__vice__*` call, because this research pass has no such tools. Every
+> claim about "what the agent should do live" is written as an instruction for the executing plan to
+> follow and empirically confirm, not as a finding already proven this session. Confidence levels are
+> stated per claim.
+
+### 1. What shape does emulator-driving work take now?
+
+**All emulator contact is a direct `mcp__vice__*` tool call made by the plan's own executing agent,
+in its own turn — never a `node tools/whatever.mjs` invocation, and never a call routed through a
+new helper module that itself imports a transport, however thin.** `[VERIFIED: code inspection —
+tools/ contains exactly releases.mjs, d64-parse.mjs(+test), recovery-schema.mjs; none imports a
+transport, confirmed by grep]`. `tools/watch-loads.mjs` is rebuilt as a **pure logic module**: it
+takes already-fetched data as its only input (a hit-log JSON the agent produces as it works) and
+never arms, disarms, reads, or in any way calls `vice_*` itself, not even behind an injectable
+transport parameter — the whole point of the rule is that no file under `tools/` may be capable of
+reaching the emulator, and an injectable-but-real transport is exactly the shape Pitfall 7 above
+warns against.
+
+**The concrete seam, stated as a data contract rather than a code seam:**
+
+1. **Sentinel data lives in `recovery/RELEASES.json`**, exactly as the (superseded) `WATCH_SET`
+   design intended — `loader_ranges[]` and a derived `unused`-range list from each release's
+   `.map.json` — but this data is now *earned by the agent performing live disassembly directly*
+   (`mcp__vice__vice_disassemble` at each candidate range's boundary addresses, per Q4/Pitfall 6
+   above, which are unaffected by this rule change) and written into the registry by the agent (via
+   `Write`/`Edit`, not by a script that also armed the checkpoint).
+2. **Arming is a sequence of direct tool calls the agent performs and narrates as it goes**:
+   `mcp__vice__vice_checkpoint_add` per `stopping`-tier sentinel, and (per the still-open probe in
+   the superseded Task 3 Step 2 above, unaffected by this rule change) either
+   `mcp__vice__vice_checkpoint_add` with stopping disabled or `mcp__vice__vice_watch_add` per
+   `counting`-tier sentinel — whichever the probe proves actually accumulates a count without
+   stopping the machine. The agent records each returned `checkpoint_num` as it arms.
+3. **The idle-calibration window, the play-through, and hit attribution are all agent-performed
+   live**, exactly as the superseded Task 3/Task 4 actions already described in terms of
+   `mcp__vice__*` tool calls (those actions were already written this way — they were never Node
+   script instructions; only Task 2's acquisition-seam module was) — resume once, poll with
+   `vice_ping`, read the checkpoint list, disassemble/backtrace at the PC when a counting-tier
+   sentinel's count exceeds its idle floor, and so on.
+4. **The agent writes the observations it collects into a committed hit-log JSON** as it works — one
+   record per hit (`sentinel`, `address`, `cycle`, `checkpoint_num`, and, for attribution, the
+   disassembly/backtrace text it read live at that PC) — via the `Write` tool, not via a script that
+   also performed the read. This file (e.g. `recovery/<release>/dumps/<release>-loading-hits.json`)
+   is the boundary artifact: everything upstream of it is live agent-tool-call work; everything
+   downstream of it is pure logic.
+5. **`tools/watch-loads.mjs`'s pure functions consume that hit-log file** — `attributeAddress` (one
+   owner per address, abutting ranges separate, overlap throws), `reportHits` (total order: cycle,
+   then address, then sentinel name), a hit-log reader/validator, and a `recovery/LOADING.md`
+   renderer — and are fully unit-testable offline with `node --test`, exactly as the superseded
+   Task 2's acceptance criteria already specified for these specific functions (only `WATCH_SET`,
+   `armWatchSet` and `disarmAll`'s *live-calling* behavior is gone; their *data-shape* and *ordering*
+   contracts survive as pure functions operating over the registry and the hit log).
+
+**How a plan expresses "the agent does X live" as a checkable task, when the proof is a committed
+artifact rather than an exit code:** this project already has the pattern for this — the superseded
+Task 3/Task 4 actions above are already written this way (they instruct the agent to call specific
+`mcp__vice__*` tools and record specific results), and their acceptance criteria already check the
+*committed record* (a non-empty `evidence` field, an `idle_hits` value of exactly `0`, a screenshot
+file that exists on disk, a `checkpoint:human-verify` task that opens each screenshot and confirms it
+shows the claimed state) rather than an automated exit code proving the live work happened correctly.
+**What genuinely changes is only Task 1 and Task 2** of the superseded plan: Task 1's
+`checkpoint:decision` about *which acquisition route* is no longer a decision with options — there
+is exactly one legal shape, so a plan should state this as a fact needing no checkpoint, and Task 2's
+`tools/lib/vice-acquire.mjs` module (and its repointing of `tools/recover.mjs`/`tools/chip-state.mjs`,
+both now deleted) is deleted from the plan entirely, not rewritten. `[ASSUMED — ordinary engineering
+judgement, ex-post about a plan I cannot execute]`: an acceptance criterion like "`node
+tools/watch-loads.mjs report --release danish --json` exits zero and is byte-identical across two
+runs" remains exactly as checkable as it was before, because it operates over the *committed hit-log
+file*, not over a live emulator — this is unaffected by the rule change and should be kept verbatim.
+
+### 2. How is a procedure made repeatable without a runnable command?
+
+**Recommendation: accept that the mechanism changes from "a command reproduces the dump" to "a
+documented tool-call procedure, precise enough for a different agent session to replay by issuing
+the same `mcp__vice__*` calls in the same order, reproduces the dump" — and record this explicitly
+rather than let success criterion 1 quietly go unmet.** Three observations support this as the right
+call rather than a concession:
+
+- **For RECOVER-01/02/03, the criterion is already satisfied *as executed*, and that evidence is
+  permanent.** `[VERIFIED: 01-01-SUMMARY.md, committed artifacts]` `node tools/recover.mjs reproduce
+  danish --runs 3` was run three times and produced the N≥3 program-image-identity proof this
+  criterion demands, and the three SHA-256 digests plus the comparison result are committed in
+  `recovery/danish/NOTES.md` and `recovery/RELEASES.json`. Deleting the script that produced that
+  evidence does not un-produce the evidence — the fact "this procedure is reproducible" was proven
+  once, by a mechanism indistinguishable in principle from an agent issuing the same calls by hand
+  (the script's inner loop *was* a sequence of `vice_*` tool calls; only its packaging as an
+  unattended Node loop is now prohibited). What is lost is **convenience** — the ability to re-invoke
+  that proof with one shell command in the future — not the evidentiary weight of the proof already
+  on record.
+- **`recovery/<release>/NOTES.md` is already written at the precision a replaying agent needs.**
+  `[VERIFIED: recovery/danish/NOTES.md, recovery/saeger/NOTES.md, read this session]` The `trigger.
+  how_located` narratives already read as literal tool-call transcripts — exact addresses, exact
+  `vice_disassemble` output quoted, exact gate key and hold duration, exact port value at dump time —
+  which is precisely the "written tool-call procedure ... precise enough for another agent to
+  replay" option named in this research's brief. This was true before the hard rule existed; the
+  rule just removes the *alternative* (a runnable command) that made this property easy to overlook.
+- **A pure-logic verifier checks a *result*, and that is a genuinely different, weaker claim that
+  must not be blurred with reproducibility.** `tools/recovery-schema.mjs validate` (unaffected by
+  this rule, still callable, still pure Node) confirms a committed dump's artifact set is complete
+  and internally consistent — right length, hash matches the file, sidecars present — but it cannot
+  confirm that *re-running the procedure* would produce the same bytes, because it never re-runs
+  anything. Recording "the schema validates" as if it were "reproducibility is proven" would be
+  exactly the kind of laundered confidence this project's own architecture explicitly forbids
+  (ARCHITECTURE.md Anti-Pattern 5's spirit, applied to a claim rather than a byte range).
+
+**Recommendation for the planner, stated as an explicit choice rather than left implicit:** record in
+the phase's plan/summary that RECOVER-01/02/03's success-criterion-1 reproducibility was
+**demonstrated once, by a now-deleted script whose evidence is permanently committed**, and that any
+*future* re-verification (if ever needed — e.g., after a VICE version upgrade, per this research's
+own "Valid until" note) must be performed by an agent replaying `NOTES.md`'s documented tool-call
+sequence directly, not by re-running a command. This is a real, honest downgrade in convenience that
+should be named rather than smoothed over — do not write a plan task implying a command still exists
+to re-check this. For 01-04 itself, this was always going to be true regardless of the hard rule:
+D-12 already required recording the play-through's input sequence as plain notes, explicitly not a
+`verify/scripts/` artifact, so 01-04's own reproducibility posture was never going to rest on a
+runnable replay command in the first place.
+
+### 3. What do the dangling downstream dependencies get instead?
+
+**D-11 → plan 02-02 ("a command to re-arm the watch set"):** replace "a command" with **a data
+contract plus a documented procedure** — `recovery/RELEASES.json`'s `loader_ranges[]` and resolved
+`watch_set[]` (the earned sentinel list, with each entry's address range, tier, type and arming
+reason) is the re-armable *specification*, and plan 02-02's own executing agent re-arms it live by
+issuing the same `mcp__vice__vice_checkpoint_add`/`vice_watch_add` calls this phase's NOTES.md/
+`RELEASES.json` describe, using `tools/watch-loads.mjs`'s pure `attributeAddress`/`reportHits`
+functions to interpret whatever it observes. "Re-arming the watch set" becomes "the agent, reading
+the registry's `watch_set` entries, arms each one live and records the result" — a hand-off of
+**data and procedure**, not of an executable. `[ASSUMED — reasonable given the rule, not yet acted
+on by any plan]`: this means plan 02-02's own plan text must itself describe this as agent-performed
+work with the same "committed record, not exit code" acceptance-criteria shape as 01-04 — it should
+not assume a command exists to shell out to, and the 01-04 replan should say so explicitly so 02-02's
+own future planning isn't surprised by it.
+
+**VERIFY-01 → Phase 3 ("a deterministic input script format and a replay driver over the `vice_*`
+MCP tools"):** this is the more load-bearing casualty, and it belongs to Phase 3's own
+discuss/research/plan cycle to resolve fully — flagging it here only to the depth this replan needs.
+The literal requirement text ("a replay driver over the `vice_*` MCP tools") describes exactly the
+prohibited shape: a piece of software that autonomously drives the emulator. **What it likely becomes
+instead:** a deterministic input **script** as a *data format* (e.g., an ordered JSON list of
+`{trigger: {checkpoint|frame}, action: {joystick_tap|joystick_set|...}}` steps) that is *replayed* by
+an agent (or, in principle, any human or future MCP client) issuing the corresponding `mcp__vice__*`
+tool calls one step at a time — the determinism guarantee comes from the script's own precision
+(checkpoint-gated, frame-gated, no wall-clock) and from the agent executing it faithfully, not from
+an unattended program executing it. D-12's "input sequence recorded as plain notes, not a
+`verify/scripts/` artifact" already points in exactly this direction; VERIFY-01 was always going to
+need to formalise that shape into a real, reusable data format, and the hard rule simply forecloses
+the one framing (an autonomous replay driver) that the requirement's literal wording still allowed.
+**This is not resolved here** — it needs Phase 3's own discuss-phase to confirm the developer accepts
+"script-as-data plus agent-as-interpreter" as VERIFY-01's shape, since it changes what "passing
+verification" can mean (a human/agent must be present to run a replay, rather than a CI job invoking
+a binary unattended). Recorded as an open item for Phase 3's own research, not decided by this
+phase's replan.
+
+### 4. What happens to SKELETON.md?
+
+**Recommendation: retire the "Emulator control transport" row explicitly, with a dated superseding
+note, rather than leaving it to silently describe a decision that is now impossible.** This research
+does not edit `SKELETON.md` itself (out of this document's scope), but the planner (or a `/gsd-quick`
+task run alongside the 01-04 replan) should replace that row's "Choice" column — currently "A single
+Node module, `tools/vice.mjs`, speaking MCP JSON-RPC ... with a documented fallback of shelling out to
+`curl`" — with something to the effect of:
+
+> **SUPERSEDED 2026-08-01.** `mcp__vice__*` tool calls made directly by the executing agent are the
+> only permitted route; no Node module of any kind may speak MCP JSON-RPC to the emulator, and the
+> `curl` fallback this row named is equally prohibited. `tools/` holds pure logic only. The
+> "Rationale" column's premise — that success criterion 1 and Phase 3's VERIFY-01 both require a
+> runnable command — no longer holds; see `01-RESEARCH.md` § "Phase 01-04 Redo — MCP-Only-Rule
+> Findings", items 2 and 3, for what replaces each.
+
+The row's original rationale ("D-09 requires a *scripted* `machine_reset`", "VERIFY-01 independently
+requires a replay driver") should not be deleted either — it is useful history explaining why the
+original architectural decision was made in good faith, and both of the claims it rested on are
+addressed by items 2 and 3 above. **This retirement should happen before or alongside the 01-04
+replan**, not after, because SKELETON.md is listed as a canonical reference the planner and any future
+executor reads, and an unretired row stating an impossible architectural decision as current fact is
+exactly the kind of stale ground-truth this project's own provenance discipline exists to prevent.
+
+### 5. Do 01-05 and 01-06 actually survive?
+
+**Confirmed: yes, unchanged, by direct reading of both plan files this session.**
+`[VERIFIED: grep -rn "vice-pool|vice-broker|vice-acquire|containerizeGrant|watch-loads"
+01-05-PLAN.md 01-06-PLAN.md` returns zero matches; every `read_first`, `<action>` and
+`<acceptance_criteria>` in both plans operates exclusively over already-committed files
+(`recovery/{danish,saeger}/dumps/*.bin`, `*.map.json`, `recovery/RELEASES.json`, `recovery/
+PROVENANCE.md`) and the `tools/diff-images.mjs`/`tools/recovery-schema.mjs` pair, both pure Node with
+zero emulator contact]`. Neither plan makes an `mcp__vice__*` call, imports a transport, or
+references any of the files deleted on 2026-08-01 (`tools/recover.mjs`, `tools/chip-state.mjs`,
+`tools/README.md`, any `.claude/mcp/vice/*` module, any `c64-ram-capture` script). Both plans were
+already correctly scoped as "this step is pure Node-side diffing/registry work, no emulator tool is
+involved" back in the original 2026-07-30 research (see "Normalisation and diffing" and
+"Crack-independence evidence" sections above), and neither the 12:46 nor this refresh needed to
+change that scoping.
+
+**What precisely still needs the planner's attention, not because 01-05/01-06 changed but because
+their *inputs* come from a plan that is being rewritten:**
+
+- **The `loader_ranges` data contract.** 01-05 Task 2's action seeds the `loader` manifest bucket
+  "from the loader code ranges already recorded in each `NOTES.md`" and its own `read_first` names
+  `recovery/danish/NOTES.md`/`recovery/saeger/NOTES.md` as the source. This presumes the redone 01-04
+  still produces a `loader_ranges`-shaped list of address ranges with disassembly evidence, recorded
+  in the registry and/or `NOTES.md`, regardless of the mechanism that earned it. It does, under item
+  1's agent-driven redesign above — the *data shape* 01-04 must produce is unchanged; only *how it is
+  earned* changed. No edit to 01-05 is needed, but the 01-04 replan must not drop this output
+  contract while changing the acquisition mechanism.
+- **`validate --final`'s existing behaviour.** 01-05 Task 2's acceptance criteria assert `node
+  tools/recovery-schema.mjs validate --final` "now exits zero, having failed at plan 01-02" — this
+  depends only on `tools/recovery-schema.mjs`, which is untouched by the 14:57 rule (confirmed
+  present, confirmed zero emulator contact). No change needed.
+- **Nothing in 01-05/01-06 references `recovery/LOADING.md`'s specific content**, so a changed
+  `LOADING.md` shape (different field names for the acquisition route, since there is no longer an
+  "acquisition route" to name) does not ripple into either plan — 01-05's only cross-reference to
+  `LOADING.md` is a prose pointer in Task 3's ledger ("the coverage cross-reference ... because a
+  ledger over an image with an unnoticed on-demand-loaded region is a ledger over the wrong image"),
+  which holds regardless of how `LOADING.md` was produced.
+
+**Conclusion: 01-05 and 01-06 need zero edits for the MCP-only rule.** They may still need ordinary
+re-review once 01-04's actual redo output lands (e.g., if the redone 01-04 changes a field name in
+`RELEASES.json` that 01-05 reads), but that is normal cross-plan-dependency hygiene, not a
+consequence of this rule change.
+
+### 6. Two live bugs the redo must not reinherit
+
+**Correction to the premise, verified this session: neither defect is currently live in the committed
+`recovery/RELEASES.json` — both were introduced and then fully reverted in the same commit range.**
+`[VERIFIED: git log — 4192a3e (introduced loader_ranges, including the bad $08F5-$08F7 entry),
+cfc9d83 (partial fix), 067c0d9, 7da03fc were all reverted by bb0b1f7; git merge-base --is-ancestor
+4192a3e HEAD confirms 4192a3e is an ancestor of HEAD, and node -e reading the live
+recovery/RELEASES.json this session confirms no releases[].loader_ranges field exists at all —
+neither the bug nor its fix is present]`. STATE.md's blocker entry describes these as defects "found
+live" during the reverted run, which is accurate as a historical statement about what that run
+discovered — but the phrasing "is live in `recovery/RELEASES.json` as of commit `4192a3e`" refers to
+a specific historical commit, not current `HEAD`. **Do not read STATE.md's phrasing as describing the
+current file.**
+
+**What genuinely is still live, and is the reason this matters despite the data being gone:**
+
+- **The imprecise prose that caused the `$08F5-$08F7` misclassification is still live, unchanged, in
+  `recovery/danish/NOTES.md`.** `[VERIFIED: recovery/danish/NOTES.md line 62, read this session]`:
+  *"The cracktro then self-runs through animation phases at `$08F5/$08F7`, `$0D64–$0D82` and
+  `$0340–$035E`..."* — grouping `$08F5/$08F7` with "animation phases" — while the very next line (63)
+  states *"Execution settles into a stable two-cluster steady state across `$08B1–$08F8` and
+  `$139E–$142B`"* — a range that numerically **contains** `$08F5-$08F7`. The same document contains
+  both the framing that caused the original misreading (line 62: "this is loader/cracktro-adjacent")
+  and the framing that actually disambiguates it (line 63: "this address range is the post-loader
+  steady state, i.e. real game code") — and nothing forces a reader (or a redo) to notice the
+  contradiction and resolve it in favor of line 63 rather than line 62. **This means the redo is at
+  real, live risk of reproducing the identical defect if it infers `loader_ranges` from this prose
+  instead of doing fresh, independent live disassembly at each candidate's boundary addresses** —
+  exactly the mechanical gate the superseded Task 3 (idle-calibration: every `loader_ranges` entry
+  must show zero hits during a no-input window) already specified, and exactly Pitfall 6 above already
+  names. This gate is unaffected by the MCP-only rule and remains the correct mitigation; the finding
+  here is that the hazard is not hypothetical residue from a stale prose paragraph — it is present,
+  word for word, in the currently committed file the redo will read.
+- **The structural cause of the unused-range false-positive is unchanged and will recur if
+  unaddressed, regardless of what data currently exists.** Both `danish` and `saeger`'s range
+  manifests are `classification_state: "ranges-only"` with 171 (danish) `unused` ranges apiece
+  `[VERIFIED: node -e read of recovery/danish/dumps/danish-gameentry-run1.map.json this session:
+  classification_state "ranges-only", 345 ranges, {unclassified: 173, unused: 171, io: 1}]`, all
+  derived from a dump captured **at the title screen** — so any range that only becomes populated
+  once real gameplay runs is structurally guaranteed to register as "never-populated" in the manifest
+  and therefore to fire the first time a chamber-drawing/animation/sprite routine executes, regardless
+  of whether an on-demand load ever happens. This is a property of *when the dumps were taken*, not
+  of any specific committed defect, so there is nothing to "fix" in the data — the fix is procedural,
+  exactly as the superseded Q4/Q5 material and this project's own STATE.md already prescribe:
+  **every non-zero counting-tier hit must be attributed (disassembly + backtrace at the causing PC,
+  performed live by the agent) before it is classified `gameplay-write` or `load-candidate`, and an
+  unattributed non-zero count carries no evidentiary weight in either direction.** This requirement is
+  unaffected by the MCP-only rule and should be carried into the redo exactly as already specified.
+
+**Recommendation for the planner:** since there is nothing to inherit or repair in `RELEASES.json`
+(both `loader_ranges` and `watch_set` must be earned fresh, from a clean slate, exactly as the
+superseded Task 3's own framing already assumed — "there is nothing to inherit and nothing to
+repair"), the redo's plan text should say this explicitly rather than imply a partial fix is being
+reapplied. The one thing that *is* still live and actionable today, independent of any plan, is that
+`recovery/danish/NOTES.md`'s line 62 should be corrected or annotated to remove the "animation
+phases" framing around `$08F5/$08F7` before it misleads a future reader again — this is a small,
+optional, non-blocking documentation fix the planner may fold into 01-04's own tasks (e.g., as part
+of Task 3's "append the derivation ... to each release's NOTES.md" step) rather than a separate todo.
+
 ## Architecture Patterns
 
 ### System Architecture Diagram — this phase's data flow
+
+> **Refreshed 2026-08-01, post-14:57.** Every `vice_*` call in the diagram below was always meant to
+> be a tool call rather than a description of a specific script, so the diagram's shape does not
+> change under the 14:57 rule — but read every arrow into a `vice_*` line as **the executing agent's
+> own direct tool call**, never as a `node tools/whatever.mjs` invocation on the agent's behalf. The
+> two boxes that *did* imply a standalone script (`tools/diff-images.mjs`, further down) remain
+> correct exactly because they involve zero emulator contact — pure Node over already-committed
+> `.bin`/`.map.json` files, which is precisely the boundary the hard rule draws.
 
 ```
 ┌─────────────────────────────┐     ┌─────────────────────────────┐
@@ -689,17 +1091,20 @@ Read directly (`git show bb0b1f7^:tools/watch-loads.mjs`), `[VERIFIED: this sess
    recovery/clean/README.md (the reason, as a number)
 ```
 
-### Recommended tooling layout for this phase
+### Recommended tooling layout for this phase — SUPERSEDED 2026-08-01, post-14:57
 
-```
-tools/
-├── hostpath-boot.mjs      # wraps devcontainer-host-path + disk_attach/autostart calls
-├── dump-capture.mjs       # calls memory_read(bank:"ram") across ranges, assembles .bin
-├── chip-state.mjs         # calls vicii/sid/cia_get_state + sprite_get×8, writes -state.json
-├── diff-images.mjs        # D-17 anchor search + D-14 coalesced-range diff → PROVENANCE.md draft
-└── d64-parse.mjs          # direct .d64 byte parsing (BAM @ 18/0, dir chain @ 18/1) — never vice_disk_list
-```
-This matches ARCHITECTURE.md's `tools/` component list and D-18's "Node, zero install" decision; nothing here needs a package.json dependency.
+> **SUPERSEDED.** `hostpath-boot.mjs`, `dump-capture.mjs` and `chip-state.mjs` as named here are
+> exactly the shape the hard rule forecloses: each would wrap a live emulator call
+> (`disk_attach`/`autostart`, `memory_read`, `vicii/sid/cia_get_state`) behind a Node CLI, which is a
+> transport by another name. `tools/chip-state.mjs` was in fact built this way in plan 01-02 and has
+> since been **deleted** along with `tools/recover.mjs`. The corrected layout is in the new section
+> below; the short version is that `tools/` now holds only files with **zero** emulator contact —
+> `d64-parse.mjs` and `recovery-schema.mjs` (both already committed, both untouched by this rule
+> change since neither ever called `vice_*`) and, once 01-05 lands, `diff-images.mjs` — plus
+> `releases.mjs` for registry read/write. Anything that needs to *read* the emulator (a RAM capture,
+> a chip-state snapshot, a checkpoint arm) is performed by the agent directly, and its result is
+> handed to a pure function (if one is warranted) as already-fetched data, never fetched by the
+> function itself.
 
 ### Pattern: Bank-scoped memory read as the primary RAM-under-ROM/IO technique
 
@@ -765,7 +1170,13 @@ vice_memory_read({address:"$A000", size:8192, bank:"ram", encoding:"hex"})
 **Why it happens:** Written before the `bank: "ram"` parameter was confirmed live.
 **How to avoid:** Default the capture procedure to `bank: "ram"` reads only; keep the `$01`-write approach documented as a named, guarded contingency (per D-08) rather than the everyday path.
 
-### Pitfall 5 (Refreshed 2026-08-01): Assuming Phase 01.2's broker automatically covers the standalone recovery tooling
+### Pitfall 5 (Refreshed 2026-08-01, 12:46) — SUPERSEDED 2026-08-01, post-14:57: Assuming Phase 01.2's broker automatically covers the standalone recovery tooling
+
+> **SUPERSEDED.** The standalone recovery tooling this pitfall warns about no longer exists at all —
+> `tools/recover.mjs` and `tools/chip-state.mjs` were deleted, and nothing may replace them with
+> another script that imports a transport. The pitfall this project must now guard against is a
+> different, opposite-shaped one: see **Pitfall 7** below, "Building a new standalone script to
+> reach the emulator because a broker-lease helper looks like clean code."
 
 **What goes wrong:** A plan or task description says "01-04 now runs on the broker route" and treats that as achieved simply because Phase 01.2 shipped, without checking that `tools/recover.mjs`/`tools/chip-state.mjs`/a rebuilt `watch-loads.mjs` still import `acquire` from `vice-pool.mjs` (the old fixed pool), not anything from `vice-broker-client.mjs`.
 **Why it happens:** Phase 01.2's own summaries describe the broker as replacing "the shared-pool infrastructure," which reads as a wholesale replacement, but every one of its five plan summaries explicitly states the standalone `tools/*.mjs` pipeline was left "completely untouched" by design (`tools/README.md`'s documented "two library consumers that are not the proxy" seam).
@@ -779,28 +1190,55 @@ vice_memory_read({address:"$A000", size:8192, bank:"ram", encoding:"hex"})
 **How to avoid:** Before arming any loader-reentry checkpoint or unused-range watch, disassemble its boundary addresses live and confirm the classification, rather than trusting the registry's inherited data. Treat any hit (loader-reentry or unused-range) as attribution work, not just a count — see Q4/Q5.
 **Warning signs:** A watch or checkpoint fires far more often than plausible for "loader code that should never execute again" (the `$08F5-$08F7` case logged 113 hits from ordinary idling); a hit's cause, when disassembled, turns out to be ordinary gameplay code rather than loader/cracktro code.
 
+### Pitfall 7 (New 2026-08-01, post-14:57): Building a new standalone script to reach the emulator because a broker-lease helper "isn't the same thing as importing the transport"
+
+**What goes wrong:** A plan or an executor concludes that composing the broker client's own exported primitives (`newRequestId`, `createLease`, `pollGrant`, `containerizeGrant`-equivalent translation) into a *new* module counts as something other than "importing a transport module as a library," because the new module is original code rather than a copy-paste of an existing one. It is not — this is precisely the failure the hard rule's text was written to name.
+
+**Why it happens:** The distinction feels meaningful from the inside of an engineering task — writing your own client against a documented protocol looks like good practice, not a violation, especially when the alternative (driving everything through the live agent's own tool calls) is less scriptable and harder to re-run as a single command. The 12:46 refresh's own recommended `adopt-seam` option (`tools/lib/vice-acquire.mjs`) is a real, in-this-project instance of exactly this reasoning, written in good faith before the rule existed to rule it out.
+
+**How to avoid:** Read the rule as a positive statement — *"the only route to the emulator is `mcp__vice__*` tool calls made by the agent"* — rather than as a list of prohibited imports. Under that framing there is no clever composition of broker primitives that qualifies, because the primitives themselves are off-limits to `tools/`, full stop, regardless of what is built from them. If a task's design requires a Node process to reach VICE at all — even one that "only adopts an existing lease" rather than creating one — the design is dead; say so and replan around the agent performing the work directly.
+
+**Warning signs:** A new file under `tools/` (or anywhere outside `.claude/mcp/vice/`) imports anything from `.claude/mcp/vice/vice-broker-client.mjs`, `vice.mjs`, `vice-pool.mjs`, or reads `.vice-supervisor/`/broker grant-directory state directly; a plan task's `<action>` describes a CLI verb ("`node tools/whatever.mjs arm`") as the mechanism for a live emulator operation, rather than describing the agent's own tool calls. **This is exactly what happened once already** — after the `bb0b1f7` revert, an executor was told to "build a clean transport that does not import the blocked tree" and responded by writing a fresh `fetch()` bypass straight to the host MCP endpoint plus broker-grant discovery, which was discarded unmerged (STATE.md, 2026-08-01). The instruction that produced it was phrased as a negative ("don't import X"); phrasing it positively ("the only route is `mcp__vice__*`") is what this project has since adopted specifically to prevent a repeat.
+
 ## Code Examples
 
-### Reading a full 65536-byte RAM image via bank-scoped reads (conceptual, Node-side orchestration)
+### Reading a full 65536-byte RAM image via bank-scoped reads — SUPERSEDED 2026-08-01, post-14:57
+
+> **SUPERSEDED.** The loop below was written as "conceptual Node-side orchestration" — a `for`
+> loop issuing repeated `vice_memory_read` calls from inside a script. That is precisely a transport
+> by another name and is exactly what the hard rule forecloses, regardless of whether the script is
+> new or reused. This is also how 01-01/01-02/01-03 were *actually* built and executed (via
+> `tools/recover.mjs`'s own loop, now deleted) — so this is not a hypothetical correction, it is a
+> description of code that existed, worked, and was subsequently deleted for exactly this reason.
+> **The equivalent live procedure now is:** the agent itself issues the same sequence of
+> `mcp__vice__vice_memory_read` calls, one per chunk, directly as tool calls — not from inside a
+> `for` loop in a file, but as repeated tool invocations in its own execution turn — and either (a)
+> accumulates the returned `data_hex` strings itself and writes the assembled 65536-byte buffer via
+> the `Write`/`Bash` tool, or (b) writes each chunk's hex to a small JSON/text sidecar as it goes and
+> hands that off to a genuinely pure assembler function that only concatenates and hashes
+> already-fetched hex strings — never issues a read itself. Below is the (b) shape, which is legal
+> because it takes fetched data as its only input:
 
 ```js
-// tools/dump-capture.mjs — conceptual shape, not yet written
-// Calls vice_memory_read via whatever MCP client surface the execution agent has
-// (the vice_* tools directly, not raw HTTP as this research pass used).
-const CHUNK = 4096; // stay well under whatever the MCP transport's response-size comfort zone is
-const image = Buffer.alloc(65536);
-for (let addr = 0; addr < 65536; addr += CHUNK) {
-  const size = Math.min(CHUNK, 65536 - addr);
-  const { data_hex } = await viceMemoryRead({
-    address: `$${addr.toString(16).padStart(4, "0")}`,
-    size,
-    bank: "ram",
-    encoding: "hex",
-  });
-  Buffer.from(data_hex, "hex").copy(image, addr);
+// tools/assemble-image.mjs — pure logic only; never imports a transport, never calls vice_*.
+// Input: an array of {address, data_hex} chunks the agent already fetched via
+// mcp__vice__vice_memory_read tool calls and wrote to a JSON file, e.g.
+//   [{ "address": "$0000", "data_hex": "..." }, { "address": "$1000", "data_hex": "..." }, ...]
+// covering all 65536 addresses with no gap and no overlap.
+export function assembleImage(chunks) {
+  const image = Buffer.alloc(65536);
+  const covered = new Uint8Array(65536);
+  for (const { address, data_hex } of chunks) {
+    const start = Number(address.startsWith("$") ? `0x${address.slice(1)}` : address);
+    const bytes = Buffer.from(data_hex, "hex");
+    bytes.copy(image, start);
+    covered.fill(1, start, start + bytes.length);
+  }
+  if (covered.some((b) => b === 0)) throw new Error("gap in chunk coverage — image is not complete");
+  return image;
 }
 ```
-**Source:** [VERIFIED: live VICE MCP server, this session] — schema and real sample response for `vice_memory_read` shown above; the chunking loop is standard, not vendor-documented (no max single-call size was found in the schema, so a conservative chunk size is a defensive choice, not a documented limit — worth confirming empirically in 01-02 whether a single 65536-byte call even works before assuming chunking is required).
+**Source:** the pure-function half of this pattern is new reasoning for this refresh, applying the hard rule's own "tools/ holds pure logic only ... over data the agent fetched through the tools and passed in" language literally. The original `vice_memory_read` schema/sample data this example still relies on is [VERIFIED: live VICE MCP server, this session, 2026-07-30] and is unaffected by the rule change — only *who* calls it changed.
 
 ### SHA-256 for D-09's reproducibility check
 
@@ -835,6 +1273,9 @@ const hash = createHash("sha256").update(readFileSync("recovery/danish/dumps/run
 | A6 *(2026-08-01)* | All three pool instances hanging simultaneously in the reverted run was a host-level event (resource/scheduling), not three independent per-instance faults | Q1 | If false (three genuinely independent faults), the pool-vs-broker distinction in Q1's table is less protective than stated, since a single broker instance could still be as failure-prone per-hour as any one pool instance was. Either way the recommendation (move off the pool route) is unaffected — only the *size* of the improvement is uncertain. |
 | A7 *(2026-08-01)* | The generally-sound "verify state transition after each input, retry bounded" pattern is an adequate missed-input recovery strategy for this game's play-through | Q6 | Never empirically tested in this project (the reverted run never left the title screen). If the game's actual input timing is more finicky than assumed, a bounded retry could still miss a required transition; this needs the planner to pick concrete retry/timeout parameters rather than leaving it open. |
 | A8 *(2026-08-01)* | A supplementary dump does not need the same N≥3 program-image-identity reproducibility bar as the primary game-entry dumps | Q7 | If the planner (or a later phase) actually needs a supplementary dump to be provably reproducible (e.g. if D-13 resolves to "absorb" and Phase 4's round-trip diff needs it), a single-capture supplementary dump would be insufficient evidence and would need redoing with the full 01-01-style N≥3 procedure. |
+| A9 *(2026-08-01, post-14:57)* | Agent-performed direct tool calls, narrated into a committed hit-log file, are an adequate replacement for a scripted CLI as the mechanism a plan task checks — i.e. a `checkpoint:human-verify`/committed-artifact acceptance shape is sufficient evidence that the live work happened correctly | § "MCP-Only-Rule Findings" item 1 | This is not a new assumption this project invented for the rule — 01-04's superseded Task 3/4/5 already used exactly this shape (evidence fields, screenshots, a human-verify checkpoint) even before the rule existed, so the risk is bounded to "does a human/agent reviewer reliably catch a bad live run," which the existing checkpoint design already addresses. If wrong, a plausible-looking but incorrect hit-log could pass review; mitigated by the same screenshot/evidence-cross-check discipline already specified. |
+| A10 *(2026-08-01, post-14:57)* | VERIFY-01's requirement text ("a replay driver over the `vice_* ` MCP tools") will be re-scoped by Phase 3's own discuss/plan cycle to "a data-format input script replayed by an agent," rather than resolved some other way | § "MCP-Only-Rule Findings" item 3 | This is this research pass's reasoned prediction, not a decision made by anyone with authority to make it. If Phase 3 instead finds some other legal mechanism (e.g. a human operator running a documented manual procedure with no data-format script at all), the D-12-style "notes as a seed" framing carried forward here would need revisiting — recorded as an open item for Phase 3, not settled here. |
+| A11 *(2026-08-01, post-14:57)* | Correcting `recovery/danish/NOTES.md` line 62's "animation phases" framing around `$08F5/$08F7` is safe to fold into 01-04's own Task-3-equivalent work rather than needing a separate todo or checkpoint | § "MCP-Only-Rule Findings" item 6 | Low risk either way — it is a documentation clarity fix, not a data or code change, and the actual mitigation (live disassembly + idle-calibration gate) does not depend on the prose being fixed first. If the planner disagrees, filing it as a `.planning/todos/pending/` entry instead costs nothing. |
 
 ## Open Questions
 
@@ -858,10 +1299,9 @@ const hash = createHash("sha256").update(readFileSync("recovery/danish/dumps/run
    - What's unclear: the actual post-decrunch/post-load entry address for the real game code in each case — this is exactly what 01-01/01-02/01-03's stepping-and-backtracing work is for.
    - Recommendation: locate empirically via `vice_execution_step`/`vice_backtrace`/`vice_disassemble`, exactly as D-06 already specifies; no shortcut exists.
 
-5. **(2026-08-01) Which acquisition route does the 01-04 redo actually use — live-agent `mcp__vice__*` calls (broker, automatic) or a standalone-script broker-lease helper (new plumbing)?**
-   - What we know: the pool route (what hung) and the broker route (Phase 01.2) are structurally separate; the broker is wired only into `vice-proxy.mjs`; the standalone `tools/*.mjs` pipeline was explicitly left untouched by Phase 01.2.
-   - What's unclear: whether the planner wants to keep a scriptable `tools/watch-loads.mjs` CLI (requiring new broker-lease plumbing plus extracting/duplicating `containerizeGrant()`) or drive the whole procedure through the live agent's own tool calls (no new plumbing, but less scriptable/re-runnable as a single command).
-   - Recommendation: make this an explicit plan decision (see Q1/Q9 in the "Phase 01-04 Redo" section) rather than leaving it to the executor to infer — the two options have different file lists, different test strategies, and different failure-recovery properties.
+5. **(2026-08-01, 12:46) Which acquisition route does the 01-04 redo actually use — live-agent `mcp__vice__*` calls (broker, automatic) or a standalone-script broker-lease helper (new plumbing)? — RESOLVED, post-14:57, no longer a question.**
+   - What changed: the 14:57 hard rule (`.claude/CLAUDE.md` § "Emulator Access") makes the standalone-script option categorically illegal, not merely less convenient — there is exactly one legal shape (the live agent's own direct tool calls), so this is no longer a decision for a plan's `checkpoint:decision` to present with options. See § "Phase 01-04 Redo — MCP-Only-Rule Findings" item 1.
+   - Residual open question, genuinely unresolved: whether a non-stopping checkpoint can accumulate a hit count without stopping the machine (the counting-tier probe named in the superseded Task 3 Step 2) is unaffected by this resolution and remains untested — this needs an empirical, agent-performed probe at execution time, not something this research pass can confirm statically.
 
 ## Environment Availability
 
@@ -889,16 +1329,27 @@ const hash = createHash("sha256").update(readFileSync("recovery/danish/dumps/run
 | Full suite command | Re-run the full recorded procedure for both images, twice each, diff all four resulting `.bin`s pairwise, then run the cross-image provenance diff |
 
 ### Phase Requirements → Test Map
+
+> **Refreshed 2026-08-01, post-14:57.** RECOVER-01/02/03 rows below are historical — those
+> requirements were satisfied by plans 01-01/01-02/01-03, already executed and committed, and the
+> commands named for them (`tools/hostpath-boot.mjs`, `tools/dump-capture.mjs`) were never actually
+> built under those names; the real, executed procedure was `node tools/recover.mjs boot|recover
+> <release>` — a file that has since been **deleted**, so neither the original nor the row below is
+> re-runnable as a command any more (see the new section's answer to "how is a procedure made
+> repeatable without a runnable command"). The RECOVER-04 row is corrected to remove the dead
+> `watch-loads.mjs` CLI-arms-watches framing: arming/play/detection is agent-performed live, and the
+> only thing checkable by an automated command is the *committed record* of that live work.
+
 | Req ID | Behavior | Test Type | Automated Command | File Exists? |
 |--------|----------|-----------|-------------------|-------------|
-| RECOVER-01 | Both disks boot via a documented MCP-only procedure, never calling `vice_disk_list` | manual (one-time, scripted) | `node tools/hostpath-boot.mjs danish.d64` then check `vice_registers_get` PC moved | ❌ Wave 0 |
-| RECOVER-02 | `danish.d64` dump captured with recorded trigger/`$01`/ranges | scripted capture + SHA-256 | `node tools/dump-capture.mjs danish` | ❌ Wave 0 |
-| RECOVER-03 | `saeger.d64` dump captured under same procedure | scripted capture + SHA-256 | `node tools/dump-capture.mjs saeger` | ❌ Wave 0 |
-| RECOVER-04 | On-demand load detection via watches during bounded play | scripted watch-arm + manual play, log to `LOADING.md` | `node tools/watch-loads.mjs` (arms watches, reports hits) — *Refreshed 2026-08-01: file was reverted, still doesn't exist; command shape depends on the acquisition-route decision in Open Question 5* | ❌ Wave 0 |
-| RECOVER-05 | Both images normalised to common base/state before diff | scripted anchor-search + offset proof | `node tools/diff-images.mjs --anchor-search danish.bin saeger.bin` | ❌ Wave 0 |
-| RECOVER-06 | Every byte range carries a provenance verdict + evidence | scripted coalesced-diff → `PROVENANCE.md` | `node tools/diff-images.mjs --gap-tolerance 16` | ❌ Wave 0 |
-| RECOVER-07 | Crack-independence verdict recorded with evidence/confidence weight | manual (CSDb search + binary inspection), written to `PROVENANCE.md` | n/a — analytical, not automatable | ❌ Wave 0 |
-| RECOVER-08 | Canonical image chosen by measured patch-count | scripted count from `PROVENANCE.md`'s generated ranges | `node tools/diff-images.mjs --count-patches` | ❌ Wave 0 |
+| RECOVER-01 | Both disks boot via a documented MCP-only procedure, never calling `vice_disk_list` | already satisfied (01-01/01-03, executed) | historical only — `node tools/recover.mjs boot <release>` was the real command; the file is deleted, so this is no longer re-runnable, only the NOTES.md procedure is | ✅ done, historical command gone |
+| RECOVER-02 | `danish.d64` dump captured with recorded trigger/`$01`/ranges | already satisfied (01-01, executed) | historical only — `node tools/recover.mjs recover danish` was the real command; deleted | ✅ done, historical command gone |
+| RECOVER-03 | `saeger.d64` dump captured under same procedure | already satisfied (01-03, executed) | historical only — `node tools/recover.mjs recover saeger` was the real command; deleted | ✅ done, historical command gone |
+| RECOVER-04 | On-demand load detection via watches during bounded play | agent-performed live arm/play/attribute; automated check runs only over the committed hit-log/`LOADING.md` record afterward | `node tools/watch-loads.mjs report --release <id> --json` — a **pure**, emulator-free CLI that renders/validates the committed hit log; it does not arm anything | ❌ Wave 0 (pure-logic file only; no live-arming CLI exists or should exist) |
+| RECOVER-05 | Both images normalised to common base/state before diff | scripted anchor-search + offset proof | `node tools/diff-images.mjs anchor-search --json` | ❌ Wave 0 (01-05, unaffected by the rule change — pure Node over committed files) |
+| RECOVER-06 | Every byte range carries a provenance verdict + evidence | scripted coalesced-diff → `PROVENANCE.md` | `node tools/diff-images.mjs diff --gap-tolerance 16 --json` | ❌ Wave 0 (01-05, unaffected) |
+| RECOVER-07 | Crack-independence verdict recorded with evidence/confidence weight | manual (CSDb search + binary inspection), written to `PROVENANCE.md` | n/a — analytical, not automatable | ❌ Wave 0 (01-06, unaffected) |
+| RECOVER-08 | Canonical image chosen by measured patch-count | scripted count from `PROVENANCE.md`'s generated ranges | `node tools/diff-images.mjs count-patches --json` | ❌ Wave 0 (01-06, unaffected) |
 
 ### Sampling Rate
 - **Per task commit:** re-run the specific dump/diff script just touched, confirm it still exits cleanly against already-captured fixtures.
@@ -906,11 +1357,17 @@ const hash = createHash("sha256").update(readFileSync("recovery/danish/dumps/run
 - **Phase gate:** both images captured, both reproducibility checks green, `PROVENANCE.md` at 100% coverage, canonical image chosen with a recorded number, before `/gsd-verify-work`.
 
 ### Wave 0 Gaps
-- [ ] `tools/hostpath-boot.mjs` — wraps `devcontainer-host-path` + `disk_attach`/`autostart`, covers RECOVER-01
-- [ ] `tools/dump-capture.mjs` — bank-scoped RAM capture + sidecar writer, covers RECOVER-02/03
-- [ ] `tools/chip-state.mjs` — chip-state sidecar, covers RECOVER-02/03 (D-04)
-- [ ] `tools/watch-loads.mjs` — on-demand-load watch arming/reporting, covers RECOVER-04
-- [ ] `tools/diff-images.mjs` — anchor search, coalesced diff, patch-count, covers RECOVER-05/06/08
+
+> **Refreshed 2026-08-01, post-14:57.** RECOVER-01/02/03's gaps are closed (01-01/01-02/01-03
+> executed); `tools/hostpath-boot.mjs` and `tools/dump-capture.mjs` were never built under those
+> names and never should be — capture/boot is agent-performed live, not a CLI wrapper. Only
+> RECOVER-04's gap remains genuinely open, and its shape has changed from "build a CLI that arms
+> watches" to "build a pure-logic reporter/validator over a hit-log record the agent produces live."
+
+- [x] ~~`tools/hostpath-boot.mjs`~~ — superseded; RECOVER-01 already satisfied by 01-01/01-03's agent/CLI-driven boot (`tools/recover.mjs`, now deleted). No replacement file is needed — booting is agent-performed live, following `recovery/<release>/NOTES.md`'s recorded procedure.
+- [x] ~~`tools/dump-capture.mjs`~~ / ~~`tools/chip-state.mjs`~~ — superseded; RECOVER-02/03 already satisfied (01-01/01-02, executed); `tools/chip-state.mjs` existed and was deleted 2026-08-01. No CLI replacement — capture is agent-performed live per `.claude/skills/c64-ram-capture/SKILL.md`.
+- [ ] `tools/watch-loads.mjs` — **pure logic only**: sentinel resolution over registry data, `attributeAddress`, `reportHits`, a hit-log reader/validator and `recovery/LOADING.md` renderer. Must import nothing from a transport and must never itself arm a checkpoint or watch. Covers RECOVER-04.
+- [ ] `tools/diff-images.mjs` — anchor search, coalesced diff, patch-count, covers RECOVER-05/06/08. Unaffected by the rule change (zero emulator contact, pure Node over already-committed `.bin` files) — carried forward unchanged from the 12:46 refresh.
 - [ ] Framework install: none — Node built-ins only, nothing to install
 
 ## Security Domain
@@ -945,8 +1402,18 @@ const hash = createHash("sha256").update(readFileSync("recovery/danish/dumps/run
 - `.planning/seeds/ram-capture-as-proxy-tools.md`, `.planning/seeds/vice-pool-contention-and-starvation.md`, `.planning/todos/pending/2026-08-01-absorb-the-ram-capture-and-host-path-skills-into-the-vice-mcp.md` — confirm the "two library consumers, not the proxy" seam is a documented, deliberate decision, and that absorbing the standalone tooling into the MCP surface is a known, not-yet-executed todo.
 
 ### Tertiary (LOW confidence), refresh
-- The root cause of all three pool instances hanging simultaneously (Q1's assumption A6) — not measured or explained anywhere in this project; recorded as an open gap, not resolved by this refresh.
-- Missed-input recovery strategy for the play-through (Q6's assumption A7) — no empirical basis; the reverted run never reached a state where this could be tested.
+- The root cause of all three pool instances hanging simultaneously (Q1's assumption A6) — not measured or explained anywhere in this project; recorded as an open gap, not resolved by this refresh. Now moot as a *decision driver* (there is no route choice left to make), but the underlying host-hang risk itself is still unexplained and still real.
+- Missed-input recovery strategy for the play-through (Q6's assumption A7) — no empirical basis; the reverted run never reached a state where this could be tested. Still unresolved by this refresh.
+
+### Refresh sources, 2026-08-01, post-14:57 (this refresh)
+
+**Primary (HIGH confidence) — direct inspection, this session, no emulator access used or available:**
+- `.claude/CLAUDE.md` § "Emulator Access" and § "Constraints" — the hard rule's exact wording, read directly.
+- `.planning/STATE.md` § "Blockers/Concerns" (top entry) and the two 2026-08-01 accumulated-context decision entries — the five things this replan must settle, the `fetch()`-bypass incident, and the exact deletion/rename commit list.
+- `git log --oneline`, `git show bb0b1f7 --stat`, `git merge-base --is-ancestor 4192a3e HEAD` — confirmed `4192a3e`/`cfc9d83`/`067c0d9`/`7da03fc` are all reverted by `bb0b1f7`, and that no `loader_ranges` field exists in the current `recovery/RELEASES.json`.
+- Direct `ls`/`cat`/`node -e` inspection of `tools/`, `tools/lib/`, `.claude/skills/c64-ram-capture/`, `.mcp.json`, `recovery/RELEASES.json`, and `recovery/danish/dumps/danish-gameentry-run1.map.json` — confirmed the current file inventory, the absence of `loader_ranges`/`watch_set`, the `ranges-only`/171-unused-range manifest state, and the still-live `$08F5/$08F7` "animation phases" prose in `recovery/danish/NOTES.md` line 62.
+- `01-04-PLAN.md`, `01-05-PLAN.md`, `01-06-PLAN.md`, `SKELETON.md`, `01-01-SUMMARY.md`, `01-02-SUMMARY.md`, `01-03-SUMMARY.md`, `01-CONTEXT.md`, `REQUIREMENTS.md` — read in full this session; the basis for the dead-plan analysis, the 01-05/01-06 survival confirmation, and the phase-requirement/success-criterion cross-references above.
+- `.claude/skills/c64-ram-capture/SKILL.md` — read in full; confirmed it is now a scripts-free, agent-tool-call procedure document.
 
 ## Metadata
 
@@ -954,7 +1421,9 @@ const hash = createHash("sha256").update(readFileSync("recovery/danish/dumps/run
 - VICE MCP tool surface & bootstrap/capture mechanics: HIGH — directly probed, live, this session, against the actual project endpoint.
 - Crack-independence evidence: MEDIUM — one side externally corroborated (Tier 2), one side an open, bounded, small task for 01-05.
 - Gameplay-dependent findings (on-demand load behavior, actual entry-point addresses, in-game `bank:"ram"` behavior once a game is running): LOW/untested — nothing in this research pass involved actually running the game, since doing so live would have mutated the shared VICE instance's state ahead of the real execution plans. Flagged explicitly wherever this applies (Open Questions 1, 3, 4).
-- **Refreshed 2026-08-01 — Phase 01-04 Redo section:** the acquisition-route split (pool vs. broker) and the specific defects found (loader-range misclassification, unused-range attribution gap, `disarm`'s env-var bug) are HIGH confidence — directly read from git history and current code, not inferred. The hang's root cause (Q1's items (b)/(c)) and the broker's actual effect on hang *frequency* (A5/A6) remain genuinely LOW confidence / unresolved, and are presented as such rather than smoothed into a false "the broker fixes it" conclusion.
+- **Refreshed 2026-08-01, 12:46 — Phase 01-04 Redo section (now itself superseded):** the acquisition-route split (pool vs. broker) and the specific defects found (loader-range misclassification, unused-range attribution gap, `disarm`'s env-var bug) were HIGH confidence — directly read from git history and current code, not inferred. That acquisition-route analysis is now moot per the 14:57 hard rule; the defect analysis remains accurate as *history* but is corrected above (§ item 6) to state plainly that neither defect is currently present in committed data, only in the still-live prose hazard that produced one of them.
 
-**Research date:** 2026-07-30 (original); **2026-08-01** (targeted RECOVER-04 / Phase 01-04 Redo refresh)
-**Valid until:** Tool-surface findings (schemas, bank behavior against the idle machine) are stable indefinitely absent a VICE MCP server upgrade — re-check `vice_ping`'s `version` field if research is reused after a long gap. Gameplay-dependent findings should be re-verified the moment 01-01/01-02 actually runs a disk, not assumed to still hold. **The 2026-08-01 refresh should be re-checked if Phase 01.2's todos (`absorb the ram-capture and host-path skills into the VICE MCP`, `extract the VICE MCP into its own project`) execute before 01-04's redo does** — either would change the exact file paths cited in Q8/Q9's tables, though not the underlying acquisition-route decision itself.
+**Refreshed 2026-08-01, post-14:57 (this refresh) — "Phase 01-04 Redo — MCP-Only-Rule Findings" section:** HIGH confidence for everything verified by direct file/git inspection this session (the current absence of `loader_ranges`/`watch_set` in `RELEASES.json`, the still-live NOTES.md prose hazard, the confirmed zero-emulator-contact scope of 01-05/01-06, the current `tools/` file inventory). MEDIUM/reasoned-not-verified for the concrete shape recommended for agent-driven arming/attribution/reporting (item 1) and for the VERIFY-01/D-11 replacements (item 3) — these are this session's design reasoning about how to satisfy the rule, not something confirmed by executing a plan under it, since this research pass has no `mcp__vice__*` tools. Every such claim is flagged inline with `[ASSUMED]` or an explicit "not yet acted on by any plan" caveat rather than presented as settled.
+
+**Research date:** 2026-07-30 (original); **2026-08-01, 12:46** (targeted RECOVER-04 / Phase 01-04 Redo refresh, now superseded); **2026-08-01, post-14:57** (this refresh, current)
+**Valid until:** Tool-surface findings (schemas, bank behavior against the idle machine) are stable indefinitely absent a VICE MCP server upgrade — re-check `vice_ping`'s `version` field if research is reused after a long gap. Gameplay-dependent findings should be re-verified the moment a disk is actually run under the new agent-driven procedure, not assumed to still hold. **This refresh should be re-checked if `.claude/mcp/vice/` is ever extracted into its own package** (the pending todo named in STATE.md) — the extraction would not change the MCP-only rule itself, but could change file paths this document cites (e.g. `.mcp.json`'s `vice-proxy.mjs` path). It should also be re-checked if Phase 3's own discuss/research cycle settles VERIFY-01's replacement shape differently from item 3's reasoned recommendation above, since that is this project's decision to make, not this research pass's.
