@@ -509,16 +509,23 @@ function mergeGroup(group) {
   const agreeing = nonOriginal.length
     ? Math.min(...nonOriginal.map((r) => (typeof r.agreeing_releases === "number" ? r.agreeing_releases : 0)))
     : 0;
-  const constituentNotes = group
-    .map((r) => r.evidence || r.reason)
-    .filter(Boolean);
+  // Only the non-ORIGINAL constituents' text is worth surfacing here -- a
+  // swallowed ORIGINAL gap's own evidence ("identical across N releases...")
+  // is generic boilerplate that adds nothing once summarised by
+  // `swallowedGap` below. Deduplicated (via Set) so a coalesced range with
+  // many same-reason singleton addresses doesn't repeat identical
+  // boilerplate once per address -- found live while running this against
+  // the real dumps (see .planning/RE-FINDINGS.md).
+  const constituentNotes = [...new Set(nonOriginal.map((r) => r.evidence || r.reason).filter(Boolean))];
   const swallowedGap = group.length > nonOriginal.length;
   const note =
     (mixed
       ? `coalesced group of mixed verdicts (${[...verdictSet].join(", ")}) within the gap tolerance -- downgraded to UNKNOWN, the conservative choice. `
       : "") +
     (swallowedGap ? `Includes a short run of agreeing bytes swallowed by the gap tolerance. ` : "") +
-    `Constituent findings: ${constituentNotes.join(" | ")}`;
+    (constituentNotes.length > 1
+      ? `Constituent findings (${constituentNotes.length} distinct): ${constituentNotes.join(" | ")}`
+      : `Constituent finding: ${constituentNotes[0] ?? ""}`);
   return {
     start,
     end,
@@ -563,6 +570,25 @@ function lookupKind(sortedRanges, address) {
     if (address >= r.start && address <= r.end) return r.kind;
   }
   return null;
+}
+
+/**
+ * Splits each diff range against a manifest's own kind boundaries, so the
+ * ledger's `kind` column is never resolved from only a range's start
+ * address -- a coalesced range can span multiple kind zones (e.g. `game`
+ * then `loader`) since coalescing groups on VERDICT continuity, not kind
+ * continuity. Resolving kind from `start` alone silently mislabels every
+ * address after the first kind boundary inside the range; found live
+ * against the real dumps (danish's $033C-$4770 ORIGINAL range spans
+ * straight through its own $0340-$035E `loader` sub-range).
+ */
+export function splitRangeByManifestKind(range, manifestRanges) {
+  const out = [];
+  for (const m of manifestRanges) {
+    const inter = intersectRanges(range, m);
+    if (inter) out.push({ ...range, start: inter.start, end: inter.end, kind: m.kind });
+  }
+  return out.sort((a, b) => a.start - b.start);
 }
 
 // --------------------------------------------------------- manifest bucketing
@@ -818,7 +844,11 @@ const VERBS = {
     const referenceId = reg.releases[0].id;
     const referenceEntry = reg.releases.find((r) => r.id === referenceId);
     const referenceManifest = readManifest(primaryDumpEntry(referenceEntry).range_manifest);
-    const generatedRanges = diffResult.ranges.map((r) => ({ ...r, kind: lookupKind(referenceManifest.ranges, r.start) ?? "unresolved" }));
+    // Split every diff range against the reference manifest's own kind
+    // boundaries -- never resolve kind from a range's start address alone
+    // (see splitRangeByManifestKind's own comment for the real bug this
+    // fixes).
+    const generatedRanges = diffResult.ranges.flatMap((r) => splitRangeByManifestKind(r, referenceManifest.ranges));
 
     const prose = buildProse({ reg, images, gapTolerance, referenceId });
     let markdown;
@@ -903,8 +933,14 @@ five kinds -- \`game\`, \`loader\`, \`cracktro\`, \`io\`, \`unused\` -- by \`too
   of prose is the documented root cause of a permanent joystick-poll instruction (\`$08F5\`) once being
   misclassified as loader code (see \`recovery/danish/NOTES.md\` §1 and \`recovery/saeger/NOTES.md\`
   "Loader-range derivation").
-- **\`cracktro\`** is seeded from a plain buffer scan for printable-ASCII runs (banner/credit text) over
-  each dump's own image bytes.
+- **\`cracktro\`** is seeded from printable-ASCII runs whose decoded text contains a recognised
+  crack-credit vocabulary word (\`findCracktroRuns\`), not from a bare "any printable run" scan. A bare
+  scan was tried first and found a real false positive against these exact dumps: the game's own
+  title-screen text ("DATASOFT PRESENTS" in danish / "DIABOLO  PRESENTS" in saeger, at \$4771-\$4779 --
+  itself a genuine, previously-undocumented divergence, logged in \`.planning/RE-FINDINGS.md\` and left
+  \`UNKNOWN\` below, not asserted as a cracker patch) is printable ASCII too, and a blind scan would have
+  misclassified it as cracktro credit content. The signature vocabulary is drawn from both releases'
+  own already-verified \`tier1_evidence\` in \`recovery/RELEASES.json\`.
 - **\`io\`** (\$D000-\$DFFF) and **\`unused\`** (contiguous \$00/\$FF power-on-pattern runs) were already
   assigned at capture time (01-04 Task 1's \`buildRangeManifest\`) and are kept verbatim here.
 - Everything else that the trace and the entry point reach is bucketed **\`game\`**.

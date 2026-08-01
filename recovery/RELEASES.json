@@ -3691,5 +3691,10 @@
         "method": "anchor-proven via tools/diff-images.mjs anchor-search -- see NOTES.md for the full narrative"
       }
     }
-  ]
+  ],
+  "ledger": {
+    "generated_tier_sha256": "dde5db52d2dad4aa8aba5fa84e0d1739c459475076d14770c039285f0eebd0ec",
+    "gap_tolerance": 16,
+    "generated_at": "2026-08-01T22:43:34.127Z"
+  }
 }

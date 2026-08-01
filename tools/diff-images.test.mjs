@@ -23,6 +23,7 @@ import {
   findCracktroRuns,
   renderLedger,
   enumerateManifests,
+  splitRangeByManifestKind,
 } from "./diff-images.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -540,6 +541,43 @@ test("enumerateManifests reads every dumps[] entry's range_manifest from the reg
   const list = enumerateManifests(fakeRegistry);
   assert.equal(list.length, 3);
   assert.ok(list.some((m) => m.release === "a" && m.label === "run2"));
+});
+
+// -------------------------------------------------------- splitRangeByManifestKind
+
+test("splitRangeByManifestKind splits a range spanning a manifest kind boundary into per-kind sub-ranges", () => {
+  // A real bug found live: a coalesced diff range can span straight through
+  // a manifest's own kind boundary (e.g. danish's $033C-$4770 ORIGINAL range
+  // crosses its own $0340-$035E loader sub-range), and resolving kind from
+  // only the range's start address silently mislabels everything past the
+  // first boundary.
+  const manifestRanges = [
+    { start: 0, end: 831, kind: "game" },
+    { start: 832, end: 862, kind: "loader" },
+    { start: 863, end: 65535, kind: "game" },
+  ];
+  const diffRange = { start: 828, end: 18288, verdict: "ORIGINAL", agreeing_releases: 2, evidence: "identical", reason: "" };
+  const split = splitRangeByManifestKind(diffRange, manifestRanges);
+  assert.equal(split.length, 3);
+  assert.deepEqual(split.map((r) => [r.start, r.end, r.kind]), [
+    [828, 831, "game"],
+    [832, 862, "loader"],
+    [863, 18288, "game"],
+  ]);
+  // Every sub-range must keep the original verdict/evidence, only start/end/kind change.
+  for (const r of split) {
+    assert.equal(r.verdict, "ORIGINAL");
+    assert.equal(r.agreeing_releases, 2);
+    assert.equal(r.evidence, "identical");
+  }
+});
+
+test("splitRangeByManifestKind returns the range unchanged (one sub-range) when it doesn't cross a kind boundary", () => {
+  const manifestRanges = [{ start: 0, end: 65535, kind: "game" }];
+  const diffRange = { start: 100, end: 200, verdict: "UNKNOWN", agreeing_releases: 0, evidence: "", reason: "no signature" };
+  const split = splitRangeByManifestKind(diffRange, manifestRanges);
+  assert.equal(split.length, 1);
+  assert.deepEqual(split[0], { ...diffRange, kind: "game" });
 });
 
 // ------------------------------------------------- real-dump integration case

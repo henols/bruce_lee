@@ -750,6 +750,34 @@ not surprising noise.
 cost the rest of attempt 4's live budget for BOTH releases (danish's Task 3 was never reached).
 Logged as a new pending todo cross-referencing attempt 3's.
 
+### 2026-08-01 — a coalesced diff range can silently cross a manifest's own kind boundary; resolving `kind` from only a range's start address mislabels everything past the first boundary
+
+**Type:** dead end (own tool-design mistake) / hazard, caught before commit
+**Evidence:** live -- `node tools/diff-images.mjs ledger` run against the real committed dumps;
+danish's own `$0340`-`$035E` `loader`-bucketed range was rendered with `kind: game` in the first
+ledger draft
+**Confidence:** HIGH (directly reproduced: danish's manifest has `$0000`-`$033F` = `game`,
+`$0340`-`$035E` = `loader`; the diff's coalesced `ORIGINAL` range spans `$033C`-`$4770`, straight
+through that boundary, because coalescing groups on VERDICT continuity across addresses, not on
+manifest kind continuity)
+
+`tools/diff-images.mjs`'s ledger renderer resolved each generated row's `kind` column by looking up
+the reference manifest's kind *at the range's start address only*. Since `diffRanges`/
+`coalesceRanges` merge purely on verdict agreement (two adjacent addresses with the same ORIGINAL/
+UNKNOWN/CRACKER-PATCH signature collapse into one row regardless of what the underlying manifest
+calls either address), a merged row can legitimately span a `game`→`loader`→`game` boundary when
+both releases happen to hold identical bytes across all three zones. The first ledger draft
+resolved this whole span's kind from its start (`game`), silently reporting the `$0340`-`$035E`
+loader-scratch bytes as ordinary game data. **Fix:** `splitRangeByManifestKind` intersects every
+generated range against the reference manifest's own range boundaries before rendering, so a
+spanning row becomes multiple sub-rows (same verdict/evidence, correct per-sub-range kind) --
+verified by re-running the ledger and confirming `$0340`-`$035E` now reports `kind: loader`. Row
+count went from 204 to 508 as a direct, expected consequence (every kind-crossing merge became
+multiple rows). **Saves:** any future ledger-style renderer that resolves a per-row categorical
+field (kind, bucket, owner) from a merged/coalesced range's start address alone should split
+against the categorising boundary first -- "the range agrees on X" does not imply "the range agrees
+on Y" for an unrelated partition Y.
+
 ### 2026-08-01 — a genuine, previously-undiscovered text divergence: "DATASOFT PRESENTS" (danish) vs "DIABOLO  PRESENTS" (saeger) at $4771-$4779, in a region that is neither loader nor cracktro
 
 **Type:** confirmation / open question (real mechanical finding, not yet explained)
