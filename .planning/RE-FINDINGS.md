@@ -202,3 +202,36 @@ stale checkpoints), and a fresh cycle bracket measured 19,017,687 cycles — gen
 crashes in roughly 20 minutes of continuous live work is a real rate, not a one-off: plan a live
 session for saeger/danish work to tolerate re-deriving a boot sequence more than once, and treat
 every post-crash "paused" read as a fresh machine requiring a full reboot, never a resume point.
+
+### 2026-08-01 — a fourth incident this session: a genuine SILENT stall (not a crash), during Task 3's play-through
+
+**Type:** hazard
+**Evidence:** live, during 01-04 Task 3's saeger play-through, on the epoch-11 instance (the one
+that successfully completed all of Task 2). After capturing one attributed `gameplay-write` hit
+on `$DD00` (a `$07DB: STA $DD00` graphics-mode-setup store during the title-to-chamber
+transition) and moving Bruce Lee right with `vice_joystick_tap`, three independent
+`cycles_stopwatch reset -> execution_run -> ping xN -> read` brackets all measured **exactly 0
+cycles**, while `vice_ping` continuously reported `execution:"running"` and NO epoch-drift error
+ever appeared (`vice_ping`'s own `version`/`machine` fields stayed identical throughout — this is
+not a crash/respawn like the three epoch-drift incidents logged above; the *same* instance is
+answering, just not advancing). `vice_registers_get` returned an identical `PC:2014` across three
+separate reads spanning two of those brackets, including one taken immediately after an explicit
+`vice_execution_pause`. `vice_checkpoint_list` and `vice_checkpoint_delete` both remained
+reliable throughout (teardown proven: two armed checkpoints deleted individually by
+`checkpoint_num`, enumeration confirmed `count:0`).
+**Confidence:** HIGH (three independent zero-cycle brackets, PC frozen across pause/resume,
+matches this project's own prior documented "silent stall" shape from `.planning/STATE.md`'s
+2026-07-31/08-01 entries almost exactly).
+**Costs:** ended this session's live play-through after only 2 of saeger's ~7 required milestones
+(title screen, game start/chamber 1) and before danish's play-through could even begin. Per the
+project's rule ("MUST NOT report a load-event count... from a run whose emulator was not proven
+to be executing") and this plan's own instruction ("If the emulator stalls again... do not attempt
+a host restart... record the stall honestly... a partial, honestly-labelled result is the correct
+outcome"), no further play-through input was attempted once this pattern was confirmed twice.
+**Distinguishing note for a future session:** this is the *silent* variant (transport answers,
+nothing executes) rather than the *loud* variant (transport errors, then epoch drift) seen three
+times earlier in this same session — both are now confirmed live in one sitting, and neither can
+be told apart by `vice_ping`'s own fields; only a cycle bracket distinguishes either from genuine
+liveness, and only a subsequent forwarded call distinguishes a silent stall (no epoch change) from
+a crash already in progress (epoch changes on the next call). A session hitting one incident type
+should not assume immunity from the other.

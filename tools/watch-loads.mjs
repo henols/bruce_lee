@@ -320,10 +320,17 @@ function renderReleaseSection(id, log) {
   s += `**Load-event count:**\n\n${count}\n\n`;
 
   if (log.run_status === "blocked") {
-    s += `> **⚠ THIS IS NOT AN EVIDENCED ZERO.** The count above is \`0\` only because no live ` +
-      `emulator work reached completion for this release this run -- it is a bare absence of ` +
-      `attempted measurement, not a null result earned by an idle calibration on a machine proven ` +
-      `to have executed. ${log.run_status_note ?? ""}\n\n`;
+    if (count === 0) {
+      s += `> **⚠ THIS IS NOT AN EVIDENCED ZERO.** The count above is \`0\` only because no live ` +
+        `emulator work reached completion for this release this run -- it is a bare absence of ` +
+        `attempted measurement, not a null result earned by an idle calibration on a machine proven ` +
+        `to have executed. ${log.run_status_note ?? ""}\n\n`;
+    } else {
+      s += `> **⚠ THIS IS A PARTIAL RESULT, NOT A COMPLETED COVERAGE CLAIM.** The count above (\`${count}\`) ` +
+        `reflects genuinely attributed hits from the portion of the play-through that did complete before this ` +
+        `run was blocked -- it is not evidence that no further load events exist beyond what was reached. ` +
+        `${log.run_status_note ?? ""}\n\n`;
+    }
   }
 
   s += `**Route:** the executing agent's own \`mcp__vice__*\` tool calls -- machine ${log.machine ?? "unknown"}, ` +

@@ -80,11 +80,56 @@
       { "name": "reg:$DD00", "tier": "counting", "start": 56576, "end": 56576, "hits": 1 }
     ]
   },
-  "milestones": [],
-  "hits": [],
-  "input_notes": "Task 2 only: boot saeger, queue a PETSCII SPACE (mcp__vice__vice_keyboard_petscii, data:[32]) into the KERNAL keyboard buffer only after vice_backtrace confirmed the call chain was inside the $08F4 gate's own JSR $FFE4 (called_from $08F6), release at the $08B1 trigger checkpoint. No gameplay input issued yet -- see Task 3 for the play-through.",
+  "run_status": "blocked",
+  "run_status_note": "Task 2 (above) completed in full and is a genuinely evidenced result. Task 3's play-through, in the SAME session immediately afterward, reached 2 of the required milestones (title-screen, game-start/chamber-1) with full evidence before a genuine SILENT host VICE stall halted further play: three independent vice_cycles_stopwatch reset->execution_run->ping xN->read brackets all measured exactly 0 cycles while vice_ping continuously reported execution:\"running\" with no epoch change (i.e. the same instance, not a crash/respawn -- distinct from the three epoch-drift crashes logged in identity_changes above). vice_registers_get returned an identical PC across all three brackets, including one taken immediately after an explicit vice_execution_pause. Per this project's rule and this plan's own instruction, no further play input was attempted once this was confirmed twice. Full evidence in .planning/RE-FINDINGS.md and .planning/todos/pending/2026-08-01-vice-silent-stall-during-01-04-task3-saeger-playthrough.md. The remaining required milestones (a second real chamber transition, both opponents, a death, a game over, a restart) were NOT reached this session -- this is an honest partial result, not a completed play-through, and recovery/LOADING.md must render it as such rather than as a clean coverage claim.",
+  "milestones": [
+    {
+      "name": "title-screen",
+      "reached": true,
+      "screen_signature": "4797375c21d2cb1ec44d2713f14a68e778442d1a153cc10fc9c202b60010c2bd",
+      "sprite_enable": 31,
+      "screenshot": "recovery/saeger/dumps/saeger-loading-01-title.png",
+      "cycles_advanced": 51563549,
+      "retries": 0,
+      "snapshot_name": null
+    },
+    {
+      "name": "game-start-chamber1",
+      "reached": true,
+      "screen_signature": "6b0010cecea54728fecb6b35d09bf80a41f4a741be6fb17b73898a22165f1f42",
+      "sprite_enable": 19,
+      "screenshot": "recovery/saeger/dumps/saeger-loading-02-postf7.png",
+      "cycles_advanced": 24071261,
+      "retries": 0,
+      "snapshot_name": null,
+      "note": "Reached by holding F7 (vice_keyboard_matrix) at the title screen for 10 frames. Confirmed both mechanically (screen signature differs from the title baseline, sprite_enable 31->19) and visually (saeger-loading-02-postf7.png shows chamber 1: HUD, Bruce Lee sprite, a white ape-like opponent, platforms and a barrier obstacle -- not the title screen)."
+    }
+  ],
+  "scope_not_attempted": [
+    "A second real chamber transition (beyond entering chamber 1) -- play-through halted by the stall before it could be attempted.",
+    "Both opponents encountered as named milestones -- the white ape-like figure visible in saeger-loading-02-postf7.png was seen on screen but not confirmed as an actual encounter/collision before the stall.",
+    "A death -- not attempted.",
+    "A game over -- not attempted.",
+    "A restart -- not attempted."
+  ],
+  "hits": [
+    {
+      "sentinel": "reg:$DD00",
+      "address": "$DD00",
+      "cycle": 24071261,
+      "tier": "counting",
+      "pc": "$07DB",
+      "backtrace": [
+        { "return_address": 1366, "called_from": 1363, "called_target": 1891 },
+        { "return_address": 7218, "called_from": 7215, "called_target": 11605 }
+      ],
+      "disassembly": "$07D9: LDA #$01 / $07DB: STA $DD00 / $07DE: LDA #$38 / $07E0: STA $D018 -- reasserts VIC bank 2 (bits 0-1 = 01, unchanged from $C1's own bank-2 selection) while clearing the CIA2 port A's other bits, immediately followed by a new $D018 charset/screen-base value. Part of a room/chamber graphics-mode-setup routine invoked during the title-to-chamber-1 transition (and again on later room draws, per the counting-tier hit count climbing from the idle floor of 1 to 5 during this transition, then to a fresh 1 on the freshly re-armed checkpoint after one vice_joystick_tap move).",
+      "classification": "gameplay-write"
+    }
+  ],
+  "input_notes": "Task 2: boot saeger, queue a PETSCII SPACE (mcp__vice__vice_keyboard_petscii, data:[32]) into the KERNAL keyboard buffer only after vice_backtrace confirmed the call chain was inside the $08F4 gate's own JSR $FFE4 (called_from $08F6), release at the $08B1 trigger checkpoint. Task 3 (this session, partial): held F7 (vice_keyboard_matrix, 10 frames) at the title screen to begin a 1-player game, reaching chamber 1; sent one vice_joystick_tap(direction:right, duration_frames:60) then one vice_joystick_tap(direction:right, duration_frames:90) to move Bruce Lee, which produced the one attributed $DD00 hit above; no further input was sent once the silent stall was confirmed.",
   "teardown": {
     "checkpoints_remaining": 0,
-    "enumerated_at": "post-idle-calibration, via an explicit mcp__vice__vice_checkpoint_list call after deleting checkpoints 1 and 2 individually by checkpoint_num; a second explicit mcp__vice__vice_checkpoint_list call after re-arming and tearing down the counting-tier probe's own checkpoint (checkpoint_num 1, re-used after the calibration checkpoints were deleted) also confirmed count:0"
+    "enumerated_at": "post-idle-calibration (Task 2), via an explicit mcp__vice__vice_checkpoint_list call after deleting checkpoints 1 and 2 individually by checkpoint_num; a second explicit mcp__vice__vice_checkpoint_list call after re-arming and tearing down the counting-tier probe's own checkpoint (checkpoint_num 1, re-used after the calibration checkpoints were deleted) also confirmed count:0. A third and final enumeration (Task 3, post-stall) confirmed count:0 again after deleting the two checkpoints (loader-reentry + $DD00, re-armed as checkpoint_num 1 and 3) that were live during the play-through -- vice_checkpoint_list and vice_checkpoint_delete both remained reliable throughout the silent stall, unlike vice_registers_get/vice_execution_pause/the cycle-advancement path."
   }
 }
