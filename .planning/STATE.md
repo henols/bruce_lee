@@ -4,11 +4,11 @@ milestone: v1.0
 milestone_name: Pipeline Proven *
 current_phase: 01
 current_phase_name: recovery-provenance
-status: planned
-stopped_at: "Replan complete. Plans 01-04/01-05/01-06 rewritten against the MCP-only rule and verified; 3/6 executed. Ready to execute wave 4."
-last_updated: "2026-08-01T16:22:59.515Z"
+status: blocked
+stopped_at: "Wave 4 halted at plan 01-04 Task 2. Task 1 (pure detector logic + artifact renderer, 35 tests) is committed and merged. Tasks 2-4 need live emulator work, and the dispatched executor's tool schema contained no mcp__vice__* tool at all. Awaiting a decision on the execution route."
+last_updated: "2026-08-01T16:52:00.000Z"
 last_activity: 2026-08-01
-last_activity_desc: "Phase 01 replanned against the MCP-only rule — 01-04 rewritten, 01-05 corrected, SKELETON.md's dead transport row retired"
+last_activity_desc: "Wave 4 halted — mcp__vice__* absent from the executor subagent's tool schema; 01-04 Task 1 landed, Tasks 2-4 blocked"
 progress:
   total_phases: 3
   completed_phases: 2
@@ -25,15 +25,15 @@ See: .planning/PROJECT.md (updated 2026-07-31)
 
 **Core value:** An ACME source tree that rebuilds a Bruce Lee which plays identically to the original, where every gameplay system is explained well enough that someone could change it.
 **Current milestone:** v1.0 — Pipeline Proven (Phases 1–4, 24 requirements)
-**Current focus:** Phase 1 — Recovery & Provenance (plans 01-04 → 01-06 replanned against the MCP-only rule, ready to execute)
+**Current focus:** Phase 1 — Recovery & Provenance (wave 4 halted mid-plan; 01-04 Task 1 landed, Tasks 2–4 blocked on emulator tool access)
 
 ## Current Position
 
 Milestone: v1.0 — Pipeline Proven (Phases 1–4 of 7 total)
 Phase: 1 — Recovery & Provenance
-Plan: 01-04 (3/6 plans executed; 01-04/01-05/01-06 replanned and verified)
-Status: Ready to execute — wave 4
-Last activity: 2026-08-01 — phase 01 replanned against the MCP-only rule; research refreshed, plan-checker passed
+Plan: 01-04 (3/6 plans executed; 01-04 partially executed — Task 1 of 4 complete)
+Status: BLOCKED — wave 4 halted at 01-04 Task 2's precondition
+Last activity: 2026-08-01 — 01-04 Task 1 committed and merged; executor halted because `mcp__vice__*` was absent from its tool schema
 
 Progress (v1.0): [████░░░░░░] 35% — 7/20 plans
 Progress (overall): [██░░░░░░░░] 20% — 7/35 plans
@@ -121,6 +121,12 @@ drifting implementations, while sharing code without sharing state means N broke
 
 ### Blockers/Concerns
 
+- **[HARD BLOCKER — Phase 1, 2026-08-01]: a `gsd-executor` subagent cannot reach the emulator, because declaring *any* `tools:` allow-list strips its MCP tools.** Wave 4's executor reported a five-tool schema — `Read`, `Write`, `Edit`, `Bash`, `Skill` — with no `mcp__vice__*` tool present, and `Grep`/`Glob` missing too even though the frontmatter named them. This is not a live-state failure (`vice_ping` would have reported one of the three documented unreachable statuses); the tools are structurally absent. Matches upstream `anthropics/claude-code#13898`. **Adding `mcp__vice__*` to the allow-list does NOT fix it** — that was tried first and produced this exact result; the allow-list itself is the trigger, so the line has to be removed entirely. Full write-up in `.planning/todos/pending/2026-08-01-vice-mcp-tools-absent-from-executor-tool-schema.md`.
+  - **The executor behaved correctly**: it halted at Task 2's precondition rather than improvising a route, explicitly declining the direct-`fetch()`/broker-discovery workaround this project has already discarded once. Task 1 (pure logic, no emulator) is complete, tested and merged (`ffb9a64`, `c5b92f8`, merge `64da66e`).
+  - **`.claude/agents/` is gitignored** (blanket `.claude/*` with an allowlist for `CLAUDE.md`, `skills/`, `mcp/`), so any executor-definition fix is untracked and a GSD reinstall silently reverts it. Whatever route is chosen, this durability gap outlives it.
+  - **01-05 cannot be run ahead of 01-04 to work around this.** 01-05 seeds its loader bucket from `RELEASES.json`'s `loader_ranges`, which 01-04 Task 2 earns from live disassembly, and cross-references `LOADING.md`'s completeness claim (T-01-23). Reading loader ranges out of `NOTES.md` prose instead is precisely how the `$08F5` joystick poll was once classified as loader code.
+  - **`01-04-SUMMARY.md` exists with `status: blocked` and empty `requirements-completed`**, which makes `phase-plan-index` report `has_summary: true` and drop 01-04 from `incomplete`. It must be removed or renamed before re-dispatch, or the plan will be silently skipped.
+
 - **[RESOLVED 2026-08-01 — Phase 1]: the replan is done; execution is unblocked.** Research was refreshed against the MCP-only rule (`0964867`) and the three plans were rewritten/corrected and passed the plan-checker (`9a62002`). Disposition of the five items, kept below because each one's *reasoning* still binds the executor:
   1. **01-04 rewritten** — 4 tasks: pure modules + purity guard test → earn the armed set live via `mcp__vice__*` → play/attribute/record → a blocking `checkpoint:human-verify` on the coverage claim. New pure module `tools/dump-artifacts.mjs` carries the chip-state and range-manifest derivations the deleted `chip-state.mjs` held (an agent can emit text, not binary, so a 65536-byte image must be assembled by a pure module from agent-serialised chunks).
   2. **SKELETON.md's transport row retired in place**, dated, plus three other rows that named the deleted command as current fact.
@@ -130,6 +136,7 @@ drifting implementations, while sharing code without sharing state means N broke
 
   Original blocker text, retained because it is the record of why:
   **phase 01 execution is halted; plans 01-04, 01-05 and 01-06 need replanning against the MCP-only rule.** Wave 4 stopped before any executor completed, so no partial plan work exists to reconcile — the three plans are simply unexecuted. What the replan has to settle, none of it resolvable inside a single plan:
+
   1. **01-04's file-level design is dead.** It specifies CLI verbs (`node tools/watch-loads.mjs disarm --json` in Task 3, and Task 4's acceptance criteria) and reuse of a Node `capture()` primitive for supplementary dumps. Nothing under `tools/` can contact the emulator any more, so `watch-loads.mjs` can only hold pure logic — sentinel resolution, boundary/overlap attribution, hit ordering, report rendering — over data the agent fetched through `mcp__vice__*`. Its *intent* (earn the armed set, calibrate idle to zero, attribute every hit before classifying it, prove teardown by enumeration, record absence as evidence) is unaffected and should survive intact.
   2. **SKELETON.md's architectural decision is now impossible.** It commits this phase to "a runnable command rather than an agent transcript" for emulator control. Retire it explicitly rather than letting it rot.
   3. **Two downstream dependencies dangle.** D-11 hands plan 02-02 a command to re-arm the watch set during Phase 2's all-chambers trace; Phase 3's VERIFY-01 wants a replay driver over the same surface. Both assumed a runnable command exists. Decide what they get instead.
