@@ -5,10 +5,10 @@ milestone_name: Pipeline Proven *
 current_phase: 01
 current_phase_name: recovery-provenance
 status: blocked
-stopped_at: "Wave 4 halted at plan 01-04 Task 2. Task 1 (pure detector logic + artifact renderer, 35 tests) is committed and merged. Tasks 2-4 need live emulator work, and the dispatched executor's tool schema contained no mcp__vice__* tool at all. Awaiting a decision on the execution route."
-last_updated: "2026-08-01T16:52:00.000Z"
+stopped_at: "Wave 4 halted again. 01-04 Task 1 and Task 2-for-danish are complete and merged. saeger's Task 2 and Tasks 3-4 are blocked by a confirmed host VICE stall: cycles_stopwatch measures 0 elapsed while vice_ping reports execution:running. Needs a host-side emulator restart, then re-dispatch in a fresh session."
+last_updated: "2026-08-01T18:05:00.000Z"
 last_activity: 2026-08-01
-last_activity_desc: "Wave 4 halted — mcp__vice__* absent from the executor subagent's tool schema; 01-04 Task 1 landed, Tasks 2-4 blocked"
+last_activity_desc: "01-04 attempt 2 — danish watch set earned live and idle-calibrated; halted on a confirmed host VICE stall before saeger"
 progress:
   total_phases: 3
   completed_phases: 2
@@ -31,9 +31,9 @@ See: .planning/PROJECT.md (updated 2026-07-31)
 
 Milestone: v1.0 — Pipeline Proven (Phases 1–4 of 7 total)
 Phase: 1 — Recovery & Provenance
-Plan: 01-04 (3/6 plans executed; 01-04 partially executed — Task 1 of 4 complete)
-Status: BLOCKED — wave 4 halted at 01-04 Task 2's precondition
-Last activity: 2026-08-01 — 01-04 Task 1 committed and merged; executor halted because `mcp__vice__*` was absent from its tool schema
+Plan: 01-04 (3/6 plans executed; 01-04 partially executed — Task 1 complete, Task 2 complete for danish only)
+Status: BLOCKED — host VICE stalled mid-Task-2; emulator restart required
+Last activity: 2026-08-01 — danish `loader_ranges` earned from live disassembly, idle-calibrated to 0 hits over 24.4M cycles, teardown proven by enumeration; halted on host stall
 
 Progress (v1.0): [████░░░░░░] 35% — 7/20 plans
 Progress (overall): [██░░░░░░░░] 20% — 7/35 plans
@@ -120,6 +120,11 @@ drifting implementations, while sharing code without sharing state means N broke
   `vice-broker.sh start`).
 
 ### Blockers/Concerns
+
+- **[HARD BLOCKER — Phase 1, 2026-08-01]: host VICE stalls while still answering `vice_ping` with `execution: "running"`.** Confirmed twice, independently. The 01-04 executor measured two `vice_cycles_stopwatch` reset→run→poll→read brackets at **exactly 0 cycles**, across two different disk images; the orchestrator then reproduced it directly after the agent exited (reset → `execution_run` → two pings → read = 0 cycles). Earlier symptom in the same incident: `vice_registers_get` returned a byte-for-byte identical stale snapshot across an explicit resume, a checkpoint delete, a soft reset, a hard reset and a single step, while `vice_backtrace` and `vice_vicii_get_state` still reflected genuine change.
+  - **`vice_ping`'s `execution` field is NOT a liveness signal.** The orchestrator wrongly reassured the developer with it *after the developer correctly suspected a freeze*. The only trustworthy test is a cycle count that advanced — which is exactly what the plan's own D-10 liveness bracket requires, and it worked. Do not repeat the ping-based inference.
+  - Incident record: `.planning/todos/pending/2026-08-01-vice-registers-frozen-after-reset-during-01-04-task2.md`. Recovery needs a **host-side** restart; the container cannot do it. Access is per-session boot-fresh, so a genuinely fresh session is the reliable way to obtain a clean instance — a subagent of a session whose instance is stalled inherits the stall.
+  - **This is the seventh host VICE incident in this project.** The previous six were outages (connection refused); this one is a *silent* stall that keeps answering. That is a worse failure mode, because every non-cycle-based health check reads green.
 
 - **[HARD BLOCKER — Phase 1, 2026-08-01]: a `gsd-executor` subagent cannot reach the emulator, because declaring *any* `tools:` allow-list strips its MCP tools.** Wave 4's executor reported a five-tool schema — `Read`, `Write`, `Edit`, `Bash`, `Skill` — with no `mcp__vice__*` tool present, and `Grep`/`Glob` missing too even though the frontmatter named them. This is not a live-state failure (`vice_ping` would have reported one of the three documented unreachable statuses); the tools are structurally absent. Matches upstream `anthropics/claude-code#13898`. **Adding `mcp__vice__*` to the allow-list does NOT fix it** — that was tried first and produced this exact result; the allow-list itself is the trigger, so the line has to be removed entirely. Full write-up in `.planning/todos/pending/2026-08-01-vice-mcp-tools-absent-from-executor-tool-schema.md`.
   - **The executor behaved correctly**: it halted at Task 2's precondition rather than improvising a route, explicitly declining the direct-`fetch()`/broker-discovery workaround this project has already discarded once. Task 1 (pure logic, no emulator) is complete, tested and merged (`ffb9a64`, `c5b92f8`, merge `64da66e`).
