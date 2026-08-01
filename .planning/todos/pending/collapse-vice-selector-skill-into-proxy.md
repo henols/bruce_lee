@@ -5,6 +5,12 @@ updated: 2026-08-01
 priority: medium
 ---
 
+> **STALE 2026-08-01.** Largely overtaken by events: `.claude/skills/vice-mcp-selector/` was
+> deleted outright in `db9eed3` rather than collapsed into the proxy. What survives of this todo
+> is only the fallout, and that is already done — the two assertions that read its SKILL.md were
+> repointed at CLAUDE.md in `e0f9915`, and its CLAUDE.md skills-table row is gone. Re-read before
+> acting; this may be closeable as-is.
+
 # Collapse the skill into the proxy that made it redundant
 
 Evidence and full line-by-line audit: [[vice-selector-skill-doc-is-vestigial]].

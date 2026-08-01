@@ -4,6 +4,12 @@ date: 2026-07-31
 priority: medium
 ---
 
+> **STALE 2026-08-01.** Its target no longer exists: `ram-compare.mjs` was deleted with the rest
+> of `c64-ram-capture/scripts/` in `db9eed3`, because those scripts reached the emulator outside
+> the `mcp__vice__*` tools. The drift knowledge it carried — volatile ranges, single-bit drift vs
+> multi-bit divergence — now lives as instructions in `c64-ram-capture/SKILL.md`. Rewrite this
+> todo against that, or close it.
+
 # Resolve where the run-set drift classification lives
 
 **This todo is a decision, not a move.** Do not start by relocating code — plan 01-01 made a
