@@ -351,6 +351,64 @@ cmd_start() {
   local i port dir epoch_file supervisor_log_rel supervisor_log_abs
   local resolved_args supervisor_pid_field dry_run_field spawned_pid
 
+  # Every supervisor pid THIS invocation spawns, collected as it spawns
+  # them -- the interrupted-start trap below terminates exactly these,
+  # never a blind sweep of $VICE_POOL_DIR. cmd_start is one-shot (it
+  # returns once every instance in the loop below has been handled), so
+  # this window is small; the trap exists for correctness on an
+  # interrupted start, and its own coverage in vice-pool.test.mjs is
+  # structural (trap registration, EXIT/HUP present) rather than
+  # timing-dependent -- a test that had to interrupt this loop fast enough
+  # to actually hit the race would be flaky, not informative.
+  local SPAWNED_SUPERVISOR_PIDS=()
+
+  # Reuses the SAME ps -o args= identity check cmd_stop below already
+  # performs before any signal: a pid whose identity does not match
+  # $SUPERVISOR_SCRIPT is left alone and logged as a possible pid reuse.
+  terminate_spawned() {
+    local p args
+    for p in "${SPAWNED_SUPERVISOR_PIDS[@]}"; do
+      args="$(ps -o args= -p "$p" 2>/dev/null || true)"
+      case "$args" in
+        *"$SUPERVISOR_SCRIPT"*)
+          echo "vice-pool: interrupted start -- terminating spawned supervisor pid $p" >&2
+          kill -TERM "$p" 2>/dev/null || true
+          ;;
+        *)
+          if [ -n "$args" ]; then
+            echo "vice-pool: refusing to signal pid $p -- ps reports \"$args\", which does not match $SUPERVISOR_SCRIPT (possible pid reuse)" >&2
+          fi
+          ;;
+      esac
+    done
+  }
+
+  # Two-entry-point trap, matching vice-supervisor.sh's own pattern: the
+  # signal path disarms all four traps first (so its own exit cannot
+  # re-enter via EXIT), terminates every supervisor spawned so far, removes
+  # the now-inconsistent registry.json (this invocation never got to write
+  # its own), and exits 0.
+  on_signal() {
+    trap - EXIT HUP INT TERM
+    echo "vice-pool: caught signal during start -- unwinding what was already spawned" >&2
+    terminate_spawned
+    rm -f "$REGISTRY_PATH"
+    exit 0
+  }
+  trap on_signal INT TERM HUP
+
+  # EXIT entry point: captures $? as its VERY FIRST statement, disarms only
+  # itself (on_signal above already disarmed this on the signal path, so it
+  # never double-fires there), terminates anything still spawned, and
+  # re-exits with the CAPTURED status -- never a hardcoded 0.
+  on_exit() {
+    local status=$?
+    trap - EXIT
+    terminate_spawned
+    exit "$status"
+  }
+  trap on_exit EXIT
+
   for ((i = 0; i < VICE_POOL_SIZE; i++)); do
     port=$((VICE_POOL_BASE_PORT + i))
     dir="$VICE_POOL_DIR/$port"
@@ -378,6 +436,7 @@ cmd_start() {
       disown "$spawned_pid" 2>/dev/null || true
       supervisor_pid_field="$spawned_pid"
       dry_run_field="false"
+      SPAWNED_SUPERVISOR_PIDS+=("$spawned_pid")
       echo "vice-pool: spawned supervisor for port $port (pid $spawned_pid), log $supervisor_log_abs"
     fi
 
@@ -403,6 +462,12 @@ ENTRY
 
   write_registry "$pool_pid" "$started_at" "${entries[@]}"
   echo "vice-pool: wrote $REGISTRY_PATH (${#entries[@]} instance(s))"
+
+  # The interrupted-start window is over: every instance has been handled
+  # and the registry reflects them. Disarm here so a LATER signal to this
+  # script's own process (long after cmd_start has returned) does not kill
+  # the pool it just successfully started.
+  trap - EXIT HUP INT TERM
 }
 
 # ------------------------------------------------------------- registry read

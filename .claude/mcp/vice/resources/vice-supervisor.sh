@@ -322,21 +322,48 @@ fi
 
 # ---------------------------------------------------------------- respawn loop
 #
-# child_pid is declared here (outside the loop) so the INT/TERM trap below
-# can see whichever child is currently running and kill it cleanly rather
-# than leaving an orphaned x64sc behind.
+# child_pid is declared here (outside the loop) so the trap entry points
+# below can see whichever child is currently running and kill it cleanly
+# rather than leaving an orphaned x64sc behind.
 child_pid=""
 
-cleanup() {
+# The shared kill-and-wait body both entry points below use. Idempotent --
+# safe to call when child_pid is empty or the child is already gone.
+terminate_child() {
   if [ -n "$child_pid" ] && kill -0 "$child_pid" 2>/dev/null; then
-    echo "vice-supervisor: caught signal, terminating child pid $child_pid" >&2
+    echo "vice-supervisor: terminating child pid $child_pid" >&2
     kill -TERM "$child_pid" 2>/dev/null || true
     wait "$child_pid" 2>/dev/null || true
   fi
+}
+
+# Signal entry point (INT/TERM/HUP): disarms ALL FOUR traps FIRST so its own
+# `exit` cannot re-enter via the EXIT entry point below, terminates the
+# child, and exits 0 -- a clean, deliberate shutdown.
+on_signal() {
+  trap - EXIT HUP INT TERM
+  echo "vice-supervisor: caught signal, shutting down" >&2
+  terminate_child
   echo "vice-supervisor: clean shutdown" >&2
   exit 0
 }
-trap cleanup INT TERM
+trap on_signal INT TERM HUP
+
+# EXIT entry point: the LOAD-BEARING one, for any exit path that is not a
+# trapped signal -- most importantly the crash-loop give-up below, which
+# exits 4 to tell an operator the cause is a bad flag or a bound port.
+# Captures $? as its VERY FIRST statement, before anything else can touch
+# it, then disarms only itself (on_signal above already disarmed this trap
+# on the signal path, so this never double-fires there) and re-exits with
+# the CAPTURED status -- never a hardcoded 0, which would silently erase
+# the give-up signal on every path through this script.
+on_exit() {
+  local status=$?
+  trap - EXIT
+  terminate_child
+  exit "$status"
+}
+trap on_exit EXIT
 
 epoch="$(read_prev_epoch)"
 epoch=$((epoch + 1))

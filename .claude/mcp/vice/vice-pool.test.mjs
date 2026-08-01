@@ -10,10 +10,10 @@
 // involved.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, statSync, chmodSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, statSync, chmodSync, rmSync } from "node:fs";
 import { tmpdir, hostname } from "node:os";
 import { join, dirname, sep } from "node:path";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { createServer } from "node:http";
@@ -33,6 +33,15 @@ import {
 } from "./install-resources.mjs";
 
 const execFileP = promisify(execFile);
+// Worktree-relative, NOT via repoRoot(): repoRoot() prefers
+// CONTAINER_WORKSPACE_PATH when it's an ancestor of this file's own
+// directory, which is true by plain string prefix for ANY worktree path
+// nested under the main workspace -- so repoRoot() would silently resolve
+// to the MAIN repo's checkout here, not this worktree's own (possibly
+// locally modified) resources/. Tests that must exercise THIS worktree's
+// own tracked scripts anchor on HERE instead, matching vice-broker.test.mjs's
+// own BROKER_SCRIPT pattern.
+const HERE = dirname(fileURLToPath(import.meta.url));
 const MODULE_URL = new URL("./vice-pool.mjs", import.meta.url).href;
 const VICE_SESSION_MODULE_URL = new URL("./vice-session.mjs", import.meta.url).href;
 const VICE_MODULE_URL = new URL("./vice.mjs", import.meta.url).href;
@@ -40,6 +49,20 @@ const REPO_ROOT_MODULE_URL = new URL("./repo-root.mjs", import.meta.url).href;
 const VICE_CLI = fileURLToPath(VICE_MODULE_URL);
 
 const tmpPoolDir = () => mkdtempSync(join(tmpdir(), "vice-pool-"));
+
+/** Poll `predicate` (a zero-arg function returning truthy/falsy) to a
+ * bounded deadline rather than sleeping a fixed duration -- checkpoint/frame
+ * synchronisation, never wall-clock delay (this project's own stack
+ * pattern). Returns the predicate's own truthy result, or null on timeout. */
+async function waitFor(predicate, { timeoutMs = 8000, pollMs = 20 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const result = predicate();
+    if (result) return result;
+    await new Promise((r) => setTimeout(r, pollMs));
+  }
+  return null;
+}
 
 function writeRegistry(dir, ports) {
   mkdirSync(dir, { recursive: true });
@@ -1770,4 +1793,101 @@ test("installResources(): never throws when the target root is unwritable -- it 
   } finally {
     chmodSync(root, 0o700); // restore so the temp dir can be cleaned up
   }
+});
+
+// ============================================================================
+// quick-260801-qpq Task 3: vice-supervisor.sh and vice-pool.sh terminate what
+// they spawned on SIGINT, SIGTERM, SIGHUP and on any other exit path -- not
+// just SIGINT/SIGTERM as before. Both scripts register a two-entry-point
+// trap: a signal entry point (INT/TERM/HUP) and an EXIT entry point that
+// captures $? as its first statement and re-exits with it, so the
+// crash-loop give-up path's exit 4 survives unchanged.
+// ============================================================================
+
+test("vice-supervisor.sh: a SIGHUP terminates the running child before the supervisor itself exits", async () => {
+  const supervisorScript = join(HERE, "resources", "vice-supervisor.sh");
+  const supervisorDir = mkdtempSync(join(tmpdir(), "vice-supervisor-sighup-"));
+  const epochFile = join(supervisorDir, "epoch.json");
+  let child;
+  try {
+    child = spawn("bash", [supervisorScript], {
+      env: {
+        ...process.env,
+        VICE_SUPERVISOR_ALLOW_CONTAINER: "1",
+        VICE_SUPERVISOR_DIR: supervisorDir,
+        VICE_BIN: "/bin/sleep",
+        VICE_ARGS: "300",
+      },
+      stdio: "ignore",
+    });
+
+    const epoch = await waitFor(() => {
+      if (!existsSync(epochFile)) return null;
+      try {
+        const rec = JSON.parse(readFileSync(epochFile, "utf8"));
+        return typeof rec.pid === "number" ? rec : null;
+      } catch {
+        return null;
+      }
+    });
+    assert.ok(epoch, "the supervisor must write an epoch record naming its child's pid");
+    const childPid = epoch.pid;
+
+    const childAliveBefore = await waitFor(() => {
+      try {
+        process.kill(childPid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+    assert.ok(childAliveBefore, "the sleep child must be alive before the signal");
+
+    child.kill("SIGHUP");
+
+    const childGone = await waitFor(() => {
+      try {
+        process.kill(childPid, 0);
+        return false;
+      } catch {
+        return true;
+      }
+    });
+    assert.ok(childGone, "SIGHUP must terminate the running child before the supervisor exits");
+
+    const supervisorExited = await waitFor(() => child.exitCode !== null);
+    assert.ok(supervisorExited, "the supervisor itself must exit after handling SIGHUP");
+    assert.equal(child.exitCode, 0, "a signal-triggered shutdown is a clean, deliberate exit -- status 0");
+  } finally {
+    if (child && child.exitCode === null) {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        /* already gone */
+      }
+    }
+    rmSync(supervisorDir, { recursive: true, force: true });
+  }
+});
+
+test("structural: both vice-supervisor.sh and vice-pool.sh register EXIT and HUP alongside INT and TERM", () => {
+  const supervisorSrc = readFileSync(join(HERE, "resources", "vice-supervisor.sh"), "utf8");
+  const poolSrc = readFileSync(join(HERE, "resources", "vice-pool.sh"), "utf8");
+
+  for (const [name, src] of [
+    ["vice-supervisor.sh", supervisorSrc],
+    ["vice-pool.sh", poolSrc],
+  ]) {
+    assert.match(src, /trap\s+\S+\s+EXIT\b/, `${name} must register a trap on EXIT`);
+    assert.match(src, /trap\s+\S+[^\n]*\bHUP\b/, `${name} must register a trap naming HUP`);
+    assert.match(src, /trap\s+\S+[^\n]*\bINT\b/, `${name} must still register a trap naming INT`);
+    assert.match(src, /trap\s+\S+[^\n]*\bTERM\b/, `${name} must still register a trap naming TERM`);
+  }
+});
+
+test("structural: bash -n exits 0 for both vice-supervisor.sh and vice-pool.sh", async () => {
+  const supervisorScript = join(HERE, "resources", "vice-supervisor.sh");
+  const poolScript = join(HERE, "resources", "vice-pool.sh");
+  await execFileP("bash", ["-n", supervisorScript]);
+  await execFileP("bash", ["-n", poolScript]);
 });
