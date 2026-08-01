@@ -145,3 +145,60 @@ Two facts confirmed alongside it, both cheap and worth repeating at session star
 one; and the instance is granted on the session's **first** forwarded call (here `vice_ping` →
 `3.10`/`C64SC`/`paused`), so a subagent of this session inherits *this* instance — which is why
 a stalled session cannot be repaired from inside and has to be abandoned for a fresh one.
+
+### 2026-08-01 — `vice_disk_attach` rejects a repo-relative path; an absolute container path works
+
+**Type:** hazard
+**Evidence:** live, during 01-04 Task 2's saeger pass — `vice_disk_attach({unit:8, path:"disks/saeger.d64"})`
+returned an error ("Failed to attach disk image") from the proxy; the identical call with
+`path` set to the absolute in-container worktree path (`git rev-parse --show-toplevel`, then
+`/disks/saeger.d64` appended) succeeded immediately, no other change.
+**Saves/costs:** a failed attach reads like a host-side problem (the error message even quotes the
+host-side launcher path and the "ask a human to start it" boilerplate), which wastes time
+suspecting the emulator when the actual defect is a relative path the host-side path-translation
+layer can't resolve. Always resolve the disk image to an absolute in-container path — derive it
+from `git rev-parse --show-toplevel` inside the worktree, per the project's own
+worktree-path-safety rule for Edit/Write — before calling `vice_disk_attach`, never pass a
+repo-relative string like `disks/<release>.d64` directly.
+
+### 2026-08-01 — a genuine mid-session host VICE crash/respawn, self-surfaced by the proxy as an epoch-drift error, and auto-recovered on the NEXT call
+
+**Type:** hazard, plus a confirmation that the epoch mechanism now works as designed
+**Evidence:** live, during 01-04 Task 2's saeger pass, immediately after `vice_autostart` +
+`vice_execution_run` on `saeger.d64` and several non-pausing `vice_ping` polls. Three consecutive
+`vice_ping` calls failed — first `UND_ERR_SOCKET`, then `ECONNREFUSED` (naming lease
+`req-92387-...`, port 6510, epoch 8, pid 827101, "may have crashed after being granted") — then a
+fourth call returned a distinct error: `"epoch drift detected before forwarding -- the host VICE
+MCP server's epoch changed from 8 to 9, pid 944178"`. Every `vice_ping` call after that fourth one
+succeeded normally (`execution:"paused"`, i.e. a fresh boot). A fresh `cycles_stopwatch
+reset -> execution_run -> ping x3 -> read` bracket on the new epoch-9 instance measured **13,501,532
+cycles** — genuinely live, not another silent stall.
+**Costs / saves:** costs the whole in-progress saeger boot (disk attach, autostart, run, and the
+partial `$08F0`/PC=61024 register read taken under epoch 8) — all of it must be treated as void
+and redone from `vice_disk_attach` on the new instance, because a differently-booted machine
+answering the same tool calls is not the machine the earlier steps ran against. Saves: the proxy's
+own epoch-drift detection means this doesn't have to be caught by comparing cycle brackets by
+hand — the transport surfaces it as a loud, unambiguous error naming both epoch numbers on the
+very next forwarded call, and (unlike the STATE.md-documented "proxy caches a dead grant for the
+session's whole life" defect from the prior incident) subsequent calls transparently used the new
+instance without the session needing to be abandoned. This is the eighth host VICE incident in
+this project and the first one that self-healed within the same session rather than requiring a
+fresh session.
+**Rule applied:** per `.claude/CLAUDE.md` § Emulator Access ("Compare the restart epoch across a
+bracket. A changed epoch voids the run.") and this plan's identity-change handling, nothing
+measured between the last confirmed-good point and the epoch-drift report is trustworthy. The
+correct response is not to inspect the "paused" state further as if it were a continuation — it
+is to re-run the entire boot sequence from `vice_disk_attach` on the new instance.
+**Confidence:** HIGH (measured live, twice independently, both self-healed the same way).
+
+**Second occurrence, same session, ~8 minutes later (epoch 9 → 10).** Immediately after the
+epoch-9 instance's re-derived idle-window checkpoints had just measured a clean counting-tier
+probe (45,519,518 cycles, non-stopping checkpoint hit_count 2513), the very next two
+`vice_checkpoint_add` calls failed the same way — `UND_ERR_SOCKET` then `ECONNREFUSED` naming
+lease `req-92387-...`, pid 944178, epoch 9 — and the following `vice_ping` reported `"epoch drift
+detected... changed from 9 to 10, pid 1056804"`. Identical shape to the first occurrence:
+`vice_checkpoint_list` on the new epoch-10 instance immediately returned `count:0` (fresh, no
+stale checkpoints), and a fresh cycle bracket measured 19,017,687 cycles — genuinely live. Two
+crashes in roughly 20 minutes of continuous live work is a real rate, not a one-off: plan a live
+session for saeger/danish work to tolerate re-deriving a boot sequence more than once, and treat
+every post-crash "paused" read as a fresh machine requiring a full reboot, never a resume point.
