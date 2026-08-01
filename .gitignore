@@ -59,10 +59,18 @@ dkms.conf
 # Claude Code state staged for the first devcontainer rebuild (contains credentials)
 .devcontainer/.claude-seed/
 
-# Claude Code: track this project's own skills and its non-skill MCP server
-# implementations, ignore the installed toolkit (agents, commands, hooks,
+# Claude Code: track this project's own instructions, skills and non-skill MCP
+# server implementations, ignore the installed toolkit (agents, commands, hooks,
 # gsd-core and local settings are per-machine)
+#
+# CLAUDE.md is tracked as of 2026-08-01. It was never per-machine -- it carries
+# the project's own standing rules, including the hard rule that mcp__vice__*
+# is the only route to the emulator. Being caught by the blanket `.claude/*`
+# meant those rules lived in one working copy and a fresh clone silently got
+# none of them, which is the wrong failure direction for a rule whose whole job
+# is to stop something being rebuilt.
 .claude/*
+!.claude/CLAUDE.md
 !.claude/skills/
 !.claude/mcp/
 
