@@ -93,7 +93,7 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-7 pending — see `.planning/todos/pending/`. The dependency chain was
+11 pending — see `.planning/todos/pending/`. The dependency chain was
 **absorb the skills → extract the package → share broker state**; its first step is now **done**
 (2026-08-01, `e0f9915`), which unblocks the second. Sharing state without sharing code means N
 drifting implementations, while sharing code without sharing state means N brokers racing:
@@ -109,6 +109,14 @@ drifting implementations, while sharing code without sharing state means N broke
   the criterion the three 2026-08-01 skill deletions established, and check it against `acme-build`
   and `c64-memory-mapping` before applying it. Pairs with the package extraction below: both ask what
   is project-specific and what is generally useful about adjacent code.
+
+- **Collect C64 reverse-engineering findings into a fast RE skill** (tooling, minor) — the three
+  surviving skills each cover one station (capture / address lookup / build) and none covers the
+  route between them, so "find the entry point, the vectors, the IRQ source, the main loop" is
+  re-derived every session. Collect from `.planning/research/`, `01-RESEARCH.md`, `01-PATTERNS.md`
+  and both `01-04-ATTEMPT-N-HALT.md` records first, then write a decision-ordered procedure that
+  delegates per-address detail to `c64-memory-mapping`. Must clear the same keep/cut bar as the
+  todo above — decision points, not narration of the `mcp__vice__*` tool list.
 
 - **Extract the VICE MCP into its own project and publish it as an installable package** (tooling,
   major) — `.claude/mcp/vice/` is ~14,650 vendored lines with no `package.json`; copying is the only
