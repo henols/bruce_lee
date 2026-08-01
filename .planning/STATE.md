@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: Pipeline Proven *
-current_phase: 01.2
-current_phase_name: On-Demand Broker and Per-Session Leasing
-status: executing
+current_phase: 2
+current_phase_name: Coverage, Hazards & Memory Map
+status: planning
 stopped_at: "Completed 01.2-05-PLAN.md: two-session leasing proven, VICE standing constraint narrowed (D-1.2-C)"
-last_updated: "2026-08-01T11:37:18.632Z"
+last_updated: "2026-08-01T11:52:29.468Z"
 last_activity: 2026-08-01
-last_activity_desc: Phase 01.2 execution resumed (wave continue)
+last_activity_desc: Phase 01.2 complete, transitioned to Phase 2
 progress:
   total_phases: 3
   completed_phases: 2
@@ -30,10 +30,10 @@ See: .planning/PROJECT.md (updated 2026-07-31)
 ## Current Position
 
 Milestone: v1.0 — Pipeline Proven (Phases 1–4 of 7 total)
-Phase: 01.2 (On-Demand Broker and Per-Session Leasing) — EXECUTING
-Plan: 2 of 5
-Status: Ready to execute
-Last activity: 2026-08-01 — Phase 01.2 execution resumed (wave continue)
+Phase: 2 — Coverage, Hazards & Memory Map
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-08-01 — Phase 01.2 complete, transitioned to Phase 2
 
 Progress (v1.0): [████░░░░░░] 35% — 7/20 plans
 Progress (overall): [██░░░░░░░░] 20% — 7/35 plans
@@ -46,7 +46,7 @@ Progress (overall): [██░░░░░░░░] 20% — 7/35 plans
 
 **Velocity:**
 
-- Total plans completed: 4
+- Total plans completed: 9
 - Average duration: —
 - Total execution time: 0.0 hours
 
@@ -55,6 +55,7 @@ Progress (overall): [██░░░░░░░░] 20% — 7/35 plans
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 01.1 | 4 | - | - |
+| 01.2 | 5 | - | - |
 
 **Recent Trend:**
 
