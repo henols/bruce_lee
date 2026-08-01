@@ -99,11 +99,11 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 01-03: Second release recovered by re-running the same recorded procedure, with N-readiness proven by the parameterisation gate (RECOVER-01, RECOVER-03) — *sequential (shared VICE)*
+- [x] 01-03: Second release recovered by re-running the same recorded procedure, with N-readiness proven by the parameterisation gate (RECOVER-01, RECOVER-03) — *sequential (shared VICE)*
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 01-04: Instance-acquisition seam, earned on-demand-load detector, bounded play-through for both releases, `LOADING.md` absence-as-evidence record, supplementary dumps (RECOVER-04) — *sequential; replanned 2026-08-01 after the first run was reverted (`bb0b1f7`); two blocking checkpoints — a decision gate on the acquisition route, then a human-verify gate on the coverage claim*
+- [ ] 01-04: Earned on-demand-load detector as pure logic, live arming and bounded play-through driven by the agent's own `mcp__vice__*` tool calls for both releases, `LOADING.md` absence-as-evidence record, supplementary dumps rendered from committed observation records, both `NOTES.md` reproduction sections corrected (RECOVER-04) — *sequential; replanned twice — once after the first run was reverted (`bb0b1f7`), then again on 2026-08-01 when `mcp__vice__*` became the only permitted route to the emulator and the plan's CLI-driven design became impossible; one blocking human-verify gate on the coverage claim, which also settles D-13 if any load event fires*
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
@@ -112,6 +112,8 @@ Plans:
 **Wave 6** *(blocked on Wave 5 completion)*
 
 - [ ] 01-06: Crack-independence verdict with tiered evidence; canonical designation by measured patch count; `recovery/clean/` published as a projection of the registry (RECOVER-07, RECOVER-08) — *strictly last*
+
+**Replanning note (2026-08-01, `/gsd-plan-phase 1`):** a hard rule landed mid-phase — **the `mcp__vice__*` tools are the only permitted route to the emulator**, so no script, module, test or driver may reach it and `tools/` holds pure logic only over data the agent fetched and passed in (`.claude/CLAUDE.md` § "Emulator Access"). Plans 01-01, 01-02 and 01-03 were already executed and are untouched; the evidence they produced is unaffected. **01-04 was rewritten**: its intent survives intact — earn the armed set, calibrate idle to zero, attribute every hit before classifying it, prove teardown by enumeration, record absence as evidence — but every CLI verb aimed at a live machine is gone, replaced by the agent's own tool calls with a committed observation record as the boundary between live work and pure logic. **01-05 and 01-06 were reviewed and found already correct** — verified independently to make zero emulator calls and to reference no deleted module — and carry only three corrections found by running the real validator during the replan (the manifest set is enumerated from the registry rather than hardcoded to two files; the loader bucket is seeded from the registry's earned `loader_ranges` rather than from prose; `validate --final`'s exits-zero claim moved from 01-05, where it is unachievable, to 01-06, which sets the canonical designation it asserts). `SKELETON.md`'s "Emulator control transport" row is retired in place with a dated superseding note rather than left to rot; its two premises — success criterion 1's mechanism and Phase 3's VERIFY-01 — are addressed in `01-04-PLAN.md` rather than abandoned, the second as an explicit deferral to Phase 3's own discuss cycle.
 
 **Planning note (2026-07-30):** the plan set was restructured from the horizontally-sliced 5-plan breakdown originally recorded here to a **tracer-first** 6-plan shape. Plan 01-01 is now a complete end-to-end vertical slice — cold reset through boot, signal detection, capture, artifact write and determinism proof against one release — rather than a bootstrap survey that produces no dump. Reasoning, and the explicit resolution of the tension with the original breakdown, is recorded in `.planning/phases/01-recovery-provenance/01-01-PLAN.md`. Two further deviations: `RECOVER-05` (normalisation) moved from 01-04 to 01-05's first task, where it gates the diff directly; and the `$01`-write step named in the original 01-02 line is **not** performed at all — research verified live that `vice_memory_read(bank:"ram")` reaches RAM beneath ROM and I/O non-invasively, so D-08's guarded fallback stays documented and unexercised.
 
