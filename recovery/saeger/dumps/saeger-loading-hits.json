@@ -1,38 +1,135 @@
 {
   "release": "saeger",
-  "run_token": "01-04-task2-saeger-2026-08-01-BLOCKED",
+  "run_token": "01-04-task2-saeger-2026-08-01-earned",
   "route": "executing agent's own mcp__vice__* tool calls, this session",
   "vice_version": "3.10",
   "machine": "C64SC",
   "video_standard": "PAL",
-  "run_status": "blocked",
-  "run_status_note": "Boot never progressed past its pre-loader state for saeger.d64 this session; two independent vice_cycles_stopwatch reset->run->poll->read brackets both measured exactly 0 cycles advanced despite vice_ping reporting execution:\"running\" throughout. See .planning/todos/pending/2026-08-01-vice-registers-frozen-after-reset-during-01-04-task2.md for the full incident record.",
-  "technique_note": "BLOCKED, not attempted to completion. After danish's Task 2 work completed successfully (see recovery/danish/dumps/danish-loading-hits.json), this session detached danish.d64, hard-reset, attached saeger.d64, autostarted, queued a PETSCII SPACE into the KERNAL keyboard buffer (matching saeger's recorded gate.delivery: \"kernal-buffer\"), armed the $08B1 trigger checkpoint, and polled. The boot never progressed past its pre-loader state: repeated vice_disassemble reads at $08E0-$08FA returned the same unpopulated power-on-pattern bytes across multiple resume/poll cycles, vice_vicii_get_state returned byte-for-byte identical output to a reading taken minutes earlier on a different disk image, and two independent vice_cycles_stopwatch reset->run->poll->read brackets both reported exactly 0 cycles advanced despite vice_ping continuously reporting execution:\"running\". This is a genuine emulator/bridge stall, not a boot that is merely slow -- logged in full at .planning/todos/pending/2026-08-01-vice-registers-frozen-after-reset-during-01-04-task2.md. Per the project's hard rule (\"If the host dies, report it -- do not try to restart it from the container\"), no further resume/reset cycles were attempted once the pattern was confirmed on this second disk image. loader_ranges, rejected_candidates and watch_set are recorded as empty arrays in recovery/RELEASES.json for this release -- NOT because none were found, but because the live derivation this task requires could not be attempted at all.",
+  "technique_note": "This session inherited danish's completed Task 2 pass (attempt 2, commit 72eb6e7) and the prior attempt's BLOCKED saeger record. saeger's own boot/derivation genuinely earned this run, on a fourth emulator instance after three mid-session host VICE crashes (epoch 8->9, 9->10, 10->11 -- see identity_changes and .planning/RE-FINDINGS.md). Each crash was self-surfaced by the proxy as a loud epoch-drift error and self-healed on the next call; per this project's rule every measurement taken before a detected crash was voided and the whole boot sequence (disk_attach -> autostart -> execution_run -> gate walk -> trigger) was redone from scratch on the new instance rather than trusted as a continuation. On the fourth (epoch-11) instance, the boot was walked patiently: registers_get/backtrace confirmed the machine was genuinely inside the KERNAL LOAD chain (not yet at the gate) before any keyboard input was queued, avoiding the earlier attempts' failure mode where a PETSCII SPACE queued too early was consumed by BASIC's own input-line editor (CHRIN via IMAIN, confirmed live via vice_backtrace showing $A483 in the call chain) rather than by the cracktro's $08F4 GETIN gate -- a concrete instance of the hazard danish's own NOTES.md already warns about for the matrix-delivery gate ('pressing too early can be read by the autostart's own simulated typing and corrupt the boot'), now confirmed for the kernal-buffer delivery mechanism too. Once vice_backtrace confirmed the call chain passed through $08F6 (the JSR $FFE4 in the $08F4 gate loop) before queuing, the PETSCII SPACE was consumed correctly and the $08B1 trigger checkpoint hit (hit_count 132) on the very next resume. Following the same technique correction recorded in danish's Task 2 (small earned set, not the full WATCH_SET-resolved sentinel list): the loader-reentry stopping sentinel ($0340-$03A0) and the $DD00 counting sentinel were the only two live-armed for idle calibration; the full 171-entry WATCH_SET resolution is recorded in the registry as data for plan 02-02's hand-off (D-11), not live-armed this run.",
   "identity_changes": [
     {
-      "when": "after switching from danish.d64 to saeger.d64 mid-session",
-      "what": "vice_registers_get had already frozen (see the danish hit log and the linked todo); vice_cycles_stopwatch subsequently confirmed genuine zero cycle advancement across two independent brackets on saeger.d64 too -- the stall widened from one tool (vice_registers_get) to the whole execution-advancement path",
-      "action": "halted all further live emulator work for this session rather than retrying into a believed-good answer"
+      "when": "immediately after vice_autostart + vice_execution_run on saeger.d64, mid-boot, several non-pausing vice_ping polls in",
+      "what": "epoch 8 -> 9 (pid 827101 -> 944178). Proxy surfaced UND_ERR_SOCKET then ECONNREFUSED on two vice_ping calls, then a distinct epoch-drift error on the third naming both epoch numbers. A fresh cycles_stopwatch bracket on the new epoch-9 instance measured 13,501,532 cycles -- genuinely live.",
+      "action": "treated everything since the last confirmed-good point (the danish liveness bracket) as void; redid vice_disk_attach/vice_autostart/vice_execution_run from scratch on the epoch-9 instance"
+    },
+    {
+      "when": "~8 minutes later, immediately after a clean counting-tier probe on the epoch-9 instance (45,519,518 cycles, non-stopping checkpoint hit_count 2513)",
+      "what": "epoch 9 -> 10 (pid 944178 -> 1056804). Same error shape: UND_ERR_SOCKET then ECONNREFUSED on vice_checkpoint_add, then epoch-drift confirmed on the next vice_ping. Fresh bracket on epoch-10: 19,017,687 cycles.",
+      "action": "voided the epoch-9 probe result and the not-yet-armed calibration checkpoints; redid the full boot from vice_disk_attach on the epoch-10 instance"
+    },
+    {
+      "when": "during a single boot attempt on the epoch-10 instance that had already run ~498,181,326 cycles (per two vice_cycles_stopwatch reads) with the armed $08B1 trigger checkpoint still at hit_count 0",
+      "what": "epoch 10 -> 11 (pid 1056804 -> 1110262), surfaced the same way (vice_execution_pause/vice_registers_get/vice_backtrace all failed with UND_ERR_SOCKET/ECONNREFUSED, then vice_ping reported the epoch drift). Fresh bracket on epoch-11: 12,312,150 cycles.",
+      "action": "logged .planning/todos/pending/2026-08-01-vice-crashes-three-times-during-sustained-execution-01-04-task2-saeger.md; voided the entire stuck boot attempt; did a clean vice_disk_detach + vice_machine_reset(hard, run_after:false) before redoing the boot on the epoch-11 instance -- the boot that ultimately succeeded and produced every result below"
     }
   ],
-  "armed": [],
-  "watch_set_note": "Not resolved this session -- recovery/RELEASES.json's watch_set for saeger is an empty array, recorded as blocked rather than as a completed zero-entry resolution.",
+  "armed": [
+    {
+      "name": "loader:$0340-$03A0",
+      "kind": "loader-reentry",
+      "tier": "stopping",
+      "type": "exec",
+      "start": 832,
+      "end": 928,
+      "reason": "cassette-buffer / Datasette-buffer region (TBUFFR, $033C-$03FB per the C64 memory map), a classic loader-stub location; holds stale $01-byte data at steady state (not the power-on $00/$FF pattern), i.e. leftover raw-sector-loader scratch never reclaimed by the game. Wider than danish's analogous finding ($0340-$035E): saeger's uncrunched loader leaves a larger scratch footprint, $0340-$03A0 (97 bytes).",
+      "evidence": "Live disassembly and a precise 192-byte vice_memory_read($02F0, size:192) spanning $02F0-$03AF: $0340-$03A0 reads as the single repeated byte $01 throughout (disassembles as ORA ($01,X) at every boundary checked), with $03A1 onward reading ordinary $00 filler.",
+      "checkpoint_num": 1,
+      "idle_hits": 0
+    },
+    {
+      "name": "reg:$DD00",
+      "kind": "register",
+      "tier": "counting",
+      "type": "write",
+      "start": 56576,
+      "end": 56576,
+      "reason": "CIA2 port A -- VIC-II bank-select bits plus bit-banged serial-bus lines a KERNAL-bypassing raw-sector loader toggles directly; the primary on-demand-load sentinel.",
+      "evidence": "c64-memory-mapping skill memmap: $DD00 bits 0-1 select the VIC bank; bits 3-5 are the serial bus ATN OUT/CLOCK OUT/DATA OUT lines. Live read at steady state: $DD00 = $C1 (%11000001) -> VIC bank 2 ($8000-$BFFF), matching the $D018=$31 screen-base decode used for the counting-tier probe below.",
+      "checkpoint_num": 2,
+      "idle_hits": 1
+    }
+  ],
+  "watch_set_note": "recovery/RELEASES.json's watch_set field for saeger carries the full 171-entry WATCH_SET resolution (169 never-populated ranges from the run1 manifest + 1 register + 1 loader-reentry range) as data for plan 02-02's D-11 hand-off, resolved this run via `node tools/watch-loads.mjs resolve --release saeger --json`. Only the 2 entries listed in `armed` above were live-armed and idle-calibrated THIS run, matching the small-earned-set technique the developer specified during danish's Task 2 pass.",
+  "irq_path_reconnaissance": {
+    "method": "vice_memory_read($01, bank:ram) -> vice_memory_read($FFFE, size:2), a lighter-weight confirming check than danish's full reconnaissance since plan 01-03 already established both releases load byte-identical original Datasoft game code at $08B1/$139E",
+    "bank_state_at_check": {
+      "port01_raw": 64,
+      "loram": false,
+      "hiram": false,
+      "charen": true,
+      "note": "HIRAM=0: KERNAL is banked OUT of $E000-$FFFF at this instant on saeger too, same as danish's own finding, so $FFFE/$FFFF is the live hardware IRQ dispatch the CPU actually reads."
+    },
+    "hardware_irq_vector": {
+      "address": "$FFFE-$FFFF",
+      "value": "$1103",
+      "note": "Identical to danish's own recorded hardware IRQ vector value ($1103) and handler ($1103: PHA/TXA/PHA/TYA/PHA/TSX/... dispatching indirectly through $0408/$0409) -- confirms saeger shares the same IRQ path as danish rather than merely the same main-loop dispatcher, consistent with plan 01-03's finding that both cracks load the same original game. Not re-disassembled in full this run since danish's own reconnaissance already covers the handler and its raster-split chain byte-for-byte identically."
+    }
+  },
   "counting_tier_probe": {
-    "hit_count": null,
-    "execution_stopped": null,
+    "hit_count": 432,
+    "execution_stopped": false,
     "fallback_taken": false,
-    "note": "Not attempted -- the boot never reached a state where a probe could be meaningfully armed."
+    "probe_range": "$8C00-$8FE7 (1000-byte screen matrix at the title-screen VIC bank/screen-base observed live: $D018=$31 -> screen base offset $0C00 within bank; $DD00=$C1 -> VIC bank 2 ($8000-$BFFF); absolute screen base $8C00, matching danish's own probe range exactly since both releases share the same title-screen VIC configuration)",
+    "cycles_advanced_during_probe": 16182609,
+    "note": "Confirms the two-tier design's premise on saeger too: a non-stopping store checkpoint accumulates a hit count while the machine keeps running. No fallback to a stopping-checkpoint-with-ignore-count was needed."
   },
   "idle_calibration": {
-    "cycles_advanced": 0,
-    "sentinels": [],
-    "note": "Two independent reset->run->poll->read brackets both measured exactly 0 cycles advanced. Per this project's own rule (an idleGate calibration whose cycles_advanced is not greater than zero is rejected regardless of hit counts), this is recorded as a FAILED/BLOCKED calibration, not a passing one with no sentinels."
+    "cycles_advanced": 51563549,
+    "sentinels": [
+      { "name": "loader:$0340-$03A0", "tier": "stopping", "start": 832, "end": 928, "hits": 0 },
+      { "name": "reg:$DD00", "tier": "counting", "start": 56576, "end": 56576, "hits": 1 }
+    ]
   },
-  "milestones": [],
-  "hits": [],
-  "input_notes": "One PETSCII SPACE (mcp__vice__vice_keyboard_petscii, data:[32]) was queued for saeger's kernal-buffer gate delivery per recovery/RELEASES.json's boot.gates entry, but the boot never progressed far enough for the gate to matter.",
+  "run_status": "blocked",
+  "run_status_note": "Task 2 (above) completed in full and is a genuinely evidenced result. Task 3's play-through, in the SAME session immediately afterward, reached 2 of the required milestones (title-screen, game-start/chamber-1) with full evidence before a genuine SILENT host VICE stall halted further play: three independent vice_cycles_stopwatch reset->execution_run->ping xN->read brackets all measured exactly 0 cycles while vice_ping continuously reported execution:\"running\" with no epoch change (i.e. the same instance, not a crash/respawn -- distinct from the three epoch-drift crashes logged in identity_changes above). vice_registers_get returned an identical PC across all three brackets, including one taken immediately after an explicit vice_execution_pause. Per this project's rule and this plan's own instruction, no further play input was attempted once this was confirmed twice. Full evidence in .planning/RE-FINDINGS.md and .planning/todos/pending/2026-08-01-vice-silent-stall-during-01-04-task3-saeger-playthrough.md. The remaining required milestones (a second real chamber transition, both opponents, a death, a game over, a restart) were NOT reached this session -- this is an honest partial result, not a completed play-through, and recovery/LOADING.md must render it as such rather than as a clean coverage claim.",
+  "milestones": [
+    {
+      "name": "title-screen",
+      "reached": true,
+      "screen_signature": "4797375c21d2cb1ec44d2713f14a68e778442d1a153cc10fc9c202b60010c2bd",
+      "sprite_enable": 31,
+      "screenshot": "recovery/saeger/dumps/saeger-loading-01-title.png",
+      "cycles_advanced": 51563549,
+      "retries": 0,
+      "snapshot_name": null
+    },
+    {
+      "name": "game-start-chamber1",
+      "reached": true,
+      "screen_signature": "6b0010cecea54728fecb6b35d09bf80a41f4a741be6fb17b73898a22165f1f42",
+      "sprite_enable": 19,
+      "screenshot": "recovery/saeger/dumps/saeger-loading-02-postf7.png",
+      "cycles_advanced": 24071261,
+      "retries": 0,
+      "snapshot_name": null,
+      "note": "Reached by holding F7 (vice_keyboard_matrix) at the title screen for 10 frames. Confirmed both mechanically (screen signature differs from the title baseline, sprite_enable 31->19) and visually (saeger-loading-02-postf7.png shows chamber 1: HUD, Bruce Lee sprite, a white ape-like opponent, platforms and a barrier obstacle -- not the title screen)."
+    }
+  ],
+  "scope_not_attempted": [
+    "A second real chamber transition (beyond entering chamber 1) -- play-through halted by the stall before it could be attempted.",
+    "Both opponents encountered as named milestones -- the white ape-like figure visible in saeger-loading-02-postf7.png was seen on screen but not confirmed as an actual encounter/collision before the stall.",
+    "A death -- not attempted.",
+    "A game over -- not attempted.",
+    "A restart -- not attempted."
+  ],
+  "hits": [
+    {
+      "sentinel": "reg:$DD00",
+      "address": "$DD00",
+      "cycle": 24071261,
+      "tier": "counting",
+      "pc": "$07DB",
+      "backtrace": [
+        { "return_address": 1366, "called_from": 1363, "called_target": 1891 },
+        { "return_address": 7218, "called_from": 7215, "called_target": 11605 }
+      ],
+      "disassembly": "$07D9: LDA #$01 / $07DB: STA $DD00 / $07DE: LDA #$38 / $07E0: STA $D018 -- reasserts VIC bank 2 (bits 0-1 = 01, unchanged from $C1's own bank-2 selection) while clearing the CIA2 port A's other bits, immediately followed by a new $D018 charset/screen-base value. Part of a room/chamber graphics-mode-setup routine invoked during the title-to-chamber-1 transition (and again on later room draws, per the counting-tier hit count climbing from the idle floor of 1 to 5 during this transition, then to a fresh 1 on the freshly re-armed checkpoint after one vice_joystick_tap move).",
+      "classification": "gameplay-write"
+    }
+  ],
+  "input_notes": "Task 2: boot saeger, queue a PETSCII SPACE (mcp__vice__vice_keyboard_petscii, data:[32]) into the KERNAL keyboard buffer only after vice_backtrace confirmed the call chain was inside the $08F4 gate's own JSR $FFE4 (called_from $08F6), release at the $08B1 trigger checkpoint. Task 3 (this session, partial): held F7 (vice_keyboard_matrix, 10 frames) at the title screen to begin a 1-player game, reaching chamber 1; sent one vice_joystick_tap(direction:right, duration_frames:60) then one vice_joystick_tap(direction:right, duration_frames:90) to move Bruce Lee, which produced the one attributed $DD00 hit above; no further input was sent once the silent stall was confirmed.",
   "teardown": {
     "checkpoints_remaining": 0,
-    "enumerated_at": "checkpoint_list and checkpoint_delete remained reliable throughout the stall (unlike registers_get and the cycle-advancement path), so the one trigger checkpoint armed at $08B1 for saeger was deleted by its checkpoint_num and confirmed by an explicit mcp__vice__vice_checkpoint_list reporting count:0, after the decision to halt further live investigation. This IS a genuine empty-enumeration proof, taken specifically to avoid leaving an armed checkpoint behind even though the rest of this release's Task 2 work could not be completed."
+    "enumerated_at": "post-idle-calibration (Task 2), via an explicit mcp__vice__vice_checkpoint_list call after deleting checkpoints 1 and 2 individually by checkpoint_num; a second explicit mcp__vice__vice_checkpoint_list call after re-arming and tearing down the counting-tier probe's own checkpoint (checkpoint_num 1, re-used after the calibration checkpoints were deleted) also confirmed count:0. A third and final enumeration (Task 3, post-stall) confirmed count:0 again after deleting the two checkpoints (loader-reentry + $DD00, re-armed as checkpoint_num 1 and 3) that were live during the play-through -- vice_checkpoint_list and vice_checkpoint_delete both remained reliable throughout the silent stall, unlike vice_registers_get/vice_execution_pause/the cycle-advancement path."
   }
 }

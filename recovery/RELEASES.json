@@ -1931,9 +1931,1747 @@
       "tier2_evidence": [],
       "independence": null,
       "notes": "recovery/saeger/NOTES.md",
-      "loader_ranges": [],
-      "rejected_candidates": [],
-      "watch_set": []
+      "loader_ranges": [
+        {
+          "start": "$0340",
+          "end": "$03A0",
+          "note": "cassette-buffer / Datasette-buffer region (TBUFFR, $033C-$03FB per the C64 memory map), a classic loader-stub location; holds stale $01-byte data at steady state (not the power-on $00/$FF pattern), i.e. leftover raw-sector-loader scratch never reclaimed by the game. Wider than danish's analogous finding ($0340-$035E, 31 bytes): saeger's uncrunched raw-sector loader leaves a larger scratch footprint here, spanning $0340-$03A0 (97 bytes), before the pattern reverts to ordinary $00 filler at $03A1.",
+          "evidence": "Live disassembly and a precise raw memory read at steady state (post-$08B1 trigger) both confirm the full extent: a 192-byte vice_memory_read($02F0, size:192) spanning $02F0-$03AF shows $0340-$03A0 reading as the single repeated byte $01 throughout (disassembles as ORA ($01,X) at every boundary checked: $0340, $039C), with $03A1 onward reading ordinary $00 filler and $033C-$033F holding different, non-repeating bytes -- the boundary at $0340 is a clean transition, not an artifact of instruction-decode alignment.",
+          "idle_hits": 0
+        }
+      ],
+      "rejected_candidates": [
+        {
+          "start": "$08F5",
+          "end": "$08FA",
+          "evidence": "Live disassembly at steady state, byte-identical to danish's own copy of the same routine: $08F5: LDA $DC01 / $08F8: AND #$10 / $08FA: BNE $08B1 / $08FC: JSR $094B -- reads CIA1 port B (joystick/direction input), masks bit 4, and branches back to the title-screen trigger address $08B1 if held.",
+          "reason": "The title dispatcher's own permanent joystick poll -- ordinary shared Datasoft game code (confirmed byte-for-byte identical to danish's copy of the same routine, per plan 01-03's provenance finding that both cracks load the same original game at $08B1), not loader or cracktro code. Rejected for the same reason danish's own $08F5-$08FA candidate was rejected; verified live on this release rather than inherited from danish by analogy, per this task's own instruction not to assume saeger's window matches danish's without live confirmation."
+        },
+        {
+          "start": "$0D30",
+          "end": "$0D82",
+          "evidence": "Live disassembly at steady state: the same per-frame title-screen animation/object-dispatch control flow as danish's own copy -- reads zero-page game-state flag $40, branches on it, computes a self-modified store target, and continues into ADC-chained offset arithmetic against $29 feeding stores at $0D86/$0D87.",
+          "reason": "Ordinary game logic (title-screen animation/object dispatch), not loader or cracktro code -- consistent with danish's own rejected finding at the same address, verified live on this release rather than assumed by analogy."
+        },
+        {
+          "start": "$0302",
+          "end": "$0327",
+          "evidence": "The same 192-byte raw memory read ($02F0-$03AF) that established the accepted range's boundaries shows this entire span also reading as the repeated byte $01 at steady state. Per the c64-memory-mapping skill, these addresses are the standard BASIC/KERNAL RAM vector table -- IMAIN ($0302), ICRNCH ($0304), IQPLOP ($0306), IGONE ($0308), IEVAL ($030A), SAREG/SXREG/SYREG ($030C-$030F), the USR() JMP instruction plus its address ($0310-$0312), CINV the hardware IRQ vector ($0314), CNBINV the BRK vector ($0316), NMINV the NMI vector ($0318), IOPEN ($031A), ICLOSE ($031C), ICHKIN ($031E), ICKOUT ($0320), ICLRCH ($0322), IBASIN ($0324), IBSOUT ($0326) -- every one of them stomped to $01 rather than left at its KERNAL-default address. This matches, byte for byte in character, danish's own IRQ-path reconnaissance finding at $0314-$0315 ('read back as the untouched power-on-adjacent pattern 01 01 01 01 01 01, confirming the game/loader never relies on the KERNAL CINV vector while KERNAL is banked out') -- the same phenomenon, simply spanning more of the vector table on this release.",
+          "reason": "Nothing in the game ever dereferences these vectors: danish's own IRQ-path reconnaissance established that HIRAM is 0 at the title screen (KERNAL banked out), so the live hardware IRQ vector the CPU actually reads is $FFFE/$FFFF, not $0314/CINV, and this machine-language-only game never uses BASIC or any KERNAL I/O vector. This is inert, power-on-adjacent filler that nothing ever calls through or jumps to -- structurally different from the accepted range, which sits in the Datasette buffer (TBUFFR, $033C-$03FB) rather than in the BASIC/KERNAL vector table ($0300-$0333). Arming an exec checkpoint here would test for a re-entry path the game structurally never uses, so it is rejected despite reading with the same telltale non-power-on-pattern byte value as the accepted range -- recorded here precisely because the wider window this task's resume context asked for turned up this range too, and a rejection with its reason is what keeps the set visibly earned rather than merely widened."
+        }
+      ],
+      "watch_set": [
+        {
+          "name": "loader:$0340-$03A0",
+          "kind": "loader-reentry",
+          "tier": "stopping",
+          "type": "exec",
+          "start": 832,
+          "end": 928,
+          "reason": "cassette-buffer / Datasette-buffer region (TBUFFR, $033C-$03FB per the C64 memory map), a classic loader-stub location; holds stale $01-byte data at steady state (not the power-on $00/$FF pattern), i.e. leftover raw-sector-loader scratch never reclaimed by the game. Wider than danish's analogous finding ($0340-$035E, 31 bytes): saeger's uncrunched raw-sector loader leaves a larger scratch footprint here, spanning $0340-$03A0 (97 bytes), before the pattern reverts to ordinary $00 filler at $03A1.",
+          "evidence": "Live disassembly and a precise raw memory read at steady state (post-$08B1 trigger) both confirm the full extent: a 192-byte vice_memory_read($02F0, size:192) spanning $02F0-$03AF shows $0340-$03A0 reading as the single repeated byte $01 throughout (disassembles as ORA ($01,X) at every boundary checked: $0340, $039C), with $03A1 onward reading ordinary $00 filler and $033C-$033F holding different, non-repeating bytes -- the boundary at $0340 is a clean transition, not an artifact of instruction-decode alignment."
+        },
+        {
+          "name": "unused:$0016-$0027",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 22,
+          "end": 39,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$004B-$005F",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 75,
+          "end": 95,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$0067-$0094",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 103,
+          "end": 148,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$00A5-$00B5",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 165,
+          "end": 181,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$00B7-$00D0",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 183,
+          "end": 208,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$00D2-$00EB",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 210,
+          "end": 235,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$0109-$014A",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 265,
+          "end": 330,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$0153-$0181",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 339,
+          "end": 385,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$0183-$01B2",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 387,
+          "end": 434,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$01B9-$01E2",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 441,
+          "end": 482,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$03A1-$03FF",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 929,
+          "end": 1023,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$4326-$4338",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 17190,
+          "end": 17208,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$4C99-$4CB1",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 19609,
+          "end": 19633,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$4EED-$4F47",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 20205,
+          "end": 20295,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$4F52-$4FE7",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 20306,
+          "end": 20455,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$5CC7-$5CD7",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 23751,
+          "end": 23767,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$5CDD-$5CF9",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 23773,
+          "end": 23801,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$5D0D-$5D1C",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 23821,
+          "end": 23836,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$5D23-$5D3E",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 23843,
+          "end": 23870,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$5D45-$5D7C",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 23877,
+          "end": 23932,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$62EB-$6301",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 25323,
+          "end": 25345,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$633F-$6356",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 25407,
+          "end": 25430,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$643F-$645B",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 25663,
+          "end": 25691,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$647E-$6499",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 25726,
+          "end": 25753,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$8180-$83CB",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 33152,
+          "end": 33739,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$83D6-$8403",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 33750,
+          "end": 33795,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$8D90-$8DE9",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 36240,
+          "end": 36329,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$8E04-$8E33",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 36356,
+          "end": 36403,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$8E53-$8E89",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 36435,
+          "end": 36489,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$8E9D-$8FE7",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 36509,
+          "end": 36839,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$9035-$905F",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 36917,
+          "end": 36959,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$9095-$90E4",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 37013,
+          "end": 37092,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$90E7-$9125",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 37095,
+          "end": 37157,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$9155-$917F",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 37205,
+          "end": 37247,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$91B5-$91DF",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 37301,
+          "end": 37343,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$9215-$923F",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 37397,
+          "end": 37439,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$9271-$92A1",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 37489,
+          "end": 37537,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$92B5-$92C6",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 37557,
+          "end": 37574,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$92D4-$9301",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 37588,
+          "end": 37633,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$9311-$9327",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 37649,
+          "end": 37671,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$9335-$9362",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 37685,
+          "end": 37730,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$938F-$93C6",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 37775,
+          "end": 37830,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$93F5-$9421",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 37877,
+          "end": 37921,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$9453-$9481",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 37971,
+          "end": 38017,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$948C-$94A0",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 38028,
+          "end": 38048,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$94B1-$94DF",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 38065,
+          "end": 38111,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$9513-$953F",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 38163,
+          "end": 38207,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$956F-$95A1",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 38255,
+          "end": 38305,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$95D4-$95FF",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 38356,
+          "end": 38399,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$9635-$965F",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 38453,
+          "end": 38495,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$966E-$9680",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 38510,
+          "end": 38528,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$9695-$96C0",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 38549,
+          "end": 38592,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$96F5-$9720",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 38645,
+          "end": 38688,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$974E-$9781",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 38734,
+          "end": 38785,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$97B4-$97DF",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 38836,
+          "end": 38879,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$97F3-$9808",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 38899,
+          "end": 38920,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$9815-$9846",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 38933,
+          "end": 38982,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$9855-$9869",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 38997,
+          "end": 39017,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$986E-$98A8",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 39022,
+          "end": 39080,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$98D3-$9909",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 39123,
+          "end": 39177,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$9915-$9927",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 39189,
+          "end": 39207,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$9933-$996D",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 39219,
+          "end": 39277,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$9973-$998E",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 39283,
+          "end": 39310,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$9992-$99CE",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 39314,
+          "end": 39374,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$99D5-$99EE",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 39381,
+          "end": 39406,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$99F2-$9A1F",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 39410,
+          "end": 39455,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$9A55-$9A81",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 39509,
+          "end": 39553,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$9AB5-$9AE7",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 39605,
+          "end": 39655,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$9AF6-$9B09",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 39670,
+          "end": 39689,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$9B16-$9B3F",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 39702,
+          "end": 39743,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$9B75-$9B9F",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 39797,
+          "end": 39839,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$9BD5-$9C00",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 39893,
+          "end": 39936,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$9C34-$9C5F",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 39988,
+          "end": 40031,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$9C95-$9CC0",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 40085,
+          "end": 40128,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$9CF5-$9D20",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 40181,
+          "end": 40224,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$9D54-$9D7F",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 40276,
+          "end": 40319,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$9DB0-$9DDF",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 40368,
+          "end": 40415,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$9E15-$9E40",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 40469,
+          "end": 40512,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$9E75-$9EAC",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 40565,
+          "end": 40620,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$9EAF-$9EC9",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 40623,
+          "end": 40649,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$9ED4-$9EFF",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 40660,
+          "end": 40703,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$9F35-$9F5F",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 40757,
+          "end": 40799,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$9F92-$9FC0",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 40850,
+          "end": 40896,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$A000-$A037",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 40960,
+          "end": 41015,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$A2C0-$A2D7",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 41664,
+          "end": 41687,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$A388-$A39F",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 41864,
+          "end": 41887,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$A400-$A447",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 41984,
+          "end": 42055,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$A4F0-$A4FF",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 42224,
+          "end": 42239,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$AAB8-$AACF",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 43704,
+          "end": 43727,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$AB68-$AB77",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 43880,
+          "end": 43895,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$ABF6-$AC07",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 44022,
+          "end": 44039,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$AE68-$AE77",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 44648,
+          "end": 44663,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$AF2E-$AF3F",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 44846,
+          "end": 44863,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$B010-$B01F",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 45072,
+          "end": 45087,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$B050-$B065",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 45136,
+          "end": 45157,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$B2C8-$B2D7",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 45768,
+          "end": 45783,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$B348-$B35B",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 45896,
+          "end": 45915,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$B410-$B41F",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 46096,
+          "end": 46111,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$B430-$B43F",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 46128,
+          "end": 46143,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$B810-$B81F",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 47120,
+          "end": 47135,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$B850-$B865",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 47184,
+          "end": 47205,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$B968-$B97D",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 47464,
+          "end": 47485,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$BAC8-$BAD7",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 47816,
+          "end": 47831,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$BB48-$BB5B",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 47944,
+          "end": 47963,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$BC10-$BC1F",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 48144,
+          "end": 48159,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$BC30-$BC3F",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 48176,
+          "end": 48191,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$BC4E-$BC61",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 48206,
+          "end": 48225,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$BF48-$BF57",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 48968,
+          "end": 48983,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$C035-$C05F",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 49205,
+          "end": 49247,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$C095-$C0C0",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 49301,
+          "end": 49344,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$C0F5-$C120",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 49397,
+          "end": 49440,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$C155-$C17F",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 49493,
+          "end": 49535,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$C1B5-$C1DF",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 49589,
+          "end": 49631,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$C214-$C23F",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 49684,
+          "end": 49727,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$C275-$C29F",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 49781,
+          "end": 49823,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$C2D5-$C2FF",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 49877,
+          "end": 49919,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$C335-$C363",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 49973,
+          "end": 50019,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$C38D-$C3C1",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 50061,
+          "end": 50113,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$C3E1-$C3F0",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 50145,
+          "end": 50160,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$C3F5-$C430",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 50165,
+          "end": 50224,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$C435-$C44C",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 50229,
+          "end": 50252,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$C456-$C482",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 50262,
+          "end": 50306,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$C4B5-$C4E1",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 50357,
+          "end": 50401,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$C515-$C540",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 50453,
+          "end": 50496,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$C572-$C5A3",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 50546,
+          "end": 50595,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$C5D5-$C5FF",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 50645,
+          "end": 50687,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$C632-$C661",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 50738,
+          "end": 50785,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$C695-$C6BF",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 50837,
+          "end": 50879,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$C6F2-$C723",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 50930,
+          "end": 50979,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$C755-$C781",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 51029,
+          "end": 51073,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$C7B5-$C7E1",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 51125,
+          "end": 51169,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$C815-$C841",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 51221,
+          "end": 51265,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$C875-$C89F",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 51317,
+          "end": 51359,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$C8D5-$C900",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 51413,
+          "end": 51456,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$C935-$C96C",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 51509,
+          "end": 51564,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$C96E-$C986",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 51566,
+          "end": 51590,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$C992-$C9CF",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 51602,
+          "end": 51663,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$C9D5-$C9E6",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 51669,
+          "end": 51686,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$C9F5-$CA4F",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 51701,
+          "end": 51791,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$CA55-$CA8A",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 51797,
+          "end": 51850,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$CA95-$CAAA",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 51861,
+          "end": 51882,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$CAB1-$CAE1",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 51889,
+          "end": 51937,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$CB15-$CB3F",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 51989,
+          "end": 52031,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$CB41-$CBE5",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 52033,
+          "end": 52197,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$CBE7-$CC0A",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 52199,
+          "end": 52234,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$CC0C-$CCDA",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 52236,
+          "end": 52442,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$CCF5-$CDB1",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 52469,
+          "end": 52657,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$CDB3-$CEFF",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 52659,
+          "end": 52991,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$CF2B-$CF3E",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 53035,
+          "end": 53054,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$CFEB-$CFFE",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 53227,
+          "end": 53246,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$F517-$F53A",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 62743,
+          "end": 62778,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$F53C-$F580",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 62780,
+          "end": 62848,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$F583-$F5BA",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 62851,
+          "end": 62906,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$F5BC-$F64F",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 62908,
+          "end": 63055,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$F651-$F666",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 63057,
+          "end": 63078,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$F668-$F825",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 63080,
+          "end": 63525,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$F827-$F97C",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 63527,
+          "end": 63868,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$F97E-$F9B4",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 63870,
+          "end": 63924,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$F9B6-$FA68",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 63926,
+          "end": 64104,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$FA79-$FB34",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 64121,
+          "end": 64308,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$FB36-$FB68",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 64310,
+          "end": 64360,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$FB6A-$FB94",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 64362,
+          "end": 64404,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$FB96-$FBBA",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 64406,
+          "end": 64442,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$FBCB-$FC1D",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 64459,
+          "end": 64541,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$FC1F-$FC50",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 64543,
+          "end": 64592,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$FC52-$FCA2",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 64594,
+          "end": 64674,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$FCA4-$FCB9",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 64676,
+          "end": 64697,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$FCBB-$FD2C",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 64699,
+          "end": 64812,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "unused:$FD5F-$FDFF",
+          "kind": "never-populated",
+          "tier": "counting",
+          "type": "write",
+          "start": 64863,
+          "end": 65023,
+          "reason": "contiguous $00/$FF power-on-pattern run of at least 16 bytes",
+          "evidence": "contiguous $00/$FF power-on-pattern run of at least 16 bytes"
+        },
+        {
+          "name": "reg:$DD00",
+          "kind": "register",
+          "tier": "counting",
+          "type": "write",
+          "start": 56576,
+          "end": 56576,
+          "reason": "CIA2 port A -- VIC-II bank-select bits (0-1) plus the bit-banged serial-bus lines (ATN/CLOCK/DATA, bits 3-5) a KERNAL-bypassing raw-sector loader toggles directly; the primary on-demand-load sentinel because such a loader leaves no KERNAL vector activity to watch instead",
+          "evidence": "c64-memory-mapping skill memmap: $DD00 bits 0-1 select the VIC bank (00=bank3 $C000-$FFFF ... 11=bank0 $0000-$3FFF); bits 3-5 are the serial bus ATN OUT/CLOCK OUT/DATA OUT lines"
+        }
+      ]
     }
   ]
 }

@@ -299,6 +299,26 @@ test("renderLoading flags a blocked run's zero count as unevidenced rather than 
   assert.match(md, /never progressed past its pre-loader state/, "the blocked-run reason must be surfaced in the rendered document");
 });
 
+test("renderLoading flags a blocked run's NON-zero count as a partial result, not a plain evidenced count", async () => {
+  const { renderLoading } = await import("./watch-loads.mjs");
+  const partialLog = {
+    machine: "C64SC",
+    video_standard: "PAL",
+    vice_version: "3.10",
+    run_status: "blocked",
+    run_status_note: "Play-through halted by a genuine silent host VICE stall after 2 of the required milestones.",
+    armed: [],
+    idle_calibration: { cycles_advanced: 100, sentinels: [] },
+    hits: [
+      { sentinel: "reg:$DD00", address: "$DD00", cycle: 1, pc: "$07DB", backtrace: [{ return_address: 1 }], disassembly: "STA $DD00", classification: "gameplay-write" },
+    ],
+  };
+  const md = renderLoading([{ id: "example", log: partialLog }]);
+  assert.match(md, /PARTIAL RESULT, NOT A COMPLETED COVERAGE CLAIM/, "a blocked run with a non-zero count must not be rendered with the zero-specific warning text");
+  assert.doesNotMatch(md, /The count above is `0` only because/, "must not claim the count is 0 when it is not");
+  assert.match(md, /halted by a genuine silent host VICE stall/, "the blocked-run reason must still be surfaced");
+});
+
 test("renderLoading does NOT add the blocked-run warning for an ordinary (non-blocked) log", async () => {
   const { renderLoading } = await import("./watch-loads.mjs");
   const normalLog = {

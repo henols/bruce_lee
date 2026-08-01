@@ -11,7 +11,36 @@ Everything below was measured against a live host VICE **3.10**, machine **C64SC
 
 **Corrected 2026-08-01 (01-04 Task 2).** This section used to open with a single shell command — the same standalone Node CLI verb named in `recovery/danish/NOTES.md`, with only the release id changed — that no longer exists in this repository: a 2026-08-01 hard project rule made `mcp__vice__*` the only permitted route to the emulator, and every standalone script that opened its own connection to VICE was deleted rather than migrated (see `.planning/STATE.md`, Phase 1 2026-08-01 entries). The three-run reproducibility proof recorded in § "Reproducibility verdict" below **was performed and its digests are committed** — deleting the script does not un-produce that evidence.
 
-The ordered procedure is the same one recorded in `recovery/danish/NOTES.md`'s own "Reproducing this dump" section, with two release-specific substitutions carried as registry data rather than as a code branch: attach/autostart `disks/saeger.d64` instead of `disks/danish.d64` in steps 1-2, and in steps 5-7, use `mcp__vice__vice_keyboard_petscii({ data: [32] })` (queuing PETSCII SPACE into the KERNAL keyboard buffer, since this release's `$08F4` gate polls KERNAL `GETIN` rather than the CIA ports directly — this release's `gate.delivery: "kernal-buffer"`) instead of holding and releasing the keyboard matrix. Every other step — arming the `$08B1` trigger, the sixteen 4096-byte bank-scoped memory reads, the chip-state readings, the checkpoint delete, and the empty-enumeration teardown proof — is identical, because both releases load the same original Datasoft game code at the same trigger address. It needs no snapshot, no saved state, and nothing from the host's home directory — only the disk image in this repository and a reachable VICE MCP server.
+The ordered procedure is the same one recorded in `recovery/danish/NOTES.md`'s own "Reproducing this dump" section, with the two release-specific substitutions (steps 4-5 below) carried as registry data rather than as a code branch, spelled out here in full so this file stands on its own:
+
+1. `mcp__vice__vice_disk_attach({ unit: 8, path: "disks/saeger.d64" })`
+2. `mcp__vice__vice_autostart({ path: "disks/saeger.d64" })`
+3. `mcp__vice__vice_execution_run` — mandatory; autostart only arms the load, the CPU is still
+   halted from the reset.
+4. `mcp__vice__vice_checkpoint_add({ start: "$08B1", exec: true, stop: true })` — arm the trigger
+   before touching any key. Confirm via `mcp__vice__vice_backtrace` that the call chain passes
+   through `$08F6` (the gate's own `JSR $FFE4`) before proceeding to the next step — a key queued
+   before the boot reaches this point is silently consumed by BASIC's own input-line editor
+   instead (see "Loader-range derivation" above for the live-confirmed hazard).
+5. `mcp__vice__vice_keyboard_petscii({ data: [32] })` — queue PETSCII SPACE into the KERNAL
+   keyboard buffer (this release's `$08F4` gate polls KERNAL `GETIN` rather than the CIA ports
+   directly, i.e. `gate.delivery: "kernal-buffer"`), in place of danish's hold-and-release on the
+   keyboard matrix.
+6. `mcp__vice__vice_execution_run`, then poll `mcp__vice__vice_ping` (non-pausing) until
+   `execution` reports the trigger has stopped the machine.
+7. Sixteen `mcp__vice__vice_memory_read` calls of 4096 bytes each at `bank: "ram"`, concatenated
+   in address order into one 65536-byte image; confirm the total is exactly 65536 bytes.
+8. `mcp__vice__vice_registers_get`, `mcp__vice__vice_vicii_get_state` and a plain
+   `mcp__vice__vice_memory_read` of `$0001` for the chip-state sidecar.
+9. `mcp__vice__vice_checkpoint_delete` the trigger checkpoint by its `checkpoint_num`.
+10. `mcp__vice__vice_checkpoint_list` and confirm it reports zero checkpoints — accept only this
+    enumeration as proof, never the delete call's own return value.
+11. `mcp__vice__vice_execution_run` to leave the machine running.
+
+Every step besides 4-5's substitution is identical to danish's own procedure, because both
+releases load the same original Datasoft game code at the same trigger address. It needs no
+snapshot, no saved state, and nothing from the host's home directory — only the disk image in
+this repository and a reachable VICE MCP server.
 
 **Why three runs and not two:** the same reason recorded for danish — two captures cannot distinguish *"the program writes this byte"* from *"it happened to drift the same way twice"*, so `classifyRunSet` refuses fewer than three, for every release, unconditionally.
 
@@ -69,6 +98,34 @@ Given both automated attempts landed on boot-time KERNAL code, the actual addres
 7. A checkpoint armed at `$08B1` was confirmed re-armable: `hit_count` grew to 114 while the title screen looped waiting for F1/F3/F7 — the same re-armability evidence danish's own `NOTES.md` records for the identical address.
 
 **A bare pause was not tried here** — the checkpoint-based approach was already established as necessary by danish's own investigation (the title screen is IRQ-driven there; there is no reason to expect otherwise here, since the code is identical), so it was used from the start rather than re-discovering the same limitation.
+
+### Loader-range derivation (01-04 Task 2, live-verified 2026-08-01) — earned independently, not inherited from danish by analogy
+
+This release's own candidate window was verified live rather than assumed from danish's finding: saeger's uncrunched raw-sector loader turns out to leave a **wider** scratch footprint than danish's crunched one, so danish's exact boundaries do not transfer unchanged. A precise 192-byte `vice_memory_read($02F0, size:192)` at steady state (post-`$08B1` trigger) — spanning `$02F0`–`$03AF` — gave an exact byte-for-byte picture rather than relying on instruction-boundary disassembly alone:
+
+**Accepted — one loader-reentry range:**
+
+| Range | Evidence | Idle hits |
+|---|---|---|
+| `$0340`–`$03A0` (97 bytes) | The whole span reads as the single repeated byte `$01` (disassembles as `ORA ($01,X)` at every boundary checked: `$0340`, `$039C`), with `$03A1` onward reading ordinary `$00` filler. This is the cassette/Datasette buffer region (`TBUFFR`, `$033C`–`$03FB` per the C64 memory map), a classic loader-stub location — the same finding danish made at `$0340`–`$035E`, just wider here: saeger's uncrunched loader leaves 97 bytes of stale scratch where danish's crunched one left 31. | **0** |
+
+**Rejected — three candidates, each with live disassembly and a stated reason:**
+
+| Range | Disassembly | Reason rejected |
+|---|---|---|
+| `$08F5`–`$08FA` | `LDA $DC01 / AND #$10 / BNE $08B1 / JSR $094B` | Byte-for-byte identical to danish's own copy of the same routine — the title dispatcher's permanent joystick poll, ordinary shared Datasoft game code, not loader code. Verified live on this release rather than inherited from danish by analogy. |
+| `$0D30`–`$0D82` | Reads zero-page flag `$40`, branches, computes a self-modified store target, ADC-chains against `$29` feeding `$0D86`/`$0D87` | Ordinary per-frame title-screen animation/object-dispatch logic, consistent with danish's own rejected finding at the same address — verified live here, not assumed. |
+| `$0302`–`$0327` | Also reads as the repeated byte `$01` throughout — **but** these addresses are the standard BASIC/KERNAL RAM vector table (`IMAIN` `$0302`, `ICRNCH` `$0304`, `IQPLOP` `$0306`, `IGONE` `$0308`, `IEVAL` `$030A`, `SAREG`/`SXREG`/`SYREG` `$030C`–`$030F`, the `USR()` `JMP` plus address `$0310`–`$0312`, `CINV` the IRQ vector `$0314`, `CNBINV` the BRK vector `$0316`, `NMINV` the NMI vector `$0318`, `IOPEN` `$031A`, `ICLOSE` `$031C`, `ICHKIN` `$031E`, `ICKOUT` `$0320`, `ICLRCH` `$0322`, `IBASIN` `$0324`, `IBSOUT` `$0326`), every one stomped to `$01` rather than left at its KERNAL default. | Nothing in the game ever dereferences these vectors — `$01`'s HIRAM bit is 0 at the title screen (KERNAL banked out, confirmed live: `$01`=`$40`), so the live hardware IRQ vector is `$FFFE`/`$FFFF` (confirmed live: `$1103`, identical to danish's own recorded value), not `$0314`/`CINV`, and this machine-language-only game never touches BASIC or a KERNAL I/O vector. Inert power-on-adjacent filler, structurally distinct from the accepted range (the Datasette buffer, not the vector table) — rejected despite sharing the same telltale `$01` byte value, because arming an exec checkpoint here would test for a re-entry path the game structurally never uses. Recorded precisely because a wider live window turned it up; a rejection with its reason is what keeps the set visibly earned rather than merely widened. |
+
+**Counting-tier probe:** a non-stopping store checkpoint on the title-screen 1000-byte screen matrix (`$8C00`–`$8FE7`, derived from live `$D018`=`$31`/`$DD00`=`$C1` readings — VIC bank 2, screen base `$8C00`, the same absolute address danish's own probe used) accumulated **432 hits** over **16,182,609 cycles** while execution never stopped — confirms the counting tier can count without stopping, on this release too, no fallback needed.
+
+**Idle calibration:** with the accepted loader-reentry range (`$0340`–`$03A0`) and the `$DD00` register sentinel armed as the small earned set, a no-input idle window advanced **51,563,549 cycles** genuinely (confirmed by a `vice_cycles_stopwatch` bracket). The loader-reentry sentinel registered **0** hits — the gate this release's `loader_ranges` entry must pass — while the `$DD00` counting sentinel registered 1 (an idle floor to read future counts against, not a gate requirement). `node tools/watch-loads.mjs check-idle --release saeger --json` confirms the gate passes.
+
+**Teardown** was proven by an explicit `vice_checkpoint_list` enumeration reporting an empty set after both checkpoints were deleted individually by `checkpoint_num` — never trusted from the delete call's own return value.
+
+**A confirming IRQ-path check, not a full re-derivation:** since plan 01-03 already established both releases load byte-identical original Datasoft game code at `$08B1`/`$139E`, a lighter check sufficed here rather than repeating danish's full reconnaissance: `$01`=`$40` (HIRAM=0, KERNAL banked out, same as danish) and the live hardware IRQ vector `$FFFE`/`$FFFF` reads `$1103` — **identical to danish's own recorded value** — confirming saeger shares the same IRQ handler and raster-split chain as danish, not merely the same main-loop dispatcher.
+
+**A genuine operational hazard, distinct from the technique above:** deriving this took four separate emulator instances in one session — the host VICE crashed three times mid-session (epoch 8→9, 9→10, 10→11), each self-surfaced by the proxy as a loud epoch-drift error and self-healed on the very next call. Per this project's rule, every measurement taken before a detected crash was voided and the whole boot sequence was redone from `vice_disk_attach` on the new instance rather than trusted as a continuation. Recorded live in `.planning/RE-FINDINGS.md` and `.planning/todos/pending/2026-08-01-vice-crashes-three-times-during-sustained-execution-01-04-task2-saeger.md`. Separately, the fourth (successful) boot attempt hit a second, unrelated hazard: a PETSCII SPACE queued immediately after `autostart` (before the boot had reached the `$08F4` gate) was silently consumed by BASIC's own input-line editor (confirmed via `vice_backtrace` showing `$A483`/`IMAIN` in the call chain) rather than by the cracktro's gate — the `kernal-buffer`-delivery analogue of the matrix-delivery hazard this file already documents above ("pressing too early can be read by the autostart's own simulated typing and corrupt the boot"). The fix applied: confirm via `vice_backtrace` that the call chain passes through `$08F6` (the gate's own `JSR $FFE4`) before queuing the key, never queue on a timer or a guess.
 
 ---
 

@@ -82,9 +82,14 @@
       { "name": "reg:$DD00", "tier": "counting", "start": 56576, "end": 56576, "hits": 0 }
     ]
   },
+  "run_status": "blocked",
+  "run_status_note": "Task 2 (above) is complete and genuinely evidenced -- nothing about it is blocked. Task 3's play-through for THIS release specifically was never attempted in any session to date: attempt 2 (this file's own Task 2 work) halted on a host-side stall before Task 3 could start; attempt 3 spent its live-emulator budget earning saeger's Task 2 pass (which attempt 2 had left blocked) and then began saeger's own Task 3 play-through, which itself halted on a fresh (silent, non-epoch-changing) stall after 2 milestones -- see recovery/saeger/dumps/saeger-loading-hits.json. Danish's own Task 3 pass was not reached at all this session. This is recorded as blocked/not-attempted rather than as a completed zero-milestone result, per the same rule that governs an unevidenced zero anywhere else in this record.",
   "milestones": [],
+  "scope_not_attempted": [
+    "The entire Task 3 milestone set for danish (title screen re-confirmation, at least two real chamber transitions, both opponents, a death, a game over, a restart) -- not attempted in any session to date; see run_status_note."
+  ],
   "hits": [],
-  "input_notes": "Task 2 only: boot danish, walk the $0900 cracktro gate holding SPACE (matrix), release at the $08B1 trigger checkpoint. No gameplay input issued yet -- see Task 3 for the play-through.",
+  "input_notes": "Task 2 only: boot danish, walk the $0900 cracktro gate holding SPACE (matrix), release at the $08B1 trigger checkpoint. No gameplay input issued yet -- see Task 3 for the play-through, which has not been attempted for this release in any session to date.",
   "teardown": {
     "checkpoints_remaining": 0,
     "enumerated_at": "post-idle-calibration, via an explicit mcp__vice__vice_checkpoint_list call after deleting checkpoints 1, 174, 175, 176 individually by checkpoint_num"
