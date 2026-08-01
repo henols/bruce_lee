@@ -506,10 +506,44 @@ extract_id_field() {
 # never jq. Spares must be included here (plan 04): a warm spare occupies a
 # real port just as much as a leased grant does, and skipping that dir would
 # let a new launch collide with an already-launching or already-ready spare.
+# Ports this broker process has found genuinely bound by something outside
+# its own bookkeeping. port_in_use() is *reality*; next_free_port() below is
+# *bookkeeping* over grants/ and spares/ files, and nothing else reconciles
+# the two. Without this set, a permanently-bound port is re-selected and
+# re-refused on every single pass, forever: the spare-warming path has no
+# request id, so unlike process_requests() it cannot deny() its way out, and
+# the refusal is not a pass failure either, so the daemon's backoff never
+# engages. Deliberately process-scoped, not persisted: a port freed while the
+# broker runs should be reconsidered on the next start rather than remembered
+# as dead across boots.
+BLOCKED_PORTS=""
+
+port_is_blocked() {
+  case " $BLOCKED_PORTS " in
+    *" $1 "*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+block_port() {
+  port_is_blocked "$1" || BLOCKED_PORTS="$BLOCKED_PORTS $1"
+}
+
+# Scans upward from VICE_BROKER_BASE_PORT for a port that is neither recorded
+# in grants/ or spares/ nor in BLOCKED_PORTS. Bounded: returns non-zero when
+# every candidate in the window is taken, so an exhausted host produces one
+# explicit denial rather than an unbounded scan. Both call sites check the
+# return value -- an unchecked `port="$(next_free_port)"` would abort the
+# whole pass under `set -e`.
 next_free_port() {
   local port="$VICE_BROKER_BASE_PORT"
+  local limit=$((VICE_BROKER_BASE_PORT + 100))
   local f p taken d
-  while : ; do
+  while [ "$port" -lt "$limit" ]; do
+    if port_is_blocked "$port"; then
+      port=$((port + 1))
+      continue
+    fi
     taken=0
     for d in "$GRANTS_DIR" "$SPARES_DIR"; do
       [ -d "$d" ] || continue
@@ -528,6 +562,7 @@ next_free_port() {
     fi
     port=$((port + 1))
   done
+  return 1
 }
 
 # Generic reader for a spares/<port>.json file, mirroring
@@ -1011,7 +1046,10 @@ process_requests() {
       continue
     fi
 
-    port="$(next_free_port)"
+    if ! port="$(next_free_port)"; then
+      deny "$id" "no free port available at or above $VICE_BROKER_BASE_PORT -- every candidate is either bound by another process or already recorded as a grant or spare"
+      continue
+    fi
     if launch_instance "$port" "cold"; then
       echo "vice-broker: cold launch in flight for request $id on port $port -- awaiting readiness, no grant or denial written yet"
     else
@@ -1084,13 +1122,46 @@ maintain_spares() {
     return 0
   fi
 
-  local ready total
+  local ready total port attempts launch_rc
   ready="$(count_ready)"
   total="$(count_total)"
+  attempts=0
   while [ "$ready" -lt "$VICE_BROKER_SPARES" ] && [ "$total" -lt "$VICE_BROKER_MAX" ]; do
-    launch_instance "$(next_free_port)" "spare"
-    ready=$((ready + 1))
-    total=$((total + 1))
+    # Bounded: a refused launch does NOT advance the counters below, so
+    # without this cap a host where every candidate port is bound would spin
+    # here inside a single pass.
+    attempts=$((attempts + 1))
+    if [ "$attempts" -gt "$VICE_BROKER_MAX" ]; then
+      echo "vice-broker: stopping spare warming for this pass after $((attempts - 1)) launch attempts -- $ready of $VICE_BROKER_SPARES ready" >&2
+      return 0
+    fi
+
+    if ! port="$(next_free_port)"; then
+      echo "vice-broker: no free port at or above $VICE_BROKER_BASE_PORT (every candidate is bound or already recorded) -- warming no further spares; $ready of $VICE_BROKER_SPARES ready" >&2
+      return 0
+    fi
+
+    # launch_instance()'s return value is load-bearing and must NOT be
+    # discarded: rc 1 = that specific port is bound (try another), rc 2 = the
+    # supervisor script is missing (no port will fix that). Incrementing the
+    # counters unconditionally is what previously made a failed launch look
+    # like a successful one -- the pass then reported success, the daemon's
+    # backoff never engaged, count_ready() still read 0 next pass, and the
+    # same doomed port was retried and re-logged on every poll forever.
+    launch_rc=0
+    launch_instance "$port" "spare" || launch_rc=$?
+    if [ "$launch_rc" -eq 0 ]; then
+      ready=$((ready + 1))
+      total=$((total + 1))
+    elif [ "$launch_rc" -eq 1 ]; then
+      # Remembering the port is what turns "logged on every poll" into
+      # "logged once": next_free_port() will not hand it back to this
+      # process again, here or on any later pass.
+      block_port "$port"
+    else
+      echo "vice-broker: not warming spares -- $LAST_LAUNCH_ERROR" >&2
+      return 0
+    fi
   done
 }
 

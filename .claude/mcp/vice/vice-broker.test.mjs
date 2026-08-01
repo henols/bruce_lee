@@ -360,6 +360,35 @@ function brokerCopyMissingSupervisor() {
   return join(dir, "vice-broker.sh");
 }
 
+/** Copies the WHOLE resources/ directory into a fresh temp dir and REPLACES
+ * vice-supervisor.sh with a stub that exits immediately. Needed by any test
+ * that must run WITHOUT --dry-run -- port_in_use() is deliberately checked
+ * only outside dry-run, so exercising a bound port requires a real launch
+ * path, and a real launch path would otherwise nohup the true supervisor,
+ * which in this container finds no x64sc and leaks a backoff-looping
+ * background process for the rest of the run. The stub keeps the launch path
+ * genuine (a pid is spawned and recorded) while spawning nothing that
+ * survives. Returns the copy's own vice-broker.sh path. */
+function brokerCopyWithStubSupervisor() {
+  const dir = mkdtempSync(join(tmpdir(), "vice-broker-stubsuper-"));
+  cpSync(join(HERE, "resources"), dir, { recursive: true });
+  const stub = join(dir, "vice-supervisor.sh");
+  writeFileSync(stub, "#!/usr/bin/env bash\n# test stub: spawn nothing, exit immediately\nexit 0\n");
+  chmodSync(stub, 0o755);
+  return join(dir, "vice-broker.sh");
+}
+
+/** Binds a real TCP listener on 127.0.0.1:<port> so port_in_use()'s
+ * /dev/tcp probe genuinely succeeds. Returns a closer. */
+async function occupyPort(port) {
+  const srv = createServer(() => {});
+  await new Promise((res, rej) => {
+    srv.once("error", rej);
+    srv.listen(port, "127.0.0.1", res);
+  });
+  return () => new Promise((res) => srv.close(res));
+}
+
 /** Writes requests/<id>.json in the exact shape vice-broker-client.mjs's own
  * writeRequest() produces, for tests that exercise the real request scan
  * rather than a directly-planted grant. */
@@ -1285,5 +1314,78 @@ test("release-then-pass produces both a teardown log line and a refill launch lo
   } finally {
     rmSync(dir, { recursive: true, force: true });
     rmSync(dirname(probe), { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Spare warming must survive a port that is bound by something outside the
+// broker's own bookkeeping. Regression test for the live spin observed on
+// 2026-08-01: maintain_spares() discarded launch_instance()'s return value,
+// so a refused launch incremented the ready/total counters as if it had
+// succeeded. The pass then reported success (no daemon backoff), count_ready()
+// still read 0 on the next pass, and the same bound port was re-selected and
+// re-logged on every poll, forever. Runs WITHOUT --dry-run because
+// port_in_use() is deliberately skipped under dry-run, against a stub
+// supervisor so no real x64sc is ever spawned.
+
+test("spare warming: a port bound by another process is skipped, not retried forever, and the next port is used instead", async () => {
+  const dir = tmpPoolDir();
+  const basePort = 8730;
+  const release = await occupyPort(basePort);
+  try {
+    const { stderr } = await runBrokerOnce(dir, {
+      basePort,
+      spares: 1,
+      dryRun: false,
+      probeCmd: "/bin/false", // a probe that exists but never promotes
+      script: brokerCopyWithStubSupervisor(),
+    });
+
+    assert.match(
+      stderr,
+      new RegExp(`refusing to launch on port ${basePort}`),
+      "the bound base port must be refused, naming that port"
+    );
+
+    // THE REGRESSION ASSERTION: the pass must advance past the bound port and
+    // actually warm a spare on the next one. Under the old code the refusal
+    // was swallowed, the counters advanced anyway, and no spare file was ever
+    // written at any port.
+    const spares = readdirSync(join(dir, "spares")).filter((f) => f.endsWith(".json"));
+    assert.deepEqual(
+      spares,
+      [`${basePort + 1}.json`],
+      `exactly one spare must exist, on port ${basePort + 1} -- got ${JSON.stringify(spares)}`
+    );
+
+    // Logged once per port, not once per attempt: the refusal names the bound
+    // port a single time even though the loop iterated past it.
+    const refusals = (stderr.match(new RegExp(`refusing to launch on port ${basePort}\\b`, "g")) || []).length;
+    assert.equal(refusals, 1, `the bound port must be logged exactly once, saw ${refusals}`);
+  } finally {
+    await release();
+  }
+});
+
+test("spare warming: when every candidate port is bound, the pass says so once and stops instead of spinning", async () => {
+  const dir = tmpPoolDir();
+  const basePort = 8760;
+  // VICE_BROKER_MAX caps the attempt loop, so bounding a small window is
+  // enough to prove the loop terminates rather than scanning unbounded.
+  const releases = [];
+  for (let p = basePort; p < basePort + 3; p++) releases.push(await occupyPort(p));
+  try {
+    const { stderr } = await runBrokerOnce(dir, {
+      basePort,
+      spares: 2,
+      max: 3,
+      dryRun: false,
+      probeCmd: "/bin/false",
+      script: brokerCopyWithStubSupervisor(),
+    });
+    assert.match(stderr, /stopping spare warming for this pass|no free port at or above/, "the exhausted case must be reported explicitly");
+    assert.equal(existsSync(join(dir, "spares")) ? readdirSync(join(dir, "spares")).filter((f) => f.endsWith(".json")).length : 0, 0, "no spare may be recorded when every candidate port is bound");
+  } finally {
+    for (const r of releases) await r();
   }
 });
