@@ -26,8 +26,8 @@ The subject exists only as two cracked releases, one of them crunched. Nothing d
 - [ ] **RECOVER-02**: A clean RAM image is captured from `danish.d64` after its `TCS-CRUNCH!` decrunch completes, with dump trigger, `$01` port configuration, and captured address ranges all recorded
 - [ ] **RECOVER-03**: A clean RAM image is captured from `saeger.d64` (SSG release) under the same recorded procedure
 - [ ] **RECOVER-04**: Dump completeness is proven by a full play-through after the dump point that detects any on-demand loading, with a supplementary dump captured for every load event found
-- [ ] **RECOVER-05**: Both recovered images are normalised to the same fully-loaded state and base address so that a byte-level diff between them is meaningful
-- [ ] **RECOVER-06**: Every byte range in the recovered image carries a provenance verdict — original Datasoft, cracker-modified, or uncertain — with the evidence recorded for each verdict
+- [x] **RECOVER-05**: Both recovered images are normalised to the same fully-loaded state and base address so that a byte-level diff between them is meaningful
+- [x] **RECOVER-06**: Every byte range in the recovered image carries a provenance verdict — original Datasoft, cracker-modified, or uncertain — with the evidence recorded for each verdict
 - [ ] **RECOVER-07**: Whether the two cracks are genuinely independent or share a common ancestor is determined and recorded, because it sets how much weight a "both releases agree" verdict carries
 - [ ] **RECOVER-08**: One recovered image is designated the canonical disassembly subject, with the reason it was chosen over the other recorded
 
@@ -136,8 +136,8 @@ Which milestone and phase cover which requirements.
 | RECOVER-02 | v1.0 | Phase 1 | Pending |
 | RECOVER-03 | v1.0 | Phase 1 | Pending |
 | RECOVER-04 | v1.0 | Phase 1 | Pending |
-| RECOVER-05 | v1.0 | Phase 1 | Pending |
-| RECOVER-06 | v1.0 | Phase 1 | Pending |
+| RECOVER-05 | v1.0 | Phase 1 | Done (01-05) |
+| RECOVER-06 | v1.0 | Phase 1 | Done (01-05) |
 | RECOVER-07 | v1.0 | Phase 1 | Pending |
 | RECOVER-08 | v1.0 | Phase 1 | Pending |
 | MAP-01 | v1.0 | Phase 2 | Pending |
