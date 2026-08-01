@@ -175,6 +175,17 @@ granted on that session's first forwarded tool call, and it is yours for the ses
 needs starting by hand, and host paths are translated for you — pass container paths and let
 the tools handle the boundary.
 
+- **Paths: pass a container path, relative or absolute, and read back what it resolved to.**
+  `path` arguments (`vice_disk_attach`, `vice_autostart`, `vice_display_screenshot`,
+  `vice_symbols_load`) accept `disks/saeger.d64` as readily as
+  `/workspaces/bruce_lee/disks/saeger.d64`; a relative one resolves against the **workspace
+  root**, never the caller's directory, so a worktree gets the main workspace's copy unless it
+  passes an absolute path. When a relative path is resolved the result says so, naming what was
+  written and the absolute container path it became — check that line rather than assuming.
+  A path outside the mounted workspace (`/tmp`, the scratchpad) is refused before forwarding,
+  because the host cannot see it under any name; move the artifact inside the workspace.
+  Everything else stays byte-identical, so an argument that merely looks path-shaped is never
+  rewritten.
 - Use the tools that are exposed to you, and only those. If a capability you expect is not in
   the tool list, it is not available — do not look for another way to obtain it.
 - Read a disk's directory by parsing `.d64` bytes with `tools/d64-parse.mjs`, or with

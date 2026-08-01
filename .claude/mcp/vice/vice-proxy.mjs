@@ -652,14 +652,40 @@ function brokerGrantedUnreachableMessage(probe, epoch) {
 // can only produce a wrong answer with no error, which is exactly the
 // silent-failure class this criterion exists to eliminate.
 //
-// STATED RESIDUAL, deliberately not papered over: a RELATIVE path string
-// (no leading "/", e.g. "recovery/danish/dump.bin") is left byte-identical.
-// A relative-looking string is indistinguishable from a non-path argument
-// (a tool name, a hex address like "$0400", an arbitrary label) without
-// guessing, and rewriting a non-path argument would be a strictly worse
-// failure than leaving a relative path unresolved on the host. SKILL.md's
-// "Paths" section tells callers to pass absolute container paths for
-// exactly this reason.
+// RELATIVE paths: resolved against the workspace root, but ONLY for the
+// arguments the tools manifest declares to BE paths.
+//
+// The original rule left every relative string byte-identical, on the
+// reasoning that "a relative-looking string is indistinguishable from a
+// non-path argument (a tool name, a hex address like "$0400", an arbitrary
+// label) without guessing". That reasoning was sound for a walker with no
+// schema, and it pointed callers at a SKILL.md "Paths" section for the
+// absolute-path requirement -- but that SKILL.md was deleted in db9eed3,
+// leaving the requirement stated nowhere. CLAUDE.md's surviving wording
+// ("pass container paths and let the tools handle the boundary") promises
+// the opposite, so callers reasonably passed "disks/foo.d64" and got a bare
+// "Failed to attach disk image" from the host, with nothing anywhere
+// indicating the path was the problem. That cost real session time.
+//
+// The premise is also no longer true. tools-manifest.json -- the same file
+// tools/list is served from -- types every argument, and exactly four
+// declare a path: vice_disk_attach.path, vice_autostart.path,
+// vice_display_screenshot.path and vice_symbols_load.path. Consulting it
+// removes the guessing the residual was protecting against: a relative
+// string in a DECLARED path argument is a path, full stop, and everything
+// else keeps the byte-identical pass-through unchanged.
+//
+// Resolution is against the workspace root, never process.cwd() -- the
+// proxy is one long-lived process serving the whole session, so its cwd is
+// meaningless to the caller. (hostpath.mjs:106 resolves against cwd for its
+// CLI's benefit; that branch is unreachable from here, and deliberately so.)
+//
+// STATED RESIDUAL, narrower than before: a relative string in an argument
+// the manifest does NOT declare as a path is still left byte-identical, and
+// so is a relative string nested inside an object or array. Both remain
+// indistinguishable from non-path data. A worktree caller also resolves
+// against the MAIN workspace root, not its worktree -- correct for the
+// read-only disk images this serves, and an absolute path still overrides.
 const PATH_REWRITE_MAX_DEPTH = 10; // bounded so pathological nesting is left alone rather than looping forever
 
 class PathOutOfWorkspaceError extends Error {}
@@ -698,18 +724,26 @@ function isInsideWorkspace(absPath, root) {
  * used in a refusal message so the caller can find exactly which argument
  * was the problem.
  */
-function rewritePathsIn(value, argPath, root, depth) {
+function rewritePathsIn(value, argPath, root, depth, asWritten) {
   if (depth > PATH_REWRITE_MAX_DEPTH) return value;
   if (typeof value === "string") {
-    if (!value.startsWith("/")) return value; // the stated residual: relative strings untouched
+    if (!value.startsWith("/")) return value; // the stated residual: undeclared relative strings untouched
     // Normalize FIRST, then check, then translate the normalized form -- so a
     // path that only looks like it is inside the workspace cannot slip through,
     // and the host is never handed a path still carrying ".." segments.
     const normalized = resolve(value);
+    // `asWritten` is set only when rewriteArguments() already resolved a
+    // declared-path argument from a relative string. Quoting the resolved
+    // form alone would show the caller a path they never typed, so BOTH
+    // failure branches below name what they wrote and what it became.
+    const escapedRelative = asWritten !== undefined && asWritten !== value;
     if (!isInsideWorkspace(normalized, root)) {
       throw new PathOutOfWorkspaceError(
-        `vice-proxy: ${argPath} is an absolute path (${value}) outside the mounted workspace (${root})` +
-          (normalized === value ? "" : `; it resolves to ${normalized}`) +
+        (escapedRelative
+          ? `vice-proxy: ${argPath} is the relative path "${asWritten}", which resolves to ${normalized} -- ` +
+            `outside the mounted workspace (${root})`
+          : `vice-proxy: ${argPath} is an absolute path (${value}) outside the mounted workspace (${root})` +
+            (normalized === value ? "" : `; it resolves to ${normalized}`)) +
           `. The host emulator can only be handed paths that live inside the mounted workspace -- move the ` +
           `artifact inside the workspace and call again.`
       );
@@ -717,8 +751,14 @@ function rewritePathsIn(value, argPath, root, depth) {
     try {
       return hostPath(normalized);
     } catch (e) {
+      // Name what the CALLER wrote first, and the container path it became --
+      // never lead with the host path. The caller reasons in container terms
+      // and cannot act on a host-side location, so quoting only the resolved
+      // form makes a fixable mistake look like an emulator fault.
       throw new PathTranslationError(
-        `vice-proxy: ${argPath} (${value}) could not be translated to a host path: ${e.message}\n  ${SET_ENV_HINT}`
+        `vice-proxy: ${argPath} ` +
+          (escapedRelative ? `("${asWritten}", which resolves to ${normalized})` : `(${value})`) +
+          ` could not be translated to a host path: ${e.message}\n  ${SET_ENV_HINT}`
       );
     }
   }
@@ -735,17 +775,79 @@ function rewritePathsIn(value, argPath, root, depth) {
   return value; // numbers, booleans, null -- byte-identical, never touched
 }
 
-/** Rewrite every absolute-in-workspace path inside `args` to its host form.
- * Throws PathOutOfWorkspaceError / PathTranslationError on the two refusal
- * cases above; the caller (handleToolsCall) converts either into an
- * isError:true result rather than letting it escape. */
-function rewriteArguments(args) {
-  const root = repoRoot();
-  const out = {};
-  for (const [k, v] of Object.entries(args || {})) {
-    out[k] = rewritePathsIn(v, `arguments.${k}`, root, 1);
+const NO_PATH_ARGS = new Set();
+let PATH_ARGS_BY_TOOL = null; // built once per process, from the manifest
+
+/**
+ * The set of argument names `toolName` declares to be filesystem paths,
+ * read off tools-manifest.json -- the SAME file tools/list is served from,
+ * so this can never become a second, drifting copy of "which arguments are
+ * paths". An argument qualifies when it is declared `type: "string"` and
+ * either is named exactly `path` or opens its description with "Path to" /
+ * "File path" (both tests agree on all four current cases; either alone
+ * would also suffice, and keeping both means a future manifest entry that
+ * satisfies only one is still caught).
+ *
+ * Deliberately name/description-driven rather than a hardcoded tool list:
+ * a manifest refresh that adds a path-taking tool gets the behaviour for
+ * free, which a literal list here would silently miss.
+ */
+function pathArgsFor(toolName) {
+  if (!PATH_ARGS_BY_TOOL) {
+    PATH_ARGS_BY_TOOL = new Map();
+    for (const t of readManifestTools()) {
+      const props = t.inputSchema && t.inputSchema.properties;
+      if (!props || typeof props !== "object") continue;
+      const names = new Set();
+      for (const [k, v] of Object.entries(props)) {
+        if (!v || v.type !== "string") continue;
+        if (k === "path" || /^(path|file path)\b/i.test(v.description || "")) names.add(k);
+      }
+      if (names.size) PATH_ARGS_BY_TOOL.set(t.name, names);
+    }
   }
-  return out;
+  return PATH_ARGS_BY_TOOL.get(toolName) || NO_PATH_ARGS;
+}
+
+/** Rewrite every in-workspace path inside `args` to its host form. A relative
+ * string in a manifest-declared path argument is resolved against the
+ * workspace root first; everything else keeps the byte-identical
+ * pass-through. Throws PathOutOfWorkspaceError / PathTranslationError on the
+ * two refusal cases above; the caller (handleToolsCall) converts either into
+ * an isError:true result rather than letting it escape. */
+function rewriteArguments(args, toolName) {
+  const root = repoRoot();
+  const pathArgs = pathArgsFor(toolName);
+  const out = {};
+  const resolutions = [];
+  for (const [k, v] of Object.entries(args || {})) {
+    // Only a top-level, declared-path, non-empty relative string is resolved.
+    // Empty stays empty (resolve() would silently turn "" into the workspace
+    // root, i.e. a directory, which is never what a caller meant).
+    if (pathArgs.has(k) && typeof v === "string" && v !== "" && !v.startsWith("/")) {
+      const container = resolve(root, v);
+      out[k] = rewritePathsIn(container, `arguments.${k}`, root, 1, v);
+      resolutions.push({ arg: k, asWritten: v, container });
+    } else {
+      out[k] = rewritePathsIn(v, `arguments.${k}`, root, 1);
+    }
+  }
+  return { args: out, resolutions };
+}
+
+/**
+ * One line naming, in full, every relative path this call resolved -- so the
+ * absolute path actually handed to the emulator is never something the caller
+ * has to infer. Returned to the AGENT, not just stderr: the failure this
+ * prevents ("Failed to attach disk image", with no indication which file was
+ * even attempted) is one the agent has to diagnose, and it cost a real session
+ * before the resolution existed at all. Empty string when nothing was resolved,
+ * so a call that passed absolute paths reads exactly as it always did.
+ */
+function resolutionNote(resolutions) {
+  if (!resolutions || !resolutions.length) return "";
+  const parts = resolutions.map((r) => `${r.arg}: "${r.asWritten}" -> ${r.container}`);
+  return `vice-proxy: resolved relative path${resolutions.length > 1 ? "s" : ""} against the workspace root -- ${parts.join("; ")}`;
 }
 
 // ------------------------------------------------------- oversized results
@@ -1132,8 +1234,11 @@ async function handleToolsCall(params) {
   // exactly like every other tools/call outcome: a well-formed isError:true
   // result, never a throw.
   let translatedArgs;
+  let pathNote = "";
   try {
-    translatedArgs = rewriteArguments(args);
+    const rewritten = rewriteArguments(args, name);
+    translatedArgs = rewritten.args;
+    pathNote = resolutionNote(rewritten.resolutions);
   } catch (e) {
     if (e instanceof PathOutOfWorkspaceError || e instanceof PathTranslationError) {
       return isErrorText(e.message);
@@ -1162,7 +1267,13 @@ async function handleToolsCall(params) {
     // and must come back as a well-formed result, not crash the read loop.
     // The probe above already proved the host alive, so this is the "alive
     // but the operation failed" state -- relay verbatim, no restart advice.
-    return isErrorText(aliveButFailedMessage(e && e.message ? e.message : String(e)));
+    // The path note rides along on the FAILURE too, and this is the case it
+    // was written for: a host-side "Failed to attach disk image" says nothing
+    // about which file was attempted, so naming the resolved absolute path
+    // here is the difference between a one-line fix and an hour spent
+    // suspecting the emulator.
+    const failure = aliveButFailedMessage(e && e.message ? e.message : String(e));
+    return isErrorText(pathNote ? `${failure}\n${pathNote}` : failure);
   }
 
   const afterDrift = checkEpochAndRebaseline("after the call returned");
@@ -1173,7 +1284,18 @@ async function handleToolsCall(params) {
   }
 
   const text = typeof payload === "string" ? payload : JSON.stringify(payload);
-  return wrapPossiblyChunked(text);
+  const wrapped = wrapPossiblyChunked(text);
+  // Append the note as a trailing content item, never mixed into the payload:
+  // wrapPossiblyChunked()'s contract is that the FIRST item is the payload
+  // byte-for-byte, so reassembly stays a plain concatenation. Only the
+  // unchunked shape is annotated -- a chunked result is already carrying a
+  // continuation marker as its second item, and the four tools that can
+  // resolve a path (disk_attach, autostart, display_screenshot, symbols_load)
+  // never produce output anywhere near the cap.
+  if (pathNote && wrapped.content.length === 1) {
+    wrapped.content.push({ type: "text", text: pathNote });
+  }
+  return wrapped;
 }
 
 // ---------------------------------------------------------- message dispatch

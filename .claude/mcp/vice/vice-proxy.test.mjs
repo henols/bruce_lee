@@ -1379,6 +1379,143 @@ test("path translation: container paths cannot reach the host", async () => {
   }
 });
 
+// -----------------------------------------------------------------------
+// A relative path in a MANIFEST-DECLARED path argument resolves against the
+// workspace root; the same string in an undeclared argument still passes
+// through byte-identical.
+//
+// Regression origin: `vice_disk_attach({unit:8, path:"disks/saeger.d64"})`
+// was forwarded untouched and came back as a bare "Failed to attach disk
+// image" from the host, with nothing indicating the path was the problem.
+// The old residual required absolute paths and pointed callers at a
+// SKILL.md "Paths" section that had been deleted in db9eed3, while
+// CLAUDE.md promised the opposite ("pass container paths"). These assertions
+// pin the narrower residual so it cannot silently widen back.
+// -----------------------------------------------------------------------
+
+test("path translation: relative paths resolve for declared path arguments only", async () => {
+  const { server, requests } = startStandInServer();
+  const port = await listen(server);
+  const proxy = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${port}/mcp` });
+
+  try {
+    proxy.send({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } },
+    });
+    await proxy.nextMessage();
+
+    const root = repoRoot();
+    const expectedHostPath = hostPath(join(root, "disks/saeger.d64"));
+    assert.ok(
+      !expectedHostPath.startsWith(root),
+      "hostPath() must actually translate here for this test to be meaningful"
+    );
+
+    // 1. vice_disk_attach.path IS declared a path by the manifest, so the
+    //    relative form must reach the host fully resolved AND translated.
+    //    (The stand-in server answers only vice_ping, so this call comes back
+    //    as a relayed -32601 -- what matters, and what is asserted, is what
+    //    was FORWARDED. The relay is also where the resolution note has to
+    //    appear, since that is the shape the original bug presented as.)
+    proxy.send({
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tools/call",
+      params: { name: "vice_disk_attach", arguments: { unit: 8, path: "disks/saeger.d64" } },
+    });
+    const attached = await proxy.nextMessage();
+    assert.match(
+      attached.result.content[0].text,
+      new RegExp(`path.*disks/saeger\\.d64.*->.*${join(root, "disks/saeger.d64").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "s"),
+      "the result must name what the caller wrote AND the absolute container path it resolved to"
+    );
+
+    const forwarded = requests.find(
+      (r) => r && r.method === "tools/call" && r.params && r.params.name === "vice_disk_attach"
+    );
+    assert.ok(forwarded, "the disk_attach call must have been forwarded");
+    assert.equal(
+      forwarded.params.arguments.path,
+      expectedHostPath,
+      "a relative path in a declared path argument must arrive resolved and host-translated"
+    );
+    assert.equal(forwarded.params.arguments.unit, 8, "a sibling non-path argument must be untouched");
+
+    // 2. The SAME string in a tool that declares no path argument keeps the
+    //    byte-identical pass-through -- the residual narrowed, not vanished.
+    proxy.send({
+      jsonrpc: "2.0",
+      id: 3,
+      method: "tools/call",
+      params: { name: "vice_ping", arguments: { path: "disks/saeger.d64" } },
+    });
+    const pinged = await proxy.nextMessage();
+    assert.equal(pinged.result.isError, false);
+    const pingForwarded = requests.find(
+      (r) =>
+        r &&
+        r.method === "tools/call" &&
+        r.params &&
+        r.params.name === "vice_ping" &&
+        r.params.arguments &&
+        r.params.arguments.path === "disks/saeger.d64"
+    );
+    assert.ok(
+      pingForwarded,
+      "vice_ping declares no path argument, so the same relative string must pass through byte-identical"
+    );
+
+    // 3. A relative path that escapes the workspace is refused by the
+    //    existing boundary check, and the refusal names what the caller
+    //    actually wrote rather than only the resolved form.
+    proxy.send({
+      jsonrpc: "2.0",
+      id: 4,
+      method: "tools/call",
+      params: { name: "vice_disk_attach", arguments: { unit: 8, path: "../../etc/passwd" } },
+    });
+    const escaped = await proxy.nextMessage();
+    assert.equal(escaped.result.isError, true, "a relative path escaping the workspace must be refused");
+    assert.match(escaped.result.content[0].text, /\.\.\/\.\.\/etc\/passwd/, "the refusal must quote what the caller wrote");
+    assert.match(escaped.result.content[0].text, /arguments\.path/, "the refusal must name the argument position");
+    assert.ok(
+      !requests.some(
+        (r) => r && r.params && r.params.arguments && String(r.params.arguments.path || "").includes("/etc/passwd")
+      ),
+      "the refusal must happen before forwarding"
+    );
+
+    // 4. An absolute in-workspace path still behaves exactly as before.
+    const abs = join(root, "disks/saeger.d64");
+    proxy.send({
+      jsonrpc: "2.0",
+      id: 5,
+      method: "tools/call",
+      params: { name: "vice_autostart", arguments: { path: abs } },
+    });
+    const auto = await proxy.nextMessage();
+    const autoForwarded = requests.find(
+      (r) => r && r.method === "tools/call" && r.params && r.params.name === "vice_autostart"
+    );
+    assert.ok(autoForwarded, "the autostart call must have been forwarded");
+    assert.equal(
+      autoForwarded.params.arguments.path,
+      expectedHostPath,
+      "an absolute in-workspace path must translate exactly as it always did"
+    );
+    assert.ok(
+      !/resolved relative path/.test(auto.result.content.map((c) => c.text).join("\n")),
+      "a call that passed an absolute path must read exactly as it always did -- no note"
+    );
+  } finally {
+    proxy.child.kill("SIGKILL");
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 // Regression: the workspace boundary must be checked against a NORMALIZED
 // path. Before this, isInsideWorkspace() compared the raw string, so any value
 // merely beginning with the root's characters passed -- and hostPath() does not

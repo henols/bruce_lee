@@ -685,3 +685,57 @@ fresh one; the first forwarded call takes a new boot-fresh grant.
 **Corollary for orchestrators:** re-dispatching an executor after a stall-halt is guaranteed to
 fail, because the subagent inherits its session's dead instance. Run the bracket *before*
 re-dispatch and treat zero as "stop and hand off", not as "retry".
+
+## Corrections to earlier entries
+
+### 2026-08-01 — CORRECTION: the `vice_disk_attach` relative-path failure was a deleted contract, not a translation defect — and it is now fixed
+
+**Type:** confirmation (corrects the 2026-08-01 hazard entry above), plus a dead end retired
+**Evidence:** live *and* source. Live, on the pre-fix proxy this session:
+`vice_disk_attach({unit:8, path:"disks/danish.d64"})` → the misleading host-launcher error;
+`path:"/workspaces/bruce_lee/disks/danish.d64"` → `{"status":"ok","unit":8,"drive":0,
+"path":"/home/henrik/dev/henrik/git/bruce_lee/disks/danish.d64"}`. Source: `vice-proxy.mjs`'s
+own comment declared the pass-through a **deliberate stated residual**, not an oversight.
+**Confidence:** HIGH (both halves verified directly).
+**Saves/costs:** the earlier entry's diagnosis — "a relative path the host-side path-translation
+layer can't resolve" — was wrong, and would have had every future session performing an
+absolute-path ritual forever instead of fixing a ten-line gap.
+
+The earlier entry said "always resolve to an absolute in-container path … never pass a
+repo-relative string". **That instruction is now obsolete.** What was actually true:
+
+- The residual was deliberate, and its reasoning was sound *for a walker with no schema*: a
+  relative string is indistinguishable from a label or a hex address like `$0400`.
+- Its caller-facing half — a `SKILL.md` "Paths" section the code comment explicitly cited —
+  **was deleted in `db9eed3`**. The code kept the requirement; nothing was left stating it.
+- `.claude/CLAUDE.md` then promised the opposite ("pass container paths and let the tools
+  handle the boundary"). A relative path *is* a container path, so the 01-04 executor did
+  exactly as instructed and hit the residual.
+- The premise had also expired: `tools-manifest.json` types every argument, and exactly four
+  declare a path (`vice_disk_attach`, `vice_autostart`, `vice_display_screenshot`,
+  `vice_symbols_load` — all named `path`). The proxy already loads that manifest to serve
+  `tools/list`; the walker just never consulted it.
+
+**Fixed this session** (`vice-proxy.mjs`, 190 tests green across all six suites): a relative
+string in a *manifest-declared* path argument resolves against the workspace root, then
+translates as before. Everything else keeps the byte-identical pass-through. The result now
+names what was written and the absolute container path it became, and both failure branches
+lead with the caller's own string rather than a host path they cannot act on.
+
+**Two general lessons worth more than the fix:**
+
+1. **A "stated residual" is only safe while the document stating it exists.** Deleting a
+   SKILL.md deletes half of a design. Grep for what cites a doc before removing it.
+2. **A findings-log entry that records a workaround for our own tooling will outlive the
+   defect and become folklore.** This entry existed for hours and already contained a
+   confident wrong diagnosis aimed at every future session. When logging a workaround, say
+   what would make it obsolete.
+
+**Still open, and NOT ours:** `vice_ping`'s `execution` field reporting `"running"` at zero
+cycles, and state reads pausing without resuming, are **upstream host-side VICE MCP**
+behaviour — `execution` appears in `vice-proxy.mjs` only inside a comment. Do not re-file
+those as proxy defects; the cycle-bracket rule above remains the answer.
+
+**Deployment caveat:** the MCP server process is spawned once per session. A session already
+running when the fix landed keeps the old behaviour until it is restarted — which is exactly
+how it was verified here.
