@@ -177,9 +177,25 @@ Verified properties of this boundary (2026-07-31, in-container):
 host, not of the design — a macOS/Windows host would not have it. `acquire()` already polls at
 500ms, so the latency floor is acceptable without watching.
 
-**The broker needs no path translation.** It runs on the host and resolves the repo root itself via
-`lib/repo-root.sh`. Only file *contents* naming paths (attaching a `.d64`) go through the
-`devcontainer-host-path` skill.
+**The broker itself needs no path translation.** It runs on the host and resolves the repo root
+itself via `lib/repo-root.sh`, and stays container-agnostic by design (D-1 depends on that staying
+true).
+
+**CORRECTED (quick-260801-ccn, 2026-08-01): the sentence above used to stop there, and that was
+wrong.** It is not just file *contents* naming paths (attaching a `.d64`) that need the
+`devcontainer-host-path` skill -- the **grant record the broker writes back** carries host
+coordinates in three fields (`url`, `epoch_file`, `supervisor_dir`), since the broker legitimately
+answers in its own, host-side terms. This is the **inverse** of Phase 01.1 criterion 9's
+container->host path translation at the proxy seam, and it was **never built** until this task:
+01.1 only ever needed the outbound direction, because a fixed port and a fixed epoch path were both
+already container-resolved. On-demand leasing introduced a second direction the moment the broker
+started handing back its own coordinates, and until quick-260801-ccn nothing inverted them --
+every broker-granted instance was silently unreachable from the container (loopback meant the
+container's own loopback, and the host-rooted epoch path simply didn't resolve). The fix lives in
+`containerpath.mjs` (new, beside `hostpath.mjs`, the same skill's inverse-direction sibling) plus
+`vice-proxy.mjs`'s `containerizeGrant()`, which inverts all three fields at the `ensureBrokerLease()`
+seam -- the last point before the coordinates become the session's identity -- before
+`useInstance()` ever adopts them.
 
 ### Layout
 

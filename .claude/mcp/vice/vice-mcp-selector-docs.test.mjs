@@ -216,6 +216,12 @@ const HOSTPATH_ALLOW_LIST = {
   "vice-sync.mjs": "screenshot(), reachable only through the standalone tools/recover.mjs pipeline criterion 8 preserves",
   "ram-capture.mjs": "attachAndStart(), same tools/recover.mjs pipeline",
   "vice-proxy.mjs": "the new third consumer, which owns translation for the MCP-mediated path",
+  // Quick task 260801-ccn: the host->container INVERSE seam. It lives
+  // beside hostpath.mjs (D-7) and consumes the sibling's own candidate
+  // derivation (hostPathCandidates()) rather than hand-translating a host
+  // path itself -- it IS the inverse direction, not a caller working around
+  // the proxy's own translation seam.
+  "containerpath.mjs": "the inverse seam beside hostpath.mjs; consumes hostPathCandidates() rather than hand-translating anything",
 };
 
 const importSpecifierPattern = /from\s+["']([^"']+)["']/g;
@@ -225,15 +231,42 @@ const importSpecifierPattern = /from\s+["']([^"']+)["']/g;
  * own header prose (naming its own path) and on any comment that mentions
  * the module by path without importing it (e.g. repo-root.mjs's header,
  * which cites hostpath.mjs's import shape as a rationale for its own last-
- * resort fallback depth, without importing it itself). */
+ * resort fallback depth, without importing it itself).
+ *
+ * BROADENED (quick-260801-ccn) beyond the original full-path substring
+ * check: containerpath.mjs lives IN THE SAME DIRECTORY as hostpath.mjs
+ * (D-7), so its own import is a bare same-directory specifier
+ * (`"./hostpath.mjs"`), which the original check -- looking only for the
+ * `devcontainer-host-path/scripts/hostpath.mjs` substring every OTHER
+ * consumer's longer relative path carries -- would never match. Without
+ * this widening, containerpath.mjs would silently sit outside the closed
+ * consumer set: a control that passes while enforcing nothing, exactly the
+ * failure class this test exists to prevent. */
 function importsHostpath(text) {
   for (const match of text.matchAll(importSpecifierPattern)) {
-    if (match[1].includes("devcontainer-host-path/scripts/hostpath.mjs")) return true;
+    const specifier = match[1];
+    if (specifier.includes("devcontainer-host-path/scripts/hostpath.mjs")) return true;
+    if (specifier === "./hostpath.mjs" || specifier.endsWith("/hostpath.mjs")) return true;
   }
   return false;
 }
 
-test("criterion 9 (caller-side): exactly the traced four production modules import hostpath.mjs, each with a recorded reason", () => {
+test("importsHostpath() classifies a bare same-directory sibling specifier as an import", () => {
+  assert.ok(
+    importsHostpath('import { hostPathCandidates } from "./hostpath.mjs";'),
+    "a bare './hostpath.mjs' specifier (containerpath.mjs's own shape) must be classified as an import"
+  );
+  assert.ok(
+    importsHostpath('import { hostPath } from "../../skills/devcontainer-host-path/scripts/hostpath.mjs";'),
+    "the original full-path specifier shape must still be classified as an import"
+  );
+  assert.ok(
+    !importsHostpath('// mentions hostpath.mjs in prose, imports nothing'),
+    "prose merely naming hostpath.mjs (no import statement) must NOT be classified as an import"
+  );
+});
+
+test("criterion 9 (caller-side): exactly the traced five production modules import hostpath.mjs, each with a recorded reason", () => {
   const modules = enumerateModules().filter((p) => !p.endsWith(".test.mjs"));
   const importers = modules.filter((p) => importsHostpath(readFileSync(p, "utf8")));
   const basenames = importers.map((p) => p.split(sep).pop()).sort();

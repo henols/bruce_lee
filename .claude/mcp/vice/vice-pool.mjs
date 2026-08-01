@@ -67,7 +67,7 @@ import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 
 import { supervisorDir } from "./repo-root.mjs";
-import { readEpoch } from "./vice.mjs";
+import { readEpoch, mcpHost } from "./vice.mjs";
 import { probeAll } from "./vice-probe.mjs";
 
 export const DEFAULT_PORT = 6510;
@@ -141,7 +141,7 @@ export function readRegistry(path = registryPath()) {
  * registry's `epoch_file` field inert (T-mef-01): that field is never opened.
  */
 export function instanceFor(port, dir = poolDir()) {
-  const host = process.env.VICE_MCP_HOST || "host.docker.internal";
+  const host = mcpHost();
   return {
     port,
     url: `http://${host}:${port}/mcp`,
@@ -153,7 +153,7 @@ export function instanceFor(port, dir = poolDir()) {
  * endpoint, and the SAME non-port-scoped epoch file tools/vice.mjs's own
  * EPOCH_FILE default resolves to when no VICE_EPOCH_FILE override is set. */
 function defaultInstance(dir = poolDir()) {
-  const host = process.env.VICE_MCP_HOST || "host.docker.internal";
+  const host = mcpHost();
   return {
     port: DEFAULT_PORT,
     url: `http://${host}:${DEFAULT_PORT}/mcp`,
