@@ -38,7 +38,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, readdirSync, existsSync, statSync } from "node:fs";
 import { tmpdir, networkInterfaces } from "node:os";
-import { hostPath } from "../../skills/devcontainer-host-path/scripts/hostpath.mjs";
+import { hostPath } from "./hostpath.mjs";
 import { repoRoot } from "./repo-root.mjs";
 // Read-only import for test assertions only -- this test file does not
 // modify vice-broker-client.mjs (outside this plan's file-ownership set);

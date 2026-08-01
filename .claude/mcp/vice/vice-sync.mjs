@@ -44,7 +44,7 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 
 import { call } from "./vice.mjs";
-import { tryHostPaths } from "../../skills/devcontainer-host-path/scripts/hostpath.mjs";
+import { tryHostPaths } from "./hostpath.mjs";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 

@@ -20,7 +20,7 @@ import { call, activeInstance, useInstance, DENY_LIST, readEpoch, beginSession, 
 // reconnect ladder.
 import { probeInstance } from "./vice-probe.mjs";
 import { repoRoot } from "./repo-root.mjs";
-import { hostPath, SET_ENV_HINT } from "../../skills/devcontainer-host-path/scripts/hostpath.mjs";
+import { hostPath, SET_ENV_HINT } from "./hostpath.mjs";
 // The INVERSE direction (host -> container), for inverting a broker grant's
 // own host-local coordinates before useInstance() ever adopts them (this
 // task, quick-260801-ccn). Consuming this from the proxy -- rather than
@@ -28,7 +28,7 @@ import { hostPath, SET_ENV_HINT } from "../../skills/devcontainer-host-path/scri
 // set closed to a fixed, traced list (vice-mcp-selector-docs.test.mjs's
 // assertion 4, amended by this task to include containerpath.mjs itself as
 // a fifth, sibling consumer of hostpath.mjs's own knowledge).
-import { containerizeRecord } from "../../skills/devcontainer-host-path/scripts/containerpath.mjs";
+import { containerizeRecord } from "./containerpath.mjs";
 // The container-side half of the on-demand broker protocol (Phase 01.2).
 // This module deliberately does NOT import hostpath.mjs itself -- the
 // host-path consumer set stays closed to four production modules

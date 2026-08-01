@@ -28,16 +28,23 @@
 //      towards mechanism 1.
 //
 // Node >= 18. No dependencies, no network, nothing machine-specific: copy this
-// file into any devcontainer-based project's
-// .claude/skills/devcontainer-host-path/scripts/ and it works.
+// file into any devcontainer-based project's .claude/mcp/vice/ and it works.
 
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve, relative, isAbsolute } from "node:path";
+import { repoRoot } from "./repo-root.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-// <workspace>/.claude/skills/devcontainer-host-path/scripts/hostpath.mjs -> <workspace>
-const WORKSPACE_ROOT = resolve(HERE, "..", "..", "..", "..");
+// Resolved by repo-root.mjs's ladder rather than by a fixed hop count. This
+// file used to live four levels deep (.claude/skills/devcontainer-host-path/
+// scripts/) and hard-coded a matching `resolve(HERE, "..", "..", "..", "..")`;
+// moving it here made that arithmetic silently wrong by one level, which is
+// precisely the quiet-wrong-answer failure repo-root.mjs's own header
+// describes -- nothing throws, the workspace root just points somewhere
+// nothing else writes to. Deriving it removes the hop count from the file
+// entirely, so the next relocation cannot reintroduce the bug.
+const WORKSPACE_ROOT = repoRoot({ from: HERE });
 const CONTAINER_WS = process.env.CONTAINER_WORKSPACE_PATH || WORKSPACE_ROOT;
 
 // Where a bind-mount source device is *itself* mounted on the host. Ordered by

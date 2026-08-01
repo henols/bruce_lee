@@ -36,18 +36,21 @@
 // container-side equivalent" -- nothing more, so it stays a generic
 // host<->container primitive rather than a second copy of broker knowledge.
 import { hostPathCandidates, SET_ENV_HINT } from "./hostpath.mjs";
+import { repoRoot } from "./repo-root.mjs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 
 export { SET_ENV_HINT };
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-// <workspace>/.claude/skills/devcontainer-host-path/scripts/containerpath.mjs -> <workspace>
-// Same four-level hop and the same env override hostpath.mjs's own
+// Same derivation and the same env override hostpath.mjs's own
 // WORKSPACE_ROOT/CONTAINER_WS use -- this file lives beside it, so the two
-// derivations must always agree; this is not a second, possibly-diverging
-// copy, just the same arithmetic applied to this file's own location.
-const WORKSPACE_ROOT = resolve(HERE, "..", "..", "..", "..");
+// must always agree; this is not a second, possibly-diverging copy, just the
+// same resolution applied to this file's own location. Both dropped their
+// hard-coded four-level hop when they moved here from
+// .claude/skills/devcontainer-host-path/scripts/, where that count was
+// correct; see hostpath.mjs's note on why a fixed count is the wrong shape.
+const WORKSPACE_ROOT = repoRoot({ from: HERE });
 const CONTAINER_WS = process.env.CONTAINER_WORKSPACE_PATH || WORKSPACE_ROOT;
 
 // Matched structurally (127.0.0.0/8 in full, "localhost", and the IPv6

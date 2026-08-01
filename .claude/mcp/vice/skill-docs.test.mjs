@@ -40,13 +40,27 @@ import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-// This gate now spans two trees: the vice MCP implementation moved to
-// .claude/mcp/vice/ (this directory), but the SKILL.md it guards deliberately
-// stayed behind at .claude/skills/vice-mcp-selector/ (D-5) -- its deletion is
-// a separate, deferred todo. Retire this gate together with that SKILL.md
-// when that todo lands.
+// REPOINTED, 2026-08-01. The header above says to retire this gate together
+// with vice-mcp-selector/SKILL.md. That SKILL.md is now deleted -- but
+// retiring the gate with it would drop a live protection, because the thing
+// it guards was never the file, it was the AGENT-FACING DOCUMENTATION of how
+// the emulator is reached. That documentation still exists; it just moved.
+// So the gate is repointed rather than retired, at every doc that now plays
+// that role:
+//
+//   .claude/CLAUDE.md                        § Emulator Access
+//   .claude/skills/c64-ram-capture/SKILL.md  the capture procedure
+//
+// Both assertions carry over unchanged in meaning: no module under this
+// directory may be named in agent-facing docs, and those docs must name the
+// real surface (the mcp__vice__ prefix) so a rewrite that drops it is caught.
+// Add a doc to this list when a new agent-facing emulator document appears.
 const MODULE_DIR = dirname(fileURLToPath(import.meta.url));
-const SKILL_MD = join(MODULE_DIR, "..", "..", "skills/vice-mcp-selector", "SKILL.md");
+const REPO_ROOT = join(MODULE_DIR, "..", "..", "..");
+const AGENT_DOCS = [
+  join(REPO_ROOT, ".claude", "CLAUDE.md"),
+  join(REPO_ROOT, ".claude", "skills", "c64-ram-capture", "SKILL.md"),
+];
 const TOOL_PREFIX = "mcp__vice__";
 
 function scriptModules() {
@@ -64,23 +78,27 @@ test("module directory enumeration is non-empty and anchored on vice-sync.mjs", 
   );
 });
 
-test("no module under this directory is named in SKILL.md -- no exemption, not even vice.mjs", () => {
-  const skillMd = readFileSync(SKILL_MD, "utf8");
-  for (const mod of scriptModules()) {
-    assert.ok(
-      !skillMd.includes(mod),
-      `${mod} is named in SKILL.md -- the usage-only guide must not leak internal module names. ` +
-        `This skill has no entry-point exemption (agents call mcp__vice__* tools directly, never a ` +
-        `module by name) -- remove the reference, or move the rationale into ${mod}'s own header comment.`
-    );
+test("no module under this directory is named in any agent-facing doc -- no exemption, not even vice.mjs", () => {
+  for (const doc of AGENT_DOCS) {
+    const text = readFileSync(doc, "utf8");
+    for (const mod of scriptModules()) {
+      assert.ok(
+        !text.includes(mod),
+        `${mod} is named in ${doc} -- agent-facing docs must not leak internal module names. ` +
+          `There is no entry-point exemption (agents call mcp__vice__* tools directly, never a ` +
+          `module by name) -- remove the reference, or move the rationale into ${mod}'s own header comment.`
+      );
+    }
   }
 });
 
-test("SKILL.md names the mcp__vice__ tool prefix -- the real agent-facing surface", () => {
-  const skillMd = readFileSync(SKILL_MD, "utf8");
-  assert.ok(
-    skillMd.includes(TOOL_PREFIX),
-    `${TOOL_PREFIX} is missing from SKILL.md -- callers need to know this is how the emulator is ` +
-      `reached; a rewrite that dropped it is a regression, not a cleanup.`
-  );
+test("agent-facing docs name the mcp__vice__ tool prefix -- the real surface", () => {
+  for (const doc of AGENT_DOCS) {
+    const text = readFileSync(doc, "utf8");
+    assert.ok(
+      text.includes(TOOL_PREFIX),
+      `${TOOL_PREFIX} is missing from ${doc} -- callers need to know this is how the emulator is ` +
+        `reached; a rewrite that dropped it is a regression, not a cleanup.`
+    );
+  }
 });

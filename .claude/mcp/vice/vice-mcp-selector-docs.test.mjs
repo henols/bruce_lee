@@ -207,15 +207,27 @@ test("criterion 8: .claude/skills/vice-session no longer exists, and no .mjs any
 // value its own assertions check the real proxy against, not to hand-
 // translate a path it then forwards to VICE. That is a different concern
 // from criterion 9's ("a caller that hand-translates a host path instead of
-// going through the proxy's own translation seam"), and 01.1-PATTERNS.md's
-// own consumer-classification table (§ hostpath.mjs) traces exactly the four
-// production entries below -- not five. Test files are excluded from this
-// enumeration for that reason, recorded here rather than silently.
+// going through the proxy's own translation seam"). Test files are excluded
+// from this enumeration for that reason, recorded here rather than silently.
+//
+// 2026-08-01: the set shrank from five to FOUR. ram-capture.mjs was deleted
+// with the c64-ram-capture skill's scripts, and the tools/recover.mjs
+// pipeline that two of the recorded reasons cited was deleted as legacy --
+// both because they reached the emulator outside the mcp__vice__* tools,
+// which is now prohibited outright. hostpath.mjs and containerpath.mjs also
+// moved here from .claude/skills/devcontainer-host-path/scripts/, so every
+// consumer's specifier is now a bare same-directory one; importsHostpath()
+// already handled that shape (see its note below) and needed no change.
 const HOSTPATH_ALLOW_LIST = {
   "install-resources.mjs": "prints a host path for a human to type; never hands a path to VICE",
-  "vice-sync.mjs": "screenshot(), reachable only through the standalone tools/recover.mjs pipeline criterion 8 preserves",
-  "ram-capture.mjs": "attachAndStart(), same tools/recover.mjs pipeline",
-  "vice-proxy.mjs": "the new third consumer, which owns translation for the MCP-mediated path",
+  // Reason rewritten 2026-08-01: this used to be justified as "reachable only
+  // through the standalone tools/recover.mjs pipeline criterion 8 preserves".
+  // That pipeline no longer exists, so the old reason justified nothing. What
+  // keeps this entry legitimate now is narrower and worth stating plainly:
+  // screenshot() names a host-side destination file for VICE to write, which
+  // is the translation seam's own job, not a caller working around it.
+  "vice-sync.mjs": "screenshot() names a host-side destination for VICE to write; translation is the point of the call, not a bypass of it",
+  "vice-proxy.mjs": "owns translation for the MCP-mediated path",
   // Quick task 260801-ccn: the host->container INVERSE seam. It lives
   // beside hostpath.mjs (D-7) and consumes the sibling's own candidate
   // derivation (hostPathCandidates()) rather than hand-translating a host
@@ -266,7 +278,7 @@ test("importsHostpath() classifies a bare same-directory sibling specifier as an
   );
 });
 
-test("criterion 9 (caller-side): exactly the traced five production modules import hostpath.mjs, each with a recorded reason", () => {
+test("criterion 9 (caller-side): exactly the traced four production modules import hostpath.mjs, each with a recorded reason", () => {
   const modules = enumerateModules().filter((p) => !p.endsWith(".test.mjs"));
   const importers = modules.filter((p) => importsHostpath(readFileSync(p, "utf8")));
   const basenames = importers.map((p) => p.split(sep).pop()).sort();
@@ -283,12 +295,23 @@ test("criterion 9 (caller-side): exactly the traced five production modules impo
 // Assertion 5 -- the skills table is current.
 // ============================================================================
 
-test("the skills table names vice-mcp-selector and not vice-session", () => {
+// REWRITTEN 2026-08-01. This asserted that CLAUDE.md's skills table names
+// vice-mcp-selector. That skill is deleted -- it was prose wrapped around a
+// tool surface the agent already holds typed schemas for, so it added a layer
+// to read instead of tools to call. The invariant underneath was never "this
+// row exists"; it was "CLAUDE.md tells an agent how to reach the emulator,
+// and names no retired route". That is what is asserted now.
+test("CLAUDE.md states the emulator route and names no retired skill", () => {
   const claudeMd = join(REPO_ROOT, ".claude", "CLAUDE.md");
   assert.ok(existsSync(claudeMd), `${claudeMd} must exist`);
   const text = readFileSync(claudeMd, "utf8");
-  assert.ok(text.includes("vice-mcp-selector"), "CLAUDE.md's Project Skills table must name vice-mcp-selector");
-  assert.ok(!text.includes("vice-session"), "CLAUDE.md must not name the retired vice-session skill");
+  assert.ok(
+    text.includes("mcp__vice__"),
+    "CLAUDE.md must name the mcp__vice__ tool surface as the route to the emulator"
+  );
+  for (const retired of ["vice-session", "vice-mcp-selector", "spike-findings-bruce-lee", "devcontainer-host-path"]) {
+    assert.ok(!text.includes(retired), `CLAUDE.md must not name the retired ${retired} skill`);
+  }
 });
 
 // ============================================================================
@@ -298,13 +321,16 @@ test("the skills table names vice-mcp-selector and not vice-session", () => {
 // merely rewording the heading) fails this test.
 // ============================================================================
 
-test("01.2-05: SKILL.md describes per-session boot-fresh emulator access granted on first use", () => {
-  const skillMd = join(REPO_ROOT, ".claude", "skills", "vice-mcp-selector", "SKILL.md");
-  assert.ok(existsSync(skillMd), `${skillMd} must exist`);
-  const text = readFileSync(skillMd, "utf8");
+// REPOINTED 2026-08-01, same reason as assertion 5: the guidance outlived the
+// file. vice-mcp-selector/SKILL.md is deleted, so criterion 12's requirement
+// now rests on CLAUDE.md § Emulator Access, the doc that replaced it.
+test("01.2-05: CLAUDE.md describes per-session boot-fresh emulator access granted on first use", () => {
+  const claudeMd = join(REPO_ROOT, ".claude", "CLAUDE.md");
+  assert.ok(existsSync(claudeMd), `${claudeMd} must exist`);
+  const text = readFileSync(claudeMd, "utf8");
   assert.ok(
     text.includes("granted on that session's first forwarded tool call"),
-    "SKILL.md must describe emulator access as granted on the session's first forwarded tool call -- " +
+    "CLAUDE.md must describe emulator access as granted on the session's first forwarded tool call -- " +
       "this is the per-session broker route added in Phase 01.2 (criterion 12); a rewrite that drops this guidance must fail here."
   );
 });
