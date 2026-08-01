@@ -573,17 +573,23 @@ test("tracer: request -> grant -> forward -> SIGINT release -> teardown, end to 
     const payload = JSON.parse(callResp.result.content[0].text);
     assert.equal(payload.version, "3.10", "the stand-in server's own ping payload must round-trip back out");
 
-    // THREE "tools/call" requests reach the stand-in server, not one: the
+    // FOUR "tools/call" requests reach the stand-in server, not one: the
     // proxy's own pre-flight liveness probe (plan 01.1-03's vice_ping round
-    // trip), the broker's OWN readiness probe_ready() (plan 04's default
-    // curl-based check, fired once against this same real, live port while
-    // promoting the cold-launched spare from launching -> ready), and the
-    // one real forwarded call this tracer proves.
+    // trip); the broker's OWN readiness probe_ready() (plan 04's default
+    // curl-based check, fired during the FIRST pass's maintain_spares()
+    // step while promoting the cold-launched spare from launching ->
+    // ready); the quick-260801-qpq GRANT-TIME readiness probe (Task 2:
+    // grant_from_spare() now calls probe_ready() again, immediately before
+    // writing the grant, during the SECOND pass's process_requests() --
+    // a record saying "ready" is bookkeeping, a probe that answers right
+    // now is evidence, and the 2026-08-01 incident proved bookkeeping alone
+    // survives a broker restart while the process behind it is long dead);
+    // and the one real forwarded call this tracer proves.
     const toolCallsSeen = requests.filter((r) => r && r.method === "tools/call");
     assert.equal(
       toolCallsSeen.length,
-      3,
-      "the stand-in server must have received the pre-flight probe, the broker's readiness probe, and the real forwarded call"
+      4,
+      "the stand-in server must have received the pre-flight probe, the broker's readiness probe, the grant-time probe, and the real forwarded call"
     );
     assert.ok(toolCallsSeen.every((r) => r.params.name === "vice_ping"));
 
@@ -1010,6 +1016,12 @@ test("start --once --dry-run: leaves dry-run grant and spare records untouched",
 
 test("kill-never-recycle: a torn-down instance is never re-granted -- the next grant on that port is a distinct, freshly launched instance", async () => {
   const dir = tmpPoolDir();
+  // quick-260801-qpq Task 2: grant_from_spare() now probes a ready spare
+  // before granting it. This test's spares are fake bookkeeping (no real
+  // listener behind them), so an always-succeeding probe stub keeps this
+  // test exercising kill-never-recycle specifically, not the new grant-time
+  // probe (which has its own dedicated tests above).
+  const probe = alwaysSucceedProbe();
   try {
     const id1 = "req-7-7000-abcdef01";
     writeRequestFile(dir, id1);
@@ -1028,7 +1040,7 @@ test("kill-never-recycle: a torn-down instance is never re-granted -- the next g
     // about. Distinct supervisorPid/launchedAt from the second spare below
     // is what makes the "never recycled" assertions below meaningful.
     writeSpareFile(dir, 7300, { state: "ready", supervisorPid: 111111111111111, launchedAt: 111111111111111, readyAt: 111111111111111 });
-    await runBrokerOnce(dir, { basePort: 7300 });
+    await runBrokerOnce(dir, { basePort: 7300, probeCmd: probe });
 
     const grant1Path = join(dir, "grants", `${id1}.json`);
     assert.ok(existsSync(grant1Path), "the first request must be granted");
@@ -1047,7 +1059,7 @@ test("kill-never-recycle: a torn-down instance is never re-granted -- the next g
     writeRequestFile(dir, id2);
     writeLeaseFile(dir, id2);
     writeSpareFile(dir, 7300, { state: "ready", supervisorPid: 222222222222222, launchedAt: 222222222222222, readyAt: 222222222222222 });
-    await runBrokerOnce(dir, { basePort: 7300 });
+    await runBrokerOnce(dir, { basePort: 7300, probeCmd: probe });
 
     const grant2Path = join(dir, "grants", `${id2}.json`);
     assert.ok(existsSync(grant2Path), "the second request must be granted");
@@ -1064,6 +1076,7 @@ test("kill-never-recycle: a torn-down instance is never re-granted -- the next g
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });
+    rmSync(dirname(probe), { recursive: true, force: true });
   }
 });
 
@@ -1079,6 +1092,12 @@ const ID_CORPUS = [
 
 test("parity: the shell script's own id validation and isValidRequestId() agree on every corpus entry", async () => {
   const dir = tmpPoolDir();
+  // quick-260801-qpq Task 2: grant_from_spare() now probes each ready spare
+  // before granting it. This test's pre-planted ready spares are fake
+  // bookkeeping with no real listener, so an always-succeeding probe stub
+  // keeps this test exercising id-validation parity, not the grant-time
+  // probe itself (covered by its own dedicated tests above).
+  const probe = alwaysSucceedProbe();
   try {
     const jsVerdicts = ID_CORPUS.map((c) => isValidRequestId(c.id));
     assert.deepEqual(
@@ -1118,7 +1137,7 @@ test("parity: the shell script's own id validation and isValidRequestId() agree 
       i++;
     }
 
-    await runBrokerOnce(dir, { basePort: 7400 });
+    await runBrokerOnce(dir, { basePort: 7400, probeCmd: probe });
 
     const shellVerdicts = ID_CORPUS.map(({ id }) => existsSync(join(dir, "grants", `${id}.json`)));
     assert.deepEqual(
@@ -1137,6 +1156,7 @@ test("parity: the shell script's own id validation and isValidRequestId() agree 
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });
+    rmSync(dirname(probe), { recursive: true, force: true });
   }
 });
 
@@ -1161,6 +1181,10 @@ function writeRequestFileRaw(dir, safeName, candidateId) {
 
 test("a malformed request body is skipped with a logged reason while a well-formed request in the same pass is still granted", async () => {
   const dir = tmpPoolDir();
+  // quick-260801-qpq Task 2: grant_from_spare() now probes the ready spare
+  // before granting it -- an always-succeeding stub keeps this test about
+  // malformed-request skipping, not the grant-time probe itself.
+  const probe = alwaysSucceedProbe();
   try {
     const rdir = join(dir, "requests");
     mkdirSync(rdir, { recursive: true });
@@ -1171,11 +1195,12 @@ test("a malformed request body is skipped with a logged reason while a well-form
     writeLeaseFile(dir, goodId); // see the parity test's own comment on this ordering
     writeSpareFile(dir, 7500, { state: "ready", readyAt: Date.now() * 1e6 }); // see the parity test's own comment on this too
 
-    const { stderr } = await runBrokerOnce(dir, { basePort: 7500 });
+    const { stderr } = await runBrokerOnce(dir, { basePort: 7500, probeCmd: probe });
     assert.match(stderr, /skipping request garbage\.json/);
     assert.ok(existsSync(join(dir, "grants", `${goodId}.json`)), "a well-formed request in the same pass must still be granted");
   } finally {
     rmSync(dir, { recursive: true, force: true });
+    rmSync(dirname(probe), { recursive: true, force: true });
   }
 });
 
@@ -1185,26 +1210,103 @@ test("a malformed request body is skipped with a logged reason while a well-form
 // and the single function (maintain_spares) that owns both the ready_spares
 // == N target and the total_instances <= MAX ceiling.
 
-test("maintain_spares: with VICE_BROKER_SPARES=2 and an always-succeeding probe, two passes bring broker-instances.json to exactly two ready entries", async () => {
+test("maintain_spares: with a spares target of 2 and an always-succeeding probe, warming is SERIALISED -- pass 1 records exactly one launching spare, pass 2 shows one ready plus one launching, pass 3 shows two ready -- never two launches in one pass", async () => {
   const dir = tmpPoolDir();
   const probe = alwaysSucceedProbe();
   try {
     await runBrokerOnce(dir, { basePort: 7700, spares: 2, probeCmd: probe });
     let files = existsSync(join(dir, "spares")) ? readdirSync(join(dir, "spares")).filter((f) => f.endsWith(".json")) : [];
-    assert.equal(files.length, 2, "pass 1 must launch exactly VICE_BROKER_SPARES=2 spares");
-    for (const f of files) {
-      const rec = JSON.parse(readFileSync(join(dir, "spares", f), "utf8"));
-      assert.equal(rec.state, "launching", "an instance launched in THIS pass must not already be ready in this same pass");
-    }
+    assert.equal(files.length, 1, "pass 1 must record exactly ONE spare -- never two or three simultaneous launches");
+    let recs = files.map((f) => JSON.parse(readFileSync(join(dir, "spares", f), "utf8")));
+    assert.equal(recs[0].state, "launching", "the pass-1 spare must not already be ready in this same pass");
 
     await runBrokerOnce(dir, { basePort: 7700, spares: 2, probeCmd: probe });
     files = readdirSync(join(dir, "spares")).filter((f) => f.endsWith(".json"));
-    assert.equal(files.length, 2, "no additional spares beyond the target once ready");
-    for (const f of files) {
-      const rec = JSON.parse(readFileSync(join(dir, "spares", f), "utf8"));
-      assert.equal(rec.state, "ready", "pass 2 must promote both entries to ready");
+    assert.equal(files.length, 2, "pass 2 must show exactly two spares -- one promoted, one newly launched");
+    recs = files.map((f) => JSON.parse(readFileSync(join(dir, "spares", f), "utf8")));
+    const states2 = recs.map((r) => r.state).sort();
+    assert.deepEqual(states2, ["launching", "ready"], "pass 2 must show one ready (promoted from pass 1) plus one launching (this pass's own new launch)");
+
+    await runBrokerOnce(dir, { basePort: 7700, spares: 2, probeCmd: probe });
+    files = readdirSync(join(dir, "spares")).filter((f) => f.endsWith(".json"));
+    assert.equal(files.length, 2, "no additional spares beyond the target once both are ready");
+    recs = files.map((f) => JSON.parse(readFileSync(join(dir, "spares", f), "utf8")));
+    for (const rec of recs) {
+      assert.equal(rec.state, "ready", "pass 3 must show both entries ready");
       assert.ok(rec.ready_at, "a promoted entry must record ready_at");
     }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(dirname(probe), { recursive: true, force: true });
+  }
+});
+
+test("maintain_spares: with a spare already launching and a probe that never promotes, a pass with a spares target of 3 adds no second spare and says on stderr that it is waiting", async () => {
+  const dir = tmpPoolDir();
+  const probe = alwaysFailProbe();
+  try {
+    const port = 7705;
+    writeSpareFile(dir, port, { state: "launching" });
+
+    const { stderr } = await runBrokerOnce(dir, { basePort: port + 1, spares: 3, probeCmd: probe });
+
+    assert.match(stderr, /spare warming waits/, "must log that warming waits for the boot already in flight");
+    const files = readdirSync(join(dir, "spares")).filter((f) => f.endsWith(".json"));
+    assert.equal(files.length, 1, "no second spare may be added while one is already launching, regardless of the target");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(dirname(probe), { recursive: true, force: true });
+  }
+});
+
+test("process_requests: a pending request that finds no ready spare while a launch is already in flight writes neither a grant nor a denial and triggers no second launch", async () => {
+  const dir = tmpPoolDir();
+  try {
+    const inFlightPort = 7715;
+    writeSpareFile(dir, inFlightPort, { state: "launching" });
+
+    const id = "req-20-7716-eeeeeeee";
+    writeRequestFile(dir, id);
+    writeLeaseFile(dir, id);
+
+    const { stderr } = await runBrokerOnce(dir, { basePort: inFlightPort + 1, spares: 0 });
+
+    assert.match(stderr, /already in flight/, "must log that a launch is already in flight for this request");
+    assert.equal(existsSync(join(dir, "grants", `${id}.json`)), false, "no grant may be written while a launch is in flight");
+    assert.equal(existsSync(join(dir, "denials", `${id}.json`)), false, "no denial may be written while a launch is in flight");
+    assert.ok(existsSync(join(dir, "requests", `${id}.json`)), "the request must remain pending for a later pass");
+
+    const spareFiles = readdirSync(join(dir, "spares")).filter((f) => f.endsWith(".json"));
+    assert.equal(spareFiles.length, 1, "no second (cold) launch may be triggered while one is already in flight");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("grant_from_spare: with two ready spares and a probe that fails only for the lower port, the grant goes to the higher port, the lower spare's record is gone, and the drop is logged", async () => {
+  const dir = tmpPoolDir();
+  const lowerPort = 7725;
+  const higherPort = 7726;
+  const probe = makeProbeStub(`
+if [ "$1" = "${lowerPort}" ]; then exit 1; else exit 0; fi
+`);
+  try {
+    writeSpareFile(dir, lowerPort, { state: "ready", readyAt: Date.now() * 1e6 });
+    writeSpareFile(dir, higherPort, { state: "ready", readyAt: Date.now() * 1e6 });
+
+    const id = "req-21-7727-ffffffff";
+    writeRequestFile(dir, id);
+    writeLeaseFile(dir, id);
+
+    const { stdout, stderr } = await runBrokerOnce(dir, { basePort: 7728, spares: 0, probeCmd: probe });
+
+    assert.match(stderr, new RegExp(`dropped stale ready spare on port ${lowerPort}`), "the lower port's failed probe must be logged as a drop");
+    assert.match(stdout, new RegExp(`granted request ${id} -> port ${higherPort}`), "the grant must go to the higher port, whose probe succeeded");
+
+    const grant = JSON.parse(readFileSync(join(dir, "grants", `${id}.json`), "utf8"));
+    assert.equal(grant.port, higherPort, "the grant record itself must carry the higher port");
+    assert.equal(existsSync(join(dir, "spares", `${lowerPort}.json`)), false, "the lower port's stale ready record must be gone");
+    assert.equal(existsSync(join(dir, "spares", `${higherPort}.json`)), false, "the higher port's spare record is consumed by the grant, same as any other grant_from_spare() success");
   } finally {
     rmSync(dir, { recursive: true, force: true });
     rmSync(dirname(probe), { recursive: true, force: true });

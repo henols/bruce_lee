@@ -181,9 +181,9 @@ Subcommands:
                 NOT installed on the --once path -- --once is a single pass
                 of a broker that is not ending. [N] is an optional
                 spares-target positional, validated as an integer 1..16
-                exactly like vice-pool.sh's own start [N]; it is not yet
-                consumed by any spares logic in this version (no warm spares
-                exist yet).
+                exactly like vice-pool.sh's own start [N]; it DRIVES
+                VICE_BROKER_SPARES (an explicit CLI count wins over the
+                ambient env knob), same as vice-pool.sh's own start [N].
   stop          Best-effort stop of the long-lived broker process recorded
                 in broker.json, if one exists and its pid's identity checks
                 out via ps -- then, in EVERY case (a live broker stopped just
@@ -222,7 +222,16 @@ Configuration (all environment-overridable):
   VICE_BROKER_SPARES       Warm-spares target: maintain_spares() launches new
                             spare instances until this many are in state
                             "ready" (subject to the ceiling below), re-checked
-                            at the end of every pass (default: 3).
+                            at the end of every pass (default: 3). Warming is
+                            SERIALISED -- one boot in flight at a time, never
+                            two or three simultaneously -- because x64sc opens
+                            a GTK3 window, an OpenGL 4.6 context and
+                            PulseAudio, and on 2026-08-01 three simultaneous
+                            launches lost that race: one SEGV, one exit 1, one
+                            exit 0, all at the identical spawn second. Reaching
+                            the target this way takes one additional pass per
+                            spare rather than one pass total, which is the
+                            trade this incident made non-negotiable.
   VICE_BROKER_MAX          Max instances (spares + leased) maintain_spares()
                             will ever hold at once (default: 16, range 1..16).
   VICE_BROKER_PROBE_CMD    Path to an executable readiness probe, invoked as
@@ -661,21 +670,20 @@ count_total() {
   printf '%s\n' "$n"
 }
 
-# Counts spares in state "launching" whose reason is "cold" -- i.e., a launch
-# already in flight to satisfy some earlier pass's still-pending request.
-# process_requests() consults this to avoid launching a SECOND cold instance
-# for a request that is already covered by one from a previous pass (see its
-# own comment at the call site).
-count_cold_launching() {
-  local n=0 f state reason
+# Counts spares in state "launching", ANY reason ("cold" or "spare") -- the
+# SINGLE in-flight-launch counter both launch paths below (process_requests'
+# cold-launch deferral and maintain_spares' warm-spare loop) consult before
+# starting a new one. Two counters that could disagree about whether a boot
+# is already under way is exactly how the two launch paths raced each other
+# back into the 2026-08-01 outage (three simultaneous x64sc launches); there
+# is now exactly one, read here and nowhere else.
+count_launching() {
+  local n=0 f state
   if [ -d "$SPARES_DIR" ]; then
     for f in "$SPARES_DIR"/*.json; do
       [ -e "$f" ] || continue
       state="$(read_spare_field "$f" state)"
-      reason="$(read_spare_field "$f" reason)"
-      if [ "$state" = "launching" ] && [ "$reason" = "cold" ]; then
-        n=$((n + 1))
-      fi
+      [ "$state" = "launching" ] && n=$((n + 1))
     done
   fi
   printf '%s\n' "$n"
@@ -959,30 +967,54 @@ JSON
   return 0
 }
 
-# Selects the LOWEST-PORT spare in state "ready" (a single snapshot read,
-# never re-checked mid-action -- must_haves C9), flips it to leased by
+# Selects the LOWEST-PORT spare in state "ready", proves it with a grant-time
+# probe_ready() call BEFORE ever writing the grant, flips it to leased by
 # writing grants/$id.json carrying its recorded fields plus this request's
 # own id, removes the spare entry, and unlinks the request. Returns non-zero
-# (writing nothing) when no ready spare exists, so the caller falls through
+# (writing nothing) when no ready spare EXISTS, so the caller falls through
 # to the cold-launch path. NEVER considers an entry in state "launching" --
 # there is no code path here that can select one.
+#
+# The grant-time probe (T-qpq must_haves) is why this is a loop, not a
+# single selection: a record saying "ready" is bookkeeping; a probe that
+# answers RIGHT NOW is evidence, and the 2026-08-01 incident proved
+# bookkeeping alone survives a broker stop, a broker start, and a full host
+# restart while the process behind it is long dead. A candidate that fails
+# the probe is terminated (signal_recorded_pid(), Task 1) and dropped, and
+# selection moves to the next-lowest ready candidate -- only when NONE probe
+# clean does this function finally give up (return 1), same as the
+# no-ready-spare-at-all case.
 grant_from_spare() {
   local id="$1"
-  local f lowest_port="" lowest_file="" state candidate_port
-  if [ -d "$SPARES_DIR" ]; then
-    for f in "$SPARES_DIR"/*.json; do
-      [ -e "$f" ] || continue
-      state="$(read_spare_field "$f" state)"
-      [ "$state" = "ready" ] || continue
-      candidate_port="$(read_spare_field "$f" port)"
-      [ -n "$candidate_port" ] || continue
-      if [ -z "$lowest_port" ] || [ "$candidate_port" -lt "$lowest_port" ]; then
-        lowest_port="$candidate_port"
-        lowest_file="$f"
-      fi
-    done
-  fi
-  [ -n "$lowest_file" ] || return 1
+  local f lowest_port lowest_file state candidate_port pid
+
+  while true; do
+    lowest_port=""
+    lowest_file=""
+    if [ -d "$SPARES_DIR" ]; then
+      for f in "$SPARES_DIR"/*.json; do
+        [ -e "$f" ] || continue
+        state="$(read_spare_field "$f" state)"
+        [ "$state" = "ready" ] || continue
+        candidate_port="$(read_spare_field "$f" port)"
+        [ -n "$candidate_port" ] || continue
+        if [ -z "$lowest_port" ] || [ "$candidate_port" -lt "$lowest_port" ]; then
+          lowest_port="$candidate_port"
+          lowest_file="$f"
+        fi
+      done
+    fi
+    [ -n "$lowest_file" ] || return 1
+
+    if probe_ready "$lowest_port"; then
+      break
+    fi
+
+    pid="$(read_spare_field "$lowest_file" supervisor_pid)"
+    signal_recorded_pid "$pid" "port $lowest_port (stale ready spare)" || true
+    rm -f "$lowest_file"
+    echo "vice-broker: dropped stale ready spare on port $lowest_port -- grant-time probe failed" >&2
+  done
 
   local url epoch_file supervisor_dir supervisor_pid launched_at dry_run_field now
   url="$(read_spare_field "$lowest_file" url)"
@@ -1058,18 +1090,25 @@ JSON
 # snapshot -- a request that appears mid-pass waits for the NEXT pass, never
 # this one.
 process_requests() {
-  local req_file id cold_pending total_now port
+  local req_file id total_now port in_flight
   [ -d "$REQUESTS_DIR" ] || return 0
 
-  # A snapshot taken ONCE, before the loop: how many cold launches are
-  # ALREADY in flight from an earlier pass. Without this, a still-pending
-  # request whose own cold instance hasn't become ready yet would trigger a
-  # SECOND (then third, ...) redundant cold launch on every subsequent pass
-  # until it finally promotes -- wasteful, duplicate churn for what is, in
-  # this project's common single-session case, exactly one logical
-  # acquisition. Each still-pending request "consumes" one already-in-flight
-  # cold launch from this snapshot before this pass will start a new one.
-  cold_pending="$(count_cold_launching)"
+  # A single in-flight flag, initialised ONCE before the loop from
+  # count_launching() -- the SAME counter maintain_spares() below also
+  # consults, so the two launch paths (this cold-launch path and
+  # maintain_spares' warm-spare path) can never disagree about whether a
+  # boot is already under way. Two counters that could disagree is exactly
+  # how the two launch paths raced each other back into the 2026-08-01
+  # outage (three simultaneous x64sc launches); there is now exactly one.
+  # Starts truthy when ANY spare -- cold or warm -- is already "launching"
+  # from an earlier pass, and flips truthy the moment THIS pass itself
+  # starts a cold launch, so a SECOND still-pending request later in this
+  # same loop does not also trigger one.
+  if [ "$(count_launching)" -gt 0 ]; then
+    in_flight=1
+  else
+    in_flight=0
+  fi
 
   for req_file in "$REQUESTS_DIR"/*.json; do
     [ -e "$req_file" ] || continue
@@ -1084,8 +1123,8 @@ process_requests() {
       continue
     fi
 
-    if [ "$cold_pending" -gt 0 ]; then
-      cold_pending=$((cold_pending - 1))
+    if [ "$in_flight" -eq 1 ]; then
+      echo "vice-broker: request $id -- a launch is already in flight, awaiting readiness before granting or denying" >&2
       continue
     fi
 
@@ -1100,6 +1139,7 @@ process_requests() {
       continue
     fi
     if launch_instance "$port" "cold"; then
+      in_flight=1
       echo "vice-broker: cold launch in flight for request $id on port $port -- awaiting readiness, no grant or denial written yet"
     else
       deny "$id" "$LAST_LAUNCH_ERROR"
@@ -1130,15 +1170,23 @@ process_requests() {
 # comfortably covering a cold boot), never a correctness requirement, so
 # guessing here would trade a real hazard for a marginal latency win.
 #
-# Step 3: otherwise, take ONE snapshot of count_ready()/count_total() (after
-# the promotions above) and launch new spares while the snapshot's ready
-# count is below VICE_BROKER_SPARES AND the snapshot's total is below
-# VICE_BROKER_MAX -- both counters advance locally as each new spare is
-# launched (a launch always starts "launching", never "ready", but for the
-# purpose of deciding how many MORE to start in this pass it counts toward
-# the target being pursued; the probe on a genuinely still-booting instance
-# only succeeds on a LATER pass, which is what makes the "two passes to reach
-# steady state" behavior in this file's own tests true).
+# Step 3: return early, warming nothing, when count_launching() (the SAME
+# single in-flight counter process_requests() above also consults) reports
+# anything already launching -- no new boot starts while one is under way.
+# Otherwise take ONE snapshot of count_ready()/count_total() (after the
+# promotions above) and scan for a port to launch on while the snapshot's
+# ready count is below VICE_BROKER_SPARES AND the snapshot's total is below
+# VICE_BROKER_MAX -- but BREAK immediately after the first launch that
+# actually succeeds (SERIALISED warming, D-qpq-01: x64sc opens a GTK3
+# window, an OpenGL 4.6 context and PulseAudio, and three simultaneous
+# launches lost that race on 2026-08-01 with one SEGV, one exit 1 and one
+# exit 0 at the identical spawn second). A launch that is REFUSED (rc 1,
+# the target port is already bound) does NOT break -- it blocks that port
+# and keeps scanning within this SAME pass, which is the pre-existing
+# bound-port regression's own requirement, and it is what stops one
+# permanently-bound port from starving warming forever. Reaching
+# VICE_BROKER_SPARES this way costs one additional pass per spare instead
+# of one pass total -- the trade the incident made non-negotiable.
 maintain_spares() {
   local f port
 
@@ -1171,6 +1219,11 @@ maintain_spares() {
     return 0
   fi
 
+  if [ "$(count_launching)" -gt 0 ]; then
+    echo "vice-broker: spare warming waits -- a boot is already in flight this pass" >&2
+    return 0
+  fi
+
   local ready total port attempts launch_rc
   ready="$(count_ready)"
   total="$(count_total)"
@@ -1200,12 +1253,20 @@ maintain_spares() {
     launch_rc=0
     launch_instance "$port" "spare" || launch_rc=$?
     if [ "$launch_rc" -eq 0 ]; then
+      # SERIALISED warming (D-qpq-01): break after the first successful
+      # launch rather than looping to the target -- never two or three
+      # simultaneous x64sc boots. Reaching VICE_BROKER_SPARES takes one
+      # additional pass per spare instead of one pass total.
       ready=$((ready + 1))
       total=$((total + 1))
+      echo "vice-broker: warmed 1 spare this pass -- $ready of $VICE_BROKER_SPARES ready, remainder warmed on later passes"
+      break
     elif [ "$launch_rc" -eq 1 ]; then
       # Remembering the port is what turns "logged on every poll" into
       # "logged once": next_free_port() will not hand it back to this
-      # process again, here or on any later pass.
+      # process again, here or on any later pass. A refused launch does
+      # NOT break -- it must still block that port and keep scanning
+      # within this SAME pass (the pre-existing bound-port regression).
       block_port "$port"
     else
       echo "vice-broker: not warming spares -- $LAST_LAUNCH_ERROR" >&2
