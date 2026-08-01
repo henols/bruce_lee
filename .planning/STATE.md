@@ -93,14 +93,22 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-7 pending — see `.planning/todos/pending/`. Three captured 2026-08-01, one dependency chain:
-**absorb the skills → extract the package → share broker state**. The middle step cannot ship while
-`vice-proxy.mjs` imports from `.claude/skills/`, and sharing state without sharing code means N
-drifting implementations while sharing code without sharing state means N brokers racing:
+7 pending — see `.planning/todos/pending/`. The dependency chain was
+**absorb the skills → extract the package → share broker state**; its first step is now **done**
+(2026-08-01, `e0f9915`), which unblocks the second. Sharing state without sharing code means N
+drifting implementations, while sharing code without sharing state means N brokers racing:
 
-- **Absorb the ram-capture and host-path skills into the VICE MCP** (tooling, minor) — the MCP
-  entrypoint imports across the tree into both skills; `ram-capture.mjs` is itself one of the five
-  pinned `hostpath.mjs` consumers, so the two removals are coupled. Sequence first.
+- ~~**Absorb the host-path skill into the VICE MCP**~~ — **DONE 2026-08-01.** `hostpath.mjs` and
+  `containerpath.mjs` moved into `.claude/mcp/vice/`, the skill deleted, and the `HOSTPATH_ALLOW_LIST`
+  guard amended from five consumers to four. `c64-ram-capture` was removed from that todo's scope and
+  kept as a skill. Nothing under `.claude/mcp/` imports from `.claude/skills/` any more, which was the
+  blocker on the package extraction below.
+
+- **Investigate whether the surviving tooling is reusable as skills** (tooling, minor) — the four
+  pure-Node modules left in `tools/` have never been assessed as capabilities-vs-plumbing. Start from
+  the criterion the three 2026-08-01 skill deletions established, and check it against `acme-build`
+  and `c64-memory-mapping` before applying it. Pairs with the package extraction below: both ask what
+  is project-specific and what is generally useful about adjacent code.
 
 - **Extract the VICE MCP into its own project and publish it as an installable package** (tooling,
   major) — `.claude/mcp/vice/` is ~14,650 vendored lines with no `package.json`; copying is the only
