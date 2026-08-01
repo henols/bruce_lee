@@ -93,7 +93,7 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-11 pending — see `.planning/todos/pending/`. The dependency chain was
+12 pending — see `.planning/todos/pending/`. The dependency chain was
 **absorb the skills → extract the package → share broker state**; its first step is now **done**
 (2026-08-01, `e0f9915`), which unblocks the second. Sharing state without sharing code means N
 drifting implementations, while sharing code without sharing state means N brokers racing:
@@ -121,6 +121,15 @@ drifting implementations, while sharing code without sharing state means N broke
 - **Extract the VICE MCP into its own project and publish it as an installable package** (tooling,
   major) — `.claude/mcp/vice/` is ~14,650 vendored lines with no `package.json`; copying is the only
   way to reuse it, and copies drift on guarantees like the `vice_disk_list` deny-list.
+
+- **Pack the whole C64 RE toolkit, including the VICE MCP proxy, into one installable package**
+  (tooling, major) — **umbrella** over the three todos above and below. The developer's goal is that
+  a new project installs one thing and gets emulator access, the RE method, and the pure-logic
+  modules with no copying. Three layers with different install mechanics (MCP server entry /
+  `.claude/skills/` markdown / importable ESM), so the first question is **one package or a family**
+  — that answer constrains the component todos, which is why it leads. Host-side `.sh` deployment
+  from a container-installed package is the novel risk and should be designed before anything moves.
+  The emulator layer is unblocked as of `e0f9915` and has the most unknowns, so it goes first.
 
 - **Make the broker cross-project via shared home-dir state** (tooling, minor) — coordination state
   is workspace-scoped, so a second project cannot reach it; pairs with orphan reaping that must
