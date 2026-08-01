@@ -81,7 +81,7 @@
     ]
   },
   "run_status": "blocked",
-  "run_status_note": "Task 2 (above) completed in full and is a genuinely evidenced result. Task 3's play-through, in the SAME session immediately afterward, reached 2 of the required milestones (title-screen, game-start/chamber-1) with full evidence before a genuine SILENT host VICE stall halted further play: three independent vice_cycles_stopwatch reset->execution_run->ping xN->read brackets all measured exactly 0 cycles while vice_ping continuously reported execution:\"running\" with no epoch change (i.e. the same instance, not a crash/respawn -- distinct from the three epoch-drift crashes logged in identity_changes above). vice_registers_get returned an identical PC across all three brackets, including one taken immediately after an explicit vice_execution_pause. Per this project's rule and this plan's own instruction, no further play input was attempted once this was confirmed twice. Full evidence in .planning/RE-FINDINGS.md and .planning/todos/pending/2026-08-01-vice-silent-stall-during-01-04-task3-saeger-playthrough.md. The remaining required milestones (a second real chamber transition, both opponents, a death, a game over, a restart) were NOT reached this session -- this is an honest partial result, not a completed play-through, and recovery/LOADING.md must render it as such rather than as a clean coverage claim.",
+  "run_status_note": "ATTEMPT 4 (2026-08-01, a genuinely fresh session, first tool call vice_ping): re-derived the whole saeger boot from scratch (Task 2's registry data reused as durable, not re-derived) and reached 5 of 7 required milestones with real evidence -- title-screen and game-start/chamber-1 (inherited from attempt 3, durable, unchanged), plus THIS session newly reached a death (FALLS-counter depletion causing a non-terminal respawn-in-place, screenshot-evidenced), a game over (full mechanical evidence: screenshot + screen-matrix signature + sprite_enable + registers), and a restart (F7 after game-over resumed active play with the FALLS counter reset to its initial value, screenshot-evidenced). IMPORTANT EVIDENTIARY GAP, recorded honestly rather than glossed over: only the game-over milestone has a full screen-matrix SHA-256 signature paired with its screenshot this session -- the death and restart milestones are evidenced by screenshot plus the HUD's own visible FALLS/1UP/GAME OVER text, but a screen-matrix signature was not separately captured at those exact moments before the session's stall. Two harder milestones were NOT reached despite six separate restart-from-title attempts: a second real chamber transition (the chamber-1 opening area has a fast-depleting FALLS hazard counter -- see .planning/RE-FINDINGS.md -- that killed Bruce Lee in roughly 4 input events regardless of direction, before enough distance could be covered to find the room's exit) and a clean, distinctly-evidenced both-opponents encounter (the green enemy visibly despawned after one punch and Bruce Lee was later found lying prone adjacent to both the green and white opponents near the pedestal, but no dedicated collision-attribution capture was taken). The session then hit a SECOND genuine silent stall (see .planning/RE-FINDINGS.md and the new todo cross-referencing attempt 3's identical-PC stall) while attempting one more clean death/restart capture pass with paired memory reads -- two independent 0-cycle brackets, vice_ping continuously \"running\", PC frozen at $07DE (the identical address attempt 3's own stall froze at) including immediately after an explicit vice_execution_pause. Per this project's rule and this plan's own instruction, no further play input was attempted once confirmed twice. This halted the session before danish's Task 3 play-through (still entirely unattempted in any session to date) could begin at all, and before saeger's remaining 2 milestones or the death/restart signature gap could be closed.",
   "milestones": [
     {
       "name": "title-screen",
@@ -103,14 +103,46 @@
       "retries": 0,
       "snapshot_name": null,
       "note": "Reached by holding F7 (vice_keyboard_matrix) at the title screen for 10 frames. Confirmed both mechanically (screen signature differs from the title baseline, sprite_enable 31->19) and visually (saeger-loading-02-postf7.png shows chamber 1: HUD, Bruce Lee sprite, a white ape-like opponent, platforms and a barrier obstacle -- not the title screen)."
+    },
+    {
+      "name": "death",
+      "reached": true,
+      "screen_signature": null,
+      "sprite_enable": null,
+      "screenshot": "recovery/saeger/dumps/saeger-loading-attempt4-check12.png",
+      "cycles_advanced": null,
+      "retries": 0,
+      "snapshot_name": null,
+      "evidentiary_gap": "No screen-matrix SHA-256 was captured at this exact moment this session -- evidenced by the HUD's own visible state (FALLS 04->00 across a short sequence of inputs, then Bruce Lee shown back at the room's start position with 1UP still displayed, i.e. a non-terminal death/respawn, not a game-over) plus the screenshot. A future session closing this gap should pause immediately on the FALLS-reaching-0 transition and take a paired vice_memory_read of the screen matrix before resuming.",
+      "note": "Reached via the FALLS hazard-counter mechanic documented in .planning/RE-FINDINGS.md (2026-08-01, 'saeger chamber 1's opening area has a fast-depleting FALLS counter') -- the counter depletes roughly 1 per input event regardless of direction and killed Bruce Lee (consuming one life, respawning him at the room's start with the counter reset to 04) well before the room's exit could be reached. Observed and screenshot-captured multiple times across six restart attempts; check12.png is the clearest single instance."
+    },
+    {
+      "name": "game-over",
+      "reached": true,
+      "screen_signature": "5bd33261ae91e055be878de2312fe97ec2dd82ef2b4607dc2bae59ea6adc8315",
+      "sprite_enable": 1,
+      "screenshot": "recovery/saeger/dumps/saeger-loading-attempt4-check4.png",
+      "cycles_advanced": 22595389,
+      "retries": 0,
+      "snapshot_name": null,
+      "note": "Full mechanical evidence: screen text reads 'GAME OVER / PLAYER 1 / 000000'; screen-matrix signature computed from a careful Write-then-node-hash capture (verified byte-exact via `wc -c` = 2000 hex chars = 1000 bytes before hashing, after an initial manual-transcription attempt produced a corrupted 2003-char string that was caught and discarded rather than used). VIC bank/screen-base ($D018=$31, $DD00=$C1 -> screen base $8C00) matches the same configuration used throughout this release's title/chamber1 captures. Reached after the FALLS counter depleted to 0 on what was evidently the last remaining life (unlike the non-terminal death above)."
+    },
+    {
+      "name": "restart",
+      "reached": true,
+      "screen_signature": null,
+      "sprite_enable": null,
+      "screenshot": "recovery/saeger/dumps/saeger-loading-attempt4-check5.png",
+      "cycles_advanced": 22595389,
+      "retries": 0,
+      "snapshot_name": null,
+      "evidentiary_gap": "No screen-matrix SHA-256 was captured at this exact moment this session -- same gap as the death milestone above. Evidenced by holding F7 (vice_keyboard_matrix) immediately after the GAME OVER screen, which returned play to chamber 1's start position with the FALLS counter genuinely reset from 00/01 back to 04 (visible in the screenshot's own HUD text) rather than remaining on the GAME OVER screen or returning only to the title screen.",
+      "note": "Confirms F7 restarts a fresh game directly from GAME OVER without requiring a return to the title screen first. The restarted state is visually and mechanically consistent with the already-committed game-start-chamber1 milestone above (same room, same starting HUD layout)."
     }
   ],
   "scope_not_attempted": [
-    "A second real chamber transition (beyond entering chamber 1) -- play-through halted by the stall before it could be attempted.",
-    "Both opponents encountered as named milestones -- the white ape-like figure visible in saeger-loading-02-postf7.png was seen on screen but not confirmed as an actual encounter/collision before the stall.",
-    "A death -- not attempted.",
-    "A game over -- not attempted.",
-    "A restart -- not attempted."
+    "A second real chamber transition (beyond entering chamber 1) -- six separate restart-from-title attempts this session all died in chamber 1's opening area before reaching the room's exit, due to the FALLS hazard-counter mechanic documented in .planning/RE-FINDINGS.md. Not a stall or crash -- a genuine gameplay-navigation limit not yet overcome.",
+    "A clean, dedicated both-opponents-encountered capture -- the green enemy visibly despawned from the screen after one punch (attempt4-check6.png vs check7.png) and Bruce Lee was later found lying prone adjacent to both the green and white opponents near the pedestal (attempt4-check11.png), but no collision was captured with a dedicated PC/backtrace/disassembly attribution the way the $DD00 gameplay-write hit was. Recorded as suggestive visual evidence, not as a fully mechanically-proven milestone."
   ],
   "hits": [
     {
@@ -130,6 +162,7 @@
   "input_notes": "Task 2: boot saeger, queue a PETSCII SPACE (mcp__vice__vice_keyboard_petscii, data:[32]) into the KERNAL keyboard buffer only after vice_backtrace confirmed the call chain was inside the $08F4 gate's own JSR $FFE4 (called_from $08F6), release at the $08B1 trigger checkpoint. Task 3 (this session, partial): held F7 (vice_keyboard_matrix, 10 frames) at the title screen to begin a 1-player game, reaching chamber 1; sent one vice_joystick_tap(direction:right, duration_frames:60) then one vice_joystick_tap(direction:right, duration_frames:90) to move Bruce Lee, which produced the one attributed $DD00 hit above; no further input was sent once the silent stall was confirmed.",
   "teardown": {
     "checkpoints_remaining": 0,
-    "enumerated_at": "post-idle-calibration (Task 2), via an explicit mcp__vice__vice_checkpoint_list call after deleting checkpoints 1 and 2 individually by checkpoint_num; a second explicit mcp__vice__vice_checkpoint_list call after re-arming and tearing down the counting-tier probe's own checkpoint (checkpoint_num 1, re-used after the calibration checkpoints were deleted) also confirmed count:0. A third and final enumeration (Task 3, post-stall) confirmed count:0 again after deleting the two checkpoints (loader-reentry + $DD00, re-armed as checkpoint_num 1 and 3) that were live during the play-through -- vice_checkpoint_list and vice_checkpoint_delete both remained reliable throughout the silent stall, unlike vice_registers_get/vice_execution_pause/the cycle-advancement path."
-  }
+    "enumerated_at": "post-idle-calibration (Task 2), via an explicit mcp__vice__vice_checkpoint_list call after deleting checkpoints 1 and 2 individually by checkpoint_num; a second explicit mcp__vice__vice_checkpoint_list call after re-arming and tearing down the counting-tier probe's own checkpoint (checkpoint_num 1, re-used after the calibration checkpoints were deleted) also confirmed count:0. A third enumeration (attempt 3, Task 3, post-stall) confirmed count:0 again after deleting the two checkpoints (loader-reentry + $DD00, re-armed as checkpoint_num 1 and 3) that were live during the play-through -- vice_checkpoint_list and vice_checkpoint_delete both remained reliable throughout that silent stall, unlike vice_registers_get/vice_execution_pause/the cycle-advancement path. A FOURTH and final enumeration (attempt 4, this session, post-SECOND-stall) confirmed count:0 again after deleting checkpoints 1 (loader-reentry) and 2 ($DD00 counting) -- checkpoint management remained reliable through this session's stall too, matching the same pattern."
+  },
+  "attempt_4_note": "This session (2026-08-01, a genuinely fresh session/instance) re-derived saeger's whole boot from scratch (Task 2 registry data reused as durable, live emulator work redone). Reached death, game-over and restart with evidence (game-over has full mechanical screen-signature proof; death and restart are screenshot/HUD-evidenced only -- see each milestone's evidentiary_gap field). Did NOT reach a second real chamber transition or a clean dedicated both-opponents capture, due to a genuine gameplay hazard (the FALLS counter, see .planning/RE-FINDINGS.md) rather than any tooling failure. The session then hit a SECOND genuine silent host VICE stall (0 cycles across two independent brackets, PC frozen at $07DE -- the identical address attempt 3's stall froze at -- including immediately after an explicit pause) while attempting one more clean capture pass. Per this project's rule, no further play input was attempted once confirmed twice. This halted the session before danish's Task 3 play-through (still entirely unattempted in any session) could begin. Full evidence: .planning/RE-FINDINGS.md and .planning/todos/pending/2026-08-01-vice-silent-stall-attempt4-froze-at-same-pc-as-attempt3.md."
 }

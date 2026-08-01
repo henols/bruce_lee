@@ -686,6 +686,70 @@ fresh one; the first forwarded call takes a new boot-fresh grant.
 fail, because the subagent inherits its session's dead instance. Run the bracket *before*
 re-dispatch and treat zero as "stop and hand off", not as "retry".
 
+### 2026-08-01 — saeger chamber 1's opening area has a fast-depleting `FALLS` counter that kills Bruce Lee in roughly 4 actions regardless of direction chosen
+
+**Type:** hazard
+**Evidence:** live -- 01-04 attempt 4, saeger Task 3 play-through, repeated across ~6 independent restarts from the title screen
+**Confidence:** HIGH (measured directly, repeatedly, with a control: an "up" tap that produced no visible sprite movement still decremented the counter by exactly 1, ruling out "counts physical falls off a ledge" as the mechanism)
+
+The status-bar field labelled `FALLS` (top-right HUD, e.g. `FALLS 04`) decrements by
+approximately 1 per `vice_joystick_tap`/`vice_keyboard_matrix` input issued in chamber 1's
+opening room, **independent of direction, of whether the sprite visibly moved, and of whether
+fire was held** -- a stationary "up" tap that produced no observable position change still cost
+one count, ruling out a literal "number of ledge-falls taken" interpretation. It starts at `04`
+on room entry (including after an F7 restart) and reaching `00` kills Bruce Lee: either a
+non-terminal respawn-in-place (screen resets to the room's start position, `1UP` persists, FALLS
+resets to `04`) if a life remains, or the explicit `GAME OVER / PLAYER 1 / <score>` screen if it
+was the last life. **This makes naive "hold a direction and walk across" traversal of this
+specific room fail before reaching the far side** -- roughly 4 input events is not enough real
+distance to cross the room's width at normal walk speed, so every attempt this session (six
+restarts, several different direction/fire combinations) died in the opening area before finding
+the exit/chamber-2 transition. Not yet root-caused at the disassembly level (no checkpoint was
+armed on the HUD's FALLS byte itself, only inferred from repeated on-screen observation) -- a
+future session attempting this room should arm a store-watch on the FALLS digit's screen-RAM
+address (or find its backing counter in zero page/low RAM) to learn the actual trigger condition
+before spending further live budget on trial-and-error navigation.
+**Saves:** a future session should not re-discover this by trial and error across several
+restarts; arm a watch on the counter's backing byte first, or try a diagonal/jump input pattern
+that covers more ground per discrete input event, before attempting this room's chamber
+transition again.
+
+### 2026-08-01 — a second genuine silent stall, in a FRESH session's FRESH instance, froze at the exact same PC ($07DE) as attempt 3's stall
+
+**Type:** hazard (confirms and sharpens the silent-stall hazard already logged for attempt 3)
+**Evidence:** live -- 01-04 attempt 4, saeger Task 3, immediately after re-arming the earned
+watch set for a final clean death/restart evidence pass
+**Confidence:** HIGH (two independent 0-cycle brackets, `vice_ping` continuously "running",
+identical PC across both brackets and immediately after an explicit `vice_execution_pause`,
+matching the project's documented stall signature exactly)
+
+This is a **brand-new session, first tool call `vice_ping`**, so per the project's own boot-fresh
+access model this should have been a fresh, healthy instance — attempt 3's stall could not have
+carried over. Sequence: `vice_cycles_stopwatch reset_and_read` reported `previous_cycles:
+54,894,035` (genuine prior execution), then two `checkpoint_add` calls succeeded, a screenshot
+came back **solid blue with no text at all** (not the title screen, not chamber 1 — a state never
+seen at any other point this session), an `F7` press + `execution_run` produced no visible change,
+and from that point on every `cycles_stopwatch reset -> run -> ping xN -> read` bracket measured
+**exactly 0** across two independent brackets. `vice_registers_get` read `PC:2014` ($07DE) both
+times, including immediately after an explicit `vice_execution_pause` — **the identical PC
+attempt 3's own stall froze at**, per
+`.planning/todos/pending/2026-08-01-vice-silent-stall-during-01-04-task3-saeger-playthrough.md`.
+`$07DE` is the instruction immediately after `STA $DD00` in the chamber-1-entry graphics-mode-setup
+routine (`$07D9: LDA #$01 / $07DB: STA $DD00 / $07DE: LDA #$38 / ...`) — exactly where this
+session's own `$DD00` attribution capture (a stopping checkpoint on that store) had just paused
+the machine for evidence-gathering, one action earlier.
+**With N=2 this is a real pattern worth flagging, not yet a proven root cause**: both saeger
+stalls this project has hit occurred shortly after a stopping checkpoint had paused the machine
+at/near this exact address and execution was then resumed. Whether the hang is triggered by
+resuming from a checkpoint sitting on this specific instruction, by something else in the
+chamber-1-entry code path, or is unrelated coincidence, is not established — but a future session
+repeating this same technique (attribute a `$DD00` hit via a stopping checkpoint, then resume and
+keep playing) should treat a stall recurring at this same PC as a real correlation to investigate,
+not surprising noise.
+**Saves/costs:** per the project's hard rule, a confirmed stall has no in-session recovery; this
+cost the rest of attempt 4's live budget for BOTH releases (danish's Task 3 was never reached).
+Logged as a new pending todo cross-referencing attempt 3's.
+
 ## Corrections to earlier entries
 
 ### 2026-08-01 — CORRECTION: the `vice_disk_attach` relative-path failure was a deleted contract, not a translation defect — and it is now fixed
