@@ -185,8 +185,15 @@ the tools handle the boundary.
 - Synchronise input on checkpoint hits and frame counts. Never on wall-clock delay.
 - `tools/` holds pure logic only — resolution, attribution, ordering, rendering — over data the
   agent fetched through the tools and passed in. Nothing under `tools/` contacts the emulator.
-- Log VICE MCP quirks as a file in `.planning/todos/pending/` rather than fixing them.
-  `.claude/mcp/` and `.vice-supervisor/` are not to be read or edited.
+- Log VICE MCP quirks observed while driving the emulator as a file in `.planning/todos/pending/`
+  rather than fixing them inline — a triage rule about not derailing a plan, not a ban on
+  maintaining the implementation.
+- `.claude/mcp/` is the tracked `mcp__vice__` implementation. It is read and edited only when the
+  task at hand *is* maintaining that implementation, as opposed to using it to reach the emulator
+  — in that case, edit the host shell scripts in its `resources/` directory; the deployed copies
+  are generated and gitignored, so hand-editing them elsewhere is silently overwritten.
+- `.vice-supervisor/` is runtime state written by the running broker/supervisor/pool; nobody
+  hand-edits it, in either mode of work.
 
 ## Reverse-Engineering Findings Log
 
