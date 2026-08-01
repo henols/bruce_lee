@@ -229,6 +229,16 @@ which is the exact cost the skill exists to remove.
 - **One entry per finding**, dated, stating the finding and what it saves or costs. If it came
   from live execution, say so — provenance is the difference between a fact and a guess, and
   this project grades every claim by confidence.
+- **Grade every entry.** `Evidence:` and `Confidence:` are separate required fields.
+  `Evidence` says *how* the finding was established; `Confidence` says *how much to trust it*,
+  on `.planning/research/STACK.md`'s existing HIGH / MEDIUM / LOW scale — one confidence
+  vocabulary across the project. Doc-derived method belongs in the log at MEDIUM; an unrun
+  method with addresses attached is a hypothesis the next session can test in minutes, which is
+  the point. **Promote by re-logging with the live evidence, never by editing a grade in
+  place** — silently upgrading destroys the record of when something stopped being a guess,
+  in a file whose whole value is that record.
 - **Do not deduplicate against the skill.** The log is raw input; curation happens when the
   skill is written. A finding logged twice is free, a finding suppressed as "probably already
-  known" is gone.
+  known" is gone. This is a rule against *suppressing* findings, not a mandate to scatter one
+  fact across the file: the same finding arriving from several sources merges into one entry
+  that carries every provenance line.
