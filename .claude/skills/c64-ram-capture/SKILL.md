@@ -1,117 +1,93 @@
 ---
 name: c64-ram-capture
-description: Capture a running C64's full 64K RAM as a verified flat image, and prove two captures are equivalent under RAM drift. Use when asked to dump RAM, depack a program by running it, capture a memory image at a checkpoint, or compare two captures for reproducibility.
+description: Capture a running C64's full 64K RAM as a verified flat image, and prove two captures are equivalent. Use when asked to dump RAM, depack a program by running it, capture a memory image at a checkpoint, or compare two captures for reproducibility.
 ---
 
 # Capturing and comparing C64 RAM
 
-```js
-import {
-  capture,
-  attachAndStart,
-  findEntry,
-  voidRun,
-  captureBaseline,
-  captureDecayReference,
-  classifyRuns,
-  VOLATILE_RANGES,
-} from "../../c64-ram-capture/scripts/ram-capture.mjs";
-```
+Reach the emulator only through the `mcp__vice__*` tools. They are the one
+permitted route. Never open a connection to the emulator by any other means.
 
-Everything this skill offers is reached through that one module — including
-the comparison functions, re-exported from it so callers never need a second
-import path.
+Never call `mcp__vice__vice_disk_list`.
 
-## Capturing at a trigger address
+## Boot a disk
 
-```js
-const cap = await capture(triggerAddress, { releaseKeys, session });
-```
+1. `mcp__vice__vice_disk_attach` with the disk image.
+2. `mcp__vice__vice_autostart` with the same image.
+3. `mcp__vice__vice_execution_run`.
+4. `mcp__vice__vice_registers_get` and confirm the program counter has moved.
 
-`triggerAddress` is the instruction address to stop at (a number, or a
-`"$08B1"`-style string). Returns the 64K image, its sha256, the chunk size
-actually used to read it, and the machine/chip-state fields recorded
-alongside it (VIC-II video standard, port `$01` value, the server version, a
-`$E000` RAM-vs-ROM comparison proving bank scoping is working).
+If the program counter has not moved, type `LOAD"*",8,1` with
+`mcp__vice__vice_keyboard_type`, run it, then type `RUN` and run it.
 
-If the caller is holding down any keys at a gate, pass them as
-`releaseKeys` — they are released at the trigger checkpoint, not before,
-so the capture reflects a program event rather than a timed guess.
+## Capture at a trigger address
 
-`session` is optional; pass one from a longer-running procedure (e.g. one
-that also called `attachAndStart`) so identity checks compare against that
-procedure's starting point rather than a fresh one.
+1. `mcp__vice__vice_checkpoint_add` at the trigger address, with execution
+   breaking and stopping enabled.
+2. `mcp__vice__vice_execution_run`.
+3. Poll `mcp__vice__vice_ping` until the checkpoint reports a hit.
+4. Read `$0000`–`$FFFF` with repeated `mcp__vice__vice_memory_read` calls of
+   4096 bytes each, and concatenate the results in address order into one
+   65536-byte image.
+5. Confirm the image is exactly 65536 bytes, then record its SHA-256.
+6. Record alongside it, in the same step: the value at `$0001`, the video
+   standard from `mcp__vice__vice_vicii_get_state`, and the registers from
+   `mcp__vice__vice_registers_get`.
+7. `mcp__vice__vice_checkpoint_delete` the checkpoint.
+8. `mcp__vice__vice_checkpoint_list` and confirm it reports zero checkpoints.
+   Accept only this enumeration as proof. Record the count.
+9. `mcp__vice__vice_execution_run` to leave the machine running.
 
-## Booting a disk
+Read state before you resume, and resume exactly once at the end.
 
-```js
-const { method, fallbackUsed, hostPath } = await attachAndStart({ diskPath });
-```
+Hold keys down across a gate by releasing them at the trigger checkpoint in
+step 3, never earlier.
 
-Attaches and autostarts the given disk image, falling back to a scripted
-`LOAD"*",8,1` + `RUN` if autostart doesn't visibly move the PC. Takes no
-screenshot and writes nothing to any registry — that is the caller's job.
+## Find an entry point
 
-## Finding an entry point
+1. Press past any "hit any key" gate with `mcp__vice__vice_keyboard_matrix`.
+2. Step forward in batches with `mcp__vice__vice_execution_step`, reading
+   `mcp__vice__vice_registers_get` after each batch.
+3. Stop when the program counter and the stack pointer both settle into a
+   repeating range across three consecutive batches. That range is the
+   dispatch loop; its lowest address is the entry point.
+4. Confirm the address with `mcp__vice__vice_disassemble` before recording it.
 
-```js
-const { address, howLocated } = await findEntry({ batchSize, maxBatches });
-```
+Set a batch ceiling before you start. Report failure to stabilise as a
+finding with the batches spent; never extend the ceiling silently.
 
-Presses past a "hit any key" gate and steps forward until the program
-counter and call-stack depth both stabilize, which is the signature of a
-program's steady-state dispatch loop. Bounded by `maxBatches`; throws with a
-diagnostic if execution never stabilizes.
+## Prove the machine did not change under you
 
-## Comparing two captures for reproducibility
+Read the restart epoch at the start of a capture and again at the end.
+Report the same epoch to accept the capture. Report a changed epoch to void
+it.
 
-```js
-const verdict = classifyRuns({ runA, runB });
-```
+## Void a run
 
-Both must be exactly 65536-byte buffers. Reads:
+Void a capture whose machine identity you could not prove unchanged.
 
-- `verdict.ok` — `false` if any multi-bit difference was found outside
-  volatile scratch. A real divergence differs in several bits; treat this
-  as a failure.
-- `verdict.decayCandidates` — single-bit differences, returned for
-  inspection, not silently dropped. This is the expected shape of harmless
-  RAM drift between two live runs.
-- `verdict.volatileDiffs` — count of differences inside `VOLATILE_RANGES`
-  (stack page, KERNAL work area, 6510 I/O port), excluded from the verdict
-  but never uncounted.
-- `verdict.programMismatches` — the multi-bit differences that failed the
-  verdict, each with its address and both byte values.
+1. Rename each artifact to `<name>.VOID-<UTC timestamp>`.
+2. Write a sibling note recording the reason, both epoch values, and the
+   time. Keep the voided artifacts on disk.
 
-## Voiding a run
+## Compare two captures
 
-```js
-voidRun({ binPath, capturePath, reason, baselineEpoch, currentEpoch });
-```
+Compare two 65536-byte images address by address.
 
-Call this when the machine's identity could not be proven unchanged across
-a capture. Renames any existing artifacts to `*.VOID-<timestamp>` and writes
-a sibling evidence note recording why — a voided run stays inspectable
-rather than silently vanishing. Missing artifacts are a no-op.
+- Treat differences at `$0000`–`$0001`, `$0100`–`$01FF` and `$0200`–`$03FF`
+  as volatile. Count them, exclude them from the verdict, and report the
+  count.
+- Treat a difference of exactly one bit as drift. List each one with its
+  address and both values, and report them as candidates.
+- Treat a difference of two or more bits as a real divergence. List each one
+  with its address and both values. Any such difference fails the comparison.
 
-## Building a machine baseline
+Report the verdict as pass or fail, with all three lists attached.
 
-```js
-await captureBaseline({ outDir });
-await captureDecayReference({ outDir, runMs });
-```
+## Establish a drift floor
 
-Both take the directory to write into and reject a missing one before
-touching the emulator. `captureBaseline` records the deterministic
-power-on RAM image (valid only as the very first emulator action of a
-fresh process). `captureDecayReference` runs the machine idle twice and
-records every address that drifted, as a floor on the drift-prone set —
-not a complete one.
+Capture the power-on image as the very first action against a fresh machine.
 
-## Copying this skill elsewhere
-
-This skill depends on the `.claude/mcp/vice/` VICE MCP implementation
-(not a sibling skill — it lives outside `.claude/skills/`, see
-quick-260731-p8a) and the sibling `devcontainer-host-path` skill — copy this
-skill, that directory, and that skill into another project together, not
-this skill alone.
+Then run the machine idle, capture, run idle again, capture again, and
+compare. Report every address that differed as the drift floor for that
+machine. State it as a floor, not a complete set.
