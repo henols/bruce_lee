@@ -124,3 +124,24 @@ power-on-pattern block-fill heuristic was **rejected** despite scoring 134/137 �
 threshold-tunable, and tuning until green manufactures the false confidence this work exists to
 prevent. Known gap: one 2-bit drift byte (`$FDD9`) still fails, so the Hamming-1 rule is
 slightly too tight; widening the threshold is not the fix.
+
+### 2026-08-01 — the only trustworthy VICE liveness test is a cycle bracket, and it clears the host after the broker fix
+
+**Type:** confirmation (live), plus the hazard it retires
+**Evidence:** fresh session, orchestrator-side, four calls — `vice_cycles_stopwatch reset` →
+`vice_execution_run` → three `vice_ping` polls → `vice_cycles_stopwatch read` = **21,551,860
+cycles**. Same bracket read **exactly 0** twice during 01-04 attempt 2, on two different disk
+images, while `vice_ping` kept answering `execution: "running"` throughout.
+**Saves:** one tool call's worth of certainty before dispatching any plan that drives the
+emulator — and it is the difference between a real zero and a stalled machine's worthless zero.
+
+`vice_ping`'s `execution` field is **not** a liveness signal; neither is a transport that
+answered. Only an advancing cycle count is. Run the bracket first in any session that will do
+live work, before committing to a long pass — attempt 2 lost its saeger half and all of Task 3
+to a stall that every non-cycle-based health check read as green.
+
+Two facts confirmed alongside it, both cheap and worth repeating at session start:
+`vice_checkpoint_list` returned `count: 0`, so no prior session's checkpoints survived into this
+one; and the instance is granted on the session's **first** forwarded call (here `vice_ping` →
+`3.10`/`C64SC`/`paused`), so a subagent of this session inherits *this* instance — which is why
+a stalled session cannot be repaired from inside and has to be abandoned for a fresh one.
