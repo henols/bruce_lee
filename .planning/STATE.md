@@ -90,9 +90,14 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-6 pending — see `.planning/todos/pending/`. Two captured 2026-08-01, on the same theme and needed
-together — sharing state without sharing code means N drifting implementations; sharing code without
-sharing state means N brokers racing:
+7 pending — see `.planning/todos/pending/`. Three captured 2026-08-01, one dependency chain:
+**absorb the skills → extract the package → share broker state**. The middle step cannot ship while
+`vice-proxy.mjs` imports from `.claude/skills/`, and sharing state without sharing code means N
+drifting implementations while sharing code without sharing state means N brokers racing:
+
+- **Absorb the ram-capture and host-path skills into the VICE MCP** (tooling, minor) — the MCP
+  entrypoint imports across the tree into both skills; `ram-capture.mjs` is itself one of the five
+  pinned `hostpath.mjs` consumers, so the two removals are coupled. Sequence first.
 
 - **Extract the VICE MCP into its own project and publish it as an installable package** (tooling,
   major) — `.claude/mcp/vice/` is ~14,650 vendored lines with no `package.json`; copying is the only

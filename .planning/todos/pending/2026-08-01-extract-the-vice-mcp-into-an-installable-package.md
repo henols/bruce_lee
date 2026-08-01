@@ -56,10 +56,14 @@ repo in four specific ways worth knowing before scoping:
    a real install/deploy story for those three `.sh` files — they must land on the **host**, which is
    outside the container the package is installed in. That is the genuinely awkward part.
 3. **The host-path translation seam has a deliberately closed consumer set.** `hostpath.mjs` from
-   the `devcontainer-host-path` skill has exactly four production consumers, and 01.2's acceptance
-   criteria assert that count (`grep -c … install-resources.mjs` is exactly 1). Packaging must
-   decide whether the skill travels with the package, stays a peer, or gets absorbed — the existing
-   todo [[collapse-vice-selector-skill-into-proxy]] is adjacent to this question.
+   the `devcontainer-host-path` skill has exactly **five** production consumers, enumerated with a
+   recorded reason each in `HOSTPATH_ALLOW_LIST` and pinned by
+   `vice-mcp-selector-docs.test.mjs:269` ("exactly the traced five production modules"). Worse for
+   packaging: `vice-proxy.mjs:23,31` — the MCP entrypoint itself — imports from
+   `../../skills/devcontainer-host-path/scripts/`, so **a published package cannot import from
+   `.claude/skills/` in the consuming project**. This is a hard blocker, not a boundary question.
+   **Resolved by [[2026-08-01-absorb-the-ram-capture-and-host-path-skills-into-the-vice-mcp]]**: the
+   skill gets absorbed, and that todo should be sequenced before this one.
 4. **The container guard is load-bearing.** `container-guard.sh` makes the host scripts refuse to
    run inside a devcontainer (exit 2, by design). A distributed package has to keep that refusal
    correct across environments it was never tested in.
@@ -93,8 +97,8 @@ TBD. Sketch:
 - Give the three host `.sh` resources a first-class deploy path from the installed package to the
   host workspace — this is the piece with no current analogue and should be designed first, since it
   is most likely to change the package's shape.
-- Decide the `devcontainer-host-path` boundary: travels with the package, peer dependency, or
-  absorbed.
+- Land [[2026-08-01-absorb-the-ram-capture-and-host-path-skills-into-the-vice-mcp]] first — it
+  removes the `.claude/skills/` imports that make the current tree unpublishable.
 - Consume it back in this project as the first customer, replacing `.claude/mcp/vice/` with the
   dependency — dogfooding is what proves the extraction actually removed the coupling rather than
   hiding it.
