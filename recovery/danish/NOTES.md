@@ -275,3 +275,13 @@ Consequences:
 **This machine is PAL, ~50.125 Hz.** Several MCP tool docstrings quote "~16.7 ms per frame at 60 Hz". That figure is wrong here and must never be used for timing arithmetic. A PAL frame is ~19.95 ms.
 
 **Provenance evidence captured during boot** (Tier 1, feeding RECOVER-07 in plan 01-06): the cracktro reads "Danish Crackers Presents BRUCE LEE" with a scroller carrying the release id **DC-011/P** and the sign-off "They make'em, We break'em." This independently corroborates the CSDb record found during research — the artifact itself agrees with the database. The post-cracktro title screen is Datasoft's original and unmodified: "DATASOFT PRESENTS / BRUCE LEE (TM) / BY RON J FORTIER".
+
+---
+
+## 9. Provenance diff offset (01-05, D-17)
+
+**danish is the reference release** for the provenance diff (`tools/diff-images.mjs`'s reference is the first release in `recovery/RELEASES.json`'s `releases[]` array — currently danish — never a hardcoded id): every other release's offset is proven *against* this release's `run1` primary dump, so danish's own offset is **0 by definition**, not something separately proven.
+
+**How the pairing (danish → saeger) was proven:** `node tools/diff-images.mjs anchor-search` selected 8 long (48-byte), non-trivial candidate byte runs from danish's `run1` dump — biased away from the volatile zero-page/stack/KERNAL-work-area zone (`$0000`–`$03FF`) per the same drift-zone reasoning as §4 above — and located each in saeger's `run1` dump with `Buffer.indexOf`. 7 of the 8 anchors produced a **unique** match in the target (the 8th matched at two offsets — a repeating `$00`×8 + `$AA`×40 pattern — and was correctly rejected as non-unique, proving nothing). **All 7 usable anchors agreed on delta 0** — i.e. **the proven offset is 0**: both releases' game code loads at identical addresses, exactly as `$08B1`/`$139E`'s byte-for-byte identity already established by inspection in §1 above. The neighbour-byte check (the byte immediately before, at, and after each anchor's resolved position in the target) was inspected for every anchor and showed no off-by-one in any of them.
+
+The proven offset, the anchor count, and the agreeing-anchor count are also recorded machine-readably in `recovery/RELEASES.json`'s `provenance_offset` field for both releases, so the diff in `recovery/PROVENANCE.md` is reproducible without re-deriving the anchors.

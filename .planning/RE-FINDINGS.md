@@ -750,6 +750,62 @@ not surprising noise.
 cost the rest of attempt 4's live budget for BOTH releases (danish's Task 3 was never reached).
 Logged as a new pending todo cross-referencing attempt 3's.
 
+### 2026-08-01 — anchor-proven provenance offset is 0 for danish vs saeger, confirmed mechanically (not just by the earlier byte-for-byte inspection)
+
+**Type:** confirmation
+**Evidence:** live -- `node tools/diff-images.mjs anchor-search --json` run against the two committed
+`run1` primary dumps (01-05 Task 1)
+**Confidence:** HIGH (mechanical: 8 candidate anchors selected, 7 produced a unique match in the
+target and all 7 agreed on delta 0; the 8th was correctly rejected as non-unique rather than
+silently averaged in)
+
+Both releases' `01-04`/earlier NOTES.md sections already established by direct disassembly
+inspection that `$08B1`/`$139E` are byte-for-byte identical between danish and saeger, implying an
+offset of 0. This finding is the *mechanical* confirmation of that same fact via
+`tools/diff-images.mjs`'s `anchorSearch`/`proveOffset`, independent of the earlier manual
+inspection: 8 long (48-byte), non-trivial byte runs were selected from danish's dump (reference),
+located in saeger's dump via `Buffer.indexOf`, and every anchor that produced a unique match agreed
+on offset 0. One anchor (a repeating `$00`x8 + `$AA`x40 pattern, landing in never-written/scratch
+territory) matched at two distinct target offsets and was correctly rejected rather than treated as
+a tie-break. **Saves:** any future release added to the registry can reuse this same verb rather than
+re-deriving an offset by manual disassembly comparison; the recorded `provenance_offset` field in
+`recovery/RELEASES.json` makes the diff reproducible without re-running the anchor search at all.
+
+### 2026-08-01 — a linear-congruence byte fill is a bad "distinctive" test fixture for anchor/offset search code
+
+**Type:** hazard (test-authoring pitfall, not a project-data finding)
+**Evidence:** live -- writing `tools/diff-images.test.mjs`'s anchor-search fixtures
+**Confidence:** HIGH (directly reproduced and diagnosed in this session)
+
+A synthetic test fixture filled via `(i * 37 + 11) & 0xff` looks non-repeating at a glance but has
+a short period (256 bytes, since 37 is coprime with 256) -- any window of 48 bytes recurs every 256
+bytes, so a search tool that looks for "long distinctive runs" will find the fixture run matching
+at *multiple* target offsets and reject it as non-unique, exactly the behaviour meant to be tested
+against a genuinely distinctive run. **Fix used:** a sha256-counter-mode fill
+(`createHash("sha256").update(seed+counter).digest()` concatenated) has no short period and behaves
+like real C64 program-image bytes for this purpose. **Saves:** the next test needing a "distinctive,
+non-repeating" byte fixture (anywhere in this project, not just `tools/diff-images.test.mjs`) should
+reach for a hash-counter fill rather than a linear congruence or other short-period generator.
+
+### 2026-08-01 — a coarse fixed-stride candidate sampler can miss a narrow non-trivial region entirely, not just under-sample it
+
+**Type:** dead end / hazard (own tool-design mistake, caught before commit)
+**Evidence:** live -- `tools/diff-images.mjs`'s first `anchorSearch` draft, caught by its own test
+suite
+**Confidence:** HIGH
+
+The first draft of `anchorSearch` walked candidate offsets with a fixed stride (`step`) computed
+from `(imageLength / (count * 6))`, then filtered each sampled window for triviality. For a real
+65536-byte image with abundant non-trivial data this rarely matters, but for a small/narrow
+distinctive region (exactly the shape of a synthetic test fixture, and potentially of a genuinely
+narrow real anchor candidate near a boundary) the stride can step clean over the region without
+ever sampling a window inside it -- silently returning zero candidates from that area rather than
+finding and correctly rejecting or accepting one. **Fix:** scan every offset for the triviality
+check (cheap: O(imageLength * minRunLength) byte comparisons, well under a second even at 65536
+bytes), then spread the final `count` picks across the resulting candidate list. **Saves:** avoids
+a class of "anchor search silently found nothing near address X" bug that would be very hard to
+notice without a synthetic test exercising exactly that boundary.
+
 ## Corrections to earlier entries
 
 ### 2026-08-01 — CORRECTION: the `vice_disk_attach` relative-path failure was a deleted contract, not a translation defect — and it is now fixed

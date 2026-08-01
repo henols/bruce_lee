@@ -308,3 +308,13 @@ This was rehearsed against the real validator, not merely asserted:
 3. The probe entry was removed. `node tools/recovery-schema.mjs validate` returns to `OK`.
 
 No code in `tools/releases.mjs` required relaxing for this rehearsal to pass — the null-tolerant shape was already exercised twice, once per real release, before this plan ever ran.
+
+---
+
+## 11. Provenance diff offset (01-05, D-17)
+
+**saeger's offset is proven against danish**, the reference release (`tools/diff-images.mjs`'s reference is the first release in `recovery/RELEASES.json`'s `releases[]` array — currently danish — resolved from the registry, never a hardcoded id).
+
+`node tools/diff-images.mjs anchor-search` selected 8 long (48-byte), non-trivial candidate byte runs from danish's `run1` dump — biased away from the volatile zero-page/stack/KERNAL-work-area zone (`$0000`–`$03FF`), the same drift zone documented in `recovery/danish/NOTES.md` §4 — and located each in this release's `run1` dump with `Buffer.indexOf`. **7 of the 8 anchors produced a unique match**; the 8th matched at two distinct target offsets (a repeating `$00`×8 + `$AA`×40 pattern) and was correctly rejected as non-unique, since a non-unique anchor proves nothing about a single global offset. **All 7 usable anchors agreed on delta 0** — **the proven offset for saeger is 0**, exactly matching what §1 above already established by direct inspection: `$08B1`/`$139E` are byte-for-byte identical between the two releases, so the game genuinely loads at the same addresses in both. The neighbour-byte check (the byte immediately before, at, and after each anchor's resolved position in saeger's dump) showed no off-by-one for any anchor.
+
+The proven offset (0), the anchor count (8), and the agreeing-anchor count (7) are recorded machine-readably in `recovery/RELEASES.json`'s `provenance_offset` field (`role: "target"`, `reference_release: "danish"`), so `recovery/PROVENANCE.md`'s diff is reproducible without re-deriving the anchors.
