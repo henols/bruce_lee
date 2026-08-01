@@ -75,7 +75,11 @@ recovery/*/dumps/probe-*.png
 # host-side VICE supervisor output (tools/vice-supervisor.sh): crash logs and
 # the restart epoch file, regenerated fresh on every supervisor start -- not
 # a project artifact, just evidence for the current debugging session.
+# The .bak-* form is the same state moved aside during a clean-slate restart
+# (see 01.2-CRITERION-13-EVIDENCE.md § 1) -- kept on disk for its crash logs,
+# still not a project artifact.
 .vice-supervisor/
+.vice-supervisor.bak-*/
 
 # deployed copies of .claude/mcp/vice/resources/ -- the tracked source of
 # truth lives in that directory (the vice MCP implementation, not a skill);
