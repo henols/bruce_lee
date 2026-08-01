@@ -90,7 +90,10 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-None yet.
+5 pending — see `.planning/todos/pending/`. Most recent: **Make the broker cross-project via shared
+home-dir state** (2026-08-01, tooling, minor) — broker coordination state is workspace-scoped, so a
+second project cannot reach it; pairs with orphan reaping that must spare a hand-started emulator,
+and subsumes `01.2-REVIEW.md` CR-01 (no singleton guard on `vice-broker.sh start`).
 
 ### Blockers/Concerns
 
