@@ -10,6 +10,27 @@ the only route. There is no CLI to invoke, no JSON to hand-assemble, and no
 "select" step: enumerate and call the tools exactly like any other MCP tool
 surface available in this session.
 
+## Per-session, boot-fresh emulator access
+
+Each session gets its own boot-fresh emulator: it is
+granted on that session's first forwarded tool call and released when the
+session ends, so a second session never shares the first session's machine.
+The first call of a session may wait a few seconds for a cold launch, and may
+report warming-and-retry; retrying the same call is the correct action in
+that case.
+
+Within one session, the same emulator instance is reused across every
+call in that session. A procedure that needs a known-clean machine still
+resets explicitly rather than assuming a fresh boot happened for that
+call — only the *session's first* grant is guaranteed boot-fresh.
+
+A tool call reporting the broker itself is absent or unreachable names
+which of three states applies and the host command to run.
+
+Namespace snapshot names by something session-scoped, never by port —
+ports are recycled across sessions under on-demand launch, so a
+port-prefixed snapshot name can collide with an unrelated later session.
+
 ## Polling while the machine runs
 
 State-reading calls stop the machine, so write a wait loop as read →

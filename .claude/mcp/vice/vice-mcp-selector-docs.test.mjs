@@ -290,3 +290,21 @@ test("the skills table names vice-mcp-selector and not vice-session", () => {
   assert.ok(text.includes("vice-mcp-selector"), "CLAUDE.md's Project Skills table must name vice-mcp-selector");
   assert.ok(!text.includes("vice-session"), "CLAUDE.md must not name the retired vice-session skill");
 });
+
+// ============================================================================
+// Assertion 6 -- 01.2-05/criterion 12: the skill describes the per-session
+// broker route. A stable, meaning-bearing phrase rather than the section
+// heading alone, so a future rewrite that drops the guidance (rather than
+// merely rewording the heading) fails this test.
+// ============================================================================
+
+test("01.2-05: SKILL.md describes per-session boot-fresh emulator access granted on first use", () => {
+  const skillMd = join(REPO_ROOT, ".claude", "skills", "vice-mcp-selector", "SKILL.md");
+  assert.ok(existsSync(skillMd), `${skillMd} must exist`);
+  const text = readFileSync(skillMd, "utf8");
+  assert.ok(
+    text.includes("granted on that session's first forwarded tool call"),
+    "SKILL.md must describe emulator access as granted on the session's first forwarded tool call -- " +
+      "this is the per-session broker route added in Phase 01.2 (criterion 12); a rewrite that drops this guidance must fail here."
+  );
+});
