@@ -5,16 +5,16 @@ milestone_name: Pipeline Proven *
 current_phase: 01.2
 current_phase_name: On-Demand Broker and Per-Session Leasing
 status: executing
-stopped_at: "Completed quick task 260730-v6z: layer B extracted into the new `c64-ram-capture` skill; `tools/recover.mjs` is now layer C only. A live `reproduce danish` during this task reported `MISMATCH` at `$D588` (2-bit) — the already-documented Hamming-1-too-tight edge case above, not a regression; that design gap remains open."
-last_updated: "2026-08-01T09:49:28.658Z"
-last_activity: 2026-07-31
-last_activity_desc: "Quick task 260801-ccn: broker grant host→container translation (unblocks 01.2-05)"
+stopped_at: "Completed 01.2-05-PLAN.md: two-session leasing proven, VICE standing constraint narrowed (D-1.2-C)"
+last_updated: "2026-08-01T11:37:18.632Z"
+last_activity: 2026-08-01
+last_activity_desc: Phase 01.2 execution resumed (wave continue)
 progress:
   total_phases: 3
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 15
-  completed_plans: 11
-  percent: 33
+  completed_plans: 12
+  percent: 67
 ---
 
 # Project State
@@ -31,9 +31,9 @@ See: .planning/PROJECT.md (updated 2026-07-31)
 
 Milestone: v1.0 — Pipeline Proven (Phases 1–4 of 7 total)
 Phase: 01.2 (On-Demand Broker and Per-Session Leasing) — EXECUTING
-Plan: 1 of 5
-Status: Executing Phase 01.2
-Last activity: 2026-08-01 — Completed quick task 260801-ccn: broker grants are now translated from host to container coordinates at the proxy seam. Phase 01.2 stands at 4/5 plans; 01.2-05 (C12/C13) is next and now has a working broker route to prove.
+Plan: 2 of 5
+Status: Ready to execute
+Last activity: 2026-08-01 — Phase 01.2 execution resumed (wave continue)
 
 Progress (v1.0): [████░░░░░░] 35% — 7/20 plans
 Progress (overall): [██░░░░░░░░] 20% — 7/35 plans
@@ -62,6 +62,11 @@ Progress (overall): [██░░░░░░░░] 20% — 7/35 plans
 - Trend: —
 
 *Updated after each plan completion*
+**Per-Plan Metrics:**
+
+| Plan | Duration | Tasks | Files |
+|------|----------|-------|-------|
+| Phase 01.2 P05 | continuation | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -79,6 +84,8 @@ Recent decisions affecting current work:
 - [Phase 01.1]: **`vice-session` retired, transport relocated to `.claude/skills/vice-mcp-selector/scripts/`.** The module tree moved unchanged (including `resources/` and `install-resources.mjs` as a unit, so the deployed host shell scripts are not orphaned); all five consumers repointed. Durable directory-enumerating tests keep any document from telling an agent to reach the emulator from a shell, keep the retired path out of every import specifier, and close the `hostpath.mjs` consumer set to four traced modules. `devcontainer-host-path` deliberately stays — the proxy is a third consumer, not a replacement.
 - [Phase 01.1]: **Static proxy first; broker and leasing are Phase 01.2.** No leasing, no broker, one fixed port — deliberately immune to every unverified assumption about host lifecycle, so tool-mediated access could not be blocked by a lifecycle unknown.
 - [Phase ?]: [quick-260730-u9w]: Checkpoint-synchronisation primitives (reset, readCheckpoint, waitCheckpointHit, runToCheckpoint, screenshot, addrNum, hex4, POLL_WINDOWS_MS, PING_INTERVAL_MS, armedCheckpoints) moved from tools/recover.mjs into a new sibling module .claude/skills/vice-session/scripts/vice-sync.mjs — a third structurally-isolated concern alongside vice.mjs's transport seam and vice-probe.mjs's liveness probe. armedCheckpoints became a singleton tracker (track/untrack/ids/clear) so both runToCheckpoint() and recover.mjs's hand-rolled capture() write through one door. A durable, directory-enumerating node:test gate (skill-docs.test.mjs) replaces a one-shot grep keeping module names out of SKILL.md; INTERNALS.md stays deleted and no companion maintainer document was created.
+- [Phase ?]: [Phase 01.2]: VICE standing constraint narrowed, not retired (D-1.2-C) — per-session boot-fresh access makes cross-session concurrency real; the reset/clear-checkpoints/reload ritual narrows to within-session reuse only. Proven by 01.2-CRITERION-13-EVIDENCE.md: two concurrent sessions held two different broker-granted instances (bookkeeping + $033C marker cross-read), kill-never-recycle confirmed, broker-stop leaves granted sessions running.
+- [Phase ?]: [Phase 01.2]: Corrects spike finding 12 further — a 16,384-byte vice_memory_read (~82,000 chars) arrived inline through the broker-granted proxy route, above the spike's measured 40-60KB ceiling. The 32KB chunking rule remains more conservative than the transport requires; the true boundary was not bisected.
 
 ### Pending Todos
 
@@ -152,6 +159,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-31T18:10:00Z
-Stopped at: Phase 01.1 complete, ready to plan Phase 01.2. UAT passed (1/1 — criterion-3 human sign-off), verification `passed`, security verified (19 threats, `threats_open: 0`), `COVERAGE.md` matrix added (65 capabilities, 1 opt-out). Note Phase 1 itself is NOT complete — plans 01-04/01-05/01-06 remain unexecuted; 01.1 was an inserted phase.
+Last session: 2026-08-01T11:37:08.628Z
+Stopped at: Completed 01.2-05-PLAN.md: two-session leasing proven, VICE standing constraint narrowed (D-1.2-C)
 Resume file: None

@@ -194,7 +194,7 @@ Plans:
  12. **The standing constraint in this ROADMAP is actually edited, not just declared obsolete.** Open question 2 is answered with evidence: fresh-boot removes cross-*session* contamination, so the reset/clear-checkpoints/reload ritual narrows to within-session reuse — it does not remove contamination within a session that reuses one emulator across several plans. Whether that is "retired" or "narrowed" is decided by what the phase measures, and the § Standing Constraints row plus the `vice-mcp-selector` skill are updated in the same change. Intra-session parallelism stays out of scope, deferred to `.planning/seeds/vice-instance-handles-for-parallel-emulator-work.md`.
  13. **From a fresh session, a real emulator operation succeeds through a broker-granted instance**, with the evidence recorded, and two concurrent sessions demonstrably hold two different instances. Like 01.1 criterion 3 this cannot be self-verified — the broker runs on the host and per-session leasing is only observable across sessions — so it carries a blocking human-verify checkpoint.
 
-**Plans**: 4/5 plans executed
+**Plans**: 5/5 plans executed
 
 Plans:
 
@@ -202,7 +202,7 @@ Plans:
 - [x] 01.2-02-PLAN.md — The broker as a real daemon: `start`/`stop`/`status`, one `teardown()` reached by release and TTL sweep alike, kill-never-recycle, request-id validation parity, uid-parity precondition (C1, C2, C7, C8)
 - [x] 01.2-03-PLAN.md — Proxy side: three broker-absent states with three fixes, never-exit/never-cache, the per-server tool-call timeout committed in `.mcp.json` (C10, C11, cold-path half of C9)
 - [x] 01.2-04-PLAN.md — Warm spares: `launching` → `ready` states, readiness by real MCP round-trip, `ready_spares == N` under `total <= MAX`, grant-from-spare with refill, denials that distinguish "not yet" from "never" (C9)
-- [ ] 01.2-05-PLAN.md — The narrowing edit in place plus the two-session proof (C12, C13) — *has a blocking human-verify checkpoint*
+- [x] 01.2-05-PLAN.md — The narrowing edit in place plus the two-session proof (C12, C13) — *has a blocking human-verify checkpoint*
 
 **Wave 1** — 01.2-01 · **Wave 2** — 01.2-02 ∥ 01.2-03 · **Wave 3** — 01.2-04 · **Wave 4** — 01.2-05.
 
@@ -431,7 +431,7 @@ Two cross-phase overlaps are intended and should be honoured when scheduling wor
 |-----------|-------|----------------|--------|-----------|
 | v1.0 | 1. Recovery & Provenance | 3/6 | In Progress|  |
 | v1.0 | 01.1. Tool-Mediated Emulator Access (INSERTED) | 4/4 | In Progress|  |
-| v1.0 | 01.2. On-Demand Broker & Leasing (INSERTED) | 4/5 | In Progress|  |
+| v1.0 | 01.2. On-Demand Broker & Leasing (INSERTED) | 5/5 | In Progress|  |
 | v1.0 | 2. Coverage, Hazards & Memory Map | 0/5 | Not started | - |
 | v1.0 | 3. Verification Harness & Original Baselines | 0/4 | Not started | - |
 | v1.0 | 4. Vertical Slice — Sprite & Display Pilot | 0/5 | Not started | - |
