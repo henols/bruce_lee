@@ -750,6 +750,185 @@ not surprising noise.
 cost the rest of attempt 4's live budget for BOTH releases (danish's Task 3 was never reached).
 Logged as a new pending todo cross-referencing attempt 3's.
 
+### 2026-08-01 — a coalesced diff range can silently cross a manifest's own kind boundary; resolving `kind` from only a range's start address mislabels everything past the first boundary
+
+**Type:** dead end (own tool-design mistake) / hazard, caught before commit
+**Evidence:** live -- `node tools/diff-images.mjs ledger` run against the real committed dumps;
+danish's own `$0340`-`$035E` `loader`-bucketed range was rendered with `kind: game` in the first
+ledger draft
+**Confidence:** HIGH (directly reproduced: danish's manifest has `$0000`-`$033F` = `game`,
+`$0340`-`$035E` = `loader`; the diff's coalesced `ORIGINAL` range spans `$033C`-`$4770`, straight
+through that boundary, because coalescing groups on VERDICT continuity across addresses, not on
+manifest kind continuity)
+
+`tools/diff-images.mjs`'s ledger renderer resolved each generated row's `kind` column by looking up
+the reference manifest's kind *at the range's start address only*. Since `diffRanges`/
+`coalesceRanges` merge purely on verdict agreement (two adjacent addresses with the same ORIGINAL/
+UNKNOWN/CRACKER-PATCH signature collapse into one row regardless of what the underlying manifest
+calls either address), a merged row can legitimately span a `game`→`loader`→`game` boundary when
+both releases happen to hold identical bytes across all three zones. The first ledger draft
+resolved this whole span's kind from its start (`game`), silently reporting the `$0340`-`$035E`
+loader-scratch bytes as ordinary game data. **Fix:** `splitRangeByManifestKind` intersects every
+generated range against the reference manifest's own range boundaries before rendering, so a
+spanning row becomes multiple sub-rows (same verdict/evidence, correct per-sub-range kind) --
+verified by re-running the ledger and confirming `$0340`-`$035E` now reports `kind: loader`. Row
+count went from 204 to 508 as a direct, expected consequence (every kind-crossing merge became
+multiple rows). **Saves:** any future ledger-style renderer that resolves a per-row categorical
+field (kind, bucket, owner) from a merged/coalesced range's start address alone should split
+against the categorising boundary first -- "the range agrees on X" does not imply "the range agrees
+on Y" for an unrelated partition Y.
+
+### 2026-08-01 — a genuine, previously-undiscovered text divergence: "DATASOFT PRESENTS" (danish) vs "DIABOLO  PRESENTS" (saeger) at $4771-$4779, in a region that is neither loader nor cracktro
+
+**Type:** confirmation / open question (real mechanical finding, not yet explained)
+**Evidence:** live -- `node tools/diff-images.mjs diff --gap-tolerance 16` run against the two
+committed `run1` primary dumps (01-05 Task 2); directly re-read with `Buffer.subarray` to confirm
+byte-for-byte (not a rendering artifact): danish reads
+`29292929a0a6a044415441534f46542050524553454e5453a027` (`...DATASOFT PRESENTS.'`), saeger reads
+`29292929a0a6a0444941424f4c4f202050524553454e5453a027` (`...DIABOLO  PRESENTS.'`) at the identical
+address range in both images
+**Confidence:** HIGH for the byte-level fact (directly read from both committed `.bin` files);
+LOW for any interpretation of *why* -- recorded as an open question, not a conclusion
+
+At address $4771 (danish) / the identical address in saeger (proven offset 0, so this is a true
+same-address comparison, not a relocation artifact), the two releases' game images hold different
+text: danish's copy reads "DATASOFT PRESENTS", saeger's reads "DIABOLO  PRESENTS" (note: "DIABOLO"
+is 7 characters + 2 spaces = 9, matching "DATASOFT" 8 characters + 1 space = 9, before "PRESENTS"
+starts at the same byte offset in both -- a deliberate, alignment-preserving substitution, not
+accidental corruption). This is **not** the cracktro banner (that's already documented separately:
+"Danish Crackers Presents..." / "...SAEGER SOFT GROUP", found at different addresses during boot,
+per each release's own `tier1_evidence`) and it is **not** inside either release's earned
+`loader_ranges`. It sits inside what the trace/entry point reaches as ordinary game data (bucketed
+`game` by `tools/diff-images.mjs`'s `bucketManifest`).
+
+This appears to directly complicate the previously-recorded claim (`recovery/saeger/NOTES.md` §8,
+screenshot-based) that "the post-cracktro title screen is Datasoft's original and unmodified —
+byte-for-byte the same screen text as danish's." That claim was verified against the **rendered
+screen** at the title-screen dump point, not this underlying source-text table at $4771 — so the
+two observations are not necessarily in direct conflict (this table may hold text for a screen
+never actually visited during either release's boot capture, e.g. a credits/loading screen, or may
+be dead/unused leftover data from a different repackaging), but it is a genuine, mechanically
+verified divergence in the game's own data, not the cracktro or loader, and it was **not** caught
+by the earlier screenshot-based Tier-1 evidence gathering. **Recorded as `UNKNOWN` in
+`recovery/PROVENANCE.md`, not `CRACKER-PATCH`** — the diff tool cannot mechanically confirm this
+matches a "recognised cracker technique" (rebrand/relabel is plausible per Pitfall 4, but asserting
+it with `CRACKER-PATCH`'s confidence marker would be exactly the kind of inferred-as-evidenced
+claim this project's prohibition forbids without stronger corroboration, e.g. live disassembly
+confirming which code path actually reads this text and whether it is ever rendered).
+
+**Saves/costs:** a future live session investigating saeger's provenance (or the game's title-
+screen code path) should check whether this text is ever actually displayed, and if so on what
+screen -- this could indicate saeger's disk derives from a rebranded/relabelled release (published
+under a "Diabolo" label) rather than merely being a different *crack* of the same Datasoft-branded
+release, which would be a materially different provenance story than "two independent cracks of
+the same original." Costs nothing to defer: `recovery/PROVENANCE.md`'s `UNKNOWN` verdict here is
+honest and does not block anything downstream.
+
+### 2026-08-01 — a blind "any printable ASCII run" heuristic misclassifies the game's own title text as cracktro content; fixed with a crack-credit-vocabulary filter
+
+**Type:** dead end (own tool-design mistake) / hazard, caught before commit
+**Evidence:** live -- the finding immediately above, discovered while running `tools/diff-images.mjs
+diff` against the real committed dumps; `tools/diff-images.mjs`'s first `bucketManifest`/`diffRanges`
+draft used a bare `findPrintableRuns` scan as the cracktro bucket's seed
+**Confidence:** HIGH
+
+The plan's own instruction ("seed the cracktro bucket from banner and credit text located by a
+plain buffer scan for printable runs") is correct in general, but a bare "printable ASCII, length >=
+minLength" predicate cannot distinguish crack-credit text from the *original game's own* printable
+text -- and this game's data genuinely has both (the $4771 "DATASOFT PRESENTS" / "DIABOLO  PRESENTS"
+divergence above is exactly such game-owned text). The first draft classified this address as
+`CRACKER-PATCH` with the reason "intro/cracktro splice", which would have been a confidently-wrong
+verdict shipped straight into the ledger. **Fix:** narrowed the scan to `findCracktroRuns`, which
+additionally requires the printable run's decoded text to contain at least one word from a short,
+explicitly-sourced crack-credit vocabulary (`CRACKED`, `CRACKERS`, `SOFT GROUP`, `DC-011`,
+`BREAK'EM`, `MAKE'EM`, `PRESENTS BY`, `CRACKED BY`) drawn from what both releases' own already-
+verified `tier1_evidence` in `recovery/RELEASES.json` record as the actual cracktro text -- and
+deliberately does not include either release's own name as a bare word. After the fix, this
+address (and every other candidate in this steady-state dump) is bucketed `game`, not `cracktro`,
+and `recovery/PROVENANCE.md`'s ledger correctly reports zero `CRACKER-PATCH` rows for this pass
+rather than one false positive. **Saves:** the next tool doing content-based classification from a
+plain-text scan (anywhere in this project) should reach for a vocabulary/signature filter rather
+than trusting "printable and long enough" as sufficient on its own -- the false positive here was
+found only because the plan required running the tool against real data before trusting it, not
+because the design was reviewed and caught in the abstract.
+
+### 2026-08-01 — `check-parameterisation` catches a real release-id conditional in a TEST file, not just implementation code
+
+**Type:** confirmation (the gate works as designed, including where it wasn't specifically aimed)
+**Evidence:** live -- `node tools/recovery-schema.mjs check-parameterisation` run after adding
+`tools/diff-images.test.mjs`'s real-dump integration test
+**Confidence:** HIGH
+
+`checkParameterisation` in `tools/recovery-schema.mjs` scans every `.mjs` file under `tools/` --
+which includes test files, not only the implementation modules a plan author might picture when
+writing the N-readiness rule. A first draft of `diff-images.test.mjs`'s real-dump integration test
+picked the two releases with `registry.releases.find(r => r.id === "danish")` /
+`registry.releases.find(r => r.id !== "danish")` -- convenient shorthand, and exactly the
+release-id conditional the gate exists to catch. The gate flagged both occurrences immediately and
+by name (file + release id + matched pattern), and the fix was purely positional:
+`registry.releases[0]` as the reference release, `registry.releases.find(r => r !== reference)` as
+"the other one" (object-identity comparison, not a string literal, so it doesn't match the gate's
+regexes at all). **Saves:** a future test needing "pick a specific release and a different one"
+should default to positional/first-vs-not-first logic rather than reaching for a literal id string,
+even in test code -- the gate does not exempt tests, and re-discovering that by tripping it is a
+five-minute detour, not a costly one, but avoidable.
+
+### 2026-08-01 — anchor-proven provenance offset is 0 for danish vs saeger, confirmed mechanically (not just by the earlier byte-for-byte inspection)
+
+**Type:** confirmation
+**Evidence:** live -- `node tools/diff-images.mjs anchor-search --json` run against the two committed
+`run1` primary dumps (01-05 Task 1)
+**Confidence:** HIGH (mechanical: 8 candidate anchors selected, 7 produced a unique match in the
+target and all 7 agreed on delta 0; the 8th was correctly rejected as non-unique rather than
+silently averaged in)
+
+Both releases' `01-04`/earlier NOTES.md sections already established by direct disassembly
+inspection that `$08B1`/`$139E` are byte-for-byte identical between danish and saeger, implying an
+offset of 0. This finding is the *mechanical* confirmation of that same fact via
+`tools/diff-images.mjs`'s `anchorSearch`/`proveOffset`, independent of the earlier manual
+inspection: 8 long (48-byte), non-trivial byte runs were selected from danish's dump (reference),
+located in saeger's dump via `Buffer.indexOf`, and every anchor that produced a unique match agreed
+on offset 0. One anchor (a repeating `$00`x8 + `$AA`x40 pattern, landing in never-written/scratch
+territory) matched at two distinct target offsets and was correctly rejected rather than treated as
+a tie-break. **Saves:** any future release added to the registry can reuse this same verb rather than
+re-deriving an offset by manual disassembly comparison; the recorded `provenance_offset` field in
+`recovery/RELEASES.json` makes the diff reproducible without re-running the anchor search at all.
+
+### 2026-08-01 — a linear-congruence byte fill is a bad "distinctive" test fixture for anchor/offset search code
+
+**Type:** hazard (test-authoring pitfall, not a project-data finding)
+**Evidence:** live -- writing `tools/diff-images.test.mjs`'s anchor-search fixtures
+**Confidence:** HIGH (directly reproduced and diagnosed in this session)
+
+A synthetic test fixture filled via `(i * 37 + 11) & 0xff` looks non-repeating at a glance but has
+a short period (256 bytes, since 37 is coprime with 256) -- any window of 48 bytes recurs every 256
+bytes, so a search tool that looks for "long distinctive runs" will find the fixture run matching
+at *multiple* target offsets and reject it as non-unique, exactly the behaviour meant to be tested
+against a genuinely distinctive run. **Fix used:** a sha256-counter-mode fill
+(`createHash("sha256").update(seed+counter).digest()` concatenated) has no short period and behaves
+like real C64 program-image bytes for this purpose. **Saves:** the next test needing a "distinctive,
+non-repeating" byte fixture (anywhere in this project, not just `tools/diff-images.test.mjs`) should
+reach for a hash-counter fill rather than a linear congruence or other short-period generator.
+
+### 2026-08-01 — a coarse fixed-stride candidate sampler can miss a narrow non-trivial region entirely, not just under-sample it
+
+**Type:** dead end / hazard (own tool-design mistake, caught before commit)
+**Evidence:** live -- `tools/diff-images.mjs`'s first `anchorSearch` draft, caught by its own test
+suite
+**Confidence:** HIGH
+
+The first draft of `anchorSearch` walked candidate offsets with a fixed stride (`step`) computed
+from `(imageLength / (count * 6))`, then filtered each sampled window for triviality. For a real
+65536-byte image with abundant non-trivial data this rarely matters, but for a small/narrow
+distinctive region (exactly the shape of a synthetic test fixture, and potentially of a genuinely
+narrow real anchor candidate near a boundary) the stride can step clean over the region without
+ever sampling a window inside it -- silently returning zero candidates from that area rather than
+finding and correctly rejecting or accepting one. **Fix:** scan every offset for the triviality
+check (cheap: O(imageLength * minRunLength) byte comparisons, well under a second even at 65536
+bytes), then spread the final `count` picks across the resulting candidate list. **Saves:** avoids
+a class of "anchor search silently found nothing near address X" bug that would be very hard to
+notice without a synthetic test exercising exactly that boundary.
+
 ## Corrections to earlier entries
 
 ### 2026-08-01 — CORRECTION: the `vice_disk_attach` relative-path failure was a deleted contract, not a translation defect — and it is now fixed

@@ -1847,7 +1847,16 @@
           "reason": "CIA2 port A -- VIC-II bank-select bits (0-1) plus the bit-banged serial-bus lines (ATN/CLOCK/DATA, bits 3-5) a KERNAL-bypassing raw-sector loader toggles directly; the primary on-demand-load sentinel because such a loader leaves no KERNAL vector activity to watch instead",
           "evidence": "c64-memory-mapping skill memmap: $DD00 bits 0-1 select the VIC bank (00=bank3 $C000-$FFFF ... 11=bank0 $0000-$3FFF); bits 3-5 are the serial bus ATN OUT/CLOCK OUT/DATA OUT lines"
         }
-      ]
+      ],
+      "provenance_offset": {
+        "role": "reference",
+        "reference_release": null,
+        "offset": 0,
+        "anchor_count": null,
+        "anchors_agreeing": null,
+        "proven_at": "2026-08-01T22:29:28.205Z",
+        "method": "reference release -- every other release's offset is proven against this one's primary dump"
+      }
     },
     {
       "id": "saeger",
@@ -3671,7 +3680,21 @@
           "reason": "CIA2 port A -- VIC-II bank-select bits (0-1) plus the bit-banged serial-bus lines (ATN/CLOCK/DATA, bits 3-5) a KERNAL-bypassing raw-sector loader toggles directly; the primary on-demand-load sentinel because such a loader leaves no KERNAL vector activity to watch instead",
           "evidence": "c64-memory-mapping skill memmap: $DD00 bits 0-1 select the VIC bank (00=bank3 $C000-$FFFF ... 11=bank0 $0000-$3FFF); bits 3-5 are the serial bus ATN OUT/CLOCK OUT/DATA OUT lines"
         }
-      ]
+      ],
+      "provenance_offset": {
+        "role": "target",
+        "reference_release": "danish",
+        "offset": 0,
+        "anchor_count": 8,
+        "anchors_agreeing": 7,
+        "proven_at": "2026-08-01T22:29:28.205Z",
+        "method": "anchor-proven via tools/diff-images.mjs anchor-search -- see NOTES.md for the full narrative"
+      }
     }
-  ]
+  ],
+  "ledger": {
+    "generated_tier_sha256": "dde5db52d2dad4aa8aba5fa84e0d1739c459475076d14770c039285f0eebd0ec",
+    "gap_tolerance": 16,
+    "generated_at": "2026-08-01T22:43:34.127Z"
+  }
 }
