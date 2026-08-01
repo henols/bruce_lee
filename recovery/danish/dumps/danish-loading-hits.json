@@ -1,0 +1,92 @@
+{
+  "release": "danish",
+  "run_token": "01-04-task2-danish-2026-08-01",
+  "route": "executing agent's own mcp__vice__* tool calls, this session",
+  "vice_version": "3.10",
+  "machine": "C64SC",
+  "video_standard": "PAL",
+  "technique_note": "Mid-run, the developer corrected the arming technique via the coordinator (three steering messages) after this task initially armed all 173 WATCH_SET-resolved sentinels (171 never-populated ranges + 1 register + 1 loader-reentry range) as live checkpoints -- reproducing the exact 174-checkpoint bombardment failure the reverted prior attempt hit. All 173 were torn down (teardown proof recorded below) and replaced with the technique the developer specified: reconnaissance by pause -> vice_registers_get -> vice_backtrace -> vice_disassemble -> resume, and a SMALL, earned, reproducible live set for the parts that must be re-armable. This run's live-armed set for danish is therefore 2 checkpoints (the loader-reentry stopping sentinel and the $DD00 counting sentinel) plus 2 small structural diagnostic write-watches on the IRQ/BRK vectors ($0314-$0315, $FFFE-$FFFF), not the full 173-entry WATCH_SET resolution. The full WATCH_SET resolution remains recorded in RELEASES.json's watch_set field as data for plan 02-02's hand-off (D-11) -- 02-02's own exhaustive all-chambers trace may have a different time/risk budget -- but this run's own coverage claim rests only on the small set actually armed and calibrated below, plus the reconnaissance-derived main-loop and IRQ-path evidence.",
+  "identity_changes": [],
+  "irq_path_reconnaissance": {
+    "method": "vice_execution_pause -> vice_registers_get -> vice_memory_read($01) -> vice_memory_read(vector) -> vice_disassemble -> vice_execution_run, per the developer's steering",
+    "bank_state_at_check": {
+      "port01_raw": 53,
+      "loram": true,
+      "hiram": false,
+      "charen": true,
+      "note": "HIRAM=0: KERNAL is banked OUT of $E000-$FFFF at this instant, so $FFFE/$FFFF (not KERNAL's $0314/CINV) is the live indirect IRQ dispatch the hardware actually reads. $0314-$0319 read back as the untouched power-on-adjacent pattern 01 01 01 01 01 01, confirming the game/loader never relies on the KERNAL CINV vector while KERNAL is banked out."
+    },
+    "hardware_irq_vector": {
+      "address": "$FFFE-$FFFF",
+      "value": "$1103",
+      "handler_disassembly": "$1103: PHA / TXA / PHA / TYA / PHA / TSX / LDA $0104,X / AND #$00 / BEQ $1113 / JMP ($DE00) / $1113: JMP ($0408) / RTI -- a register-save prologue dispatching indirectly through $0408/$0409 (the $DE00 branch is currently dead: AND #$00 always clears the flag byte, so JMP ($0408) is always taken in this run)."
+    },
+    "per_frame_dispatch_target": {
+      "vector": "$0408-$0409",
+      "observed_value": "$1574",
+      "self_modifying": true,
+      "evidence": "$1574: LDX #$04 / DEX / BNE $1576 (cycle-precise delay) / LDA #$32 / STA $D018 / LDA #$16 / STA $D016 / LDA #$2C / STA $0408 / LDA #$15 / STA $0409 / LDA #$01 / STA $D01A / STA $D019 / LDA $D011 / AND #$7F / STA $D011 / LDA #$FD / STA $D012 / PLA/TAY/PLA/TAX/PLA/RTI -- a raster-split stage: sets VIC memory pointers and control register 2 for this screen band, REWRITES ITS OWN DISPATCH VECTOR ($0408/$0409) to $152C for the next raster interrupt, clears the raster-compare high bit, arms the next raster line ($D012=$FD), acks and re-enables the VIC raster IRQ, restores registers, returns. This is per-frame chained raster-split code, not a mode transition -- confirmed by disassembling the next stage.",
+      "next_stage": {
+        "address": "$152C",
+        "disassembly": "$152C: LDA $48 / BEQ $1532 / DEC $48 / LDA $49 / BEQ $1542 / DEC $49 / BNE $1542 / LDA $4A / BEQ $1542 / DEC $4A / DEC $49 / LDA #$30 / STA $D018 / LDA #$18 / STA $D016 ... -- decrements the same zero-page timer bytes ($48/$49/$4A) the main-loop title dispatcher polls ($08B1: LDA $49 / ORA $4A), confirming the IRQ path and the main-loop path share state through zero page rather than being independent."
+      }
+    },
+    "coverage_statement": "The armed/reconnoitred set for danish covers BOTH halves of the program the developer's steering named: the main loop (title dispatcher $08B1 -> input scanner $139E -> CIA read $143F, reached via the stopping checkpoint at the trigger and confirmed by backtrace) and the IRQ path (hardware vector $FFFE/$FFFF -> $1103 dispatcher -> per-frame raster-split chain $1574/$152C, reached by reconnaissance). Neither path's disassembly shows disk-loader or serial-bus activity at the title screen; both are ordinary display/timing game logic.",
+    "structural_vector_watch": {
+      "purpose": "Cheap (4 bytes total), separate diagnostic instrumentation per the developer's third steering message -- catches any handler swap mechanically, independent of and in addition to the two-tier watch_set model. NOT counted as part of the two-tier loader_ranges/never-populated watch_set; recorded here as a deviation per the developer's own framing.",
+      "watches": [
+        { "address": "$0314-$0315", "type": "write", "idle_hit_count": 1, "note": "Fired once during the idle window, but the value written was identical to the value already resident ($01$01 before and after) -- consistent with an incidental blanket byte-stamp routine touching this address in passing, not a live vector install. The KERNAL CINV vector is not in use while HIRAM=0." },
+        { "address": "$FFFE-$FFFF", "type": "write", "idle_hit_count": 0, "note": "The live hardware dispatch vector did not change during the idle window -- stable, consistent with it being a genuine mode signal rather than per-frame churn (contrast with $0408/$0409, which the IRQ handler itself rewrites every interrupt as ordinary raster-split chaining)." }
+      ]
+    }
+  },
+  "armed": [
+    {
+      "name": "loader:$0340-$035E",
+      "kind": "loader-reentry",
+      "tier": "stopping",
+      "type": "exec",
+      "start": 832,
+      "end": 862,
+      "reason": "cassette-buffer region, a classic loader-stub location; holds stale $01-byte data at steady state, i.e. leftover raw-sector-loader scratch never reclaimed by the game",
+      "evidence": "Live disassembly at steady state (post-$08B1 trigger), both boundaries: $0340: 01 01 ORA ($01,X) [repeats through $034A] and $0356: 01 01 ORA ($01,X) [repeats through $0360] -- the whole range decodes as the single repeated byte $01.",
+      "checkpoint_num": 1,
+      "idle_hits": 0
+    },
+    {
+      "name": "reg:$DD00",
+      "kind": "register",
+      "tier": "counting",
+      "type": "write",
+      "start": 56576,
+      "end": 56576,
+      "reason": "CIA2 port A -- VIC-II bank-select bits plus bit-banged serial-bus lines a KERNAL-bypassing raw-sector loader toggles directly; the primary on-demand-load sentinel.",
+      "evidence": "c64-memory-mapping skill memmap: $DD00 bits 0-1 select the VIC bank; bits 3-5 are the serial bus ATN OUT/CLOCK OUT/DATA OUT lines.",
+      "checkpoint_num": 174,
+      "idle_hits": 0
+    }
+  ],
+  "watch_set_note": "recovery/RELEASES.json's watch_set field for danish carries the FULL 173-entry WATCH_SET resolution (171 never-populated ranges from the run1 manifest + 1 register + 1 loader-reentry range) as data for plan 02-02's D-11 hand-off. Only the 2 entries listed in `armed` above were live-armed and idle-calibrated in THIS run, per the developer's mid-run technique correction. The 171 never-populated ranges were not individually live-watched this run; see `technique_note`.",
+  "counting_tier_probe": {
+    "hit_count": 432,
+    "execution_stopped": false,
+    "fallback_taken": false,
+    "probe_range": "$8C00-$8FE7 (1000-byte screen matrix at the title-screen VIC bank/screen-base observed live)",
+    "cycles_advanced_during_probe": 27189792,
+    "note": "Confirms the two-tier design's premise: a non-stopping store checkpoint accumulates a hit count while the machine keeps running. No fallback to a stopping-checkpoint-with-ignore-count was needed."
+  },
+  "idle_calibration": {
+    "cycles_advanced": 24396568,
+    "sentinels": [
+      { "name": "loader:$0340-$035E", "tier": "stopping", "start": 832, "end": 862, "hits": 0 },
+      { "name": "reg:$DD00", "tier": "counting", "start": 56576, "end": 56576, "hits": 0 }
+    ]
+  },
+  "milestones": [],
+  "hits": [],
+  "input_notes": "Task 2 only: boot danish, walk the $0900 cracktro gate holding SPACE (matrix), release at the $08B1 trigger checkpoint. No gameplay input issued yet -- see Task 3 for the play-through.",
+  "teardown": {
+    "checkpoints_remaining": 0,
+    "enumerated_at": "post-idle-calibration, via an explicit mcp__vice__vice_checkpoint_list call after deleting checkpoints 1, 174, 175, 176 individually by checkpoint_num"
+  }
+}

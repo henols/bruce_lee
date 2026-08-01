@@ -9,11 +9,9 @@ Everything below was measured against a live host VICE **3.10**, machine **C64SC
 
 ## Reproducing this dump
 
-```
-node tools/recover.mjs reproduce saeger --runs 3
-```
+**Corrected 2026-08-01 (01-04 Task 2).** This section used to open with a single shell command — the same standalone Node CLI verb named in `recovery/danish/NOTES.md`, with only the release id changed — that no longer exists in this repository: a 2026-08-01 hard project rule made `mcp__vice__*` the only permitted route to the emulator, and every standalone script that opened its own connection to VICE was deleted rather than migrated (see `.planning/STATE.md`, Phase 1 2026-08-01 entries). The three-run reproducibility proof recorded in § "Reproducibility verdict" below **was performed and its digests are committed** — deleting the script does not un-produce that evidence.
 
-That is the whole procedure — the **same command, same code, same verbs** used for `danish.d64` (see `recovery/danish/NOTES.md`), with only the release id changed. It runs the recorded steps three times from a scripted hard reset and compares the results. It needs no snapshot, no saved state, and nothing from the host's home directory — only the disk image in this repository and a reachable VICE MCP server.
+The ordered procedure is the same one recorded in `recovery/danish/NOTES.md`'s own "Reproducing this dump" section, with two release-specific substitutions carried as registry data rather than as a code branch: attach/autostart `disks/saeger.d64` instead of `disks/danish.d64` in steps 1-2, and in steps 5-7, use `mcp__vice__vice_keyboard_petscii({ data: [32] })` (queuing PETSCII SPACE into the KERNAL keyboard buffer, since this release's `$08F4` gate polls KERNAL `GETIN` rather than the CIA ports directly — this release's `gate.delivery: "kernal-buffer"`) instead of holding and releasing the keyboard matrix. Every other step — arming the `$08B1` trigger, the sixteen 4096-byte bank-scoped memory reads, the chip-state readings, the checkpoint delete, and the empty-enumeration teardown proof — is identical, because both releases load the same original Datasoft game code at the same trigger address. It needs no snapshot, no saved state, and nothing from the host's home directory — only the disk image in this repository and a reachable VICE MCP server.
 
 **Why three runs and not two:** the same reason recorded for danish — two captures cannot distinguish *"the program writes this byte"* from *"it happened to drift the same way twice"*, so `classifyRunSet` refuses fewer than three, for every release, unconditionally.
 
@@ -57,7 +55,7 @@ $13A9  49 FF     EOR #$FF
 
 Unlike danish, this address was **not** discovered by the automated `find-entry` search. Two things had to be fixed/worked around first, both recorded here rather than hidden:
 
-1. **`find-entry`'s CLI verb had a real bug**: it called the generic entry-search function directly without ever calling `boot()` first, so it silently stepped whatever the machine happened to be doing rather than this release's own boot. Verified live: without a boot, the "stabilized" address was `$E5CD`, KERNAL ROM's own keyboard-wait loop (`LDA $C6 / STA $CC / STA $0292 / BEQ $E5CD`) — not game code at all. Fixed in `tools/recover.mjs`'s `find-entry` verb to mirror `recover()`'s own reset → boot → find-entry order (a generic fix, not a release-specific branch).
+1. **`find-entry`'s CLI verb had a real bug**: it called the generic entry-search function directly without ever calling `boot()` first, so it silently stepped whatever the machine happened to be doing rather than this release's own boot. Verified live: without a boot, the "stabilized" address was `$E5CD`, KERNAL ROM's own keyboard-wait loop (`LDA $C6 / STA $CC / STA $0292 / BEQ $E5CD`) — not game code at all. Fixed in the (since-retired) standalone recovery tool's `find-entry` verb to mirror its own reset → boot → find-entry order (a generic fix, not a release-specific branch).
 2. **Even fixed, the generic search's step budget (400 steps × 150 batches) is far too small** for an uncrunched raw-sector loader that has to read 186 blocks off a simulated disk — orders of magnitude more CPU instructions than a crunched cracktro's "hit any key" loop. Re-run after the fix, it stabilized on `$FD59` (`STA $0300,Y`), also KERNAL ROM boot-time vector-table initialization, still not game code.
 
 Given both automated attempts landed on boot-time KERNAL code, the actual address was found by **direct, hand-driven observation** — screenshots plus `vice_disassemble`/`vice_backtrace` at each step, exactly the method danish's own trigger was originally found by (see danish's `NOTES.md` §1, "Empirically, against the live machine"):
@@ -154,7 +152,7 @@ The first two `reproduce saeger` runs (before the fix below) genuinely **failed*
 
 **Root cause:** danish's gate polls `$DC00`/`$DC01` directly — an instantaneous hardware read, so a held matrix key is seen on the very next poll, the same CPU cycle every run. Saeger's gate instead waits on the KERNAL's own `GETIN` (`$FFE4`), which only sees a key once the KERNAL's *periodic* keyboard-scan IRQ notices the matrix state — a real-time-dependent number of cycles after the press, since that scan runs on its own schedule, unrelated to when the press's RPC call happens to land. That jitter shifted how many extra iterations of some periodic table-filling process ran before the `$08B1` trigger fired, which is exactly the observed one-step phase shift.
 
-**Fix:** `tools/recover.mjs`'s `boot()` gained a second, generic gate-delivery style, selected by a **registry field** (`gate.delivery`, default `"matrix"`) — never a release-id conditional:
+**Fix:** the (since-retired) standalone recovery tool's boot routine gained a second, generic gate-delivery style, selected by a **registry field** (`gate.delivery`, default `"matrix"`) — never a release-id conditional:
 
 - `"matrix"` (danish's `$0900` gate, unchanged): press-and-hold the keyboard matrix.
 - `"kernal-buffer"` (saeger's `$08F4` gate): write the KERNAL keyboard buffer (`$C6`/`$0277`) directly — the exact end state a real keypress eventually produces — so `GETIN` is satisfied on its very next call, with no dependency on the scan IRQ's schedule at all.
@@ -234,7 +232,7 @@ Every field below that differs is recorded here as a **property of the disk or o
 
 ## 10. N-readiness rehearsal
 
-`recovery/RELEASES.json` carries a top-level `schema_notes` field stating the mechanical claim: **adding a release requires appending one `releases[]` entry with its `id`, `disk_image` and `disk_sha256` (all other fields `null`/empty, matching the shape both `danish` and `saeger` started from before their first capture), then running `node tools/recover.mjs recover <id>` (or `reproduce <id>`) — nothing else.**
+`recovery/RELEASES.json` carries a top-level `schema_notes` field stating the mechanical claim: **adding a release requires appending one `releases[]` entry with its `id`, `disk_image` and `disk_sha256` (all other fields `null`/empty, matching the shape both `danish` and `saeger` started from before their first capture), then the executing agent issuing the ordered `mcp__vice__*` calls this file's "Reproducing this dump" section now records — nothing else.**
 
 This was rehearsed against the real validator, not merely asserted:
 

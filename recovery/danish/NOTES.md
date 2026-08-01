@@ -9,11 +9,49 @@ Everything below was measured against a live host VICE **3.10**, machine **C64SC
 
 ## Reproducing this dump
 
-```
-node tools/recover.mjs reproduce danish --runs 3
-```
+**Corrected 2026-08-01 (01-04 Task 2).** This section used to open with a single shell command —
+a standalone Node CLI verb that reproduced this dump end to end — that no longer exists in this
+repository: a 2026-08-01 hard project rule made `mcp__vice__*` the only permitted route to the
+emulator, and every standalone script that opened its own connection to VICE was deleted rather
+than migrated (see `.planning/STATE.md`, Phase 1 2026-08-01 entries). The three-run reproducibility proof
+recorded in § "Reproducibility verdict" below **was performed and its digests are committed** —
+deleting the script does not un-produce that evidence. What changed is the *mechanism* for
+re-verifying it: a documented, ordered tool-call procedure precise enough for a different agent
+session to replay by issuing the same `mcp__vice__*` calls in the same order, in place of one
+shell command. This is a named downgrade in **convenience**, not in the evidentiary weight of the
+proof already on record.
 
-That is the whole procedure. It runs the recorded steps three times from a scripted hard reset and compares the results. It needs no snapshot, no saved state, and nothing from the host's home directory — only the disk image in this repository and a reachable VICE MCP server.
+The ordered procedure, cross-referenced against § "Boot procedure", § "The cracktro gate" and
+§ "Clean-slate ritual" below, which already record each step at this precision:
+
+1. `mcp__vice__vice_disk_attach({ unit: 8, path: "disks/danish.d64" })`
+2. `mcp__vice__vice_autostart({ path: "disks/danish.d64" })`
+3. `mcp__vice__vice_execution_run` — mandatory; autostart only arms the load, the CPU is still
+   halted from the reset.
+4. `mcp__vice__vice_checkpoint_add({ start: "$08B1", exec: true, stop: true })` — arm the trigger
+   before touching any key.
+5. `mcp__vice__vice_keyboard_matrix({ key: "SPACE", pressed: true })` — press and hold at the
+   `$0900` gate. Confirm via `mcp__vice__vice_registers_get`/`mcp__vice__vice_disassemble` that
+   the machine has actually reached the `$0900/$0901` gate loop before pressing; pressing too
+   early can be read by the autostart's own simulated typing and corrupt the boot (observed live
+   in this session).
+6. `mcp__vice__vice_execution_run`, then poll `mcp__vice__vice_ping` (non-pausing) until
+   `execution` reports the trigger has stopped the machine.
+7. `mcp__vice__vice_keyboard_matrix({ key: "SPACE", pressed: false })` — release, now a program
+   event on the same CPU cycle every run, before any memory is read.
+8. Sixteen `mcp__vice__vice_memory_read` calls of 4096 bytes each at `bank: "ram"`, concatenated
+   in address order into one 65536-byte image; confirm the total is exactly 65536 bytes.
+9. `mcp__vice__vice_registers_get`, `mcp__vice__vice_vicii_get_state` and a plain
+   `mcp__vice__vice_memory_read` of `$0001` for the chip-state sidecar.
+10. `mcp__vice__vice_checkpoint_delete` the trigger checkpoint by its `checkpoint_num`.
+11. `mcp__vice__vice_checkpoint_list` and confirm it reports zero checkpoints — accept only this
+    enumeration as proof, never the delete call's own return value.
+12. `mcp__vice__vice_execution_run` to leave the machine running.
+
+That is the whole procedure — the same recorded steps this file's earlier sections already
+describe, now stated as the replay itself rather than as a description of what a deleted script
+did. It needs no snapshot, no saved state, and nothing from the host's home directory — only the
+disk image in this repository and a reachable VICE MCP server.
 
 **Why three runs and not two:** 93 bytes were identical in runs 1 and 2 yet differed in run 3. Two captures cannot distinguish *"the program writes this byte"* from *"it happened to drift the same way twice"*, so `classifyRunSet` refuses fewer than three.
 
@@ -59,7 +97,7 @@ Empirically, against the live machine:
 
 1. After `vice_disk_attach` + `vice_autostart` the **CPU is still halted** (`reset` uses `run_after: false`). `vice_execution_run` is mandatory or no loader code executes at all.
 2. Once running, the machine settles into a tight loop at `$0900/$0901` — the cracktro's "hit any key" poll.
-3. The cracktro then self-runs through animation phases at `$08F5/$08F7`, `$0D64–$0D82` and `$0340–$035E` (the cassette-buffer region, a classic loader-stub location), ending on the Danish Crackers sign-off.
+3. The cracktro then self-runs through further boot-time code at `$0340–$035E` (the cassette-buffer region, a classic loader-stub location), ending on the Danish Crackers sign-off. **Correction (01-04 Task 2, live-verified 2026-08-01):** this step previously grouped `$08F5/$08F7` and `$0D64–$0D82` here as if they were more of the cracktro's animation phases. Live disassembly taken at the post-trigger steady state shows otherwise for both: `$08F5: LDA $DC01 / AND #$10 / BNE $08B1 / JSR $094B` is the title dispatcher's own **permanent joystick poll** — ordinary game code that branches back to the `$08B1` trigger address itself, not defeated loader code — and `$0D30–$0D82` is ordinary per-frame title-screen animation/object-dispatch logic (reads zero-page flags `$40`/`$29`/`$42CA`, self-modifies a store at `$0D87`, calls `$10D0`). Both are recorded in `recovery/RELEASES.json`'s `rejected_candidates` with their disassembly and reasons rather than in `loader_ranges`. This is the exact misclassification recorded in `.planning/STATE.md` 2026-07-31 (113 false-positive hits from ordinary idle looping at the title screen) — corrected here at its source in this file, not just in the registry, so the prose that produced it cannot produce it again. Only `$0340–$035E` is accepted as a loader-reentry range: its post-trigger disassembly decodes as the single repeated byte `$01` across the whole span (`$0340: 01 01 ORA ($01,X)` ... `$0356: 01 01 ORA ($01,X)`), consistent with stale raw-sector-loader scratch never reclaimed by the game, and it registered exactly zero hits across a no-input idle calibration window (24,396,568 cycles advanced) before this file's own reproduction procedure below was ever re-run.
 4. Execution settles into a stable two-cluster steady state across `$08B1–$08F8` and `$139E–$142B`, with Datasoft's original title screen displayed.
 5. `vice_disassemble` confirmed `$08B1` is a genuine routine entry, not a mid-instruction landing.
 

@@ -319,6 +319,13 @@ function renderReleaseSection(id, log) {
 
   s += `**Load-event count:**\n\n${count}\n\n`;
 
+  if (log.run_status === "blocked") {
+    s += `> **⚠ THIS IS NOT AN EVIDENCED ZERO.** The count above is \`0\` only because no live ` +
+      `emulator work reached completion for this release this run -- it is a bare absence of ` +
+      `attempted measurement, not a null result earned by an idle calibration on a machine proven ` +
+      `to have executed. ${log.run_status_note ?? ""}\n\n`;
+  }
+
   s += `**Route:** the executing agent's own \`mcp__vice__*\` tool calls -- machine ${log.machine ?? "unknown"}, ` +
     `video standard ${log.video_standard ?? "unknown"}, VICE server version ${log.vice_version ?? "unknown"}.\n\n`;
 
