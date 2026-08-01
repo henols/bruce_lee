@@ -311,6 +311,11 @@ the new skill would restate is a sign the content belongs there instead.
 The collection step is real work — this is not a greenfield write-up. Sources to mine before
 writing anything:
 
+- **`.planning/RE-FINDINGS.md`** — the append-only findings log, created 2026-08-01 and now
+  mandated by `.claude/CLAUDE.md` § Reverse-Engineering Findings Log. This is the primary
+  input: everything logged there is already a finding someone chose to record. It carries a
+  partial seed of the verified emulator-technique and capture findings from STATE.md; the rest
+  of the sweep below is still outstanding and is step 1 of this todo.
 - `.planning/research/ARCHITECTURE.md`, `PITFALLS.md`, `STACK.md`, `SUMMARY.md`
 - `.planning/phases/01-recovery-provenance/01-RESEARCH.md` and `01-PATTERNS.md`
 - The three `01-0N-SUMMARY.md` files, plus both `01-04-ATTEMPT-N-HALT.md` records — halts

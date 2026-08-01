@@ -187,3 +187,41 @@ the tools handle the boundary.
   agent fetched through the tools and passed in. Nothing under `tools/` contacts the emulator.
 - Log VICE MCP quirks as a file in `.planning/todos/pending/` rather than fixing them.
   `.claude/mcp/` and `.vice-supervisor/` are not to be read or edited.
+
+## Reverse-Engineering Findings Log
+
+Also kept outside the GSD-managed blocks, for the same reason.
+
+**Every finding that makes reverse engineering faster goes in `.planning/RE-FINDINGS.md`, at
+the moment it is found.** That file is the raw material for the RE skill this project is going
+to build (`.planning/todos/pending/2026-08-01-collect-c64-reverse-engineering-findings-into-a-fast-re-skill.md`).
+A trick that is not written down when it is discovered is re-derived from scratch next session,
+which is the exact cost the skill exists to remove.
+
+**What must be logged:**
+
+- A shortcut — a read, a tool call, or an ordering that got to an answer faster than the
+  obvious route.
+- A trick — a non-obvious way to use a register, a tool, or a checkpoint. `$D41B` as the RNG
+  rather than audio is the shape of this.
+- A hazard — anything that gave a wrong answer, or that changed the running machine by being
+  observed. These are worth more than the shortcuts; they are what a register list cannot tell
+  you.
+- A dead end — an approach that looked right and was not, with the reason. **Negative findings
+  count.** Not recording them means the next session pays for the same detour.
+- A confirmation — a fact that was uncertain and is now verified live, with how it was
+  verified.
+
+**Rules for the log:**
+
+- **Append-only, and never in a todo.** Todos move to `completed/` when their work is done; the
+  log has to outlive every one of them. `.planning/RE-FINDINGS.md` is the safe place precisely
+  because nothing archives it.
+- **Log at discovery, not at session end.** A finding recalled at wrap-up has already lost the
+  detail that made it useful.
+- **One entry per finding**, dated, stating the finding and what it saves or costs. If it came
+  from live execution, say so — provenance is the difference between a fact and a guess, and
+  this project grades every claim by confidence.
+- **Do not deduplicate against the skill.** The log is raw input; curation happens when the
+  skill is written. A finding logged twice is free, a finding suppressed as "probably already
+  known" is gone.
