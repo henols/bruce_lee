@@ -35,16 +35,22 @@ than exiting cleanly. `VICE_BROKER_SPARES=1` launches one at a time and works.
 **Suggested fix:** serialise `maintain_spares()` launches — one spawn per pass, or a probe-gated
 sequential loop. Warming N spares in parallel is not safe for this emulator on this host.
 
-## Defect 2 — `start [N]` silently ignores its argument
+## Defect 2 — CORRECTED: `start [N]` works; only the usage text is stale
 
-`./vice-broker.sh start 2` does **not** set the spares target. The script's own usage text
-admits it (`it is not yet consumed by any spares logic in this version`), but the command
-accepts the argument and reports success, so the operator reasonably believes it took effect.
-This directly extended the outage: `start 1` was tried as the fix for defect 1 and still
-warmed three.
+**This was reported wrong and is retained as the correction.** The original claim was that
+`./vice-broker.sh start 2` silently ignores its argument. It does not — `vice-broker.sh:394-396`
+assigns `VICE_BROKER_SPARES="$N_ARG"` when a positional is given, with three passing tests, and
+the comment there describes this exact bug as already fixed.
 
-**Suggested fix:** either wire the positional to `VICE_BROKER_SPARES`, or reject it with a
-usage error naming the env var. Accepting-and-ignoring is the worst of the three options.
+The error came from reading the script's `usage()` text, which still claims *"it is not yet
+consumed by any spares logic in this version"* — stale prose describing a defect that was
+repaired without updating the docs. Acting on it, the orchestrator told the developer that
+`start 1` would be ignored and to use the env var instead. Harmless in effect (both routes
+work) but the reasoning was wrong.
+
+**Remaining real defect:** the usage text contradicts the code and must be corrected. A stale
+`usage()` is not cosmetic — it is what an operator reads under pressure, and here it sent
+a debugging session down a wrong branch during a live outage.
 
 ## Defect 3 — grants outlive their process and survive broker restart
 
