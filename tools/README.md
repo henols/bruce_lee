@@ -385,17 +385,18 @@ supervisor **or** a pool, not both, to avoid this.
 
 ### Interactive (agent-facing) use takes no pool lease at all
 
-The pool is a container-side, harness-driven concept for `tools/recover.mjs`'s
-own batch pipeline — it has nothing to do with how Claude Code reaches the
-emulator. As of Phase 01.1 (§3 above), `.mcp.json` registers
-`vice-proxy.mjs`, which forwards every `mcp__vice__*` call to the FIXED
-port from decision D-A (6510, the single supervised instance) — it never
-leases a pooled instance and never redirects. `tools/recover.mjs`'s own CLI
-still acquires and redirects a `kind:"process"` lease for the duration of
-the verb it's running, exactly as before; that machinery is entirely
-internal to the standalone batch pipeline and is not part of the
-agent-facing path at all. See §6 below for how an agent actually discovers
-and calls tools.
+The pool is a container-side, harness-driven concept — it has nothing to do
+with how Claude Code reaches the emulator. As of Phase 01.1 (§3 above),
+`.mcp.json` registers `vice-proxy.mjs`, which forwards every `mcp__vice__*`
+call to the FIXED port from decision D-A (6510, the single supervised
+instance) — it never leases a pooled instance and never redirects. See §6
+below for how an agent actually discovers and calls tools.
+
+> **Phase 01-04:** the standalone batch pipeline that used to take a
+> `kind:"process"` lease here (`tools/recover.mjs`, `tools/chip-state.mjs`
+> and `tools/recover.test.mjs`) was deleted as legacy. Nothing under
+> `tools/` takes a pool lease any more. The pool's `kind:"process"` lease
+> path is retained in the scripts for a replacement driver to use.
 
 ---
 
@@ -448,22 +449,29 @@ other means still can't leak it. The prohibition is enforced in two
 independent places at the call boundary too: `tools/call` refuses it before
 any request is serialised, even if the name is obtained some other way.
 
-### Programmatic seam: two library consumers that are not the proxy
+### Programmatic seam: retired in Phase 01-04
 
-`tools/recover.mjs` and the `c64-ram-capture` skill's pipeline import
-`vice.mjs`/`vice-sync.mjs` directly, as a library — `node tools/recover.mjs
-...`, invoked from a shell, exactly as it always has been. This is
-deliberate and unchanged by the proxy's arrival: criterion 8's retirement is
-of the *documented, agent-facing* route to the emulator, not of the
-transport module itself, which both of these standalone pipelines still
-need as their only way to reach VICE. Neither pipeline is something an
-agent is ever instructed to invoke as a substitute for `mcp__vice__*` tool
-calls — they are Phase 1's own recovery/capture tooling, run by a human or
-by an agent executing a *documented, specific plan step* that names
-`tools/recover.mjs` by task, not a general-purpose emulator-access
-shortcut. If a document ever tells an agent to reach for this module as a
-generic alternative to `mcp__vice__*`, that is the regression
-`vice-mcp-selector-docs.test.mjs` exists to catch.
+There used to be a documented second route to the emulator here: a pair of
+standalone library consumers (`tools/recover.mjs` and `tools/chip-state.mjs`)
+that imported the transport module directly and were invoked as
+`node tools/recover.mjs ...` from a shell, alongside the proxy rather than
+through it.
+
+**Both were deleted as legacy in Phase 01-04, along with
+`tools/recover.test.mjs`.** No file under `tools/` imports the transport
+module any more, and `mcp__vice__*` tool calls are now the only route to the
+emulator from this repo — which is what
+[`vice-mcp-selector/SKILL.md`](../.claude/skills/vice-mcp-selector/SKILL.md)
+always said, minus the standing exception.
+
+The rule that outlived them is unchanged and still enforced: no document may
+tell an agent to reach for a transport module as a generic alternative to
+`mcp__vice__*`. That is the regression `vice-mcp-selector-docs.test.mjs`
+exists to catch.
+
+A replacement driver is expected to reappear under `tools/`. When it does it
+must not import from `.claude/mcp/`, and this section should describe how it
+reaches VICE instead.
 
 ---
 
