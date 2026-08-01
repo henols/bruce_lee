@@ -25,6 +25,23 @@ const SELF = fileURLToPath(import.meta.url);
 const DEFAULT_ENDPOINT = process.env.VICE_MCP_URL || "http://host.docker.internal:6510/mcp";
 const DEFAULT_TIMEOUT_MS = Number(process.env.VICE_MCP_TIMEOUT_MS || 30000);
 
+// The container-visible alias for the host machine -- the ONE definition
+// every consumer that needs to build a host-facing URL from a bare port
+// reads, instead of each inlining its own
+// `process.env.VICE_MCP_HOST || "host.docker.internal"` copy (there were
+// three such copies before this: vice-pool.mjs's instanceFor() and
+// defaultInstance(), and vice-session.mjs's readSession()). A FUNCTION, not
+// a module-level constant, so it stays sensitive to a runtime env override
+// -- vice-pool.test.mjs's own withMcpHostEnv() helper mutates
+// process.env.VICE_MCP_HOST across test cases within the SAME process, which
+// a constant captured once at import time would silently stop honouring.
+// Leaves DEFAULT_ENDPOINT (above) untouched -- that is a full URL read once
+// at startup, a different concern from this alias, which is read fresh on
+// every call.
+export function mcpHost() {
+  return process.env.VICE_MCP_HOST || "host.docker.internal";
+}
+
 // Where tools/vice-supervisor.sh (host-only) writes its restart epoch --
 // resolved via repo-root.mjs's supervisorDir() (never a fixed hop count off
 // this file's own location), so the path is correct regardless of the

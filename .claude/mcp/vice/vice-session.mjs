@@ -19,7 +19,7 @@ import { resolve, join, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 
 import { acquire, releaseLeaseByToken, refreshLease, instanceFor, poolDir } from "./vice-pool.mjs";
-import { useInstance, readEpoch } from "./vice.mjs";
+import { useInstance, readEpoch, mcpHost } from "./vice.mjs";
 import { supervisorDir } from "./repo-root.mjs";
 
 /**
@@ -93,7 +93,7 @@ export function readSession(path = sessionFilePath()) {
   }
   const pooled = parsed.pooled === true;
   const dir = poolDir();
-  const host = process.env.VICE_MCP_HOST || "host.docker.internal";
+  const host = mcpHost();
   // Derived, never trusted, per T-nh5-01 -- see the doc comment above.
   const url = `http://${host}:${port}/mcp`;
   const epochFile = pooled ? instanceFor(port, dir).epochFile : resolve(dir, "epoch.json");

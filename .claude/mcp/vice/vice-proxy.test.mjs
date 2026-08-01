@@ -37,7 +37,7 @@ import { createServer } from "node:http";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, readdirSync, existsSync, statSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { tmpdir, networkInterfaces } from "node:os";
 import { hostPath } from "../../skills/devcontainer-host-path/scripts/hostpath.mjs";
 import { repoRoot } from "./repo-root.mjs";
 // Read-only import for test assertions only -- this test file does not
@@ -107,6 +107,36 @@ function startStandInServer() {
 async function listen(server) {
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   return server.address().port;
+}
+
+/**
+ * Quick task 260801-ccn (task 2): binds `server` to a SPECIFIC address
+ * rather than loopback -- the url-rewrite test needs a stub reachable ONLY
+ * via the container's own non-internal IPv4 address, so a successful
+ * forwarded call is only possible if the containerization inverse actually
+ * rewrote the grant's loopback url to that address.
+ */
+async function listenOn(server, host) {
+  await new Promise((resolvePromise, reject) => {
+    server.once("error", reject);
+    server.listen(0, host, resolvePromise);
+  });
+  return server.address().port;
+}
+
+/** The container's first non-internal (non-loopback) IPv4 address -- what
+ * makes listenOn()'s stub unreachable on loopback and reachable only via
+ * the rewrite (see spike-findings-bruce-lee-adjacent environment note in
+ * this task's PLAN.md). Asserted present, never silently skipped -- a test
+ * relying on this address must fail loudly if the environment lacks one,
+ * not quietly pass having tested nothing. */
+function firstNonInternalIPv4() {
+  for (const addrs of Object.values(networkInterfaces())) {
+    for (const a of addrs) {
+      if (a.family === "IPv4" && !a.internal) return a.address;
+    }
+  }
+  return null;
 }
 
 /**
@@ -1545,6 +1575,45 @@ async function acquireLeaseViaBroker(proxy, dir, port, callId) {
   return { id, leasePath };
 }
 
+/**
+ * Quick task 260801-ccn (task 2): writes grants/<id>.json DIRECTLY, bypassing
+ * the real broker script entirely -- the whole point is to reproduce a
+ * captured host-shaped grant VERBATIM, with every field under the test's own
+ * control, rather than depend on grant_from_spare()'s own field derivation.
+ * `waitForRequest(dir)` must have already resolved before calling this (a
+ * request file, not necessarily this one specifically) -- callers pass the
+ * SAME id waitForCondition() found.
+ */
+function grantDirectly(dir, id, fields) {
+  const dirPath = join(dir, "grants");
+  mkdirSync(dirPath, { recursive: true });
+  const record = { version: 1, id, granted_at: new Date().toISOString(), ...fields };
+  writeFileSync(join(dirPath, `${id}.json`), JSON.stringify(record, null, 2) + "\n", "utf8");
+  return record;
+}
+
+/** Waits for a request file to appear under dir/requests and returns its id
+ * (the basename minus ".json"). Shared by every containerization test below
+ * that plants its own grant directly rather than via acquireLeaseViaBroker(). */
+async function waitForRequestId(dir) {
+  const reqDir = join(dir, "requests");
+  const reqFiles = await waitForCondition(() => {
+    if (!existsSync(reqDir)) return null;
+    const files = readdirSync(reqDir).filter((f) => f.endsWith(".json"));
+    return files.length > 0 ? files : null;
+  });
+  assert.ok(reqFiles, "a request file must appear before a grant is planted");
+  return reqFiles[0].replace(/\.json$/, "");
+}
+
+function writeFreshBrokerJson(dir) {
+  writeFileSync(
+    join(dir, "broker.json"),
+    JSON.stringify({ version: 1, pid: process.pid, heartbeat_at: new Date().toISOString() }),
+    "utf8"
+  );
+}
+
 const ENDING_TRIGGERS = [
   { name: "SIGINT", end: (proxy) => proxy.child.kill("SIGINT") },
   { name: "SIGTERM", end: (proxy) => proxy.child.kill("SIGTERM") },
@@ -1562,6 +1631,12 @@ for (const trigger of ENDING_TRIGGERS) {
       VICE_POOL_DIR: dir,
       VICE_BROKER_BASE_PORT: String(port),
       VICE_EPOCH_FILE: join(dir, "epoch.json"),
+      // The host alias set to loopback: this test's grant carries a loopback
+      // url for a stub that really does live on THIS side of the boundary,
+      // so the containerization inverse must be an identity here, not a
+      // rewrite to host.docker.internal (which would make the stub
+      // unreachable).
+      VICE_MCP_HOST: "127.0.0.1",
     });
     try {
       await handshake(proxy);
@@ -1587,6 +1662,10 @@ test("idempotency: SIGINT followed by SIGTERM ~50ms later releases exactly once"
     VICE_POOL_DIR: dir,
     VICE_BROKER_BASE_PORT: String(port),
     VICE_EPOCH_FILE: join(dir, "epoch.json"),
+    // The alias set to loopback -- makes the inverse an identity for a stub
+    // that really lives on this side of the boundary (see the "ending path"
+    // tests above for the same rationale).
+    VICE_MCP_HOST: "127.0.0.1",
   });
   try {
     await handshake(proxy);
@@ -1624,6 +1703,8 @@ test("a lease already removed out from under the proxy: teardown does not throw,
     VICE_POOL_DIR: dir,
     VICE_BROKER_BASE_PORT: String(port),
     VICE_EPOCH_FILE: join(dir, "epoch.json"),
+    // The alias set to loopback -- see the "ending path" tests above.
+    VICE_MCP_HOST: "127.0.0.1",
   });
   try {
     await handshake(proxy);
@@ -1657,6 +1738,8 @@ test("heartbeat: with a short interval and no further tool calls, the lease's mt
     VICE_BROKER_BASE_PORT: String(port),
     VICE_EPOCH_FILE: join(dir, "epoch.json"),
     VICE_BROKER_HEARTBEAT_MS: "150",
+    // The alias set to loopback -- see the "ending path" tests above.
+    VICE_MCP_HOST: "127.0.0.1",
   });
   try {
     await handshake(proxy);
@@ -1698,6 +1781,8 @@ test("heartbeat timer is unref'd: the child exits after stdin closes, even with 
     VICE_BROKER_BASE_PORT: String(port),
     VICE_EPOCH_FILE: join(dir, "epoch.json"),
     VICE_BROKER_HEARTBEAT_MS: "100",
+    // The alias set to loopback -- see the "ending path" tests above.
+    VICE_MCP_HOST: "127.0.0.1",
   });
   try {
     await handshake(proxy);
@@ -1883,6 +1968,8 @@ test("broker never-cache: absent-then-alive-and-granted succeeds on the SAME pro
     VICE_POOL_DIR: dir,
     VICE_BROKER_BASE_PORT: String(port),
     VICE_EPOCH_FILE: join(dir, "epoch.json"),
+    // The alias set to loopback -- see the "ending path" tests above.
+    VICE_MCP_HOST: "127.0.0.1",
   });
   try {
     await handshake(proxy);
@@ -1975,6 +2062,249 @@ test("broker warming: a poll timeout with no grant or denial is a warming-and-re
     assert.ok(gone, "a warming timeout must clean up both the request file and the lease file it created");
   } finally {
     proxy.child.kill("SIGKILL");
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// -----------------------------------------------------------------------
+// Quick task 260801-ccn task 2: a broker grant carrying HOST-local
+// coordinates (a loopback url, host-rooted epoch_file/supervisor_dir) is
+// inverted to container coordinates before useInstance() adopts it. Every
+// test below plants its grant DIRECTLY (grantDirectly()), reproducing the
+// captured host shape verbatim, rather than going through the real broker
+// script -- the point is a hand-written grant under full test control, not
+// a synthetic spare's own field derivation.
+// -----------------------------------------------------------------------
+
+test("containerize: a loopback grant url is rewritten so the forwarded call actually reaches a stub bound off loopback", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vice-proxy-ccn-url-"));
+  const eth0 = firstNonInternalIPv4();
+  assert.ok(eth0, "this environment must expose a non-internal IPv4 address for this test to be meaningful");
+  const { server } = startStandInServer();
+  const stubPort = await listenOn(server, eth0);
+
+  const proxy = startProxy({
+    VICE_POOL_DIR: dir,
+    VICE_MCP_HOST: eth0, // the alias this test's rewrite must land on
+    VICE_EPOCH_FILE: join(dir, "epoch.json"),
+  });
+  try {
+    await handshake(proxy);
+    writeFreshBrokerJson(dir);
+
+    proxy.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
+    const id = await waitForRequestId(dir);
+
+    // A loopback url on the stub's port -- nothing listens on loopback at
+    // this port (the stub is bound ONLY to eth0), so a successful response
+    // is only possible if the containerization inverse rewrote the url.
+    grantDirectly(dir, id, {
+      port: stubPort,
+      url: `http://127.0.0.1:${stubPort}/mcp`,
+      epoch_file: join(dir, "unused-epoch.json"),
+      supervisor_dir: join(dir, "unused-supervisor-dir"),
+    });
+
+    const resp = await proxy.nextMessage(10000);
+    assert.equal(
+      resp.result.isError,
+      false,
+      "the forwarded call must succeed -- only possible if the loopback url was rewritten to the alias the stub actually listens on"
+    );
+    const payload = JSON.parse(resp.result.content[0].text);
+    assert.equal(payload.version, "3.10");
+
+    assert.match(proxy.stderr.join(""), /containerized grant/, "the one translation stderr line must be emitted");
+  } finally {
+    proxy.child.kill("SIGKILL");
+    await new Promise((resolveClose) => server.close(resolveClose));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("containerize: a host-rooted grant epoch_file is rewritten so epoch drift is actually detected, and the translation line names all three fields", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vice-proxy-ccn-epoch-"));
+  const eth0 = firstNonInternalIPv4();
+  assert.ok(eth0, "this environment must expose a non-internal IPv4 address for this test to be meaningful");
+  const { server } = startStandInServer();
+  const stubPort = await listenOn(server, eth0);
+
+  // A REAL epoch file inside the container workspace's own .vice-supervisor/
+  // (gitignored) -- proves the path inverse is actually READ, not merely
+  // computed.
+  const epochContainerDir = join(repoRoot(), ".vice-supervisor", `test-ccn-${process.pid}-${Date.now()}`);
+  mkdirSync(epochContainerDir, { recursive: true });
+  const epochContainerFile = join(epochContainerDir, "epoch.json");
+  writeFileSync(epochContainerFile, JSON.stringify({ epoch: 1, pid: 4242, spawned_at: new Date().toISOString() }), "utf8");
+  const epochHostPath = hostPath(epochContainerFile);
+  assert.notEqual(epochHostPath, epochContainerFile, "hostPath() must actually translate in this environment for this test to be meaningful");
+
+  const proxy = startProxy({
+    VICE_POOL_DIR: dir,
+    VICE_MCP_HOST: eth0,
+    // Deliberately NOT setting VICE_EPOCH_FILE -- the granted epoch_file
+    // must be the only path in play.
+  });
+  try {
+    await handshake(proxy);
+    writeFreshBrokerJson(dir);
+
+    proxy.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
+    const id = await waitForRequestId(dir);
+
+    grantDirectly(dir, id, {
+      port: stubPort,
+      url: `http://127.0.0.1:${stubPort}/mcp`,
+      epoch_file: epochHostPath,
+      supervisor_dir: join(dir, "unused-supervisor-dir"),
+    });
+
+    const first = await proxy.nextMessage(10000);
+    assert.equal(first.result.isError, false, "the first forwarded call must succeed");
+
+    // Stderr evidence: exactly one line naming all three fields, so
+    // translating two of three would fail this.
+    const translationLines = proxy.stderr.join("").split("\n").filter((l) => l.includes("containerized grant"));
+    assert.equal(translationLines.length, 1, "exactly one translation line must be emitted for this grant");
+    for (const field of ["url", "epoch_file", "supervisor_dir"]) {
+      assert.match(translationLines[0], new RegExp(field), `the translation line must name ${field}`);
+    }
+
+    // Bump the epoch in the REAL container-side file.
+    writeFileSync(epochContainerFile, JSON.stringify({ epoch: 2, pid: 4242, spawned_at: new Date().toISOString() }), "utf8");
+
+    proxy.send({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
+    const second = await proxy.nextMessage(10000);
+    assert.equal(
+      second.result.isError,
+      true,
+      "the second call must detect epoch drift -- only possible if the granted epoch_file was actually translated and read"
+    );
+    assert.match(second.result.content[0].text, /epoch drift/i);
+  } finally {
+    proxy.child.kill("SIGKILL");
+    await new Promise((resolveClose) => server.close(resolveClose));
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(epochContainerDir, { recursive: true, force: true });
+  }
+});
+
+test("containerize: an already-container-shaped grant (tmpdir VICE_POOL_DIR) is adopted byte-identical, reported as unchanged on stderr", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vice-proxy-ccn-passthrough-"));
+  const { server } = startStandInServer();
+  const port = await listen(server); // loopback, matching every pre-existing broker test's own stub binding
+
+  const proxy = startProxy({
+    VICE_POOL_DIR: dir,
+    VICE_MCP_HOST: "127.0.0.1", // makes the rewrite an identity for a stub that really lives on this side
+    VICE_EPOCH_FILE: join(dir, "epoch.json"),
+  });
+  try {
+    await handshake(proxy);
+    const { leasePath } = await acquireLeaseViaBroker(proxy, dir, port, 3);
+    assert.ok(existsSync(leasePath));
+
+    const translationLines = proxy.stderr.join("").split("\n").filter((l) => l.includes("containerized grant"));
+    assert.equal(translationLines.length, 1);
+    assert.match(translationLines[0], /url: unchanged/, "an already container-shaped url must be reported unchanged, not translated");
+    assert.match(translationLines[0], /epoch_file: unchanged/, "a tmpdir-rooted epoch_file must be reported unchanged");
+    assert.match(translationLines[0], /supervisor_dir: unchanged/, "a tmpdir-rooted supervisor_dir must be reported unchanged");
+  } finally {
+    proxy.child.kill("SIGKILL");
+    await new Promise((resolveClose) => server.close(resolveClose));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("containerize safety net: a grant whose epoch_file translates outside the workspace is refused, falling back to the port-derived path", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vice-proxy-ccn-safetynet-epoch-"));
+  const { server } = startStandInServer();
+  const port = await listen(server);
+
+  const proxy = startProxy({
+    VICE_POOL_DIR: dir,
+    VICE_MCP_HOST: "127.0.0.1",
+  });
+  try {
+    await handshake(proxy);
+    writeFreshBrokerJson(dir);
+
+    proxy.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
+    const id = await waitForRequestId(dir);
+
+    // A REAL host root this container recognises, with a lexical ".."
+    // traversal appended -- translates to something outside the workspace
+    // once containerPath() constructs the container form.
+    const realHostRoot = hostPath(repoRoot());
+    const escapingHostPath = `${realHostRoot}/../../../../../../etc/passwd`;
+
+    grantDirectly(dir, id, {
+      port,
+      url: `http://127.0.0.1:${port}/mcp`,
+      epoch_file: escapingHostPath,
+      supervisor_dir: join(dir, "unused-supervisor-dir"),
+    });
+
+    const resp = await proxy.nextMessage(10000);
+    assert.equal(
+      resp.result.isError,
+      false,
+      "the session must still be usable -- the safety net substitutes a coordinate, it does not fail the call"
+    );
+
+    const translationLines = proxy.stderr.join("").split("\n").filter((l) => l.includes("containerized grant"));
+    assert.equal(translationLines.length, 1);
+    assert.match(
+      translationLines[0],
+      /epoch_file: SUBSTITUTED/,
+      "the escaping epoch_file must be reported as substituted, not silently adopted"
+    );
+  } finally {
+    proxy.child.kill("SIGKILL");
+    await new Promise((resolveClose) => server.close(resolveClose));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("containerize safety net: a grant whose url port disagrees with the granted port is refused, falling back to the port-derived url", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vice-proxy-ccn-safetynet-url-"));
+  const { server } = startStandInServer();
+  const port = await listen(server);
+  const wrongPort = port + 1; // NOT what the stub is actually listening on
+
+  const proxy = startProxy({
+    VICE_POOL_DIR: dir,
+    VICE_MCP_HOST: "127.0.0.1",
+  });
+  try {
+    await handshake(proxy);
+    writeFreshBrokerJson(dir);
+
+    proxy.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
+    const id = await waitForRequestId(dir);
+
+    grantDirectly(dir, id, {
+      port,
+      url: `http://127.0.0.1:${wrongPort}/mcp`, // disagrees with the granted port
+      epoch_file: join(dir, "unused-epoch.json"),
+      supervisor_dir: join(dir, "unused-supervisor-dir"),
+    });
+
+    const resp = await proxy.nextMessage(10000);
+    assert.equal(resp.result.isError, false, "the session must still be usable via the port-derived fallback url");
+    const payload = JSON.parse(resp.result.content[0].text);
+    assert.equal(payload.version, "3.10");
+
+    const translationLines = proxy.stderr.join("").split("\n").filter((l) => l.includes("containerized grant"));
+    assert.equal(translationLines.length, 1);
+    assert.match(
+      translationLines[0],
+      /url: SUBSTITUTED/,
+      "the port-mismatched url must be reported as substituted, not silently adopted"
+    );
+  } finally {
+    proxy.child.kill("SIGKILL");
+    await new Promise((resolveClose) => server.close(resolveClose));
     rmSync(dir, { recursive: true, force: true });
   }
 });

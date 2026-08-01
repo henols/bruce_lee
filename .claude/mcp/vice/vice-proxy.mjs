@@ -13,7 +13,7 @@
 //
 // Sibling import, no longer cross-skill: `vice-session` has been retired
 // (plan 01.1-04) and its transport module tree lives here now.
-import { call, activeInstance, useInstance, DENY_LIST, readEpoch, beginSession, MachineRestartedError } from "./vice.mjs";
+import { call, activeInstance, useInstance, DENY_LIST, readEpoch, beginSession, MachineRestartedError, mcpHost } from "./vice.mjs";
 // Sibling import, same relocation as above. probeInstance() is the
 // deliberately-fragile liveness check (see that file's own header): one
 // 1500ms-budget round trip, no retry, no dependency on vice.mjs's resilient
@@ -21,6 +21,14 @@ import { call, activeInstance, useInstance, DENY_LIST, readEpoch, beginSession, 
 import { probeInstance } from "./vice-probe.mjs";
 import { repoRoot } from "./repo-root.mjs";
 import { hostPath, SET_ENV_HINT } from "../../skills/devcontainer-host-path/scripts/hostpath.mjs";
+// The INVERSE direction (host -> container), for inverting a broker grant's
+// own host-local coordinates before useInstance() ever adopts them (this
+// task, quick-260801-ccn). Consuming this from the proxy -- rather than
+// hand-translating a host path here -- is what keeps the host-path consumer
+// set closed to a fixed, traced list (vice-mcp-selector-docs.test.mjs's
+// assertion 4, amended by this task to include containerpath.mjs itself as
+// a fifth, sibling consumer of hostpath.mjs's own knowledge).
+import { containerizeRecord } from "../../skills/devcontainer-host-path/scripts/containerpath.mjs";
 // The container-side half of the on-demand broker protocol (Phase 01.2).
 // This module deliberately does NOT import hostpath.mjs itself -- the
 // host-path consumer set stays closed to four production modules
@@ -36,6 +44,7 @@ import {
   startHeartbeat,
   readBrokerLiveness,
   requestsDir,
+  brokerRootDir,
 } from "./vice-broker-client.mjs";
 import { readFileSync, unlinkSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -815,6 +824,113 @@ function handleResultContinue(args) {
 let brokerLeaseId = null;
 let brokerHeartbeatTimer = null;
 
+// ----------------------------------------------------- grant containerization
+//
+// Quick task 260801-ccn (the inverse of Phase 01.1 criterion 9). The broker
+// runs on the HOST, legitimately resolves its own repo root, and writes a
+// grant carrying host-local coordinates: a loopback `url`, and
+// `epoch_file`/`supervisor_dir` paths rooted at the host's own checkout --
+// entirely correct from where the broker stands. Nothing inverted them
+// before this task: loopback meant the CONTAINER's own loopback
+// (ECONNREFUSED, since nothing listens there) and the host-rooted epoch
+// path simply never resolved, so every broker-granted instance was silently
+// unreachable. containerizeGrant() is the seam that fixes this -- called in
+// ensureBrokerLease() below between pollGrant() returning a grant and
+// useInstance() adopting it, since that is the LAST point before the
+// coordinates become the session's identity (D-1).
+function containerizeGrant(grant) {
+  const grantId = grant && typeof grant.id === "string" ? grant.id : "(no id)";
+  const port = Number(grant && grant.port);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    // T-mef-01's rule, reused here: nothing downstream can be trusted
+    // without a validated port, so no translation is even attempted --
+    // useInstance() fails on its own terms, exactly as it would have before
+    // this function existed.
+    console.error(
+      `vice-proxy: containerizeGrant ${grantId}: grant.port (${grant && grant.port}) is not a valid integer ` +
+        `port -- skipping translation entirely.`
+    );
+    return grant;
+  }
+
+  const alias = mcpHost();
+  // containerizeRecord() (containerpath.mjs) does the translation itself:
+  // `url` through the loopback-rewrite (D-4), `epoch_file`/`supervisor_dir`
+  // through the host->container path inverse (D-2 -- all three fields). An
+  // already container-shaped record (every pre-existing broker test's
+  // tmpdir-rooted VICE_POOL_DIR) matches no known host root and comes back
+  // byte-identical -- D-7's whole point.
+  const { record, changes } = containerizeRecord(grant, {
+    pathFields: ["epoch_file", "supervisor_dir"],
+    urlFields: ["url"],
+    alias,
+  });
+
+  // Safety net (T-ccn-01, T-ccn-02), mirroring the outbound seam's own
+  // posture: never open/connect to an unvalidated string read out of a
+  // grant file. On either failure below, substitute the coordinate DERIVED
+  // FROM THE VALIDATED PORT instead (instanceFor()'s own T-mef-01 rule,
+  // reused here) and report the substitution -- never silently.
+  const root = repoRoot();
+  const fallbackDir = join(brokerRootDir(), String(port));
+  const fallbackEpochFile = join(fallbackDir, "epoch.json");
+  const fallbackUrl = `http://${alias}:${port}/mcp`;
+  const changedFields = new Set(changes.map((c) => c.field));
+  const substituted = { url: false, epoch_file: false, supervisor_dir: false };
+
+  // T-ccn-01: only a field that was ACTUALLY TRANSLATED (its host root
+  // matched) is re-checked for workspace containment -- an already
+  // container-shaped path was never translated at all (D-7's passthrough)
+  // and is trusted exactly as every pre-existing broker test already relies
+  // on. A translated path escaping the workspace (a lexical ".." sequence
+  // in the grant's own host-rooted field) is exactly what this check
+  // catches.
+  if (changedFields.has("epoch_file") && !isInsideWorkspace(resolve(record.epoch_file), root)) {
+    record.epoch_file = fallbackEpochFile;
+    substituted.epoch_file = true;
+  }
+  if (changedFields.has("supervisor_dir") && !isInsideWorkspace(resolve(record.supervisor_dir), root)) {
+    record.supervisor_dir = fallbackDir;
+    substituted.supervisor_dir = true;
+  }
+
+  // T-ccn-02: the FINAL url's port must equal the validated grant port,
+  // checked UNCONDITIONALLY (translated or not) -- a grant could simply
+  // declare a mismatched port from the start, translation aside, and that
+  // is exactly the spoofing shape this check exists to catch.
+  let urlPortOk = false;
+  if (typeof record.url === "string") {
+    try {
+      urlPortOk = Number(new URL(record.url).port) === port;
+    } catch {
+      urlPortOk = false;
+    }
+  }
+  if (!urlPortOk) {
+    record.url = fallbackUrl;
+    substituted.url = true;
+  }
+
+  // Exactly ONE stderr line, naming every field's before/after (or
+  // "unchanged") -- this is the signal whose absence made the original bug
+  // invisible; it must never become a line per field (D-2's own reporting
+  // requirement).
+  const parts = ["url", "epoch_file", "supervisor_dir"].map((field) => {
+    const original = grant ? grant[field] : undefined;
+    const final = record[field];
+    if (substituted[field]) {
+      return `${field}: SUBSTITUTED ${JSON.stringify(original)} -> ${JSON.stringify(final)} (port-derived fallback)`;
+    }
+    if (final === original) {
+      return `${field}: unchanged (${JSON.stringify(final)})`;
+    }
+    return `${field}: ${JSON.stringify(original)} -> ${JSON.stringify(final)}`;
+  });
+  console.error(`vice-proxy: containerized grant ${grantId} -- ${parts.join("; ")}`);
+
+  return record;
+}
+
 /**
  * Acquire a broker-granted instance for this session, once. Returns
  * immediately (no broker traffic at all) when a lease is already held, and
@@ -878,8 +994,12 @@ async function ensureBrokerLease() {
   }
 
   brokerLeaseId = id;
-  const grant = result.grant;
-  useInstance({ port: grant.port, url: grant.url, epochFile: grant.epoch_file, pooled: true });
+  // Invert the grant's host-local coordinates BEFORE useInstance() adopts
+  // them (D-1, this task) -- this is the LAST point before the coordinates
+  // become the session's identity: the endpoint every later tool call is
+  // sent to, and the path the epoch guard opens.
+  const containerized = containerizeGrant(result.grant);
+  useInstance({ port: containerized.port, url: containerized.url, epochFile: containerized.epoch_file, pooled: true });
   viceSession = null; // re-baseline: the next ensureViceSession() reads the GRANTED instance's own epoch file
   // startHeartbeat() (vice-broker-client.mjs) returns an unref'd interval
   // timer -- unref'd so the TIMER never holds this process alive past its
