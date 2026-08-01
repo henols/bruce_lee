@@ -78,7 +78,7 @@ Decimal phases appear between their surrounding integers in numeric order.
   4. `recovery/PROVENANCE.md` records an explicit verdict on whether the two cracks are independent, the artifacts examined to reach it, and the confidence weight a "both releases agree" verdict therefore carries.
   5. `recovery/clean/README.md` names the canonical disassembly subject and the reason it was chosen over the other image.
 
-**Plans**: 3/6 plans executed
+**Plans**: 4/6 plans executed
 
 Plans:
 
@@ -86,7 +86,7 @@ Plans:
 - [x] 01-02-PLAN.md
 - [x] 01-03-PLAN.md
 - [ ] 01-04-PLAN.md
-- [ ] 01-05-PLAN.md
+- [x] 01-05-PLAN.md
 - [ ] 01-06-PLAN.md
 
 **Wave 1**
@@ -431,7 +431,7 @@ Two cross-phase overlaps are intended and should be honoured when scheduling wor
 
 | Milestone | Phase | Plans Complete | Status | Completed |
 |-----------|-------|----------------|--------|-----------|
-| v1.0 | 1. Recovery & Provenance | 3/6 | In Progress|  |
+| v1.0 | 1. Recovery & Provenance | 4/6 | In Progress|  |
 | v1.0 | 01.1. Tool-Mediated Emulator Access (INSERTED) | 4/4 | In Progress|  |
 | v1.0 | 01.2. On-Demand Broker & Leasing (INSERTED) | 5/5 | In Progress|  |
 | v1.0 | 2. Coverage, Hazards & Memory Map | 0/5 | Not started | - |

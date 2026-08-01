@@ -22,9 +22,9 @@ Phases 1–4. These are the checkable, committed scope right now.
 
 The subject exists only as two cracked releases, one of them crunched. Nothing downstream can start until a clean, trustworthy memory image exists and its bytes carry known provenance.
 
-- [ ] **RECOVER-01**: Both disk images boot under host VICE through the MCP tool surface via a documented, repeatable procedure that never calls `vice_disk_list`
-- [ ] **RECOVER-02**: A clean RAM image is captured from `danish.d64` after its `TCS-CRUNCH!` decrunch completes, with dump trigger, `$01` port configuration, and captured address ranges all recorded
-- [ ] **RECOVER-03**: A clean RAM image is captured from `saeger.d64` (SSG release) under the same recorded procedure
+- [x] **RECOVER-01**: Both disk images boot under host VICE through the MCP tool surface via a documented, repeatable procedure that never calls `vice_disk_list`
+- [x] **RECOVER-02**: A clean RAM image is captured from `danish.d64` after its `TCS-CRUNCH!` decrunch completes, with dump trigger, `$01` port configuration, and captured address ranges all recorded
+- [x] **RECOVER-03**: A clean RAM image is captured from `saeger.d64` (SSG release) under the same recorded procedure
 - [ ] **RECOVER-04**: Dump completeness is proven by a full play-through after the dump point that detects any on-demand loading, with a supplementary dump captured for every load event found
 - [x] **RECOVER-05**: Both recovered images are normalised to the same fully-loaded state and base address so that a byte-level diff between them is meaningful
 - [x] **RECOVER-06**: Every byte range in the recovered image carries a provenance verdict — original Datasoft, cracker-modified, or uncertain — with the evidence recorded for each verdict
@@ -132,9 +132,9 @@ Which milestone and phase cover which requirements.
 
 | Requirement | Milestone | Phase | Status |
 |-------------|-----------|-------|--------|
-| RECOVER-01 | v1.0 | Phase 1 | Pending |
-| RECOVER-02 | v1.0 | Phase 1 | Pending |
-| RECOVER-03 | v1.0 | Phase 1 | Pending |
+| RECOVER-01 | v1.0 | Phase 1 | Complete |
+| RECOVER-02 | v1.0 | Phase 1 | Complete |
+| RECOVER-03 | v1.0 | Phase 1 | Complete |
 | RECOVER-04 | v1.0 | Phase 1 | Pending |
 | RECOVER-05 | v1.0 | Phase 1 | Done (01-05) |
 | RECOVER-06 | v1.0 | Phase 1 | Done (01-05) |
@@ -178,6 +178,7 @@ Which milestone and phase cover which requirements.
 | VERIFY-07 | v2.0 | Phase 7 | Pending |
 
 **Coverage:**
+
 - Phased requirements: 44 total
 - Mapped to phases: 44 ✓
 - Unmapped: 0 ✓

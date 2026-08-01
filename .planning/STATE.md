@@ -5,10 +5,10 @@ milestone_name: Pipeline Proven *
 current_phase: 01
 current_phase_name: recovery-provenance
 status: blocked
-stopped_at: "Wave 4 halted a THIRD time (attempt 3). 01-04 Task 1 and Task 2 are now complete and merged for BOTH releases — the first time across three attempts. Task 3 is partial (saeger 2/7 milestones + 1 attributed hit; danish never started) and Task 4 was not reached. Cause: four host VICE incidents in ~45 min of live work — three loud crash/respawns (epoch 8→9→10→11, all self-healed and re-derived) then a fourth GENUINE SILENT STALL. This session's instance is confirmed dead (orchestrator-side bracket = 0 cycles while ping still says \"running\"), and a stall cannot be repaired in-session. RESUME IN A FRESH SESSION with /gsd-execute-phase 1 — it picks up at Task 3, continuing saeger's play-through from chamber 1 before starting danish's."
-last_updated: "2026-08-01T21:05:00.000Z"
+stopped_at: "Wave 4 halted a FOURTH time (attempt 4), but the session was NOT wasted: 01-05 ran to completion afterwards on the user's explicit call, because it touches no emulator. 01-04 state: Tasks 1-2 complete for BOTH releases; Task 3 now saeger 5/7 milestones (death, game-over and restart newly earned this attempt, on top of title-screen and game-start/chamber-1) and danish STILL 0/7, unattempted in any of four sessions; Task 4 not reached. Cause: a SECOND genuine silent stall, in a fresh session's fresh instance, frozen at PC $07DE — the IDENTICAL address attempt 3's stall froze at (N=2, now flagged for investigation). Confirmed three ways: the executor's two 0-cycle brackets, then an independent orchestrator-side bracket after the subagent exited and its worktree was merged (0 cycles, PC $07DE, ping still saying \\\"running\\\"). A stall cannot be repaired in-session. 01-06 was deliberately HELD — it designates the canonical disassembly subject that every later phase builds on, and that decision should rest on a finished completeness claim. RESUME IN A FRESH SESSION with /gsd-execute-phase 1 — it re-dispatches 01-04 (danish's Task 3 from scratch is the biggest remaining gap) and then 01-06."
+last_updated: "2026-08-01T22:35:00.000Z"
 last_activity: 2026-08-01
-last_activity_desc: "01-04 attempt 3 — saeger's Task 2 earned live across four instances; Task 3 partial then halted on a silent host stall"
+last_activity_desc: "01-04 attempt 4 — saeger 2/7→5/7 milestones then a second silent stall at the same PC; 01-05 then completed in full (provenance ledger over all 65536 addresses)"
 progress:
   total_phases: 3
   completed_phases: 2
@@ -25,20 +25,20 @@ See: .planning/PROJECT.md (updated 2026-07-31)
 
 **Core value:** An ACME source tree that rebuilds a Bruce Lee which plays identically to the original, where every gameplay system is explained well enough that someone could change it.
 **Current milestone:** v1.0 — Pipeline Proven (Phases 1–4, 24 requirements)
-**Current focus:** Phase 1 — Recovery & Provenance (wave 4 halted a third time; 01-04 Task 2 now complete for both releases, Task 3 partial, Task 4 not reached)
+**Current focus:** Phase 1 — Recovery & Provenance (01-05 complete; 01-04 halted a fourth time on a silent host stall, 01-06 deliberately held behind it)
 
 ## Current Position
 
 Milestone: v1.0 — Pipeline Proven (Phases 1–4 of 7 total)
 Phase: 1 — Recovery & Provenance
-Plan: 01-04 (3/6 plans executed; 01-04 partially executed — Tasks 1–2 complete for both releases, Task 3 partial, Task 4 not reached)
-Status: BLOCKED — this session's VICE instance is stalled and cannot be recovered in-session; waves 5–6 are dependency-blocked behind 01-04
-Last activity: 2026-08-01 — saeger's `loader_ranges` earned live across four instances (3 crashes survived), then Task 3's play-through halted on a silent stall after 2/7 milestones
+Plan: 4 of 6 complete (01-01, 01-02, 01-03, 01-05). 01-04 partially executed across four attempts; 01-06 not started.
+Status: BLOCKED on 01-04 — this session's VICE instance is stalled and cannot be recovered in-session. 01-06 is dependency-held behind 01-04 by choice, not by tooling.
+Last activity: 2026-08-01 — saeger reached 5/7 Task 3 milestones before a second silent stall at PC $07DE; 01-05 then delivered `recovery/PROVENANCE.md`, a verdict for all 65536 addresses
 
-Progress (v1.0): [████░░░░░░] 35% — 7/20 plans
-Progress (overall): [██░░░░░░░░] 20% — 7/35 plans
+Progress (v1.0): [████░░░░░░] 40% — 8/20 plans
+Progress (overall): [██░░░░░░░░] 23% — 8/35 plans
 
-<sub>Phases currently on disk: [██████████████░░░░░░] 7/10 plans (70%). The 20/35 denominators are v1.0's and the project's *projected* plan counts; phases 2–7 are not yet broken into plans.</sub>
+<sub>Phases currently on disk: [████████████████░░░░] 8/10 plans (80%). The 20/35 denominators are v1.0's and the project's *projected* plan counts; phases 2–7 are not yet broken into plans.</sub>
 
 **Milestone roadmap:** v1.0 = Phases 1–4 (proven pipeline) · v2.0 = Phases 5–7 (complete reconstruction, where "fully documented and recompiled" is met) · v3.0 = round-trip assets + editor, not yet phased.
 
@@ -137,6 +137,16 @@ drifting implementations, while sharing code without sharing state means N broke
   `vice-broker.sh start`).
 
 ### Blockers/Concerns
+
+- **[HARD BLOCKER — Phase 1, 2026-08-01, attempt 4]: a SECOND silent stall, at the IDENTICAL PC as attempt 3's ($07DE) — N=2, and now the most specific lead this project has on the stall's cause.**
+  - **Attempt 4 was a genuinely fresh session with a healthy instance.** The orchestrator ran the mandatory pre-dispatch cycle bracket and measured **18,145,575 cycles** advancing before spawning the executor, so this was not an inherited stall. The bracket-before-dispatch rule works and should be kept.
+  - **Real progress was made before the stall:** saeger went from 2/7 to **5/7** Task 3 milestones — death, game-over and restart newly earned, each with evidence. Danish remains at **0/7**, unattempted across all four sessions; it is now the single biggest remaining gap in this plan.
+  - **The stall froze at PC `$07DE` — byte-for-byte the same address attempt 3 froze at.** `$07DE` is the instruction immediately after `STA $DD00` in the chamber-1-entry graphics-mode-setup routine (`$07D9: LDA #$01 / $07DB: STA $DD00 / $07DE: LDA #$38`). **Both stalls occurred shortly after a stopping checkpoint had paused the machine at/near that exact store and execution was then resumed.** That is a correlation with N=2, not a proven cause — but a future session repeating the same technique (attribute a `$DD00` hit via a stopping checkpoint, then resume and keep playing) should treat a recurrence at this PC as a lead to investigate, not as noise. Logged at `.planning/todos/pending/2026-08-01-vice-silent-stall-attempt4-froze-at-same-pc-as-attempt3.md`.
+  - **Confirmed three independent ways**, which is what makes it a stall and not a slow frame: the executor's two 0-cycle brackets, then an **orchestrator-side bracket taken after the subagent had exited and its worktree had been merged and removed** — 0 cycles, PC still `$07DE`, `vice_ping` still reporting `"running"`. This is the second orchestrator-side confirmation that **a stall belongs to the SESSION, not to the agent that hit it.**
+  - **New gameplay-level blocker, not a tooling one:** chamber 1's opening room has a fast-depleting `FALLS` counter that kills Bruce Lee in roughly 4 input events regardless of direction — verified with a control (a stationary "up" tap that moved nothing still cost a count). Six restarts all died before reaching the room's exit, which is why the second chamber transition and a clean both-opponents capture were not reached. A future session should arm a store-watch on the counter's backing byte before spending more live budget on trial-and-error navigation. In `.planning/RE-FINDINGS.md`.
+  - **The session was not wasted.** Because 01-05 touches no emulator and its authoritative input (`loader_ranges`, earned live in Task 2) was already complete for both releases, it was run afterwards on the user's explicit call and completed in full. **01-06 was deliberately held**: it designates the canonical disassembly subject every later phase builds on, and that decision should rest on a finished completeness claim rather than a partial one.
+
+- **[RESOLVED 2026-08-01, orchestrator-side — Phase 1]: REQUIREMENTS.md traceability reconciled.** RECOVER-01/02/03 were completed by plans 01-01/01-02/01-03 but left "Pending", which would have made phase verification report false gaps. Verified against each SUMMARY's own `requirements-completed` frontmatter, then marked via `gsd-tools query requirements mark-complete`. RECOVER-05/06 were marked by 01-05's executor. RECOVER-04 (01-04) and RECOVER-07/08 (01-06) correctly remain Pending. The underlying cause is unchanged and will recur: `gsd-tools` is absent from executor worktrees, so this needs an orchestrator-side pass each time.
 
 - **[HARD BLOCKER — Phase 1, 2026-08-01, attempt 3]: host VICE instability is now the binding constraint on this phase, in TWO distinct shapes, both hit in one 45-minute session.** Plan 01-04 has now halted three times, each time on the emulator rather than on design or scope.
   - **Shape 1 — loud crash/respawn (×3 during Task 2).** The transport errors, then the epoch changes on the next forwarded call. All three self-healed via respawn; the executor re-derived saeger's work from scratch across **four separate instances** and still earned the full Task 2 pass. Survivable, but each one costs a full re-derivation.
