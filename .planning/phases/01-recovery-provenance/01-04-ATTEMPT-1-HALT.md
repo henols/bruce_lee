@@ -1,3 +1,16 @@
+<!--
+NOT A SUMMARY. This is the halt record of plan 01-04 attempt 1 (2026-08-01).
+
+It was written as 01-04-SUMMARY.md by an executor that completed Task 1 and then
+halted at Task 2 because no mcp__vice__* tool existed in its schema. Renamed so
+phase-plan-index stops reporting 01-04 as complete, and so the real SUMMARY.md --
+written once Tasks 2-4 actually run -- is the one the verifier reads.
+
+Task 1 IS committed and merged (ffb9a64, c5b92f8, merge 64da66e). Everything this
+file says about Task 1 is accurate; everything it says about Tasks 2-4 describes
+work that had not started.
+-->
+
 ---
 phase: 01-recovery-provenance
 plan: 04
