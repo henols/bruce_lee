@@ -592,6 +592,52 @@ function aliveButFailedMessage(errMessage) {
   );
 }
 
+// STATED RESIDUAL (quick-260801-ccn task 3), recorded rather than fixed
+// here: aliveButFailedMessage() above still names the supervisor launcher
+// as its reference path, even under a broker-granted session. It answers a
+// DIFFERENT question from both the host-unreachable triple and the
+// broker-granted message below -- an instance that IS reachable and
+// answering rejected ONE call -- where no launcher is the fix and a
+// restart would be the wrong advice on either route (broker-granted or
+// fixed-port). Left alone deliberately, not missed.
+
+// ------------------------------------------- broker-granted unreachable diagnostics
+//
+// Quick task 260801-ccn task 3 (D-5). Distinct from BOTH the host-unreachable
+// triple above (which answers "is the host VICE MCP server reachable" with
+// no broker in the picture at all) and the broker-ABSENT triple below (which
+// answers "is the on-demand broker itself reachable", reached only BEFORE a
+// lease exists) -- this answers a third, different question: the broker has
+// ALREADY reported successfully launching an instance for this session, and
+// THAT instance is not answering. Offering the fixed-port triple's
+// never-started/dead-or-hung diagnosis here would send the operator to
+// restart the RETIRED supervisor route while the broker is running fine and
+// had already granted a working emulator -- exactly the misdirection this
+// task fixes.
+//
+// Deliberately ONE message, not a broker-side copy of the fixed-port
+// triple's own launched-vs-hung split: a granted instance cannot be in the
+// "was it ever started" state that split exists to distinguish -- the
+// broker has just told us it was. Quotes brokerHostPath() (an absolute HOST
+// path, recomputed fresh -- see that function's own comment), the granted
+// port and url (activeInstance()), the held lease id, the probe's own
+// reason verbatim, and whether an epoch record was found for this instance;
+// ends with the shared only-route note, never a second copy of it.
+function brokerGrantedUnreachableMessage(probe, epoch) {
+  const { port, url } = activeInstance();
+  const epochNote = epoch && epoch.present
+    ? `an epoch record is on file for it (epoch ${epoch.epoch}${epoch.pid != null ? `, pid ${epoch.pid}` : ""})`
+    : "no epoch record is on file for it";
+  return (
+    `vice-proxy: the on-demand VICE broker's granted instance (lease ${brokerLeaseId}, port ${port}, ${url}) ` +
+    `is not answering -- ${probe.reason}. ${epochNote}. The broker already reported this instance as ` +
+    `launched, so it may have crashed after being granted, or the grant may be stale -- a different ` +
+    `problem than a host that has not been brought up at all. Investigate on the host with:\n` +
+    `  ${brokerHostPath()}\n` +
+    ONLY_ROUTE_NOTE
+  );
+}
+
 // ------------------------------------------------------------ path rewriting
 //
 // Decision D-G (plan 01.1-03 task 3 / criterion 9): container->host path
@@ -1060,6 +1106,16 @@ async function handleToolsCall(params) {
   const probe = await probeInstance({ url, port });
   if (!probe.alive) {
     const epoch = currentEpoch();
+    // D-5 (quick-260801-ccn task 3): the lease check runs FIRST, before the
+    // refused-and-no-epoch test below -- under the bug this fixes, BOTH of
+    // that test's arms hold true for a fresh broker grant (a just-granted
+    // instance's own epoch_file rarely has a baseline recorded yet), so a
+    // broker-granted instance was being answered by the RETIRED fixed-port
+    // triple instead of naming the broker. That ordering was the whole
+    // defect.
+    if (brokerLeaseId) {
+      return isErrorText(brokerGrantedUnreachableMessage(probe, epoch));
+    }
     if (isConnectionRefusedReason(probe.reason) && !epoch.present) {
       return isErrorText(neverStartedMessage(probe));
     }

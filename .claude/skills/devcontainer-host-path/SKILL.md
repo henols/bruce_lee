@@ -44,3 +44,14 @@ const { result, hostPath: used } = await tryHostPaths(file, (p) => hostTool({ pa
 - To get a file *back* from a host-side tool, give it a translated workspace path
   to write to, then read that file normally in the container. When the tool offers
   to return the bytes instead (base64, stdout), take that — no path needed.
+
+## The other direction
+
+A host-side process sometimes hands YOU its own coordinates back — e.g. the on-demand
+VICE broker's grant records, which carry a host-rooted path and a loopback url. Reach
+for `containerpath.mjs` (beside `hostpath.mjs`, same directory) to invert them into
+container form before adopting them:
+
+```js
+import { containerPath, containerHost, containerizeRecord } from "../../devcontainer-host-path/scripts/containerpath.mjs";
+```

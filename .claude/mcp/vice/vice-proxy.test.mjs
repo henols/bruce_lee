@@ -2310,6 +2310,84 @@ test("containerize safety net: a grant whose url port disagrees with the granted
 });
 
 // -----------------------------------------------------------------------
+// Quick task 260801-ccn task 3 (D-5): a broker-GRANTED unreachable instance
+// names the broker and its launcher, never the retired fixed-port route --
+// and a FIXED-PORT unreachable instance (no lease held) still produces the
+// unchanged 01.1 triple. The pre-existing "three states" test above (line
+// ~1078) is left byte-identical -- these are two NEW, narrower tests
+// proving the routing fix is a branch, not a blanket rename.
+// -----------------------------------------------------------------------
+
+test("broker-granted unreachable: names the broker launcher, carries the probe reason and granted port, never the retired fixed-port route", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vice-proxy-ccn-broker-unreachable-"));
+  // Reserve then CLOSE a port -- guarantees an ACTIVELY refused connection
+  // (ECONNREFUSED), not merely "nothing has bound here yet".
+  const probeServer = createServer();
+  const refusedPort = await new Promise((resolvePort, reject) => {
+    probeServer.once("error", reject);
+    probeServer.listen(0, "127.0.0.1", () => resolvePort(probeServer.address().port));
+  });
+  await new Promise((resolveClose) => probeServer.close(resolveClose));
+
+  const proxy = startProxy({
+    VICE_POOL_DIR: dir,
+    VICE_MCP_HOST: "127.0.0.1",
+  });
+  try {
+    await handshake(proxy);
+    writeFreshBrokerJson(dir);
+
+    proxy.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
+    const id = await waitForRequestId(dir);
+
+    grantDirectly(dir, id, {
+      port: refusedPort,
+      url: `http://127.0.0.1:${refusedPort}/mcp`,
+      epoch_file: join(dir, "unused-epoch.json"),
+      supervisor_dir: join(dir, "unused-supervisor-dir"),
+    });
+
+    const resp = await proxy.nextMessage(10000);
+    assert.equal(resp.result.isError, true);
+    const text = resp.result.content[0].text;
+
+    assert.match(text, /broker/i, "the message must name the on-demand broker");
+    assert.match(text, new RegExp(String(refusedPort)), "the message must carry the granted port");
+    assert.match(text, /ECONNREFUSED/, "the message must carry the probe's own reason verbatim");
+    assert.doesNotMatch(text, /vice-supervisor\.sh/, "the message must NOT name the retired fixed-port launcher");
+    assert.doesNotMatch(text, /never.*started/i, "the message must NOT carry the 01.1 never-started phrasing");
+  } finally {
+    proxy.child.kill("SIGKILL");
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("fixed-port unreachable is unchanged: no lease held still produces the 01.1 never-started message naming the supervisor launcher", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vice-proxy-ccn-fixedport-"));
+  const neverStartedEpochFile = join(dir, "never-written-epoch.json"); // deliberately never written
+  const refusedPort = await reserveFreePort();
+
+  const proxy = startProxy({
+    VICE_MCP_URL: `http://127.0.0.1:${refusedPort}/mcp`, // fixed-port override -- broker never contacted, no lease ever held
+    VICE_EPOCH_FILE: neverStartedEpochFile,
+  });
+  try {
+    await handshake(proxy);
+    proxy.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
+    const resp = await proxy.nextMessage(10000);
+    assert.equal(resp.result.isError, true);
+    const text = resp.result.content[0].text;
+
+    assert.match(text, /never.*started/i, "a fixed-port instance with no lease held must still produce the 01.1 never-started message");
+    assert.match(text, /vice-supervisor\.sh/, "the message must name the supervisor launcher");
+    assert.doesNotMatch(text, /on-demand VICE broker/i, "a fixed-port (no-lease) instance must never be answered by the broker-granted message");
+  } finally {
+    proxy.child.kill("SIGKILL");
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// -----------------------------------------------------------------------
 // Plan 01.2-03 task 2: the two client-side thresholds are set explicitly,
 // not inherited -- .mcp.json's per-server `timeout` is ordered correctly
 // against the proxy's own grant-poll deadline, and MAX_MCP_OUTPUT_TOKENS's

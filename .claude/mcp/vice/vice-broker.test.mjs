@@ -443,6 +443,14 @@ test("tracer: request -> grant -> forward -> SIGINT release -> teardown, end to 
     VICE_POOL_DIR: dir,
     VICE_BROKER_BASE_PORT: String(port),
     VICE_EPOCH_FILE: epochFile,
+    // Quick task 260801-ccn: the broker's own grant_from_spare() writes a
+    // loopback url ("http://127.0.0.1:$port/mcp"). vice-proxy.mjs's
+    // containerizeGrant() now inverts that to the container-visible host
+    // alias before adopting it -- setting the alias to loopback here is what
+    // makes the inverse an identity for THIS stand-in, which really does
+    // live on this side of the boundary (see vice-proxy.test.mjs's own
+    // broker-path tests for the same rationale).
+    VICE_MCP_HOST: "127.0.0.1",
   });
 
   try {
