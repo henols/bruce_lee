@@ -929,6 +929,25 @@ bytes), then spread the final `count` picks across the resulting candidate list.
 a class of "anchor search silently found nothing near address X" bug that would be very hard to
 notice without a synthetic test exercising exactly that boundary.
 
+### 2026-08-01 — the container-side grant poll gives up at 25s while the measured tool-call budget is >=150s, so parallel wave width is capped at about three agents by a default nobody chose
+
+**Type:** hazard
+**Evidence:** source read, not live measurement. `GRANT_POLL_TIMEOUT_MS` default 25000 read from
+`.claude/mcp/vice/vice-broker-client.mjs:213`; the >=150s tool-call budget and the "a cold x64sc
+launch is seconds" note read from `.planning/spikes/003-timeout-budgets/README.md:139` and
+`:104-105`.
+**Confidence:** HIGH for the two constants themselves (both read directly from their source files); LOW for the ~8s boot time used to derive wave-width behaviour from them (assumed, never measured); MEDIUM at best, therefore, for any wave-width arithmetic built on top of that assumption.
+**Saves / costs:** one config change — raising `GRANT_POLL_TIMEOUT_MS` toward ~120000ms — recovers
+waves wider than three agents immediately, independent of any broker rewrite. Ignoring it costs
+waves that fail by denial with no visible pattern, which reads as pool-size trouble or host
+instability rather than what it actually is: a client-side deadline shorter than the platform's own
+measured budget.
+
+The two numbers live in different registers — one inside container-side client code, the other in
+a spike README — which is why the mismatch went unnoticed for as long as it did. The general
+lesson: a client-side deadline shorter than the platform's measured budget is a self-imposed cap
+that reads to everyone downstream as a platform limit, not a config default someone can just raise.
+
 ## Corrections to earlier entries
 
 ### 2026-08-01 — CORRECTION: the `vice_disk_attach` relative-path failure was a deleted contract, not a translation defect — and it is now fixed
