@@ -6,14 +6,14 @@ current_phase: 01.2
 current_phase_name: On-Demand Broker and Per-Session Leasing
 status: executing
 stopped_at: "Completed quick task 260730-v6z: layer B extracted into the new `c64-ram-capture` skill; `tools/recover.mjs` is now layer C only. A live `reproduce danish` during this task reported `MISMATCH` at `$D588` (2-bit) — the already-documented Hamming-1-too-tight edge case above, not a regression; that design gap remains open."
-last_updated: "2026-07-31T21:30:27.641Z"
+last_updated: "2026-08-01T09:49:28.658Z"
 last_activity: 2026-07-31
-last_activity_desc: Phase 01.2 execution started
+last_activity_desc: "Quick task 260801-ccn: broker grant host→container translation (unblocks 01.2-05)"
 progress:
   total_phases: 3
   completed_phases: 1
   total_plans: 15
-  completed_plans: 7
+  completed_plans: 11
   percent: 33
 ---
 
@@ -33,7 +33,7 @@ Milestone: v1.0 — Pipeline Proven (Phases 1–4 of 7 total)
 Phase: 01.2 (On-Demand Broker and Per-Session Leasing) — EXECUTING
 Plan: 1 of 5
 Status: Executing Phase 01.2
-Last activity: 2026-07-31 — Phase 01.2 execution started
+Last activity: 2026-08-01 — Completed quick task 260801-ccn: broker grants are now translated from host to container coordinates at the proxy seam. Phase 01.2 stands at 4/5 plans; 01.2-05 (C12/C13) is next and now has a working broker route to prove.
 
 Progress (v1.0): [████░░░░░░] 35% — 7/20 plans
 Progress (overall): [██░░░░░░░░] 20% — 7/35 plans
@@ -140,6 +140,7 @@ None yet.
 | 260730-u9w | Extract checkpoint-synchronization primitives into vice-session (vice-sync.mjs); durable module-leak node:test gate keeping module names out of SKILL.md; corrected the false self-sufficiency claim | 2026-07-30 | 9424395 | [260730-u9w-extract-the-checkpoint-synchronization-p](./quick/260730-u9w-extract-the-checkpoint-synchronization-p/) |
 | 260730-v6z | New `c64-ram-capture` skill holds layer B (reproducible 64K RAM capture + drift-tolerant comparison); `tools/recover.mjs` slimmed 874→422 lines to layer C only; 27-test suite moved beside the code it covers; both pending todos retired | 2026-07-30 | 4c0874d | [260730-v6z-create-the-c64-ram-capture-skill-layer-b](./quick/260730-v6z-create-the-c64-ram-capture-skill-layer-b/) |
 | 260731-p8a | Vice MCP implementation relocated out of the `vice-mcp-selector` skill into a non-skill `.claude/mcp/vice/` (18 files via `git mv`, history preserved); `.gitignore` gained `!.claude/mcp/`; skill dir reduced to `SKILL.md` alone — **`.mcp.json`'s `args[0]` changed; whether that re-prompts project-scope MCP approval is UNVERIFIED** | 2026-07-31 | bdd1040 | [260731-p8a-move-vice-mcp-scripts-out-of-the-vice-mc](./quick/260731-p8a-move-vice-mcp-scripts-out-of-the-vice-mc/) |
+| 260801-ccn | Broker grants carried **host-local** coordinates (`127.0.0.1` url, host-rooted `epoch_file`/`supervisor_dir`) that the container-side proxy consumed verbatim, so every broker-granted instance was unreachable — and the failure misreported as "host VICE never started", naming the retired `vice-supervisor.sh`. New `containerpath.mjs` is the host→container inverse of `hostpath.mjs` (the direction 01.1 criterion 9 never built); `containerizeGrant()` applies it at the `ensureBrokerLease()` seam; a broker-granted unreachable instance now names the broker. Verified live: `vice_ping` through a granted instance returns `status:ok`. Unblocks Phase 01.2 plan 01.2-05 (C12/C13) | 2026-08-01 | d2b3246 | [260801-ccn-translate-broker-granted-host-coordinate](./quick/260801-ccn-translate-broker-granted-host-coordinate/) |
 
 ## Deferred Items
 
