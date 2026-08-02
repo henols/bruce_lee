@@ -1,8 +1,9 @@
 ---
 created: 2026-08-02T15:23:47.411Z
-title: Shrink vice-broker.sh by moving its logic into a Node module — if the host can run node
+rescoped: 2026-08-02
+title: Move vice-broker.sh's logic into Node — the enabling step for a TCP control plane, if the host can run node
 area: tooling
-severity: minor
+severity: major
 files:
   - .claude/mcp/vice/resources/vice-broker.sh:1-1838
   - .claude/mcp/vice/vice-broker-client.mjs
@@ -10,6 +11,44 @@ files:
   - .claude/mcp/vice/resources/lib/container-guard.sh
   - .claude/mcp/vice/install-resources.mjs
 ---
+
+## Re-scoped 2026-08-02 — this is no longer a file-size cleanup
+
+Filed originally as `minor`: *"1,838 lines of bash is too much bash."* A `/gsd-explore` session
+on the broker's communication channels raised the stakes, and this is now the **enabling step
+for a TCP control plane** (`.planning/notes/broker-control-plane-over-tcp.md`).
+
+What changed:
+
+- **The Node move is a prerequisite, not a preference.** The target design replaces the
+  file-messaging protocol with one TCP connection per proxy, where the connection's lifetime
+  *is* the lease. A bash socket server forks a subshell per connection and loses the in-process
+  `in_flight` flag that is the only thing preventing a repeat of the 2026-08-01
+  triple-`x64sc`-launch outage (see `process_requests()`'s own comment on that race). A
+  single-threaded event loop holds that invariant better than the current poll does. Bash
+  cannot get there; Node can.
+- **The host-`node` question stops being a nice-to-have gate.** Below it is written as "if the
+  host does not have node, this todo is dead." Under the re-scope, a negative answer kills the
+  control-plane design too, not just this cleanup. **Ask it first.**
+- **The severity is `major` because two other open todos are paying interest on this.**
+  `2026-08-01-make-the-broker-cross-project-via-shared-home-dir-state.md` and
+  `2026-08-01-vice-broker-spare-warming-and-stale-grant-defects.md` both edit exactly the
+  spare-state / grant-lifetime logic that this relocates.
+
+What is unchanged: the analysis below of which functions are shell-shaped and which are
+program-shaped is still exactly right, and the sequencing note at the bottom (fix the four
+defects *first*) still holds.
+
+Related: `.planning/seeds/broker-restart-reaps-and-voids.md` covers what a restarted broker must
+do once the lease no longer has a file backing it.
+
+**Not blocked by, but blocked alongside:**
+`2026-08-02-vice-diagnose-and-vice-recycle-unreachable-from-agent-session.md`. The control plane's
+whole purpose is to carry non-emulator commands (recycle a frozen instance, ask for host state,
+release). Those surface to the agent as proxy-local synthetic tools — the exact category that is
+currently written, tested and *unreachable*. A new transport does not make them reachable;
+whatever routes around `vice-proxy.mjs` routes around this too. Fix that, or the control plane
+lands with no consumer.
 
 ## Problem
 
