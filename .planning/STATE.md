@@ -1,20 +1,20 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.0
-milestone_name: Pipeline Proven *
-current_phase: 01.3
-current_phase_name: wedge-detection-and-recovery
-status: executing
-stopped_at: Phase 01.3 planned — 6 plans, 6 waves
-last_updated: "2026-08-02T14:33:52.596Z"
+milestone: v1.1
+milestone_name: Emulator Access Hardened
+current_phase: 01.4
+current_phase_name: tool-surface-reachability
+status: planning
+stopped_at: v1.1 inserted and scoped — 01.4/01.5/01.6 defined in ROADMAP, 01.3 PAUSED at 5/6; no plans written yet
+last_updated: "2026-08-02T18:10:00.000Z"
 last_activity: 2026-08-02
-last_activity_desc: Phase 01.3 execution started
+last_activity_desc: Milestone v1.1 inserted ahead of v1.0; Phase 01.3 paused pending 01.4 and 01.6
 progress:
   total_phases: 4
-  completed_phases: 2
-  total_plans: 21
-  completed_plans: 13
-  percent: 50
+  completed_phases: 0
+  total_plans: 6
+  completed_plans: 5
+  percent: 6
 ---
 
 # Project State
@@ -24,29 +24,38 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-31)
 
 **Core value:** An ACME source tree that rebuilds a Bruce Lee which plays identically to the original, where every gameplay system is explained well enough that someone could change it.
-**Current milestone:** v1.0 — Pipeline Proven (Phases 1–4, 24 requirements)
-**Current focus:** Phase 01.3 — wedge-detection-and-recovery
+**Current milestone:** v1.1 — Emulator Access Hardened (Phases 01.3–01.6, 0 requirements — tooling)
+**Current focus:** Phase 01.4 — tool-surface-reachability
 
 ## Current Position
 
-Milestone: v1.0 — Pipeline Proven (Phases 1–4 of 7 total)
-Phase: 01.3 (wedge-detection-and-recovery) — EXECUTING
-Phase 01 (recovery-provenance) — **PARKED mid-execution, not abandoned.** 4 of 6 plans complete (01-01, 01-02, 01-03, 01-05). 01-04 partially executed across FIVE attempts; 01-06 not started, held by choice.
-Plan: 1 of 6
+Milestone: **v1.1 — Emulator Access Hardened** *(inserted 2026-08-02, ahead of the rest of v1.0)*
+Phase: 01.4 (tool-surface-reachability) — NOT YET PLANNED
+Execution order within v1.1 is **01.4 → 01.5 → 01.6 → 01.3**, not numeric order.
 
-**Phase 01.3 shape (for whoever picks it up):** wave 1 is a `tracer` — `vice_recycle` end to end against a *healthy* instance, which is provable without ever meeting a real wedge. Waves 2–4 add `vice_diagnose` (checkpoint-trap check before any resume), the incident record, and the D-16 seam annotation that warns rather than refuses. Wave 5 is the bounded trigger hunt (budget **6 attempts**, a count — never a duration). Wave 6 reaches the answers that are discharged by decision and ends at a blocking human-verify checkpoint. **No parallelism, and that is a finding**: every code plan owns `vice-proxy.mjs`, so waves 1–4 are sequential on file ownership, and 5–6 are sequential on evidence.
-Status: Executing Phase 01.3
+**Why v1.1 exists.** Emulator tooling has been arriving as one-at-a-time decimal insertions (01.1, 01.2, 01.3), each interrupting Phase 1. What is outstanding is twelve recorded defects and design changes across the proxy, broker and tool surface — several of them the direct cause of Phase 1 stalling five times. v1.1 batches them behind one completion bar. Coverage of which todo lands in which phase: `.planning/notes/v1.1-todo-coverage.md`.
+
+**v1.0 is PAUSED, not closed.** Its 24 requirements are untouched and `/gsd-complete-milestone` must not be run against it. It resumes when v1.1 closes.
+
+Phase 01 (recovery-provenance) — **PARKED mid-execution, not abandoned.** 4 of 6 plans complete (01-01, 01-02, 01-03, 01-05). 01-04 partially executed across FIVE attempts; 01-06 not started, held by choice.
+
+**Phase 01.3 is PAUSED at 5/6 plans**, with only 01.3-06 outstanding. Two blockers it does not own: `vice_recycle` is a control-plane command living on the file protocol that Phase 01.6 replaces, so finishing now means building it twice; and both of this phase's tools (`vice_diagnose`, `vice_recycle`) are unreachable from an agent session until 01.4 lands, so 01.3-06's blocking human-verify checkpoint cannot run. Plan 01.3-05's bounded trigger hunt recorded its own blocked outcome honestly — no trigger found to close at the seam — and criterion 9 carries forward into the resumed plan.
+
+**Phase 01.6 is gated on a fact nobody in this container can check:** whether the host has a usable `node` on PATH. A negative answer does not stop v1.1 — 01.4 and 01.5 are independent — but it kills the TCP control plane, and 01.3 then resumes against the bash broker. **Answer it before 01.6 is planned.**
+
+Status: v1.1 scoped; no plans written yet
 
 **Known-failing check, carried forward for whoever resumes 01-04:** the plan's own Task 3 automated verification fails today — `saeger`'s `death` milestone is recorded `reached: true` with `cycles_advanced: null` and an explicit `evidentiary_gap` (no screen-matrix SHA-256 captured, attempt 4). Attempt 6 must re-capture that signature, not merely reach the two remaining milestones. danish's five milestones all carry full mechanical proof and pass.
 
-Last activity: 2026-08-02 — Phase 01.3 execution started
+Last activity: 2026-08-02 — Milestone v1.1 inserted ahead of v1.0; Phase 01.3 paused pending 01.4 and 01.6
 
-Progress (v1.0): [████░░░░░░] 40% — 8/20 plans
+Progress (v1.1): [█░░░░░░░░░] 6% — 5 plans done (01.3-01…05), 1 known outstanding (01.3-06); 01.4/01.5/01.6 not yet broken into plans, so the denominator is not knowable yet.
+Progress (v1.0, paused): [████░░░░░░] 40% — 8/20 plans
 Progress (overall): [██░░░░░░░░] 23% — 8/35 plans
 
-<sub>Phases currently on disk: [████████████████░░░░] 8/10 plans (80%). The 20/35 denominators are v1.0's and the project's *projected* plan counts; phases 2–7 are not yet broken into plans.</sub>
+<sub>The frontmatter `progress` block now counts **v1.1** (4 phases, 0 complete; 5 of 6 known plans done, all in the paused 01.3). The 20/35 denominators in the two lines above are v1.0's and the project's *projected* plan counts and are unchanged by this insertion; phases 2–7 are not yet broken into plans.</sub>
 
-**Milestone roadmap:** v1.0 = Phases 1–4 (proven pipeline) · v2.0 = Phases 5–7 (complete reconstruction, where "fully documented and recompiled" is met) · v3.0 = round-trip assets + editor, not yet phased.
+**Milestone roadmap:** **v1.1 = Phases 01.3–01.6 (emulator access hardened, active)** · v1.0 = Phases 1–4 (proven pipeline, paused) · v2.0 = Phases 5–7 (complete reconstruction, where "fully documented and recompiled" is met) · v3.0 = round-trip assets + editor, not yet phased.
 
 ## Performance Metrics
 

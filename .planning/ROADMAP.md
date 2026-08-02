@@ -24,15 +24,28 @@ These apply across every phase and every plan; `/gsd-plan-phase` should inherit 
 
 ## Milestones
 
-The 7 phases are split across two milestones at the Phase 4 boundary, with a third already scoped from the deferred requirements.
+The 7 phases are split across two milestones at the Phase 4 boundary, with a third already scoped from the deferred requirements. A fourth, **v1.1**, was inserted ahead of the rest of v1.0 on 2026-08-02 — see the insertion note below the table.
 
 | Milestone | Phases | Reqs | What it delivers |
 |---|---|---|---|
-| **v1.0 — Pipeline Proven** *(active)* | 1–4 | 24 | A clean canonical image with per-byte provenance, a full code/data map, a working replay-verification harness with the original's baselines recorded, and one subsystem (sprite/display) driven end-to-end through the pipeline to a verified `.prg`. The deliverable is a **proven pipeline**. |
+| **v1.1 — Emulator Access Hardened** *(active, inserted 2026-08-02)* | 01.3–01.6 | 0 (tooling) | Every tool the proxy implements actually reaches the agent that needs it; a dead or wedged instance costs one acquisition instead of the whole session; the broker never warms, grants or retains an instance that is not real; and the broker's coordination logic moves into Node behind a TCP control plane, retiring the file-messaging protocol. The deliverable is **live emulator work that survives its own failure modes** — every long unattended session from Phase 1's remaining play-through onward depends on it. |
+| **v1.0 — Pipeline Proven** *(paused behind v1.1)* | 1–4 | 24 | A clean canonical image with per-byte provenance, a full code/data map, a working replay-verification harness with the original's baselines recorded, and one subsystem (sprite/display) driven end-to-end through the pipeline to a verified `.prg`. The deliverable is a **proven pipeline**. |
 | **v2.0 — Complete Reconstruction** | 5–7 | 20 | Every remaining subsystem documented and reconstructed, all data formats proven by round-trip, the annotated listing complete, source split to mirror the docs, a bootable `.d64`, and the full replay suite passing. This is where "fully documented and recompiled" is actually met. |
 | **v3.0 — Editable** | — | 6 | Round-trip asset converters (`ASSET-01..04`) and the change guide + chamber editor (`EXT-01..02`). Deferred; not yet phased. |
 
 **Scope note.** v1.0 intentionally ships short of the original project goal. The full "documented and recompiled" deliverable lands at v2.0 — v1.0 exists to de-risk it by proving every stage of the pipeline works before scaling out. Do not read a v1.0 close as project completion.
+
+### v1.1 insertion note (2026-08-02)
+
+**Why a milestone and not a fourth inserted phase.** Emulator-tooling work has arrived as decimal insertions three times already (01.1, 01.2, 01.3), one problem at a time, each one interrupting Phase 1. What is outstanding is no longer one problem: it is twelve recorded defects and design changes across the proxy, the broker and the tool surface, and several of them are the direct cause of Phase 1 stalling five times. Batching them behind a single completion bar is the point — the alternative is a fourth, fifth and sixth insertion discovered the same way, mid-plan, at the cost of an executor's context each time.
+
+**This displaces v1.0 rather than running beside it.** v1.0's remaining work (plan 01-04's live play-through, then Phases 2–4) is long unattended emulator sessions, which is exactly the workload every v1.1 defect makes expensive or impossible. v1.0 does not resume until v1.1 closes. `/gsd-complete-milestone` has not been run on v1.0 and must not be — it is paused, not finished, and its 24 requirements are untouched by this insertion.
+
+**Requirement accounting is deliberately zero.** Phases 01.1, 01.2 and 01.3 carry no REQ IDs; the 24 requirements are RE-domain scope, and the requirement-coverage gate reads tooling phases as unmapped by design. v1.1 follows that established pattern rather than minting a `TOOL-xx` block that would break the "24 requirements" accounting in this file, `REQUIREMENTS.md` and `STATE.md` at once.
+
+**Execution order is not numeric order.** Phase 01.3 sorts first and runs last — see its own PAUSED annotation. The order is **01.4 → 01.5 → 01.6 → 01.3**.
+
+**Gating risk, stated once.** Phase 01.6 depends on a fact nobody in this container can check: whether the host has a usable `node` on PATH. A negative answer does not stop the milestone — 01.4 and 01.5 are independent of it — but it kills the TCP control plane, and Phase 01.3 then resumes against the bash broker with `vice_recycle` staying on the file protocol. Answer it before 01.6 is planned, not during.
 
 **At v1.0 close**, `/gsd-complete-milestone` archives Phases 1–4 to `.planning/milestones/v1.0-ROADMAP.md`, archives the 24 completed requirements, runs the PROJECT.md evolution review, and `/gsd-new-milestone` opens v2.0 with Phases 5–7 promoted into a fresh `REQUIREMENTS.md`.
 
@@ -45,12 +58,20 @@ The 7 phases are split across two milestones at the Phase 4 boundary, with a thi
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-### Milestone v1.0 — Pipeline Proven *(active)*
+### Milestone v1.1 — Emulator Access Hardened *(active, inserted 2026-08-02)*
+
+Execution order is **01.4 → 01.5 → 01.6 → 01.3**, not numeric order.
+
+- [ ] **Phase 01.3: Wedge Detection and Recovery** *(INSERTED — **PAUSED at 5/6 plans**, resumes LAST)* - Close the gap the broker cannot see: `x64sc` alive and answering, but the emulated CPU retiring zero cycles. Paused 2026-08-02 with only 01.3-06 outstanding: `vice_recycle` is a control-plane command living on the file protocol that Phase 01.6 replaces, and both of this phase's tools are unreachable from an agent session until Phase 01.4 lands, so its final plan cannot be verified live. Resumes once 01.4 and 01.6 have closed
+- [ ] **Phase 01.4: Tool Surface Reachability** *(INSERTED)* - Make every tool the proxy implements reach the agent that needs it, in every session shape the project uses including subagents, and close the deny-list hole the generic call path opens. `vice_diagnose` and `vice_recycle` are written, 268/268 green and invisible; `mcp__vice__*` was structurally absent from an executor subagent's schema; `vice_disk_list` was observed in a `tools_list` response
+- [ ] **Phase 01.5: Session and Broker Survivability** *(INSERTED)* - A dead instance costs one acquisition, not the session, and the broker never warms, grants or retains an instance that is not real. Four recorded defects, one of which is the root cause of the 2026-08-01 outage, plus the spawn-policy redefinition and the port-band and timeout corrections
+- [ ] **Phase 01.6: Broker in Node and the TCP Control Plane** *(INSERTED)* - Move the broker's coordination logic out of 1,838 lines of bash into Node, then replace the file-messaging protocol with one TCP control connection per proxy whose lifetime is the lease. Bootstrap stays a file; the emulator data plane is untouched. **Gated on whether the host has a usable `node`**
+
+### Milestone v1.0 — Pipeline Proven *(paused behind v1.1)*
 
 - [ ] **Phase 1: Recovery & Provenance** - Defeat both crack loaders, capture a clean canonical memory image, and give every byte range a provenance verdict
 - [x] **Phase 01.1: Tool-Mediated Emulator Access** *(INSERTED)* - Diagnose why `vice-session` fails, remove it, and replace it with `vice-mcp-selector`: one static `.mcp.json` entry whose stdio proxy forwards to a fixed host port, surfacing the emulator as real `mcp__vice__*` tools and enforcing the known hazards in code. No leasing, no broker — deliberately immune to every unverified assumption (completed 2026-07-31)
 - [x] **Phase 01.2: On-Demand Broker and Per-Session Leasing** *(INSERTED)* - Add the host-side broker: launch a fresh `x64sc` per session on first use, kill it at session end, keep N warm spares, sweep orphans on TTL. This is the phase that makes cross-session concurrency real and narrows the reset ritual. ~~Gated by the lifecycle spike~~ **spike gate cleared 2026-07-31** (`.planning/spikes/`, 4 spikes; design findings 8 and 12 corrected, 4/5/6 confirmed, 13/14/15 new) (completed 2026-08-01)
-- [ ] **Phase 01.3: Wedge Detection and Recovery** *(INSERTED)* - Close the gap the broker cannot see: `x64sc` alive and answering, but the emulated CPU retiring zero cycles. The supervisor respawns only on process *exit*, so the silent stall has no detector and no remedy — an agent that hits one can only abandon the session. Triage procedure as a skill, privileged host-side recovery as MCP tool(s), since `mcp__vice__*` is the only permitted route
 - [ ] **Phase 2: Coverage, Hazards & Memory Map** - Classify every byte as code/data/untouched by live trace, label every reachable routine, catalogue every reconstruction hazard, document the memory map
 - [ ] **Phase 3: Verification Harness & Original Baselines** - Build the deterministic replay harness and record the original's checkpoint baselines, before any rebuild exists
 - [ ] **Phase 4: Vertical Slice — Sprite & Display Pilot** - Prove the whole pipeline end-to-end on one subsystem: trace → annotate → document → extract → ACME → `.prg` → verified against baseline
@@ -236,6 +257,17 @@ Also recorded: this phase has **no requirement IDs and no `-SPEC.md`**, so the s
 
 ### Phase 01.3: Wedge Detection and Recovery
 
+> **PAUSED 2026-08-02 at 5/6 plans — resumes LAST in milestone v1.1, after 01.4 and 01.6.**
+>
+> Plans 01.3-01 through 01.3-05 are executed and committed. Only **01.3-06** is outstanding, and it is blocked on two things this phase does not own:
+>
+> 1. **`vice_recycle` is a control-plane command sitting on a protocol that is scheduled for replacement.** It is implemented today as `requests/<id>.json` with `op:"recycle"` polled against `recycle-acks/`. Phase 01.6 replaces that file protocol with a TCP control connection. Finishing recovery now means building it twice, and the second build is the one that ships.
+> 2. **This phase's own two tools are unreachable from an agent session.** `vice_diagnose` and `vice_recycle` are fully wired and 268/268 green, and neither appears in a live session's tool schema (see Phase 01.4). Plan 01.3-06 ends at a blocking human-verify checkpoint over exactly those tools, so it cannot be verified live until 01.4 closes.
+>
+> Plan 01.3-05's bounded trigger hunt already recorded its own blocked outcome honestly (commits `874e1ad`, `e5c3d82`, `8e6e868`): no trigger was found to close at the seam, and the hunt is destructive by nature — each attempt costs an instance, which is unaffordable while Phase 01.5's defects stand. Criterion 9 therefore carries forward into the resumed plan rather than being written off.
+>
+> **Nothing in this phase's criteria below changes.** The pause is a sequencing decision, not a scope change.
+
 **Goal**: An agent that suspects the emulator is stuck can establish mechanically whether it is, tell the three look-alike states apart, and recover a wedged instance through the permitted route — instead of abandoning the session, which is the only option that exists today
 
 **Depends on**: Phase 01.2 (complete). The broker owns instance lifecycle, so recovery is a new broker capability rather than a new mechanism; `vice-supervisor.sh`'s respawn loop, its restart-epoch file, and its identity-verified kill are the parts being extended. **Nothing in Phase 1 blocks this phase, and this phase blocks nothing that is currently runnable** — it is inserted ahead of 01-04's remaining live play-through and Phase 2's exhaustive trace because both are long unattended emulator sessions, which is exactly where an unrecoverable wedge is most expensive.
@@ -309,6 +341,94 @@ and the phase record needs the hunt's denominator. Waves are 1 through 6, one pl
 **Risks**: **Unreproducible subject** — the wedge has never been produced on demand, so criterion 9 may resolve to "could not reproduce", and a recovery path that has never run against a real wedge is a hypothesis. **The detector as cause** — see D-1.2-F above; resuming to measure is not free. **Blind-kill blast radius** — a stale registry entry pointing at a recycled pid makes the naive implementation dangerous, which is why criterion 6 is a criterion and not an implementation note. **Scope creep into root-causing `x64sc`** — identifying a triggering call or ordering (criterion 9) is in scope; diagnosing why GTK/OpenGL wedges underneath it is not, and the evidence criterion exists so that investigation stays possible later without being attempted now. The boundary is a decision above, not a hope. **Trigger-hunting is destructive by nature** — deliberately reproducing a wedge means deliberately killing instances, so the investigation needs the recovery path, or a fresh-session-per-attempt budget, before it can run at any scale; a plan that hunts triggers before recovery works will spend most of its wall-clock waiting for sessions. **Verification asymmetry, again** — as in 01.1 and 01.2, host-side behaviour is not self-verifiable from the container, so expect a human-verify checkpoint.
 
 **Roadmap note (2026-08-02, `/gsd-phase --insert`):** this detail section was written by hand at insertion time, for the reason the 01.1 and 01.2 notes above already record — `phase insert` writes a summary line and a directory but no `## Phase Details` section, so `roadmap.get-phase` returns `malformed_roadmap` and planning cannot start. The CLI additionally placed the summary line before 01.1/01.2 rather than in numeric order; that was corrected in the same edit. Content is derived from `.planning/todos/pending/2026-08-02-supervisor-skill-to-detect-and-recover-a-wedged-vice.md` and the four incident todos it cites, plus direct reads of `vice-supervisor.sh`'s respawn loop and `vice-pool.sh`'s kill path. No new scope was invented.
+
+---
+
+### Phase 01.4: Tool Surface Reachability
+
+**Goal**: Every tool the proxy implements is callable by the agent that needs it, in every session shape this project actually uses — main session and spawned subagent alike — and no path that can name a tool can reach `vice_disk_list`
+
+**Depends on**: Nothing. Runs **first** in v1.1, because it is the phase that makes the others verifiable: three tools built across 01.2 and 01.3 currently cannot be called at all, and no live check of any later phase's work can be trusted while the tool surface an agent sees differs from the one the proxy serves.
+
+**Requirement mapping**: none — tooling phase, matching 01.1/01.2/01.3.
+
+**Success Criteria** (what must be TRUE):
+
+  1. **`vice_diagnose`, `vice_recycle` and `vice_result_continue` are callable from a normal agent session as named `mcp__vice__*` tools.** All three are implemented in `vice-proxy.mjs`, concatenated onto the manifest in `handleToolsList()`, dispatched in `handleToolsCall()` before any forwarding, and covered by structural tests asserting they appear in a live `tools/list`. The suite passes 268/268 and the session still cannot see them. Tests asserting a property the running system does not have is itself a finding: the criterion is a call from a real session, not a green suite.
+
+  2. **The route that bypasses `vice-proxy.mjs` is identified and named in writing.** The evidence on record: a session sees a flat **64**-tool list against a committed **63**-tool manifest, the three proxy-local synthetic tools are absent from it, and calling one by name returns the host's own `Tool not found` in `aliveButFailedMessage()`'s wording — meaning the literal name was forwarded to `x64sc` instead of being intercepted proxy-side. A stale-file and stale-process explanation was already ruled out directly (`/proc/<pid>/cwd` is the main workspace). Whatever is in the path, name it before changing anything, because a fix aimed at the wrong layer will appear to work in tests exactly as the current state does.
+
+  3. **`vice_disk_list` is unreachable on the generic call path, not only the named one.** The four-layer guard was verified on 2026-08-02 against the named-tool path and holds there. It does **not** hold on the path that session actually had: `tools_list` returned `vice_disk_list` in its 64-tool response. That is a live breach of the project's one hard hazard rule — the tool crashes the host MCP server and recovery is a manual host restart. Any generic `tools_call`/`tools_list` surface is treated as a first-class enforcement point or removed.
+
+  4. **`mcp__vice__*` tools are present in a spawned executor subagent's tool schema, or the limitation is documented with a workaround that does not break the hard rule.** Plan 01-04's executor received exactly five tools (`Read`, `Write`, `Edit`, `Bash`, `Skill`) with no `mcp__vice__*` entry at all — structurally absent, not reporting one of the three documented unreachable statuses. This blocked Tasks 2–4 of that plan. The suspected cause is upstream (`anthropics/claude-code#13898`, MCP tools stripped from agents with a `tools:` frontmatter restriction). **A CLI escape hatch is not an available answer here** — that is precisely the prohibited second route — so if the cause is upstream and unfixable, the deliverable is a documented session-shape constraint that planning must respect, not a bypass.
+
+  5. **Agent-visible failure messages name an action the agent can take, not a topology it has no model of.** `vice-proxy.mjs` returns roughly ten agent-visible strings describing a three-layer container/proxy/broker/host arrangement. They are read by the model on every failure and are not actionable as written. Stderr-only strings are out of scope — they are invisible to the model and cost nothing.
+
+**Risks**: **The cause may be outside this repo.** Criteria 2 and 4 both point at harness or upstream behaviour rather than at `vice-proxy.mjs`, and a phase can end with "identified, not fixable here" as an honest result — but criterion 3 must be closed regardless, because a reachable `vice_disk_list` is a hazard this project has already paid for once. **A green suite is actively misleading here** — 268/268 passing while three tools are uncallable is the shape of the problem, so verification for this phase is a live session call and nothing else.
+
+---
+
+### Phase 01.5: Session and Broker Survivability
+
+**Goal**: A dead or wedged instance costs one acquisition rather than the whole session, and the broker never warms, grants or retains an instance that does not exist
+
+**Depends on**: Phase 01.4 (for live verification of anything). Runs **before** 01.6 deliberately — the shrink-broker todo's own sequencing note is that fixing known defects and relocating the code holding them in one move makes it impossible to tell which change caused a regression. These defects are fixed in bash, in place, and 01.6 then moves working code.
+
+**Requirement mapping**: none — tooling phase.
+
+**Success Criteria** (what must be TRUE):
+
+  1. **A session whose granted instance dies recovers by re-requesting, instead of being permanently dead.** Today the proxy caches its grant for the session's lifetime: after a host was *fully repaired* — broker healthy, one live `x64sc`, zero stale grant records — every subsequent `vice_ping` from the original session still returned the old `req-832` / port 6512 `ECONNREFUSED`. The consequence is that losing an instance means losing an executor's accumulated context mid-plan, which has already halted plan 01-04 twice. On `ECONNREFUSED` against a held grant, the lease is dropped and re-requested once before any error surfaces.
+
+  2. **Spare warming is serialised, and never launches two `x64sc` processes in the same instant.** `VICE_BROKER_SPARES` defaults to 3, so `start` warmed three simultaneously and all three died — port 6510 **SEGV** (139), 6512 exit 1, 6513 exit 0, identical log timestamp. The cause is that `x64sc` is not headless: each instance opens a GTK3 window, takes an OpenGL 4.6 context and opens PulseAudio, and concurrent GPU/sound contention segfaults a failed OpenGL init rather than exiting cleanly. This was the root cause of the 2026-08-01 outage; `VICE_BROKER_SPARES=1` works.
+
+  3. **A grant is proven live before it is honoured, and cannot outlive its process.** A `state granted` record for port 6512 whose `x64sc` (pid 1634866) was long dead survived a broker `stop`, a broker `start`, and a full host restart, during which the broker reported *"granted request … (from ready spare)"* and launched nothing. `pgrep -a x64sc` showed no process at all, and recovery required moving `grants/`, `requests/`, `leases/`, `spares/` and `broker-instances.json` aside **by hand**. The epoch record already carries the pid, so a `kill -0` or port probe at load time closes this. Relatedly: a spare recorded "ready" is never grantable without a successful readiness probe.
+
+  4. **The spawn policy replenishes lazily and caps the pool at roughly `N + 1`, not `N + outstanding_leases`.** R1 — after handing an instance out, launch a replacement **only if zero ready remain**. R2 — on release, always kill the returned instance (kill-never-recycle stands), then launch a replacement **only if `total < N`**, never overshooting. At rest the pool holds exactly `N` ready. On a host where every instance costs a window, a GL context and a sound device, the current always-rewarm-to-N policy spends that headroom for nothing.
+
+  5. **The default port band is clear of ports other software holds.** `127.0.0.1:6511` is held by VS Code, inside the broker's default 6510–6512 band. It is loopback-only so the container could never have reached it, but the broker refuses to launch on a bound port, so it silently narrows the usable band.
+
+  6. **`GRANT_POLL_TIMEOUT_MS` has headroom over the measured tool-call budget** rather than sitting at a value a slow or contended host can exceed during a cold `x64sc` launch.
+
+  7. **Operator-facing text matches the code.** `usage()` still claims the positional `start [N]` argument *"is not yet consumed by any spares logic in this version"*. It is consumed (`vice-broker.sh:394-396`, three passing tests); the prose describes a defect that was repaired without updating the docs, and during a live outage it sent the debugging session down a wrong branch. Stale operator text under pressure is a defect, not cosmetics.
+
+**Risks**: **Host-side verification asymmetry**, as in 01.1/01.2/01.3 — several of these are host behaviours the container cannot self-verify, so expect a human-verify checkpoint. **Defect 1's fix has a failure mode of its own**: re-requesting on `ECONNREFUSED` must not mask a genuinely dead host into an infinite re-request loop, and it must not silently hand the session a *different* machine without the epoch check firing — a re-request is an identity change and `assertSameMachine()` must see it as one.
+
+---
+
+### Phase 01.6: Broker in Node and the TCP Control Plane
+
+**Goal**: The broker's coordination logic lives in Node, and proxy↔broker coordination is one TCP control connection per session whose lifetime *is* the lease — with the emulator data plane untouched and bootstrap still a file
+
+**Depends on**: Phase 01.5 (defects fixed in place first, so this relocates working code). **Gated on an unanswered external fact** — see criterion 1.
+
+**Requirement mapping**: none — tooling phase.
+
+**Design source**: `.planning/notes/broker-control-plane-over-tcp.md` and `.planning/seeds/broker-restart-reaps-and-voids.md`.
+
+**Success Criteria** (what must be TRUE):
+
+  1. **The host-`node` question is answered in writing before anything is built, and a negative answer closes this phase cleanly.** Nothing in the repo can determine whether the host has a usable `node` on PATH. `vice-broker.sh` is host-only by construction — it launches `x64sc`, its windows and its MCP listeners, and `lib/container-guard.sh` makes it *refuse* to run in the devcontainer — so there is no existing host-side Node precedent to copy. If the answer is no, this phase records that and stops, Phase 01.3 resumes against the bash broker, and `vice_recycle` stays on the file protocol.
+
+  2. **Program-shaped logic moves to Node; only genuinely shell-shaped work stays in bash.** Moving: hand-rolled JSON (`json_escape`, `write_json_atomic`, `extract_*_field`, `read_*_field`), the spare state machine, `count_*`, port allocation and blocking, lease staleness, grant sweeping, and the decisions in `process_requests`/`maintain_spares`. Staying: process launch and signalling (`launch_instance`, `signal_recorded_pid`, `reap_all_instances`), the daemon loop and traps, `port_in_use`, and the host `curl` probe.
+
+  3. **The duplicated request-id regex is deleted, not merely kept in sync.** `is_valid_request_id` in bash must stay byte-identical to `REQUEST_ID_PATTERN` in `vice-broker-client.mjs`, and a parity test exists solely to stop the two implementations of one rule from drifting. Importing the constant makes that test unnecessary rather than passing.
+
+  4. **The lease is the connection.** Connection open is the claim; connection close — including on SIGKILL and including container death — is the release, enforced by the kernel. `startHeartbeat()`, the mtime-as-heartbeat convention, `file_mtime_epoch()`, `lease_is_stale()`, `sweep_grants()` and the 180 s TTL all retire together. Today's release is one attempted `unlinkSync` inside a measured ~490 ms shutdown window, so a hard kill strands an instance for the full TTL.
+
+  5. **Bootstrap stays a file, so liveness is answerable without a connection.** `broker.json` already carries `pid` and `heartbeat_at`; it gains a port and becomes the discovery record, read once. `readBrokerLiveness()` keeps distinguishing never_started / stale / alive, so `ECONNREFUSED` is never ambiguous.
+
+  6. **The emulator data plane is unchanged.** The proxy still dials the granted port directly, exactly as today. The broker carries control traffic only — acquire, release, recycle, host-state questions — and is never in the emulator path. This is what keeps the change off the hot path and out of the failure mode most correlated with host death.
+
+  7. **Broker restart reaps every instance, and the void rides the existing epoch mechanism.** With the lease in a connection, a restarted broker would otherwise see zero connections, conclude every emulator is free, and hand a live one to a second proxy. Reaping on startup bumps every supervisor's epoch, which `assertSameMachine()` already turns into `MachineRestartedError` — the same discipline already applied to a restarted emulator, with no second notion of "recoverable". The reap must be **unconditional on startup**, not only on clean shutdown, since a SIGKILLed broker never runs its shutdown path.
+
+  8. **Broker death takes the session with it, and says so.** This is an accepted trade, decided explicitly: the MCP reports that the session must be restarted, or acquires a fresh instance where possible. Note this is a *regression* against today, where broker death is survivable — after the grant the proxy's only broker dependency is `touchLease`, whose failure is a silent no-op — and it is accepted knowingly rather than overlooked.
+
+  9. **The existing 102 KB test suite passes across the move.** It is the cheapest available proof of equivalence, and `--once` plus `VICE_BROKER_PROBE_CMD` are the seams every test drives; both stay.
+
+ 10. **`install-resources.mjs` deploys any new `.mjs` under `resources/`.** It copies `resources/` to the gitignored `tools/`; a new module that is not added to what it copies breaks the deployed broker with a missing-module error, silently, on a machine nobody is watching.
+
+**Risks**: **The gate may close the phase** (criterion 1) — that is a real outcome, not a failure. **Relocating code and changing its protocol in one phase** is two changes; sequence the Node move to land and pass the suite *before* the transport changes, so a regression has one candidate cause. **Concurrency moves from a poll loop to an event loop** — the single `in_flight` flag that prevents a repeat of the 2026-08-01 triple-launch must survive as a single owner; Node makes this easier than bash, but only if it is deliberate.
 
 ---
 

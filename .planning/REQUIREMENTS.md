@@ -2,17 +2,21 @@
 
 **Defined:** 2026-07-30
 **Core Value:** An ACME source tree that rebuilds a Bruce Lee which plays identically to the original, where every gameplay system is explained well enough that someone could change it.
-**Active milestone:** v1.0 — Pipeline Proven (Phases 1–4, 24 requirements)
+**Active milestone:** v1.1 — Emulator Access Hardened (Phases 01.3–01.6, 0 requirements — tooling)
+**Paused behind it:** v1.0 — Pipeline Proven (Phases 1–4, 24 requirements)
 
 ## Milestone Map
 
 | Milestone | Phases | Reqs | Delivers |
 |---|---|---|---|
-| **v1.0 — Pipeline Proven** *(active)* | 1–4 | 24 | Clean canonical image with per-byte provenance, full code/data map, working replay-verification harness with the original's baselines, and one subsystem driven end-to-end to a verified `.prg`. Deliverable is a **proven pipeline**. |
+| **v1.1 — Emulator Access Hardened** *(active, inserted 2026-08-02)* | 01.3–01.6 | 0 (tooling) | Every proxy tool reaches the agent that needs it; a dead or wedged instance costs one acquisition, not the session; the broker never warms, grants or retains an instance that is not real; broker coordination moves into Node behind a TCP control plane. Deliverable is **live emulator work that survives its own failure modes**. |
+| **v1.0 — Pipeline Proven** *(paused behind v1.1)* | 1–4 | 24 | Clean canonical image with per-byte provenance, full code/data map, working replay-verification harness with the original's baselines, and one subsystem driven end-to-end to a verified `.prg`. Deliverable is a **proven pipeline**. |
 | **v2.0 — Complete Reconstruction** | 5–7 | 20 | All remaining subsystems documented and reconstructed, formats proven by round-trip, listing complete, source split, bootable `.d64`, full replay suite passing. **This is where "fully documented and recompiled" is met.** |
 | **v3.0 — Editable** | not yet phased | 6 | Round-trip asset converters and the change guide + chamber editor. |
 
 **Scope note.** v1.0 deliberately ships short of the original project goal in order to de-risk it — every pipeline stage is proven on one subsystem before scaling out. A v1.0 close is not project completion; v2.0 is.
+
+**v1.1 carries no requirements, deliberately.** Phases 01.1, 01.2 and 01.3 already set this precedent: tooling insertions are ROADMAP-only and the requirement-coverage gate reads them as unmapped by design. The 24 requirements below are RE-domain scope and are **untouched** by the v1.1 insertion — v1.0 is paused, not closed, and `/gsd-complete-milestone` must not be run against it.
 
 ## v1.0 Requirements — Pipeline Proven (active)
 
