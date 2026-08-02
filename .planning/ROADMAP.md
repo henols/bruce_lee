@@ -493,10 +493,20 @@ carried forward as 01.4's problem, rather than one the suite has settled.
 **Plans:** 4 plans
 
 Plans:
+**Wave 1**
 
 - [ ] 01.6-01-PLAN.md — **Tracer.** The whole build topology on one real module: `typescript` legitimacy checkpoint, `package.json`/`tsconfig`/`tsconfig.build`/`build.ts`, `vice-broker.mts` → banner-marked `resources/vice-broker.mjs`, the container-guarded `vice-launcher.sh`, deployment by the existing installer, execution under bare `node` with no `node_modules`, the `resources/`-in-sync gate and the `./.claude/CLAUDE.md` directory-meaning inversion (criteria A, C1, C3, C9)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 01.6-02-PLAN.md — Rescue the ~28 assertions in `vice-pool.test.mjs` that cover **surviving** modules into files named for their subjects: `repo-root.test.mjs`, `host-scripts.test.mjs`, `install-resources.test.mjs`, `vice-probe.test.mjs`, `vice.test.mjs`. Pure addition; nothing is deleted (criteria B prerequisite, C8, C9)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
 - [ ] 01.6-03-PLAN.md — The deployed-set contract: a manifest-scoped prune in `install-resources.mjs`, two-way `.gitignore` parity, the one-shell-script check rebuilt on `git ls-files`, the load-order guard and cycle allowlist, and the `.mcp.json` wiring gate (criteria D, E, C6 scaffold, C9, C10 scaffold)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
 - [ ] 01.6-04-PLAN.md — Delete `vice-pool.mjs`, `vice-session.mjs`, `vice-pool.test.mjs`, `resources/vice-pool.sh` and `vice.mjs`'s CLI behind a blocking `checkpoint:decision`, then record the `D-1.2-B` override in the design note, this ROADMAP and `STATE.md` (criteria B, C — D-02, D-03, D-05)
 
 **Waves:** strictly sequential, 1 → 2 → 3 → 4. Plan 02 must precede 03 because `install-resources.mjs`'s only test home today is inside the file plan 04 deletes; plan 03 must precede 04 because the prune and the two parity gates are what make the deletion propagate and stay honest.

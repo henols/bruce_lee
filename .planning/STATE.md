@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Emulator Access Hardened
-current_phase: 01.4
-current_phase_name: tool-surface-reachability
-status: planning
-stopped_at: v1.1 inserted and scoped — 01.4/01.5/01.6 defined in ROADMAP, 01.3 PAUSED at 5/6; no plans written yet
-last_updated: "2026-08-02T18:10:00.000Z"
+current_phase: 01.6
+current_phase_name: conversion-foundation-and-scope-reduction
+status: Ready to execute
+stopped_at: Phase 01.6 PLANNED (4 plans, 4 waves, checker passed first iteration). Old 01.6 split four ways at plan time on context-budget grounds — 01.6 / 01.6.1 / 01.6.2 / 01.6.3. 01.3 still PAUSED at 5/6.
+last_updated: "2026-08-02T21:30:00.000Z"
 last_activity: 2026-08-02
-last_activity_desc: Milestone v1.1 inserted ahead of v1.0; Phase 01.3 paused pending 01.4 and 01.6
+last_activity_desc: Phase 01.6 researched, split four ways and planned — 4 plans ready to execute
 progress:
-  total_phases: 4
+  total_phases: 8
   completed_phases: 0
   total_plans: 6
   completed_plans: 5
@@ -24,14 +24,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-31)
 
 **Core value:** An ACME source tree that rebuilds a Bruce Lee which plays identically to the original, where every gameplay system is explained well enough that someone could change it.
-**Current milestone:** v1.1 — Emulator Access Hardened (Phases 01.3–01.6, 0 requirements — tooling)
-**Current focus:** Phase 01.4 — tool-surface-reachability
+**Current milestone:** v1.1 — Emulator Access Hardened (Phases 01.3–01.7, 0 requirements — tooling)
+**Current focus:** Phase 01.6 — conversion-foundation-and-scope-reduction (PLANNED, 4 plans)
 
 ## Current Position
 
 Milestone: **v1.1 — Emulator Access Hardened** *(inserted 2026-08-02, ahead of the rest of v1.0)*
-Phase: 01.4 (tool-surface-reachability) — NOT YET PLANNED
-Execution order within v1.1 is **01.4 → 01.5 → 01.6 → 01.3**, not numeric order.
+Phase: 01.6 (conversion-foundation-and-scope-reduction) — **PLANNED, 4 plans across 4 sequential waves**
+Execution order within v1.1 is **01.6 → 01.6.1 → 01.6.2 → 01.6.3 → 01.4 → 01.5 → 01.7 → 01.3**, not numeric order.
+
+**Old 01.6 was split four ways on 2026-08-02, at plan time.** `gsd-planner` returned `## PHASE SPLIT RECOMMENDED` rather than plans: post-deletion the work is 13,478 lines changed plus 2,546 bash lines re-expressed, four single files each exceed one task's context budget, and honouring "keep the suite green continuously" yields 18 plans across 5 waves against a 3–5 standard. The developer chose the split over `--chunked`. Only the first group is planned; 01.6.1/01.6.2/01.6.3 are separate planning runs. All four research artifacts stay in `.planning/phases/01.6-broker-in-node-and-tcp-control-plane/` and apply to all four groups.
 
 **Why v1.1 exists.** Emulator tooling has been arriving as one-at-a-time decimal insertions (01.1, 01.2, 01.3), each interrupting Phase 1. What is outstanding is twelve recorded defects and design changes across the proxy, broker and tool surface — several of them the direct cause of Phase 1 stalling five times. v1.1 batches them behind one completion bar. Coverage of which todo lands in which phase: `.planning/notes/v1.1-todo-coverage.md`.
 
@@ -43,7 +45,7 @@ Phase 01 (recovery-provenance) — **PARKED mid-execution, not abandoned.** 4 of
 
 **Phase 01.6's host-`node` gate is CLEARED (2026-08-02).** The host has `node` on PATH — confirmed by the developer, who has host access; the container cannot verify this by construction. The TCP control plane is in scope and the bash-broker fallback is off the table. Still unknown and worth establishing in 01.6's first plan: the host's `node` **version**, and the shell→Node call boundary, since this repo has no host-side Node precedent to copy.
 
-Status: v1.1 scoped; no plans written yet. **Phase 01.3 stopped by the developer 2026-08-02** — 01.3-01…04 complete, 01.3-05 closed with a blocked attempt recorded (`01.3-05-SUMMARY-attempt1-blocked.md`, no trigger found at the seam), 01.3-06 planned but never executed.
+Status: Phase 01.6 planned and ready to execute; 01.6.1/01.6.2/01.6.3/01.4/01.5/01.7 not yet planned. **Phase 01.3 stopped by the developer 2026-08-02** — 01.3-01…04 complete, 01.3-05 closed with a blocked attempt recorded (`01.3-05-SUMMARY-attempt1-blocked.md`, no trigger found at the seam), 01.3-06 planned but never executed.
 
 **Known-failing check, carried forward for whoever resumes 01-04:** the plan's own Task 3 automated verification fails today — `saeger`'s `death` milestone is recorded `reached: true` with `cycles_advanced: null` and an explicit `evidentiary_gap` (no screen-matrix SHA-256 captured, attempt 4). Attempt 6 must re-capture that signature, not merely reach the two remaining milestones. danish's five milestones all carry full mechanical proof and pass.
 
