@@ -4,7 +4,7 @@ title: The broker's boot-time log rounds every sub-second boot down to (0s), hid
 area: tooling
 severity: minor
 files:
-  - tools/vice-broker.sh
+  - .claude/mcp/vice/resources/vice-broker.sh
 ---
 
 ## Problem

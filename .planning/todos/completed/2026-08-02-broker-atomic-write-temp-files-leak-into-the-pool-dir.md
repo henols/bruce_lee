@@ -4,7 +4,7 @@ title: The broker's atomic-write helper leaks temp files into the pool dir, and 
 area: tooling
 severity: minor
 files:
-  - tools/vice-broker.sh
+  - .claude/mcp/vice/resources/vice-broker.sh
 ---
 
 ## Problem
