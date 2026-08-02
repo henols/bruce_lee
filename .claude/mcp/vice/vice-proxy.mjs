@@ -1935,6 +1935,177 @@ async function ensureBrokerLease() {
   return { ok: true };
 }
 
+// ------------------------------------------------ D-16 seam hazard annotation
+//
+// Plan 01.3-04. Structurally the OPPOSITE of the deny-list refusal below (the
+// DENY_LIST.includes(name) branch a little further into this same function):
+// the refusal fires BEFORE forwarding and the call never reaches the host;
+// this fires AFTER call() returns a real payload and appends to a
+// SUCCESSFUL result. The call is never refused and the error flag is never
+// set (D-16) -- a stopping checkpoint on an IRQ handler is core reverse-
+// engineering technique that Phase 2's exhaustive trace depends on, so this
+// warns instead of blocking it, the way the deny list blocks vice_disk_list
+// (which has no legitimate use at all).
+
+// The set of capability names whose OWN arguments can express an armed,
+// stopping, exec checkpoint. Today that is vice_checkpoint_add alone.
+// Re-enabling an already-armed stopping checkpoint via vice_checkpoint_toggle
+// or a checkpoint group (vice_checkpoint_group_toggle/_add) can ALSO re-arm
+// one, but neither call's own arguments carry the stop flag -- only the
+// id/group being toggled -- so that re-enable path is NOT detectable from
+// the call alone and is deliberately excluded from this set. That gap is
+// covered by both tools' own descriptions and by vice_diagnose's checkpoint-
+// trap check, and it is stated in the annotation text below rather than left
+// for a reader to discover.
+const CHECKPOINT_ARMING_TOOLS = new Set(["vice_checkpoint_add"]);
+
+// Per-session suppression: an address (as rendered by formatAddress(), or an
+// "unparseable:<raw>" key for an address that could not be parsed) already
+// warned about this session maps to true. Cleared whenever the observed
+// epoch changes -- a new machine has seen none of these. currentEpoch() is a
+// synchronous LOCAL file read (see its own definition above), never a
+// forwarded call, so consulting it here does not violate the "makes no
+// forwarded call of its own" requirement below.
+let seamHazardSeen = new Set();
+let seamHazardEpochKey = null;
+
+function seamHazardObserveEpoch() {
+  const epoch = currentEpoch();
+  const key = epoch && epoch.present ? epoch.epoch : null;
+  if (seamHazardEpochKey !== null && key !== seamHazardEpochKey) {
+    seamHazardSeen = new Set(); // a new machine has seen none of these
+  }
+  seamHazardEpochKey = key;
+}
+
+/**
+ * D-16's hazard annotation. Returns the annotation text for a successful
+ * checkpoint-arming call, or nothing. Returns nothing unless the capability
+ * is in CHECKPOINT_ARMING_TOOLS and the arguments express an exec operation
+ * with the stop flag set -- callers only reach this after a successful
+ * call(), so a rejected arm never reaches here at all (a failed arm has no
+ * hazard to warn about). Makes NO forwarded call of its own (T-01.3-13) --
+ * the detection is entirely over the arguments the agent already supplied.
+ * An unparseable address is still annotated, naming the address as unread
+ * rather than silently skipping: an unparseable address is not evidence of
+ * safety.
+ */
+function detectCheckpointArmingHazard(name, args) {
+  if (!CHECKPOINT_ARMING_TOOLS.has(name)) return undefined;
+  // vice_checkpoint_add's own schema: `stop` defaults true, `exec` defaults
+  // true -- an ABSENT field is armed, not merely "true when written out".
+  const stopArmed = !(args && args.stop === false);
+  const execArmed = !(args && args.exec === false);
+  if (!stopArmed || !execArmed) return undefined;
+
+  seamHazardObserveEpoch();
+
+  const addrNum = toAddressNumber(args && args.start);
+  const addrLabel =
+    addrNum === null ? `an unparseable address (raw value: ${JSON.stringify(args && args.start)})` : formatAddress(addrNum);
+  const suppressionKey = addrNum === null ? `unparseable:${JSON.stringify(args && args.start)}` : addrLabel;
+
+  const repeat = seamHazardSeen.has(suppressionKey);
+  if (!repeat) seamHazardSeen.add(suppressionKey);
+  return { addrLabel, repeat };
+}
+
+function renderCheckpointArmingHazard(detection) {
+  const { addrLabel, repeat } = detection;
+  if (repeat) {
+    return (
+      `vice-proxy hazard (repeat): a stopping exec checkpoint was armed again at ${addrLabel} -- the full ` +
+      "hazard note for this address was already issued earlier this session; see that note."
+    );
+  }
+  return [
+    `vice-proxy hazard: a stopping exec checkpoint was just armed at ${addrLabel}, and the call was NOT ` +
+      "blocked -- it will not be, because this is core reverse-engineering technique.",
+    "",
+    "This shape -- a stopping exec checkpoint armed, then execution resumed -- is common to every recorded " +
+      "freeze on this project. Two variants are on record: a mid-routine stop that froze two independent " +
+      "sessions at an identical program counter, and an IRQ-handler-entry stop whose tell was a hit count " +
+      "of zero on a screen the machine must have been executing.",
+    "",
+    "Whether THIS address is the live IRQ handler is a question vice_diagnose answers, by resolving the " +
+      "vector pair live -- this warning deliberately does not resolve it here, because doing so on every " +
+      "arm would disturb the machine it is protecting.",
+    "",
+    "Recovery, in order: run vice_diagnose first; reach for vice_recycle only when the bracket says wedge " +
+      "with no checkpoint explanation.",
+    "",
+    "Stated residual: re-enabling this checkpoint later via vice_checkpoint_toggle or a checkpoint group " +
+      "carries no stop flag in its own arguments and is therefore NOT annotated by this mechanism -- covered " +
+      "by both tools' own descriptions and by vice_diagnose's checkpoint-trap check instead.",
+  ].join("\n");
+}
+
+/**
+ * Plan 01.3-04 task 2: turns task 1's single hazard into the general
+ * mechanism D-06 needs -- a table, so the next confirmed trigger (plan
+ * 01.3-05's bounded hunt) is a single entry rather than new plumbing at this
+ * seam. Each entry:
+ *   - id: a short identifier that MUST be named by at least one test in
+ *     vice-proxy.test.mjs (this file's own structural completeness test
+ *     enforces it) -- an entry that ships without a matching test fails the
+ *     suite rather than shipping unproven.
+ *   - capabilities: the Set of tool names this entry's own detect() can ever
+ *     match against. Used ONLY by the disjointness structural test below
+ *     (never for dispatch -- the walk tries every entry against every
+ *     call). Every capability named here must be ABSENT from DENY_LIST: a
+ *     capability with no legitimate use is refused before forwarding, and
+ *     one with a legitimate use is annotated after it, and none is both
+ *     (D-16).
+ *   - detect(name, args, payload): returns a truthy detection payload, or
+ *     nothing. MUST make no forwarded call of its own (T-01.3-13).
+ *   - render(detection): returns the annotation text for a truthy
+ *     detection.
+ *
+ * Plan 01.3-05 is this table's expected next writer, adding the bounded
+ * hunt's own confirmed trigger as one more entry here -- not new plumbing.
+ */
+const SEAM_HAZARDS = [
+  {
+    id: "checkpoint-arming",
+    capabilities: CHECKPOINT_ARMING_TOOLS,
+    detect: detectCheckpointArmingHazard,
+    render: renderCheckpointArmingHazard,
+  },
+];
+
+// TEST-ONLY escape hatch (plan 01.3-04 task 2's data-driven proof): proves
+// the walk below is genuinely data-driven, not hand-wired to the one
+// production entry above, by injecting a SECOND entry the same way a real
+// plan 01.3-05 entry would arrive. Matches against vice_ping -- an existing,
+// universally-forwardable tool -- rather than inventing a synthetic
+// capability name that would need its own manifest/deny-list bookkeeping.
+// Never set outside this file's own test suite.
+if (process.env.VICE_SEAM_HAZARDS_TEST_FIXTURE === "1") {
+  SEAM_HAZARDS.push({
+    id: "test-fixture-synthetic-entry",
+    capabilities: new Set(["vice_ping"]),
+    detect: (name) => (name === "vice_ping" ? { fixture: true } : undefined),
+    render: () => "vice-proxy hazard (TEST FIXTURE): synthetic second SEAM_HAZARDS entry, detected and annotated through the same walk.",
+  });
+}
+
+/**
+ * Walks SEAM_HAZARDS, concatenating every annotation a successful call
+ * attracts. Short-circuits per entry on a falsy detection -- a call matching
+ * no entry costs one array pass and returns undefined, leaving the payload
+ * untouched.
+ */
+function renderSeamHazardAnnotations(name, args, payload) {
+  const notes = [];
+  for (const entry of SEAM_HAZARDS) {
+    const detection = entry.detect(name, args, payload);
+    if (detection) {
+      notes.push(entry.render(detection));
+    }
+  }
+  return notes.length ? notes.join("\n\n") : undefined;
+}
+
 async function handleToolsCall(params) {
   const name = params && params.name;
   if (!name || typeof name !== "string") {
@@ -2079,13 +2250,21 @@ async function handleToolsCall(params) {
     return isErrorText(afterDrift);
   }
 
-  const text = typeof payload === "string" ? payload : JSON.stringify(payload);
+  const rawText = typeof payload === "string" ? payload : JSON.stringify(payload);
+  // D-16 seam hazard annotation (plan 01.3-04): computed by walking
+  // SEAM_HAZARDS and merged into the TEXT itself, BEFORE wrapPossiblyChunked()
+  // runs, so an oversized annotated result still carries the note inside its
+  // own chunking (T-01.3-15) -- a warning appended AFTER chunking would be
+  // lost off the end. Never routes through isErrorText and never touches the
+  // error flag (D-16, T-01.3-12).
+  const hazardNote = renderSeamHazardAnnotations(name, args, payload);
+  const text = hazardNote ? `${rawText}\n\n${hazardNote}` : rawText;
   const wrapped = wrapPossiblyChunked(text);
-  // Append the note as a trailing content item, never mixed into the payload:
-  // wrapPossiblyChunked()'s contract is that the FIRST item is the payload
-  // byte-for-byte, so reassembly stays a plain concatenation. Only the
-  // unchunked shape is annotated -- a chunked result is already carrying a
-  // continuation marker as its second item, and the four tools that can
+  // Append the path note as a trailing content item, never mixed into the
+  // payload: wrapPossiblyChunked()'s contract is that the FIRST item is the
+  // payload byte-for-byte, so reassembly stays a plain concatenation. Only
+  // the unchunked shape is annotated -- a chunked result is already carrying
+  // a continuation marker as its second item, and the four tools that can
   // resolve a path (disk_attach, autostart, display_screenshot, symbols_load)
   // never produce output anywhere near the cap.
   if (pathNote && wrapped.content.length === 1) {
