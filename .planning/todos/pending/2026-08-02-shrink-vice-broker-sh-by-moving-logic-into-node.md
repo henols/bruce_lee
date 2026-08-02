@@ -27,9 +27,13 @@ What changed:
   triple-`x64sc`-launch outage (see `process_requests()`'s own comment on that race). A
   single-threaded event loop holds that invariant better than the current poll does. Bash
   cannot get there; Node can.
-- **The host-`node` question stops being a nice-to-have gate.** Below it is written as "if the
-  host does not have node, this todo is dead." Under the re-scope, a negative answer kills the
-  control-plane design too, not just this cleanup. **Ask it first.**
+- **The host-`node` question is ANSWERED: the host has `node` on PATH** (developer-confirmed
+  2026-08-02; the container cannot verify this by construction). Below, this is written as a
+  blocking investigation — *"if the host does not have node, this todo is dead"* — and that
+  branch is now closed. **Read § Solution's "Investigate first" heading as satisfied**, and treat
+  the remaining unknowns as mechanical: the host's `node` **version** (an unrecorded constraint
+  on what the moved code may use) and the shell→Node call boundary, since this repo has no
+  host-side Node precedent to copy.
 - **The severity is `major` because two other open todos are paying interest on this.**
   `2026-08-01-make-the-broker-cross-project-via-shared-home-dir-state.md` and
   `2026-08-01-vice-broker-spare-warming-and-stale-grant-defects.md` both edit exactly the
@@ -79,6 +83,10 @@ paths inside it) and `2026-08-01-vice-broker-spare-warming-and-stale-grant-defec
 (four defects, three of them in exactly the spare-state / grant-lifetime logic above).
 
 ## Solution
+
+> **GATE CLEARED 2026-08-02 — the host has `node` on PATH.** The "investigate first" framing
+> below is satisfied; the blocking question is answered and the dead-end branch is closed. The
+> rest of this section stands as written.
 
 **Investigate first — this is gated on one fact that cannot be checked from the container.**
 

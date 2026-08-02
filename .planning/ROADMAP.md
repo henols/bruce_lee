@@ -45,7 +45,7 @@ The 7 phases are split across two milestones at the Phase 4 boundary, with a thi
 
 **Execution order is not numeric order.** Phase 01.3 sorts first and runs last — see its own PAUSED annotation. The order is **01.4 → 01.5 → 01.6 → 01.3**.
 
-**Gating risk, stated once.** Phase 01.6 depends on a fact nobody in this container can check: whether the host has a usable `node` on PATH. A negative answer does not stop the milestone — 01.4 and 01.5 are independent of it — but it kills the TCP control plane, and Phase 01.3 then resumes against the bash broker with `vice_recycle` staying on the file protocol. Answer it before 01.6 is planned, not during.
+**Gating risk — CLEARED 2026-08-02.** Phase 01.6 depended on a fact nobody in this container can check: whether the host has a usable `node` on PATH. **It does** — confirmed by the developer, who has host access; not verified from the container, which cannot verify it by construction. The TCP control plane is therefore in scope, and the fallback branch (01.3 resuming against the bash broker with `vice_recycle` staying on the file protocol) is off the table. Treat the first host-side `node` invocation during 01.6 as the mechanical confirmation of this answer.
 
 **At v1.0 close**, `/gsd-complete-milestone` archives Phases 1–4 to `.planning/milestones/v1.0-ROADMAP.md`, archives the 24 completed requirements, runs the PROJECT.md evolution review, and `/gsd-new-milestone` opens v2.0 with Phases 5–7 promoted into a fresh `REQUIREMENTS.md`.
 
@@ -65,7 +65,7 @@ Execution order is **01.4 → 01.5 → 01.6 → 01.3**, not numeric order.
 - [ ] **Phase 01.3: Wedge Detection and Recovery** *(INSERTED — **PAUSED at 5/6 plans**, resumes LAST)* - Close the gap the broker cannot see: `x64sc` alive and answering, but the emulated CPU retiring zero cycles. Paused 2026-08-02 with only 01.3-06 outstanding: `vice_recycle` is a control-plane command living on the file protocol that Phase 01.6 replaces, and both of this phase's tools are unreachable from an agent session until Phase 01.4 lands, so its final plan cannot be verified live. Resumes once 01.4 and 01.6 have closed
 - [ ] **Phase 01.4: Tool Surface Reachability** *(INSERTED)* - Make every tool the proxy implements reach the agent that needs it, in every session shape the project uses including subagents, and close the deny-list hole the generic call path opens. `vice_diagnose` and `vice_recycle` are written, 268/268 green and invisible; `mcp__vice__*` was structurally absent from an executor subagent's schema; `vice_disk_list` was observed in a `tools_list` response
 - [ ] **Phase 01.5: Session and Broker Survivability** *(INSERTED)* - A dead instance costs one acquisition, not the session, and the broker never warms, grants or retains an instance that is not real. Four recorded defects, one of which is the root cause of the 2026-08-01 outage, plus the spawn-policy redefinition and the port-band and timeout corrections
-- [ ] **Phase 01.6: Broker in Node and the TCP Control Plane** *(INSERTED)* - Move the broker's coordination logic out of 1,838 lines of bash into Node, then replace the file-messaging protocol with one TCP control connection per proxy whose lifetime is the lease. Bootstrap stays a file; the emulator data plane is untouched. **Gated on whether the host has a usable `node`**
+- [ ] **Phase 01.6: Broker in Node and the TCP Control Plane** *(INSERTED)* - Move the broker's coordination logic out of 1,838 lines of bash into Node, then replace the file-messaging protocol with one TCP control connection per proxy whose lifetime is the lease. Bootstrap stays a file; the emulator data plane is untouched. ~~Gated on whether the host has a usable `node`~~ **gate cleared 2026-08-02 — the host has `node` on PATH**
 
 ### Milestone v1.0 — Pipeline Proven *(paused behind v1.1)*
 
@@ -400,7 +400,7 @@ and the phase record needs the hunt's denominator. Waves are 1 through 6, one pl
 
 **Goal**: The broker's coordination logic lives in Node, and proxy↔broker coordination is one TCP control connection per session whose lifetime *is* the lease — with the emulator data plane untouched and bootstrap still a file
 
-**Depends on**: Phase 01.5 (defects fixed in place first, so this relocates working code). **Gated on an unanswered external fact** — see criterion 1.
+**Depends on**: Phase 01.5 (defects fixed in place first, so this relocates working code). ~~Gated on an unanswered external fact~~ — **the host-`node` gate was cleared 2026-08-02; see criterion 1.**
 
 **Requirement mapping**: none — tooling phase.
 
@@ -408,7 +408,7 @@ and the phase record needs the hunt's denominator. Waves are 1 through 6, one pl
 
 **Success Criteria** (what must be TRUE):
 
-  1. **The host-`node` question is answered in writing before anything is built, and a negative answer closes this phase cleanly.** Nothing in the repo can determine whether the host has a usable `node` on PATH. `vice-broker.sh` is host-only by construction — it launches `x64sc`, its windows and its MCP listeners, and `lib/container-guard.sh` makes it *refuse* to run in the devcontainer — so there is no existing host-side Node precedent to copy. If the answer is no, this phase records that and stops, Phase 01.3 resumes against the bash broker, and `vice_recycle` stays on the file protocol.
+  1. **ANSWERED 2026-08-02 — the host has `node` on PATH.** This was the phase's gate and it is cleared. Confirmed by the developer, who has host access; **not** verified from the container, which cannot verify it by construction (`lib/container-guard.sh` makes `vice-broker.sh` *refuse* to run in the devcontainer, and `x64sc`, its windows and its MCP listeners are all host-side). The remaining obligation is mechanical rather than investigative: **there is no existing host-side Node precedent in this repo to copy** — `vice-pool.sh` + `vice-pool.mjs` is a host/container *split*, not a thin-shell/fat-node split — so the first plan establishes and records the host-side Node invocation pattern (how the shell entry point calls it, what its cwd and module resolution are, how `install-resources.mjs` deploys it) before any logic moves. Record the host's actual `node --version` when that first invocation runs, since the version bound is now a real constraint on what the moved code may use.
 
   2. **Program-shaped logic moves to Node; only genuinely shell-shaped work stays in bash.** Moving: hand-rolled JSON (`json_escape`, `write_json_atomic`, `extract_*_field`, `read_*_field`), the spare state machine, `count_*`, port allocation and blocking, lease staleness, grant sweeping, and the decisions in `process_requests`/`maintain_spares`. Staying: process launch and signalling (`launch_instance`, `signal_recorded_pid`, `reap_all_instances`), the daemon loop and traps, `port_in_use`, and the host `curl` probe.
 
@@ -428,7 +428,7 @@ and the phase record needs the hunt's denominator. Waves are 1 through 6, one pl
 
  10. **`install-resources.mjs` deploys any new `.mjs` under `resources/`.** It copies `resources/` to the gitignored `tools/`; a new module that is not added to what it copies breaks the deployed broker with a missing-module error, silently, on a machine nobody is watching.
 
-**Risks**: **The gate may close the phase** (criterion 1) — that is a real outcome, not a failure. **Relocating code and changing its protocol in one phase** is two changes; sequence the Node move to land and pass the suite *before* the transport changes, so a regression has one candidate cause. **Concurrency moves from a poll loop to an event loop** — the single `in_flight` flag that prevents a repeat of the 2026-08-01 triple-launch must survive as a single owner; Node makes this easier than bash, but only if it is deliberate.
+**Risks**: ~~The gate may close the phase~~ — cleared 2026-08-02, see criterion 1. **The host Node version is an unknown constraint**: `node` is present but its version is not recorded, and the moved code inherits whatever it is; establish it in the first plan rather than discovering it through a syntax error on a machine nobody is watching. **Relocating code and changing its protocol in one phase** is two changes; sequence the Node move to land and pass the suite *before* the transport changes, so a regression has one candidate cause. **Concurrency moves from a poll loop to an event loop** — the single `in_flight` flag that prevents a repeat of the 2026-08-01 triple-launch must survive as a single owner; Node makes this easier than bash, but only if it is deliberate. **No host-side Node precedent exists in this repo**, so deployment, module resolution and the shell→Node call boundary are all first-time work, not copies of an established pattern.
 
 ---
 

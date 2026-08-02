@@ -90,9 +90,11 @@ reports as void. Same discipline the project already applies to a restarted emul
 
 ## Two blockers, neither of them transport
 
-1. **Does the host have `node` on PATH?** Nothing in the repo can answer this, and it is not
-   a gate on a cleanup any more — it is a prerequisite for the architecture. Recorded on
-   `.planning/todos/pending/2026-08-02-shrink-vice-broker-sh-by-moving-logic-into-node.md`.
+1. ~~**Does the host have `node` on PATH?**~~ **ANSWERED 2026-08-02: yes.** Developer-confirmed;
+   the container cannot verify it by construction. The architecture's prerequisite is met.
+   What remains is mechanical — the host's `node` version is still unrecorded, and this repo has
+   no host-side Node precedent, so the shell→Node call boundary and its deployment are first-time
+   work. Scheduled as Phase 01.6, criterion 1.
 2. **The tool surface routes around the proxy.**
    `.planning/todos/pending/2026-08-02-vice-diagnose-and-vice-recycle-unreachable-from-agent-session.md`
    (priority `major`) records that `vice_diagnose` and `vice_recycle` are fully wired and

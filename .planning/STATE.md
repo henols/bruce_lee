@@ -41,9 +41,9 @@ Phase 01 (recovery-provenance) — **PARKED mid-execution, not abandoned.** 4 of
 
 **Phase 01.3 is PAUSED at 5/6 plans**, with only 01.3-06 outstanding. Two blockers it does not own: `vice_recycle` is a control-plane command living on the file protocol that Phase 01.6 replaces, so finishing now means building it twice; and both of this phase's tools (`vice_diagnose`, `vice_recycle`) are unreachable from an agent session until 01.4 lands, so 01.3-06's blocking human-verify checkpoint cannot run. Plan 01.3-05's bounded trigger hunt recorded its own blocked outcome honestly — no trigger found to close at the seam — and criterion 9 carries forward into the resumed plan.
 
-**Phase 01.6 is gated on a fact nobody in this container can check:** whether the host has a usable `node` on PATH. A negative answer does not stop v1.1 — 01.4 and 01.5 are independent — but it kills the TCP control plane, and 01.3 then resumes against the bash broker. **Answer it before 01.6 is planned.**
+**Phase 01.6's host-`node` gate is CLEARED (2026-08-02).** The host has `node` on PATH — confirmed by the developer, who has host access; the container cannot verify this by construction. The TCP control plane is in scope and the bash-broker fallback is off the table. Still unknown and worth establishing in 01.6's first plan: the host's `node` **version**, and the shell→Node call boundary, since this repo has no host-side Node precedent to copy.
 
-Status: v1.1 scoped; no plans written yet
+Status: v1.1 scoped; no plans written yet. **Phase 01.3 stopped by the developer 2026-08-02** — 01.3-01…04 complete, 01.3-05 closed with a blocked attempt recorded (`01.3-05-SUMMARY-attempt1-blocked.md`, no trigger found at the seam), 01.3-06 planned but never executed.
 
 **Known-failing check, carried forward for whoever resumes 01-04:** the plan's own Task 3 automated verification fails today — `saeger`'s `death` milestone is recorded `reached: true` with `cycles_advanced: null` and an explicit `evidentiary_gap` (no screen-matrix SHA-256 captured, attempt 4). Attempt 6 must re-capture that signature, not merely reach the two remaining milestones. danish's five milestones all carry full mechanical proof and pass.
 
