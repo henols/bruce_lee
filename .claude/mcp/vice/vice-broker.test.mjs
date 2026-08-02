@@ -1141,6 +1141,56 @@ test(
   }
 );
 
+// ---------------------------------------------------------------------------
+// quick-260802-d6v Task 3: `stop` still reaps a detached broker -- the
+// reap-on-signal contract PROVEN against a detached broker, not merely
+// asserted in prose. Same non-negotiable cleanup protocol as Task 2's tests.
+
+test(
+  "stop reaps a detached broker: this is the reap-on-signal contract proven against a detached broker, not asserted in prose -- and the log survives the purge",
+  { timeout: 30000 },
+  async (t) => {
+    const dir = tmpPoolDir();
+    const ref = {};
+    t.after(() => reapDetached(dir, ref));
+
+    const { pid, logPath } = await startDetached(dir, { VICE_BROKER_BASE_PORT: "9520" });
+    ref.pid = pid;
+
+    const brokerJsonSeen = await waitFor(() => existsSync(join(dir, "broker.json")));
+    assert.ok(brokerJsonSeen, "the detached daemon must write broker.json before this test proceeds");
+    const brokerJson = JSON.parse(readFileSync(join(dir, "broker.json"), "utf8"));
+    // Equality here is what proves `stop` will find the right process, and it
+    // also confirms setsid did not fork out from under `$!` -- the pid the
+    // parent printed IS the pid the daemon itself recorded.
+    assert.equal(brokerJson.pid, pid, "broker.json's recorded pid must equal the pid the parent printed");
+
+    const { stdout } = await execFileP("bash", [BROKER_SCRIPT, "stop"], {
+      env: { ...process.env, VICE_SUPERVISOR_ALLOW_CONTAINER: "1", VICE_POOL_DIR: dir },
+    });
+    assert.match(stdout, /reap saw \d+ recorded instance/, "stop must report the reap");
+
+    const daemonGone = await waitFor(() => {
+      try {
+        process.kill(pid, 0);
+        return false;
+      } catch {
+        return true;
+      }
+    });
+    assert.ok(daemonGone, "stop must terminate the detached daemon");
+    assert.equal(existsSync(join(dir, "broker.json")), false, "broker.json must be purged");
+    for (const sub of ["spares", "grants", "requests", "leases"]) {
+      assert.equal(existsSync(join(dir, sub)), false, `${sub}/ must be purged`);
+    }
+
+    // purge_protocol_state()'s untouched-ness, proven behaviourally here
+    // next to the structural grep gate in the verify sweep: the log must
+    // still exist after stop.
+    assert.ok(existsSync(logPath), "the detached daemon's log must survive stop's purge -- purge_protocol_state() must never remove it");
+  }
+);
+
 test("start --once: drops a non-dry-run record whose recorded pid is dead, drops a spare recorded ready whose port has no listener, and leaves a grant whose pid is a live, identity-matching supervisor untouched", async () => {
   const dir = tmpPoolDir();
   const { brokerScript, supervisorScript } = brokerCopyWithSleepingSupervisor();

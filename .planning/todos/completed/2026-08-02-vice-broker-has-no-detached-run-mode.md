@@ -4,8 +4,8 @@ title: The VICE broker only runs in the foreground, so one signal destroys every
 area: tooling
 severity: major
 files:
-  - tools/vice-broker.sh
-  - tools/vice-supervisor.sh
+  - .claude/mcp/vice/resources/vice-broker.sh
+  - .claude/mcp/vice/vice-broker.test.mjs
 ---
 
 ## Problem
