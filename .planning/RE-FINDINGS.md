@@ -1397,7 +1397,7 @@ rationale ("recycle first is what makes the six-attempt budget affordable") from
 agent session shaped like this one. Filed as an actionable item at
 `.planning/todos/pending/2026-08-02-vice-diagnose-and-vice-recycle-unreachable-from-agent-session.md`.
 
-### 2026-08-01 — arming a stopping checkpoint on the KERNAL default IRQ handler (`$EA31`) bounds a resume to almost exactly one frame regardless of real-world latency
+### 2026-08-02 — arming a stopping checkpoint on the KERNAL default IRQ handler (`$EA31`) bounds a resume to almost exactly one frame regardless of real-world latency
 
 **Type:** trick (re-logged from an orphaned worktree branch — this entry never reached `main`'s
 `RE-FINDINGS.md`, per plan 01.3-05's own instructions to preserve it here with its original
