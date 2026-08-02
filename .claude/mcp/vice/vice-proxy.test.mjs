@@ -4042,3 +4042,196 @@ test("structural: DIAGNOSE_VERDICTS is a frozen five-member array, and every fix
     assert.ok(verdicts.includes(v), `fixture verdict "${v}" must be a member of DIAGNOSE_VERDICTS`);
   }
 });
+
+// ---------------------------------------------------------------------------
+// Plan 01.3-04 task 1: the D-16 seam hazard annotation -- structurally the
+// OPPOSITE of the vice_disk_list refusal tested earlier in this file. A
+// stopping exec checkpoint arm goes through to the host UNCHANGED and comes
+// back annotated, never refused.
+// ---------------------------------------------------------------------------
+
+function sendCheckpointAdd(proxy, args, id = 3) {
+  proxy.send({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "vice_checkpoint_add", arguments: args } });
+  return proxy.nextMessage();
+}
+
+function checkpointAddRespond(overrides = {}) {
+  return (name, args) => {
+    if (name === "vice_ping") return { version: "3.10", machine: "C64SC", execution: "paused" };
+    if (name === "vice_checkpoint_add") {
+      return { checkpoint_num: 9, start: args.start, stop: args.stop !== false, exec: args.exec !== false, ...overrides };
+    }
+    return undefined;
+  };
+}
+
+test("seam: arming a stopping exec checkpoint is forwarded and annotated, never refused", async () => {
+  const { server, requests } = startFlexibleStandInServer(checkpointAddRespond());
+  const port = await listen(server);
+  const proxy = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${port}/mcp` });
+  try {
+    await handshake(proxy);
+    const resp = await sendCheckpointAdd(proxy, { start: "$1103" });
+    assert.equal(resp.result.isError, false, "an armed stopping exec checkpoint must never be refused");
+    const text = resp.result.content[0].text;
+    assert.match(text, /stopping exec checkpoint was just armed/);
+    assert.match(text, /\$1103/, "the annotation must name the address that was just armed");
+    assert.match(text, /common to every recorded freeze/i, "must name the shape as common to all three recorded freezes");
+    assert.match(text, /vice_diagnose/, "must name the diagnose tool as the way to establish liveness of this handler");
+    assert.match(text, /vice_recycle/, "must name the recovery tool in the recovery ordering");
+    assert.match(text, /vice_checkpoint_toggle/, "must state the toggle/group re-enable residual");
+    assert.match(text, /NOT[\s\S]*blocked/, "must state plainly the call was not blocked");
+    assert.equal(
+      forwardedCallsNamed(requests, "vice_checkpoint_add").length,
+      1,
+      "the call itself must reach the host exactly once"
+    );
+  } finally {
+    proxy.child.kill("SIGKILL");
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("seam: the annotated result's error flag is false and the host payload is intact", async () => {
+  const { server } = startFlexibleStandInServer(checkpointAddRespond({ checkpoint_num: 42 }));
+  const port = await listen(server);
+  const proxy = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${port}/mcp` });
+  try {
+    await handshake(proxy);
+    const resp = await sendCheckpointAdd(proxy, { start: "$4000" });
+    assert.equal(resp.result.isError, false);
+    const text = resp.result.content[0].text;
+    assert.match(text, /"checkpoint_num":42/, "the host's own payload must still be present, byte-for-byte, in full");
+    assert.match(text, /vice-proxy hazard/, "the hazard note must also be present alongside the payload");
+  } finally {
+    proxy.child.kill("SIGKILL");
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("seam: a continue-only checkpoint, a disabled one and a non-exec watchpoint draw no annotation", async () => {
+  const respond = (name, args) => {
+    if (name === "vice_ping") return { version: "3.10", machine: "C64SC", execution: "paused" };
+    if (name === "vice_checkpoint_add") return { checkpoint_num: 1, start: args.start, stop: args.stop, exec: args.exec };
+    if (name === "vice_checkpoint_toggle") return { checkpoint_num: args.checkpoint_num, enabled: args.enabled };
+    return undefined;
+  };
+  const { server } = startFlexibleStandInServer(respond);
+  const port = await listen(server);
+  const proxy = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${port}/mcp` });
+  try {
+    await handshake(proxy);
+
+    // Continue-only: stop explicitly false.
+    const continueOnly = await sendCheckpointAdd(proxy, { start: "$5000", stop: false }, 3);
+    assert.doesNotMatch(continueOnly.result.content[0].text, /vice-proxy hazard/, "a continue-only arm must draw no annotation");
+
+    // A "disabled" re-arm: vice_checkpoint_toggle is NOT in CHECKPOINT_ARMING_TOOLS
+    // at all -- its own arguments never carry a stop flag, matching the
+    // stated residual (re-enabling a checkpoint is not detectable from the
+    // toggle call alone).
+    proxy.send({
+      jsonrpc: "2.0",
+      id: 4,
+      method: "tools/call",
+      params: { name: "vice_checkpoint_toggle", arguments: { checkpoint_num: 1, enabled: true } },
+    });
+    const toggleResp = await proxy.nextMessage();
+    assert.doesNotMatch(toggleResp.result.content[0].text, /vice-proxy hazard/, "vice_checkpoint_toggle must draw no annotation");
+
+    // A non-exec watchpoint: exec explicitly false (a load/store watchpoint).
+    const watchpoint = await sendCheckpointAdd(proxy, { start: "$6000", exec: false, store: true }, 5);
+    assert.doesNotMatch(watchpoint.result.content[0].text, /vice-proxy hazard/, "a non-exec watchpoint arm must draw no annotation");
+  } finally {
+    proxy.child.kill("SIGKILL");
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("seam: a checkpoint-add call the host rejects is returned as an error, with no annotation appended", async () => {
+  const respond = (name) => {
+    if (name === "vice_ping") return { version: "3.10", machine: "C64SC", execution: "paused" };
+    return undefined; // vice_checkpoint_add itself is answered with the stand-in's generic JSON-RPC error
+  };
+  const { server } = startFlexibleStandInServer(respond);
+  const port = await listen(server);
+  const proxy = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${port}/mcp` });
+  try {
+    await handshake(proxy);
+    const resp = await sendCheckpointAdd(proxy, { start: "$7000" });
+    assert.equal(resp.result.isError, true, "a rejected arm must come back as an error");
+    assert.doesNotMatch(resp.result.content[0].text, /vice-proxy hazard/, "a failed arm has no hazard to warn about");
+  } finally {
+    proxy.child.kill("SIGKILL");
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("seam: the annotation makes no additional forwarded calls", async () => {
+  const { server, requests } = startFlexibleStandInServer(checkpointAddRespond());
+  const port = await listen(server);
+  const proxy = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${port}/mcp` });
+  try {
+    await handshake(proxy);
+    const resp = await sendCheckpointAdd(proxy, { start: "$8000" });
+    assert.match(resp.result.content[0].text, /vice-proxy hazard/);
+    // Excludes the seam's own pre-flight vice_ping liveness probe (present on
+    // every forwarded call, annotated or not) -- what this asserts is that
+    // the ANNOTATION contributes zero calls beyond the arm itself, which the
+    // seam would have made regardless of whether a hazard fired.
+    const forwardedArms = forwardedCallsNamed(requests, "vice_checkpoint_add");
+    assert.equal(forwardedArms.length, 1, "the annotation itself must issue no forwarded call beyond the arm itself");
+  } finally {
+    proxy.child.kill("SIGKILL");
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("seam: a repeat arm at the same address is suppressed to a pointer, and an epoch change clears it", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vice-proxy-seam-hazard-epoch-"));
+  const epochFile = join(dir, "epoch.json");
+  writeFileSync(epochFile, JSON.stringify({ epoch: 1, pid: 111, spawned_at: "2026-08-02T00:00:00.000Z" }), "utf8");
+
+  const { server } = startFlexibleStandInServer(checkpointAddRespond());
+  const port = await listen(server);
+  const proxy = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${port}/mcp`, VICE_EPOCH_FILE: epochFile });
+  try {
+    await handshake(proxy);
+
+    const first = await sendCheckpointAdd(proxy, { start: "$2000" }, 3);
+    assert.match(first.result.content[0].text, /vice-proxy hazard:/, "the first arm at this address must draw the full note");
+
+    const second = await sendCheckpointAdd(proxy, { start: "$2000" }, 4);
+    assert.match(second.result.content[0].text, /vice-proxy hazard \(repeat\)/, "a repeat arm at the same address must be a one-line pointer");
+    assert.doesNotMatch(
+      second.result.content[0].text,
+      /common to every recorded freeze/,
+      "the repeat pointer must not re-render the full paragraph"
+    );
+
+    // The epoch moves underneath the proxy. The VERY NEXT forwarded call
+    // hits the pre-forward epoch-drift refusal (never-cache-a-negative-
+    // result: the baseline re-adopts the new value on that same call), so it
+    // is expected to come back as an epoch-drift ERROR, not a checkpoint
+    // result -- exactly like every other forwarded call after a restart.
+    writeFileSync(epochFile, JSON.stringify({ epoch: 2, pid: 222, spawned_at: "2026-08-02T00:05:00.000Z" }), "utf8");
+    const duringDrift = await sendCheckpointAdd(proxy, { start: "$2000" }, 5);
+    assert.equal(duringDrift.result.isError, true, "the call made during the epoch transition must be refused as a restart, not silently annotated");
+
+    // The call AFTER that one sees no further drift (baseline already caught
+    // up) and succeeds -- and the suppression set, observing the new epoch
+    // for the first time, must have cleared: the full annotation reappears.
+    const afterDrift = await sendCheckpointAdd(proxy, { start: "$2000" }, 6);
+    assert.equal(afterDrift.result.isError, false);
+    assert.match(
+      afterDrift.result.content[0].text,
+      /vice-proxy hazard:/,
+      "the full annotation must reappear once the epoch has genuinely changed -- a new machine has seen none of the earlier warnings"
+    );
+    assert.doesNotMatch(afterDrift.result.content[0].text, /vice-proxy hazard \(repeat\)/);
+  } finally {
+    proxy.child.kill("SIGKILL");
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
