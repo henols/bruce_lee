@@ -1475,3 +1475,27 @@ about tool reachability (they are independent facts); `tools_list`/`tools_call` 
 `handleToolsCall()`'s synthetic dispatch and still cannot reach a synthetic tool; a broker restart
 still does not refresh a client's tool surface. The correct pre-flight remains a by-name schema load,
 which is what produced this entry.
+
+### 2026-08-02 — four `vice-proxy.mjs` child processes observed running concurrently, with start times spanning 2h21m across the SAME container, directly corroborating the session-snapshot mechanism
+
+**Type:** confirmation (corroborates, with a new independent data point, the "CONFIRMED LIVE" entry
+immediately above this one — the per-session MCP tool-schema snapshot mechanism)
+**Evidence:** live, this container, during 01.4 research: `ps -eo pid,lstart,cmd | grep vice-proxy.mjs`
+found **four** simultaneously-running `node .claude/mcp/vice/vice-proxy.mjs` processes, started
+15:22:26, 17:12:39, 17:35:10 and 17:43:55 (all 2026-08-02) — one per concurrently-open session, none
+sharing a process, none restarted since its own session began. `git log` on `.claude/mcp/vice/vice-proxy.mjs`
+shows six commits landing between 14:58:13 and 16:58:38 that same day (the 01.3-01..04 synthetic-tool
+and hazard-table work). The 15:22:26 process therefore predates three of those six commits and is
+still running the code as it stood at 15:22 — a live, currently-observable instance of exactly the
+"whichever session's snapshot was taken before a later commit lands, it does not see that commit's
+tools for the rest of its life" mechanism the entry above establishes. `/proc/<pid>/cwd` for all four
+resolves to `/workspaces/bruce_lee` (the main workspace, not a worktree) — confirming the earlier
+"ruled out stale-file/stale-process" check's own method (cwd comparison) is insufficient on its own:
+cwd correctness says nothing about which commit's code a long-running process loaded at spawn time.
+**Confidence:** HIGH (direct `ps`/`git log` cross-reference, reproducible by anyone with container
+shell access, no emulator contact).
+**Saves:** a cheap, non-destructive, container-side diagnostic for "is THIS session's proxy possibly
+serving a stale snapshot": `ps -eo pid,lstart,cmd | grep vice-proxy.mjs` cross-referenced against
+`git log -1 --format=%cI -- .claude/mcp/vice/vice-proxy.mjs` — if any commit post-dates a live
+process's start time, every session bound to that process has been snapshotted from before that
+commit and will not see whatever it added, however long that session continues to run.
