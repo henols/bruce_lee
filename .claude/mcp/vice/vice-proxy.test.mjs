@@ -3380,3 +3380,219 @@ test("vice_diagnose appears in tools/list alongside the other synthetic tools", 
     await new Promise((resolve) => server.close(resolve));
   }
 });
+
+// ---------------------------------------------------------------------------
+// Plan 01.3-02 task 2: the cycle bracket, one definition, and the three
+// verdicts that need it (wedged, stale_read_path, live). No checkpoints are
+// armed in any fixture below, so every call here passes cleanly through
+// task 1's trap check and reaches the bracket.
+// ---------------------------------------------------------------------------
+
+/**
+ * Builds a `respond(name, args)` function for the bracket-phase diagnose
+ * fixtures: no checkpoints armed (the trap check always passes through
+ * cleanly), a fixed banked-in $01/$0314 vector pair (irrelevant to these
+ * fixtures' own verdicts, but required so resolveLiveIrqHandler() always has
+ * something to read), and caller-supplied sequences for the two things each
+ * bracket test actually varies -- the sequence of vice_registers_get
+ * responses (index 0 is the trap check's own PC read; index 1 is the
+ * bracket's regsBefore; index 2 is regsAfter) and the sequence of
+ * vice_cycles_stopwatch "read" responses (index 0 is bracket 1; index 1,
+ * only consumed when bracket 1 read zero, is bracket 2).
+ */
+function bracketPhaseHandlers({ registerSequence, stopwatchReadSequence, pingExecution = "running" }) {
+  let registerCallIndex = 0;
+  let stopwatchReadIndex = 0;
+  return (name, args) => {
+    if (name === "vice_checkpoint_list") return { checkpoints: [] };
+    if (name === "vice_registers_get") {
+      const value = registerSequence[Math.min(registerCallIndex, registerSequence.length - 1)];
+      registerCallIndex += 1;
+      return value;
+    }
+    if (name === "vice_memory_read") {
+      if (args.address === "$01") return memHex([0x37]); // banked in -- not exercised by these fixtures
+      if (args.address === "$0314") return memHex([0x31, 0xea]);
+    }
+    if (name === "vice_cycles_stopwatch") {
+      if (args.action === "read") {
+        const value = stopwatchReadSequence[Math.min(stopwatchReadIndex, stopwatchReadSequence.length - 1)];
+        stopwatchReadIndex += 1;
+        return { cycles: value };
+      }
+      return { status: "ok" }; // reset -- response never parsed
+    }
+    if (name === "vice_ping") return { version: "3.10", machine: "C64SC", execution: pingExecution };
+    if (name === "vice_execution_run") return { status: "ok" };
+    if (name === "vice_execution_pause") return { status: "ok" };
+    return undefined;
+  };
+}
+
+test("diagnose: a ping-says-running, counter-frozen stand-in is wedged, and records exactly two resumes; a healthy stand-in records exactly one", async () => {
+  // Wedged: both brackets read zero.
+  const wedgedRespond = bracketPhaseHandlers({
+    registerSequence: [{ PC: 0x2000 }, { PC: 0x2000 }, { PC: 0x2000 }],
+    stopwatchReadSequence: [0, 0],
+    pingExecution: "running",
+  });
+  const { server: wedgedServer, requests: wedgedRequests } = startFlexibleStandInServer(wedgedRespond);
+  const wedgedPort = await listen(wedgedServer);
+  const wedgedProxy = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${wedgedPort}/mcp` });
+  try {
+    await handshake(wedgedProxy);
+    const resp = await sendDiagnose(wedgedProxy, 3);
+    assert.equal(resp.result.isError, false);
+    assert.match(resp.result.content[0].text, /verdict: wedged/);
+    assert.equal(
+      forwardedCallsNamed(wedgedRequests, "vice_execution_run").length,
+      2,
+      "a wedged verdict must have run exactly two brackets, i.e. exactly two resumes"
+    );
+  } finally {
+    wedgedProxy.child.kill("SIGKILL");
+    await new Promise((resolve) => wedgedServer.close(resolve));
+  }
+
+  // Healthy: the first bracket is already non-zero -- short-circuits, no second bracket.
+  // regsBefore != regsAfter -- a genuinely live machine, not a stale read path.
+  const healthyRespond = bracketPhaseHandlers({
+    registerSequence: [{ PC: 0x2000 }, { PC: 0x2000 }, { PC: 0x2001 }],
+    stopwatchReadSequence: [991000],
+    pingExecution: "running",
+  });
+  const { server: healthyServer, requests: healthyRequests } = startFlexibleStandInServer(healthyRespond);
+  const healthyPort = await listen(healthyServer);
+  const healthyProxy = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${healthyPort}/mcp` });
+  try {
+    await handshake(healthyProxy);
+    const resp = await sendDiagnose(healthyProxy, 3);
+    assert.equal(resp.result.isError, false);
+    assert.match(resp.result.content[0].text, /verdict: live/);
+    assert.equal(
+      forwardedCallsNamed(healthyRequests, "vice_execution_run").length,
+      1,
+      "a non-zero first bracket must short-circuit -- exactly one resume, no second bracket"
+    );
+  } finally {
+    healthyProxy.child.kill("SIGKILL");
+    await new Promise((resolve) => healthyServer.close(resolve));
+  }
+});
+
+test("diagnose: a ping-says-not-running, counter-advancing stand-in is live -- the ping execution field decides nothing", async () => {
+  const respond = bracketPhaseHandlers({
+    registerSequence: [{ PC: 0x1000 }, { PC: 0x2000 }, { PC: 0x2001 }], // regsBefore != regsAfter -- not stale
+    stopwatchReadSequence: [500000],
+    pingExecution: "not running", // deliberately NOT "running" -- must not change the verdict
+  });
+  const { server } = startFlexibleStandInServer(respond);
+  const port = await listen(server);
+  const proxy = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${port}/mcp` });
+  try {
+    await handshake(proxy);
+    const resp = await sendDiagnose(proxy, 3);
+    assert.equal(resp.result.isError, false);
+    assert.match(resp.result.content[0].text, /verdict: live/);
+  } finally {
+    proxy.child.kill("SIGKILL");
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("diagnose: a byte-identical register read with an advancing counter is stale_read_path", async () => {
+  const identicalRegs = { PC: 0x2014, A: 1, X: 33, Y: 56, SP: 251 };
+  const respond = bracketPhaseHandlers({
+    registerSequence: [{ PC: 0x0fab }, identicalRegs, identicalRegs], // regsBefore === regsAfter, byte-identical
+    stopwatchReadSequence: [500000], // advancing -- the machine is not frozen
+    pingExecution: "running",
+  });
+  const { server } = startFlexibleStandInServer(respond);
+  const port = await listen(server);
+  const proxy = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${port}/mcp` });
+  try {
+    await handshake(proxy);
+    const resp = await sendDiagnose(proxy, 3);
+    const text = resp.result.content[0].text;
+    assert.match(text, /verdict: stale_read_path/);
+    assert.match(text, /stale/i);
+    assert.match(text, /not frozen/i);
+  } finally {
+    proxy.child.kill("SIGKILL");
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("diagnose: a below-baseline non-zero rate (six thousand cycles/s) is reported as an observation, not a verdict of its own", async () => {
+  const respond = bracketPhaseHandlers({
+    registerSequence: [{ PC: 0x1000 }, { PC: 0x3000 }, { PC: 0x3001 }], // not stale
+    stopwatchReadSequence: [6000],
+    pingExecution: "running",
+  });
+  const { server } = startFlexibleStandInServer(respond);
+  const port = await listen(server);
+  const proxy = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${port}/mcp` });
+  try {
+    await handshake(proxy);
+    const resp = await sendDiagnose(proxy, 3);
+    const text = resp.result.content[0].text;
+    assert.match(text, /verdict: live/, "a below-baseline non-zero rate must still be classified live, never a degradation verdict of its own");
+    assert.match(text, /6000 cycles/);
+    assert.match(text, /991000 cycles\/s/, "the baseline figure must be printed beside the measured rate");
+  } finally {
+    proxy.child.kill("SIGKILL");
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("structural: runCycleBracket has exactly one definition, and every stopwatch call in the file lies inside it", () => {
+  const src = readFileSync(PROXY_PATH, "utf8");
+  const defs = (src.match(/^async function runCycleBracket\(\)\s*\{/gm) || []).length;
+  assert.equal(defs, 1, `expected exactly one runCycleBracket() definition, found ${defs}`);
+
+  const startIdx = src.indexOf("async function runCycleBracket()");
+  assert.ok(startIdx >= 0, "runCycleBracket()'s own definition must be found in the source");
+  const endIdx = src.indexOf("\n}\n", startIdx);
+  assert.ok(endIdx > startIdx, "could not isolate runCycleBracket()'s own closing brace");
+  const body = src.slice(startIdx, endIdx);
+
+  const stopwatchInBody = (body.match(/vice_cycles_stopwatch/g) || []).length;
+  const stopwatchTotal = (src.match(/vice_cycles_stopwatch/g) || []).length;
+  assert.equal(
+    stopwatchInBody,
+    stopwatchTotal,
+    "every vice_cycles_stopwatch call in the whole file must live inside runCycleBracket()'s own body"
+  );
+  assert.ok(stopwatchInBody >= 2, "runCycleBracket() itself must call vice_cycles_stopwatch (reset and read)");
+
+  assert.equal(
+    (src.match(/BASELINE_CYCLES_PER_SECOND/g) || []).length,
+    2,
+    "BASELINE_CYCLES_PER_SECOND must appear exactly twice: its own definition and one interpolation into report text"
+  );
+
+  const pacingMatches = body.match(/setTimeout|setInterval|Atomics\.wait/g) || [];
+  assert.equal(pacingMatches.length, 0, "no timer-based pacing construct may appear inside runCycleBracket()'s own body");
+});
+
+function extractDiagnoseVerdicts() {
+  const src = readFileSync(PROXY_PATH, "utf8");
+  const match = src.match(/const DIAGNOSE_VERDICTS = Object\.freeze\(\[([^\]]+)\]\)/);
+  assert.ok(match, "DIAGNOSE_VERDICTS definition not found in source");
+  return match[1].split(",").map((s) => s.trim().replace(/^"|"$/g, ""));
+}
+
+test("structural: DIAGNOSE_VERDICTS is a frozen five-member array, and every fixture's verdict in this file is a member of it", () => {
+  const verdicts = extractDiagnoseVerdicts();
+  assert.equal(verdicts.length, 5, `expected exactly five verdict members, found ${verdicts.length}: ${JSON.stringify(verdicts)}`);
+  assert.deepEqual(verdicts, ["restarted", "checkpoint_trap", "wedged", "stale_read_path", "live"]);
+
+  // Parameterised: every verdict string this file's own fixtures assert
+  // against (above, across both task 1 and task 2) must be drawn from this
+  // same closed vocabulary -- no fixture anywhere in this suite invents a
+  // sixth state.
+  const fixtureVerdicts = ["restarted", "checkpoint_trap", "wedged", "stale_read_path", "live"];
+  for (const v of fixtureVerdicts) {
+    assert.ok(verdicts.includes(v), `fixture verdict "${v}" must be a member of DIAGNOSE_VERDICTS`);
+  }
+});

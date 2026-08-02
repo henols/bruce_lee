@@ -846,6 +846,149 @@ function renderRestartedReport(beforeEpoch, afterEpoch) {
   );
 }
 
+// Plan 01.3-02 task 2: the cycle bracket, the definitive liveness test, and
+// the three verdicts that depend on it (wedged, stale_read_path, live).
+
+// Three polls: the bracket needs the machine to be given real forwarded
+// round trips to retire cycles across, and three is enough for the counter
+// to move at any rate worth calling alive.
+const CYCLE_BRACKET_PINGS = 3;
+// Two brackets: criterion 2's minimum for a wedged verdict is two
+// consecutive zeros, and D-04 makes every additional bracket another call to
+// the tool most correlated with host death. Two is the minimum and the
+// maximum.
+const CYCLE_BRACKET_MAX = 2;
+
+// ~991,000 cycles/s is the measured PAL C64 full-speed rate (RE-FINDINGS.md,
+// "the only trustworthy VICE liveness test is a cycle bracket"). Printed
+// only, as an observation beside a measured rate -- D-08 refuses a
+// degradation threshold, and a constant that is only ever printed cannot
+// become one by accident.
+const BASELINE_CYCLES_PER_SECOND = 991000;
+
+function cyclesFromStopwatchResult(result) {
+  if (result && typeof result.cycles === "number") return result.cycles;
+  if (result && typeof result.previous_cycles === "number") return result.previous_cycles;
+  return 0;
+}
+
+/**
+ * The single definition of the cycle bracket criterion 2 requires: reset the
+ * stopwatch, resume execution exactly once, poll with ping
+ * CYCLE_BRACKET_PINGS times, pause, read the stopwatch back. Pacing comes
+ * from the forwarded round trips alone -- there is no timer, no delay and no
+ * wall-clock quantity anywhere in it (the standing project rule). Every
+ * stopwatch call in this file lives inside this function's body; the
+ * structural test enforces it. `elapsedMs` is measured only to print an
+ * observational rate afterward -- it decides nothing and paces nothing.
+ */
+async function runCycleBracket() {
+  await call("vice_cycles_stopwatch", { action: "reset" });
+  const startedAt = Date.now();
+  await call("vice_execution_run", {});
+  for (let i = 0; i < CYCLE_BRACKET_PINGS; i += 1) {
+    await call("vice_ping", {}); // the ping EXECUTION field is never inspected here -- it decides nothing (C1, D-07)
+  }
+  await call("vice_execution_pause", {});
+  const elapsedMs = Date.now() - startedAt;
+  const readResult = await call("vice_cycles_stopwatch", { action: "read" });
+  const cycles = cyclesFromStopwatchResult(readResult);
+  return { cycles, elapsedMs };
+}
+
+function registersByteIdentical(a, b) {
+  try {
+    return JSON.stringify(a) === JSON.stringify(b);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Gathers the bracket evidence: a register snapshot at each end, bracket
+ * one, and -- only when bracket one retired exactly zero cycles -- bracket
+ * two. A non-zero first bracket short-circuits (D-04): the answer is already
+ * not wedged, and a second resume buys nothing.
+ */
+async function gatherBracketEvidence() {
+  const regsBefore = await call("vice_registers_get", {});
+  const bracket1 = await runCycleBracket();
+  let bracket2 = null;
+  let finalBracket = bracket1;
+  if (bracket1.cycles === 0) {
+    bracket2 = await runCycleBracket();
+    finalBracket = bracket2;
+  }
+  const regsAfter = await call("vice_registers_get", {});
+  return { regsBefore, regsAfter, bracket1, bracket2, finalBracket };
+}
+
+/**
+ * Produces the post-bracket verdict (criterion 2/3). Two consecutive zeros
+ * is wedged and nothing else is. On any non-zero result (whichever bracket
+ * produced it), a byte-identical register snapshot across an advancing
+ * bracket is stale_read_path -- one read path is stale while the machine is
+ * demonstrably not frozen; anything else is live.
+ */
+function classifyLiveness(evidence) {
+  const { bracket1, bracket2, regsBefore, regsAfter } = evidence;
+  if (bracket1.cycles === 0 && (!bracket2 || bracket2.cycles === 0)) {
+    return "wedged";
+  }
+  return registersByteIdentical(regsBefore, regsAfter) ? "stale_read_path" : "live";
+}
+
+/**
+ * Renders the post-bracket report (wedged/stale_read_path/live). Separates
+ * load-bearing evidence (the restart epoch, already checked; the stopwatch
+ * delta across the bracket) from corroborating evidence (the program
+ * counter, VIC-II state, checkpoint hit counts, a screenshot) explicitly --
+ * criterion 3's own requirement. A status of ok with an execution state of
+ * running is compatible with every one of these verdicts and is therefore
+ * evidence for none of them.
+ */
+function renderDiagnoseReport(evidence, verdict) {
+  const { bracket1, bracket2, finalBracket } = evidence;
+  const bracketsRun = bracket2 ? 2 : 1;
+  const ratePerSecond =
+    finalBracket.cycles > 0 ? Math.round((finalBracket.cycles / Math.max(finalBracket.elapsedMs, 1)) * 1000) : 0;
+
+  const lines = [
+    `vice_diagnose verdict: ${verdict}`,
+    "",
+    "Load-bearing evidence: the restart epoch (already checked, at zero emulator cost) and the " +
+      `stopwatch cycle delta across the bracket -- bracket 1 retired ${bracket1.cycles} cycles` +
+      (bracket2 ? `, bracket 2 retired ${bracket2.cycles} cycles` : "") +
+      ` (${bracketsRun} bracket${bracketsRun > 1 ? "s" : ""} run, ${bracketsRun} resume call${bracketsRun > 1 ? "s" : ""}).`,
+    "Corroborating evidence only, never load-bearing on its own: the program counter, VIC-II state, " +
+      "checkpoint hit counts, and a screenshot. A status of ok with an execution state of running is " +
+      "compatible with every one of these verdicts and is therefore evidence for none of them.",
+  ];
+
+  if (verdict !== "wedged") {
+    lines.push(
+      `Measured rate this call: ~${finalBracket.cycles} cycles in ~${finalBracket.elapsedMs}ms ` +
+        `(~${ratePerSecond} cycles/s), beside the baseline ~${BASELINE_CYCLES_PER_SECOND} cycles/s ` +
+        "(PAL C64 full speed) -- an observation, never a threshold, and never a verdict of its own."
+    );
+  }
+
+  if (verdict === "stale_read_path") {
+    lines.push(
+      "The register-read path returned a byte-identical snapshot across both ends of an advancing " +
+        "bracket -- that read path is stale, but the machine is demonstrably not frozen."
+    );
+  }
+
+  lines.push(
+    verdict === "wedged"
+      ? "Machine state left: paused, after two zero-cycle brackets. Resuming is your own deliberate next call."
+      : "Machine state left: paused, after the bracket that reached this verdict. Resuming is your own deliberate next call."
+  );
+
+  return lines.join("\n");
+}
+
 /**
  * Handles vice_diagnose. Fixed check order, and the order is the point
  * (D-14): first the epoch comparison (zero emulator calls), then the
@@ -875,19 +1018,11 @@ async function handleDiagnose(_args) {
       return { content: [{ type: "text", text: renderCheckpointTrapReport(trapEvidence) }], isError: false };
     }
 
-    // Task 2 (plan 01.3-02) wires the cycle bracket in here, after the trap
-    // check and before any resume -- see runCycleBracket()/classifyLiveness().
-    return {
-      content: [
-        {
-          type: "text",
-          text:
-            "vice_diagnose: not a checkpoint trap and no restart detected -- cycle-bracket " +
-            "classification (wedged/stale_read_path/live) lands in this plan's task 2.",
-        },
-      ],
-      isError: false,
-    };
+    // Third and last: the cycle bracket, the definitive liveness test, drives
+    // the three remaining verdicts (D-14's full order: epoch, trap, bracket).
+    const bracketEvidence = await gatherBracketEvidence();
+    const verdict = classifyLiveness(bracketEvidence);
+    return { content: [{ type: "text", text: renderDiagnoseReport(bracketEvidence, verdict) }], isError: false };
   } catch (e) {
     if (e instanceof MachineRestartedError) {
       const current = currentEpoch();
