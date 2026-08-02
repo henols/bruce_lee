@@ -286,6 +286,26 @@ const RECYCLE_TOOL = {
   },
 };
 
+// The diagnose tool (plan 01.3-02): the read-mostly companion to
+// RECYCLE_TOOL above, served in the same proxy-local synthetic slot. D-03
+// keeps the two structurally unlinked -- no shared verdict/confirm state,
+// and recycle never reads a diagnose verdict.
+const DIAGNOSE_TOOL = {
+  name: "vice_diagnose",
+  description:
+    "Read-mostly. Answers which of five states this session's emulator is in -- restarted, " +
+    "checkpoint_trap, wedged, stale_read_path, or live -- with the evidence that produced the " +
+    "verdict. It may resume the machine once or twice to measure a cycle bracket, so it is never " +
+    "something to call reflexively; when it runs a bracket it leaves the machine PAUSED afterward -- " +
+    'resuming is your own next call. A "checkpoint_trap" verdict means the machine stopped ITSELF at ' +
+    "an armed checkpoint and must NOT be recycled -- recycling a self-inflicted stop destroys a " +
+    "healthy instance.",
+  inputSchema: {
+    type: "object",
+    properties: {},
+  },
+};
+
 function manifestPath() {
   return process.env.VICE_TOOLS_MANIFEST
     ? resolve(process.env.VICE_TOOLS_MANIFEST)
@@ -336,7 +356,7 @@ function handleToolsList() {
   //      tool, not a curated subset -- the host's tool set is not this
   //      repo's to enumerate.
   const manifestTools = readManifestTools().filter((t) => !DENY_LIST.includes(t.name));
-  const tools = [...manifestTools, RESULT_CONTINUE_TOOL, RECYCLE_TOOL].map((t) => ({
+  const tools = [...manifestTools, RESULT_CONTINUE_TOOL, RECYCLE_TOOL, DIAGNOSE_TOOL].map((t) => ({
     ...t,
     _meta: { ...(t._meta || {}), "anthropic/maxResultSizeChars": OUTPUT_CHAR_CAP },
   }));
@@ -607,6 +627,277 @@ async function handleRecycle(args) {
     ],
     isError: false,
   };
+}
+
+// ----------------------------------------------------------- vice_diagnose
+//
+// Plan 01.3-02 task 1: the read-mostly half of this phase, up to but not
+// including the cycle bracket (task 2 wires that in). Every read below goes
+// through the proxy's existing forwarded call() path -- no new host
+// capability, no new protocol, no second route.
+
+// The closed, five-member verdict vocabulary, in the order the checks run.
+// Frozen so a future edit cannot quietly widen it -- must_have C1's whole
+// point.
+const DIAGNOSE_VERDICTS = Object.freeze(["restarted", "checkpoint_trap", "wedged", "stale_read_path", "live"]);
+
+/** Normalise a checkpoint/register address to a plain number, accepting
+ * either a JS number or a hex string ("$1103"/"1103"/"0x1103"). An unprefixed
+ * digit string is read as HEX, matching this project's own address
+ * convention (every C64 address in this project's docs and RE-FINDINGS.md is
+ * hex), never decimal. Returns null, never throws, on anything unresolvable
+ * (T-01.3-06: an untrusted payload degrades to "unknown", never a thrown
+ * exception). */
+function toAddressNumber(value) {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const s = value.trim().replace(/^\$/, "").replace(/^0x/i, "");
+    const n = parseInt(s, 16);
+    if (Number.isFinite(n)) return n;
+  }
+  return null;
+}
+
+function formatAddress(n) {
+  return n === null || n === undefined ? "unknown" : `$${n.toString(16).toUpperCase().padStart(4, "0")}`;
+}
+
+function formatByte(n) {
+  return n === null || n === undefined ? "unknown" : `$${n.toString(16).toUpperCase().padStart(2, "0")}`;
+}
+
+/** Decode a vice_memory_read result into a plain byte array, accepting
+ * either the compact "hex" string encoding (requested below) or the legacy
+ * per-byte "bytes" array shape -- an untrusted payload degrades to an empty
+ * array, never a thrown exception (T-01.3-06). */
+function bytesFromMemoryReadResult(result) {
+  if (result && typeof result.hex === "string") {
+    const clean = result.hex.replace(/[^0-9a-fA-F]/g, "");
+    const bytes = [];
+    for (let i = 0; i + 1 < clean.length; i += 2) bytes.push(parseInt(clean.slice(i, i + 2), 16));
+    return bytes;
+  }
+  if (result && Array.isArray(result.bytes)) {
+    return result.bytes
+      .map((b) => (typeof b === "string" ? parseInt(b.replace(/^\$/, ""), 16) : Number(b)))
+      .filter((n) => Number.isFinite(n));
+  }
+  return [];
+}
+
+function wordFromBytes(bytes) {
+  return bytes.length >= 2 ? bytes[0] | (bytes[1] << 8) : null;
+}
+
+// Bit 1 (HIRAM) of the 6510 processor port at $01. SET -- the KERNAL ROM is
+// banked in, and the RAM IRQ vector pair ($0314/$0315) is what the KERNAL's
+// own dispatch actually reads (RE-FINDINGS.md's own vector-table entry).
+// CLEAR -- the KERNAL is replaced by RAM and the CPU reads the hardware
+// IRQ/BRK vector pair ($FFFE/$FFFF) directly, with no ROM indirection.
+const HIRAM_MASK = 0x02;
+
+/**
+ * The single definition of the live-IRQ-handler lookup (Key Finding 6):
+ * three forwarded reads through the normal call() path -- $01, the RAM
+ * vector pair, and (only when $01 says the ROMs are banked out) the hardware
+ * vector pair. Consumed by the checkpoint-trap check below and, per this
+ * plan's own key_links, by plan 01.3-03's evidence gatherer. Memoises
+ * NOTHING: a disk swap, a reset or a different game retargets the handler,
+ * so a cached address would silently resolve the wrong pair.
+ */
+async function resolveLiveIrqHandler() {
+  const portResult = await call("vice_memory_read", { address: "$01", size: 1, encoding: "hex" });
+  const portBytes = bytesFromMemoryReadResult(portResult);
+  const port01 = portBytes.length > 0 ? portBytes[0] : null;
+  const bankedOut = port01 !== null && (port01 & HIRAM_MASK) === 0;
+
+  const ramResult = await call("vice_memory_read", { address: "$0314", size: 2, encoding: "hex" });
+  const ramTarget = wordFromBytes(bytesFromMemoryReadResult(ramResult));
+
+  if (!bankedOut) {
+    return {
+      target: ramTarget,
+      pairLabel: "the RAM KERNAL IRQ vector pair ($0314/$0315)",
+      explanation:
+        `$01 read as ${formatByte(port01)} -- the KERNAL ROM is banked in, so the RAM IRQ vector pair ` +
+        `($0314/$0315) is the pair this session's IRQ dispatch actually reads; it resolves to ${formatAddress(ramTarget)}.`,
+    };
+  }
+
+  const hwResult = await call("vice_memory_read", { address: "$FFFE", size: 2, encoding: "hex" });
+  const hwTarget = wordFromBytes(bytesFromMemoryReadResult(hwResult));
+  return {
+    target: hwTarget,
+    pairLabel: "the hardware IRQ/BRK vector pair ($FFFE/$FFFF)",
+    explanation:
+      `$01 read as ${formatByte(port01)} -- the KERNAL ROM is banked OUT, so the CPU dispatches ` +
+      `directly through the hardware IRQ/BRK vector pair ($FFFE/$FFFF) with no ROM indirection; it ` +
+      `resolves to ${formatAddress(hwTarget)}.`,
+  };
+}
+
+/**
+ * Enumerate armed checkpoints, read the current PC, resolve the live IRQ
+ * handler, and decide the checkpoint-trap verdict on two named shapes
+ * (D-14): an enabled, stopping, exec checkpoint sitting exactly at the
+ * current PC; or one sitting at the resolved handler entry with a hit count
+ * of exactly zero (the corroborating tell that it has never actually
+ * fired). Makes NO resume and NO stopwatch call -- the whole point of
+ * checking this before any cycle bracket (D-14, T-01.3-08).
+ */
+async function gatherCheckpointTrapEvidence() {
+  const checkpointsResult = await call("vice_checkpoint_list", {});
+  const checkpoints = Array.isArray(checkpointsResult && checkpointsResult.checkpoints) ? checkpointsResult.checkpoints : [];
+
+  const regs = await call("vice_registers_get", {});
+  const pc = regs && typeof regs.PC === "number" ? regs.PC : null;
+
+  const handler = await resolveLiveIrqHandler();
+
+  const armedStopping = checkpoints.filter((c) => c && c.enabled !== false && c.stop === true && c.exec === true);
+
+  const atPc = pc !== null ? armedStopping.find((c) => toAddressNumber(c.start) === pc) : undefined;
+  const atHandler =
+    !atPc && handler.target !== null && handler.target !== undefined
+      ? armedStopping.find((c) => toAddressNumber(c.start) === handler.target && c.hit_count === 0)
+      : undefined;
+
+  const trapCheckpoint = atPc || atHandler || null;
+  return {
+    isTrap: Boolean(trapCheckpoint),
+    checkpoints,
+    pc,
+    handler,
+    trapCheckpoint,
+    trapReason: atPc ? "pc" : atHandler ? "handler" : null,
+  };
+}
+
+// The recorded incident this report's own "not guaranteed" paragraph cites --
+// D-15's own caveat, load-bearing per this plan's planning notes: delete,
+// soft reset, hard reset and an explicit single step ALL left the machine
+// frozen in this recorded case.
+const CHECKPOINT_TRAP_INCIDENT_REF =
+  ".planning/todos/pending/2026-08-01-vice-registers-frozen-after-reset-during-01-04-task2.md";
+
+/** Renders the checkpoint_trap verdict's report -- an explanation, never a
+ * remedy (D-15): it names the armed checkpoints, the resolved handler, the
+ * PC's relation to the trap, states plainly this is self-inflicted and not a
+ * wedge, names the agent's own next moves without performing any of them,
+ * and closes with the not-guaranteed paragraph. */
+function renderCheckpointTrapReport(evidence) {
+  const { checkpoints, pc, handler, trapCheckpoint, trapReason } = evidence;
+  const checkpointList =
+    checkpoints.length === 0
+      ? "none armed"
+      : checkpoints
+          .map((c) => {
+            const addr = formatAddress(toAddressNumber(c && c.start));
+            const flag = c && c.stop ? "stop" : "continue";
+            const enabled = c && c.enabled === false ? "disabled" : "enabled";
+            const hitCount = c && typeof c.hit_count === "number" ? c.hit_count : "unknown";
+            return `#${c && c.checkpoint_num} ${addr} (${flag}, ${enabled}, hit_count ${hitCount})`;
+          })
+          .join("; ");
+
+  const pcRelation =
+    trapReason === "pc"
+      ? `exactly at armed checkpoint #${trapCheckpoint.checkpoint_num} -- that is why the machine is stopped here`
+      : trapReason === "handler"
+        ? `not at the armed checkpoint's own address, but checkpoint #${trapCheckpoint.checkpoint_num} sits at ` +
+          "the resolved live IRQ handler entry with hit_count 0 -- the corroborating tell that this checkpoint " +
+          "has never actually fired, not merely that it fired between reads"
+        : "no relation established";
+
+  return [
+    "vice_diagnose verdict: checkpoint_trap",
+    "",
+    `Armed checkpoints: ${checkpointList}.`,
+    `Resolved live IRQ handler: ${handler.explanation}`,
+    `Current PC: ${formatAddress(pc)} -- ${pcRelation}.`,
+    "",
+    "This is a self-inflicted stop, not a wedge: the machine paused because an armed checkpoint " +
+      "fired or sits exactly here, not because it stopped retiring cycles on its own. Recycling now " +
+      "would destroy a healthy instance -- no cycle bracket was run to reach this verdict.",
+    "",
+    "Next moves available to you (this report does not perform any of them): vice_checkpoint_delete " +
+      "the offending checkpoint, or vice_checkpoint_toggle it disabled; vice_execution_step past it; " +
+      "then re-run vice_diagnose.",
+    "",
+    "Not guaranteed: deleting the checkpoint is not guaranteed to unfreeze the machine. The recorded " +
+      `incident (${CHECKPOINT_TRAP_INCIDENT_REF}) shows checkpoint delete, then a soft reset, then a hard ` +
+      "reset, then an explicit single step ALL leaving the machine frozen in sequence -- a checkpoint " +
+      "trap may be the onset without being the whole story. If a cycle bracket still measures zero " +
+      "after the checkpoint is gone, the verdict becomes wedged and recycle is the fallback after all.",
+  ].join("\n");
+}
+
+/** Renders the restarted verdict's report -- reached from a plain epoch-file
+ * comparison alone, at zero emulator calls (D-14's ordering: this check
+ * costs nothing and runs first). */
+function renderRestartedReport(beforeEpoch, afterEpoch) {
+  return (
+    "vice_diagnose verdict: restarted\n\n" +
+    `The host VICE MCP server's epoch changed from ${beforeEpoch} to ${afterEpoch} -- the emulator ` +
+    "behind this session restarted. This is answered from a plain epoch comparison alone, at zero " +
+    "emulator calls; no checkpoint enumeration was attempted, because a restart is this project's own " +
+    "already-handled case (criterion 1) and re-deriving it here would be a second mechanism. Any run " +
+    "in flight before this point is void."
+  );
+}
+
+/**
+ * Handles vice_diagnose. Fixed check order, and the order is the point
+ * (D-14): first the epoch comparison (zero emulator calls), then the
+ * checkpoint-trap check (no resume at all). Never throws past this point --
+ * every branch is a well-formed isError:false or isError:true result.
+ */
+async function handleDiagnose(_args) {
+  try {
+    const leaseResult = await ensureBrokerLease();
+    if (!leaseResult.ok) {
+      return isErrorText(leaseResult.message);
+    }
+    ensureViceSession();
+
+    const epochNow = currentEpoch();
+    if (epochChanged(epochBaseline, epochNow)) {
+      const before = epochBaseline.epoch;
+      epochBaseline = epochNow; // never cache a negative result (criterion 6)
+      return { content: [{ type: "text", text: renderRestartedReport(before, epochNow.epoch) }], isError: false };
+    }
+    if (!epochBaseline.present && epochNow.present) {
+      epochBaseline = epochNow;
+    }
+
+    const trapEvidence = await gatherCheckpointTrapEvidence();
+    if (trapEvidence.isTrap) {
+      return { content: [{ type: "text", text: renderCheckpointTrapReport(trapEvidence) }], isError: false };
+    }
+
+    // Task 2 (plan 01.3-02) wires the cycle bracket in here, after the trap
+    // check and before any resume -- see runCycleBracket()/classifyLiveness().
+    return {
+      content: [
+        {
+          type: "text",
+          text:
+            "vice_diagnose: not a checkpoint trap and no restart detected -- cycle-bracket " +
+            "classification (wedged/stale_read_path/live) lands in this plan's task 2.",
+        },
+      ],
+      isError: false,
+    };
+  } catch (e) {
+    if (e instanceof MachineRestartedError) {
+      const current = currentEpoch();
+      epochBaseline = current;
+      return { content: [{ type: "text", text: renderRestartedReport(e.baselineEpoch, e.currentEpoch) }], isError: false };
+    }
+    return isErrorText(
+      `vice_diagnose: an unexpected error occurred while gathering evidence: ${e && e.message ? e.message : e}`
+    );
+  }
 }
 
 // --------------------------------------------------- unreachable diagnostics
@@ -1378,6 +1669,16 @@ async function handleToolsCall(params) {
   // request protocol itself).
   if (name === RECYCLE_TOOL.name) {
     return handleRecycle(args);
+  }
+
+  // The diagnose tool (plan 01.3-02): also entirely a proxy-local concern,
+  // served in the same synthetic-tool slot as the two above -- before any
+  // deny-list or epoch logic. handleDiagnose() drives its own forwarded
+  // reads via call() and its own epoch bookkeeping, rather than the generic
+  // forwarding path below, because its epoch-drift and trap outcomes are
+  // REPORTS (a verdict), never a refusal.
+  if (name === DIAGNOSE_TOOL.name) {
+    return handleDiagnose(args);
   }
 
   // Layer 1: call-time deny-list refusal, before any forwarding logic and

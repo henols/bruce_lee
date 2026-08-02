@@ -379,9 +379,9 @@ test("tools/list reads the committed snapshot with no emulator", async () => {
     const resp = await proxy.nextMessage();
     const tools = resp.result.tools;
     // Both fixture tools, PLUS the always-present synthetic
-    // vice_result_continue tool (task 3) AND vice_recycle (plan 01.3-01) --
-    // tools/list never omits either synthetic tool.
-    assert.equal(tools.length, 4, "both fixture tools plus both synthetic tools must come back");
+    // vice_result_continue tool (task 3), vice_recycle (plan 01.3-01) and
+    // vice_diagnose (plan 01.3-02) -- tools/list never omits any synthetic tool.
+    assert.equal(tools.length, 5, "both fixture tools plus all three synthetic tools must come back");
 
     const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
     assert.ok(byName.vice_ping, "vice_ping must be present");
@@ -433,12 +433,13 @@ test("tools/list survives a missing or corrupt snapshot", async () => {
         proxy.send({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} });
         const resp = await proxy.nextMessage();
         // "Empty tools array" means empty of MANIFEST-derived tools -- the
-        // always-present synthetic tools (vice_result_continue, task 3; and
-        // vice_recycle, plan 01.3-01) are not sourced from the manifest at
-        // all, so a broken manifest can't take either of them down with it.
+        // always-present synthetic tools (vice_result_continue, task 3;
+        // vice_recycle, plan 01.3-01; and vice_diagnose, plan 01.3-02) are
+        // not sourced from the manifest at all, so a broken manifest can't
+        // take any of them down with it.
         assert.deepEqual(
           resp.result.tools.map((t) => t.name),
-          ["vice_result_continue", "vice_recycle"],
+          ["vice_result_continue", "vice_recycle", "vice_diagnose"],
           `expected only the synthetic tools for ${manifestFile}`
         );
 
@@ -456,7 +457,7 @@ test("tools/list survives a missing or corrupt snapshot", async () => {
 
         proxy.send({ jsonrpc: "2.0", id: 4, method: "tools/list", params: {} });
         const secondList = await proxy.nextMessage();
-        assert.deepEqual(secondList.result.tools.map((t) => t.name), ["vice_result_continue", "vice_recycle"]);
+        assert.deepEqual(secondList.result.tools.map((t) => t.name), ["vice_result_continue", "vice_recycle", "vice_diagnose"]);
 
         assert.equal(proxy.child.exitCode, null, "the proxy process must still be running");
         assert.equal(proxy.child.killed, false);
@@ -3051,6 +3052,329 @@ test("vice_disk_list is still absent from tools/list and still refused at tools/
     const callResp = await proxy.nextMessage();
     assert.equal(callResp.result.isError, true, "vice_disk_list must still be refused at call time");
     assert.equal(requests.length, 0, "the refusal must make no request to the stand-in host");
+  } finally {
+    proxy.child.kill("SIGKILL");
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Plan 01.3-02 task 1: vice_diagnose's checkpoint-trap check and epoch-first
+// ordering -- the read-mostly half of this phase, up to but not including
+// the cycle bracket (task 2). Every fixture here is a stand-in host that
+// answers each forwarded read with a scripted payload; no live emulator, no
+// host, deterministic forever (D-07's synthetic proof standard for the
+// detector half).
+// ---------------------------------------------------------------------------
+
+/** Encode a plain byte array as the compact "hex" vice_memory_read shape
+ * resolveLiveIrqHandler() requests. */
+function memHex(bytes) {
+  return { hex: bytes.map((b) => b.toString(16).padStart(2, "0")).join("") };
+}
+
+/**
+ * A general-purpose stand-in for vice_diagnose's own forwarded reads.
+ * `respond(name, args)` is supplied by each test and returns the JSON-able
+ * payload for a given tool call, or `undefined` for anything unhandled
+ * (which becomes the same generic "unsupported" JSON-RPC result every other
+ * stand-in in this file returns). Mutable per-call state (a $01 value that
+ * flips between two diagnose calls, a checkpoint set that changes between
+ * calls) is just a closure variable the test itself owns and mutates between
+ * `proxy.send()` calls -- this stand-in imposes no shape of its own on that.
+ */
+function startFlexibleStandInServer(respond) {
+  const requests = [];
+  const server = createServer((req, res) => {
+    let body = "";
+    req.setEncoding("utf8");
+    req.on("data", (chunk) => (body += chunk));
+    req.on("end", () => {
+      let msg;
+      try {
+        msg = JSON.parse(body);
+      } catch {
+        msg = null;
+      }
+      requests.push(msg);
+
+      if (msg && msg.method === "initialize") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: msg.id,
+            result: { protocolVersion: "2024-11-05", capabilities: {}, serverInfo: { name: "stand-in-vice", version: "0.0.0" } },
+          })
+        );
+        return;
+      }
+      if (msg && msg.method === "tools/call" && msg.params) {
+        const payload = respond(msg.params.name, msg.params.arguments || {});
+        if (payload !== undefined) {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(
+            JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: JSON.stringify(payload) }] } })
+          );
+          return;
+        }
+      }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: msg && "id" in msg ? msg.id : null,
+          error: { code: -32601, message: "unsupported in this test's stand-in server" },
+        })
+      );
+    });
+  });
+  return { server, requests };
+}
+
+function sendDiagnose(proxy, id = 3) {
+  proxy.send({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "vice_diagnose", arguments: {} } });
+  return proxy.nextMessage();
+}
+
+function forwardedCallsNamed(requests, toolName) {
+  return requests.filter((r) => r && r.method === "tools/call" && r.params && r.params.name === toolName);
+}
+
+test("diagnose: a stopping checkpoint at the current PC is a checkpoint trap, and no bracket is run", async () => {
+  const respond = (name, args) => {
+    if (name === "vice_checkpoint_list") {
+      return { checkpoints: [{ checkpoint_num: 1, start: "$1103", stop: true, exec: true, enabled: true, hit_count: 3 }] };
+    }
+    if (name === "vice_registers_get") {
+      return { PC: 0x1103, A: 0, X: 0, Y: 0, SP: 0xf0 };
+    }
+    if (name === "vice_memory_read") {
+      if (args.address === "$01") return memHex([0x37]); // banked in
+      if (args.address === "$0314") return memHex([0x31, 0xea]); // default $EA31
+    }
+    return undefined;
+  };
+  const { server, requests } = startFlexibleStandInServer(respond);
+  const port = await listen(server);
+  const proxy = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${port}/mcp` });
+  try {
+    await handshake(proxy);
+    const resp = await sendDiagnose(proxy);
+    assert.equal(resp.result.isError, false);
+    assert.match(resp.result.content[0].text, /verdict: checkpoint_trap/);
+    assert.match(resp.result.content[0].text, /armed checkpoint #1/);
+    assert.equal(
+      forwardedCallsNamed(requests, "vice_execution_run").length,
+      0,
+      "no resume must occur -- the trap verdict needs none"
+    );
+    assert.equal(
+      forwardedCallsNamed(requests, "vice_cycles_stopwatch").length,
+      0,
+      "no stopwatch call must occur either"
+    );
+  } finally {
+    proxy.child.kill("SIGKILL");
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("diagnose: a stopping checkpoint at the resolved live IRQ handler is a checkpoint trap", async () => {
+  const respond = (name, args) => {
+    if (name === "vice_checkpoint_list") {
+      return { checkpoints: [{ checkpoint_num: 7, start: "$EA31", stop: true, exec: true, enabled: true, hit_count: 0 }] };
+    }
+    if (name === "vice_registers_get") {
+      // Incident 1's own frozen PC -- deliberately NOT the checkpoint's own
+      // address, proving this path is distinct from the "at PC" case above.
+      return { PC: 0x0fab, A: 1, X: 21, Y: 38, SP: 251 };
+    }
+    if (name === "vice_memory_read") {
+      if (args.address === "$01") return memHex([0x37]); // banked in
+      if (args.address === "$0314") return memHex([0x31, 0xea]); // resolves to $EA31, matching the checkpoint
+    }
+    return undefined;
+  };
+  const { server, requests } = startFlexibleStandInServer(respond);
+  const port = await listen(server);
+  const proxy = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${port}/mcp` });
+  try {
+    await handshake(proxy);
+    const resp = await sendDiagnose(proxy);
+    assert.equal(resp.result.isError, false);
+    assert.match(resp.result.content[0].text, /verdict: checkpoint_trap/);
+    assert.match(resp.result.content[0].text, /hit_count 0/);
+    assert.match(resp.result.content[0].text, /never actually fired/);
+    assert.equal(forwardedCallsNamed(requests, "vice_execution_run").length, 0);
+  } finally {
+    proxy.child.kill("SIGKILL");
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("diagnose: the trap report names the vector pair, the $01 value, and that remediation is not guaranteed", async () => {
+  const respond = (name, args) => {
+    if (name === "vice_checkpoint_list") {
+      return { checkpoints: [{ checkpoint_num: 2, start: "$1574", stop: true, exec: true, enabled: true, hit_count: 5 }] };
+    }
+    if (name === "vice_registers_get") {
+      return { PC: 0x1574 };
+    }
+    if (name === "vice_memory_read") {
+      if (args.address === "$01") return memHex([0x35]); // banked OUT (HIRAM bit clear)
+      if (args.address === "$0314") return memHex([0x31, 0xea]);
+      if (args.address === "$FFFE") return memHex([0x48, 0xff]);
+    }
+    return undefined;
+  };
+  const { server } = startFlexibleStandInServer(respond);
+  const port = await listen(server);
+  const proxy = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${port}/mcp` });
+  try {
+    await handshake(proxy);
+    const resp = await sendDiagnose(proxy);
+    const text = resp.result.content[0].text;
+    assert.match(text, /hardware IRQ\/BRK vector pair/);
+    assert.match(text, /\$35/i);
+    assert.match(text, /not guaranteed/i);
+    assert.match(text, /soft reset/);
+    assert.match(text, /hard reset/);
+    assert.match(text, /single step/);
+    assert.match(text, /delete/);
+  } finally {
+    proxy.child.kill("SIGKILL");
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("diagnose: does not fire on disabled, non-stopping, or address-mismatched checkpoints", async () => {
+  const scenario = { checkpoints: [] };
+  const respond = (name, args) => {
+    if (name === "vice_checkpoint_list") return { checkpoints: scenario.checkpoints };
+    if (name === "vice_registers_get") return { PC: 0x4000 };
+    if (name === "vice_memory_read") {
+      if (args.address === "$01") return memHex([0x37]);
+      if (args.address === "$0314") return memHex([0x31, 0xea]);
+    }
+    return undefined;
+  };
+  const { server } = startFlexibleStandInServer(respond);
+  const port = await listen(server);
+  const proxy = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${port}/mcp` });
+  try {
+    await handshake(proxy);
+
+    scenario.checkpoints = [{ checkpoint_num: 1, start: "$4000", stop: true, exec: true, enabled: false, hit_count: 0 }];
+    const disabledResp = await sendDiagnose(proxy, 3);
+    assert.doesNotMatch(disabledResp.result.content[0].text, /verdict: checkpoint_trap/, "a disabled checkpoint must not trap");
+
+    scenario.checkpoints = [{ checkpoint_num: 2, start: "$4000", stop: false, exec: true, enabled: true, hit_count: 0 }];
+    const nonStoppingResp = await sendDiagnose(proxy, 4);
+    assert.doesNotMatch(
+      nonStoppingResp.result.content[0].text,
+      /verdict: checkpoint_trap/,
+      "a non-stopping checkpoint must not trap"
+    );
+
+    scenario.checkpoints = [{ checkpoint_num: 3, start: "$9999", stop: true, exec: true, enabled: true, hit_count: 0 }];
+    const mismatchResp = await sendDiagnose(proxy, 5);
+    assert.doesNotMatch(
+      mismatchResp.result.content[0].text,
+      /verdict: checkpoint_trap/,
+      "an address matching neither the PC nor the resolved handler must not trap"
+    );
+  } finally {
+    proxy.child.kill("SIGKILL");
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("diagnose: a restarted epoch is reported with both epoch values, and no checkpoint enumeration is attempted", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vice-proxy-diagnose-epoch-"));
+  const epochFile = join(dir, "epoch.json");
+  writeFileSync(epochFile, JSON.stringify({ epoch: 1, pid: 111, spawned_at: "2026-08-02T00:00:00.000Z" }), "utf8");
+
+  let checkpointListCalls = 0;
+  const respond = (name) => {
+    if (name === "vice_ping") return { version: "3.10", machine: "C64SC", execution: "paused" };
+    if (name === "vice_checkpoint_list") {
+      checkpointListCalls += 1;
+      return { checkpoints: [] };
+    }
+    return undefined;
+  };
+  const { server } = startFlexibleStandInServer(respond);
+  const port = await listen(server);
+  const proxy = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${port}/mcp`, VICE_EPOCH_FILE: epochFile });
+  try {
+    await handshake(proxy);
+    // Establish the baseline first via a plain forwarded call.
+    proxy.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
+    await proxy.nextMessage();
+
+    // The epoch moves underneath the proxy -- a restart happened.
+    writeFileSync(epochFile, JSON.stringify({ epoch: 2, pid: 222, spawned_at: "2026-08-02T00:05:00.000Z" }), "utf8");
+
+    const resp = await sendDiagnose(proxy, 4);
+    assert.equal(resp.result.isError, false);
+    assert.match(resp.result.content[0].text, /verdict: restarted/);
+    assert.match(resp.result.content[0].text, /\b1\b/);
+    assert.match(resp.result.content[0].text, /\b2\b/);
+    assert.equal(checkpointListCalls, 0, "no checkpoint enumeration must be attempted once a restart is already proven");
+  } finally {
+    proxy.child.kill("SIGKILL");
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("diagnose: the live IRQ handler resolver is called fresh on every diagnose call, never cached", async () => {
+  const scenario = { port01: 0x37 }; // banked in, target $EA31
+  const respond = (name, args) => {
+    if (name === "vice_checkpoint_list") {
+      return { checkpoints: [{ checkpoint_num: 1, start: "$4000", stop: true, exec: true, enabled: true, hit_count: 3 }] };
+    }
+    if (name === "vice_registers_get") return { PC: 0x4000 };
+    if (name === "vice_memory_read") {
+      if (args.address === "$01") return memHex([scenario.port01]);
+      if (args.address === "$0314") return memHex([0x31, 0xea]);
+      if (args.address === "$FFFE") return memHex([0x48, 0xff]);
+    }
+    return undefined;
+  };
+  const { server } = startFlexibleStandInServer(respond);
+  const port = await listen(server);
+  const proxy = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${port}/mcp` });
+  try {
+    await handshake(proxy);
+
+    const first = await sendDiagnose(proxy, 3);
+    assert.match(first.result.content[0].text, /RAM IRQ vector pair/);
+    assert.match(first.result.content[0].text, /\$EA31/);
+
+    scenario.port01 = 0x35; // banked OUT on the second call -- same proxy, same session
+    const second = await sendDiagnose(proxy, 4);
+    assert.match(second.result.content[0].text, /hardware IRQ\/BRK vector pair/);
+    assert.match(second.result.content[0].text, /\$FF48/);
+  } finally {
+    proxy.child.kill("SIGKILL");
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("vice_diagnose appears in tools/list alongside the other synthetic tools", async () => {
+  const { server } = startStandInServer();
+  const port = await listen(server);
+  const proxy = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${port}/mcp` });
+  try {
+    await handshake(proxy);
+    proxy.send({ jsonrpc: "2.0", id: 3, method: "tools/list", params: {} });
+    const resp = await proxy.nextMessage();
+    const names = resp.result.tools.map((t) => t.name);
+    assert.ok(names.includes("vice_diagnose"), "vice_diagnose must be present in a live tools/list response");
+    assert.ok(names.includes("vice_recycle"));
+    assert.ok(names.includes("vice_result_continue"));
   } finally {
     proxy.child.kill("SIGKILL");
     await new Promise((resolve) => server.close(resolve));
