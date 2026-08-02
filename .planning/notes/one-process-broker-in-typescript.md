@@ -36,6 +36,56 @@ independence, which is why D-3 exists.
 Chosen over plain `.mjs` after the trade was put explicitly (see § The trade, below). The
 developer reaffirmed TypeScript after the cost was named, so it is locked, not a default.
 
+**D-2a. The conversion covers *all* of `.claude/mcp/vice/`, not just the broker — 16,522 lines.**
+Developer: *"remove all shell script exept for the one that starts the broker, all mjs files is
+converted to typescript. Nice and simple no mixture of different things."* So the proxy, the pool
+client, the path helpers and the entire test suite convert too — 13 source files (6,426 lines) and 8
+test files (10,096 lines).
+
+**Boundary, decided explicitly:** `tools/*.mjs` (~4,900 lines of RE tooling with tests) and
+`.claude/skills/*/scripts/*.mjs` (~811) stay `.mjs` and become a follow-up todo — a separate concern,
+its own lifecycle, no shared code with the MCP, and dragging it in would roughly double an already
+oversized phase. `.planning/spikes/**` (~1,500 lines) is **never** converted: those are frozen
+records of completed experiments, and rewriting them destroys evidence for the same reason editing a
+confidence grade in place does. `.devcontainer/*.sh` is container provisioning, untouched.
+
+**D-2b. Exactly one shell script survives: the broker launcher.** All 3,444 tracked lines of
+host-side bash go. Two of the five are not coordination logic and need a deliberate destination
+rather than deletion-in-passing: `lib/container-guard.sh` (184 lines) is what makes the broker
+*refuse to run inside the devcontainer* — a real failure it prevents, since `x64sc` and its listeners
+are host-side — and `lib/repo-root.sh` (103 lines). Each either lives in the launcher or moves to TS.
+
+**D-2c. The broker holds all its state in one place, in process.**
+Developer: *"the broker becomes a server that holds everyting it needs to know in as single place."*
+Six on-disk locations retire into in-process state with one owner: `grants/`, `requests/`, `leases/`,
+`spares/`, `broker-instances.json`, and the per-instance epoch files. This is the direct fix for the
+defect where recovery required moving five directories aside **by hand**. **One exception survives on
+purpose:** `broker.json` stays a file as the *discovery* record, because without a file naming the
+port nothing can find the broker and `ECONNREFUSED` is ambiguous between never-started, stale and
+alive. State in one place; discovery still a file.
+
+**D-2d. Conversion runs FIRST, and old 01.6 splits in two.**
+The developer chose to land the conversion before any further work on the files it rewrites. That
+forced the split criterion 15 had already flagged as likely — "convert first" only means something if
+the conversion is separable from the protocol change. New execution order for v1.1:
+
+**01.6 (convert) → 01.4 (tool surface, in TS) → 01.5 (broker defects, in TS) → 01.7 (transport) → 01.3**
+
+Two consequences, both recorded rather than smoothed over:
+
+1. **01.5's original rationale is dead.** It read *"these defects are fixed in bash, in place, and
+   01.6 then moves working code"* — there is no bash left to fix in place. What survives is the
+   discipline that rationale existed to protect: 01.5 still runs **before 01.7**, so a transport
+   regression still has one candidate cause. And fixing a stringly-typed state machine *with types on
+   it* is a better outcome than fixing it in bash, given the 2026-08-01 triple-launch was exactly
+   that class of bug.
+2. **01.6 now runs with no live-session verification available at all.** 01.4 is what makes live
+   verification possible, and it now comes second. So the largest, riskiest phase in the milestone is
+   proven only by a test suite that 01.4 has already shown can be 268/268 green while three tools are
+   uncallable from a real session. This is a genuine cost of the chosen ordering, it cannot be
+   engineered away by adding more tests of the same shape, and 01.6 must carry "the tool surface a
+   session sees is unchanged" forward as an *explicitly unverified* claim.
+
 **D-3. A SIGKILLed broker leaves its `x64sc` processes running, and that is accepted.**
 *Revised within the same session.* The first phrasing was a hard constraint — *"it cant leave any
 orphand x64sc processes … when a SIGKILL shows up the broker must tell the supervisors to take down
@@ -123,22 +173,34 @@ test asserting `resources/` is in sync with the TS source.
 | 10 (`install-resources.mjs` deploys new files) | Unchanged mechanism, higher stakes — it now deploys build output, so a stale build deploys stale code silently. |
 | 11 (two brokers cannot run at once — CR-01) | Unchanged and still required. A single TCP listener is still the kernel-enforced singleton. |
 
+## Resolved since first draft
+
+1. ~~Does TypeScript stop at the broker application?~~ **No — D-2a: all of `.claude/mcp/vice/`,
+   16,522 lines, with `tools/` and the skill scripts excluded as a follow-up and the spikes never.**
+2. ~~Sequencing inside 01.6 — does it warrant a split?~~ **Yes, and the split is now mandatory rather
+   than advisable — D-2d. 01.6 is the conversion; the new 01.7 is the transport.**
+
 ## Open questions — for 01.6 planning, not decided here
 
-1. **Does TypeScript stop at the broker application, or eventually cover `vice-proxy.mjs` and the
-   rest of `.claude/mcp/vice/`?** The decision as given was scoped to *the broker application*
-   (broker + supervisor + pool). The container-side proxy is a different component and is **not**
-   in scope by this note. Phase 01.4 is editing `.mjs` proxy files right now on that assumption.
-2. **Is the `vice-pool.mjs` / `vice-pool.sh` split absorbed entirely, or does the container-side half
-   of the pool survive as a separate concern?** D-1 says the pool joins the application; the
-   existing split is host/container, not shell/node, so which side "the pool" means needs settling.
-3. **Sequencing inside 01.6.** The phase now carries three changes — consolidate three programs into
-   one, change language, change transport. Its own recorded risk is that relocating code and
-   changing its protocol together leaves a regression with no single candidate cause. Three changes
-   is worse than two. Consider whether this warrants a split before planning.
+1. **Is the `vice-pool.mjs` / `vice-pool.sh` split absorbed entirely, or does the container-side half
+   of the pool survive as a separate concern?** D-1 says the pool joins the application; the existing
+   split is host/container, not shell/node, so which side "the pool" means needs settling.
+2. **Does the test suite compile, or run TS directly?** 10,096 lines of tests convert, and the suite
+   is the equivalence proof (01.6 criterion 8), so how it is invoked stops being cosmetic.
+   `node --test` against compiled output is the conservative answer; `--experimental-strip-types`
+   needs a container Node new enough. Note the container and host Node versions are *different
+   constraints* — tests run container-side, only the deployed broker runs host-side.
+3. **Where does `resources/` end up in the build topology?** If `tsc` emits into it, it inverts from
+   authored source to generated output, and `./.claude/CLAUDE.md` currently instructs editing it
+   directly. That rule must change in the same commit that inverts the directory — 01.6 criterion 3
+   requires it, but the concrete layout is unchosen.
 4. **Does the one-process design change how a wedged emulator is detected?** Phase 01.3's recovery
-   path was designed against a separate supervisor holding the respawn loop. Worth a read-through
-   when 01.3 resumes, since 01.3 is sequenced *after* 01.6.
+   path was designed against a separate supervisor holding the respawn loop, and 01.3 resumes last.
+   Worth a read-through before it does.
+5. **How is 16,522 lines sliced so the suite stays green continuously?** Both halves of the
+   conversion — source and tests — are being rewritten, so a conversion bug landing in both is
+   invisible. The slicing strategy is the main thing standing between this phase and a silent
+   regression, and it is not decided here.
 
 ## Related
 
