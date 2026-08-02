@@ -93,7 +93,12 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-17 pending — see `.planning/todos/pending/`. The dependency chain was
+19 pending — see `.planning/todos/pending/`. The newest is the only **blocker**: **a supervisor
+skill/tool to detect and recover a wedged (not crashed) VICE**
+(`2026-08-02-supervisor-skill-to-detect-and-recover-a-wedged-vice.md`) — the existing supervisor
+respawns x64sc only when the *process exits*, so a live-but-frozen emulator (0 cycles retired while
+`vice_ping` reports `running`) has no recovery path and has halted plan 01-04 across three attempts.
+The dependency chain was
 **absorb the skills → extract the package → share broker state**; its first step is now **done**
 (2026-08-01, `e0f9915`), which unblocks the second. Sharing state without sharing code means N
 drifting implementations, while sharing code without sharing state means N brokers racing:
