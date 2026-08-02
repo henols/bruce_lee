@@ -30,9 +30,10 @@ An ACME source tree that rebuilds a Bruce Lee which plays identically to the ori
 
 ### Milestone Split
 
-Active requirements are delivered across two milestones, split at the Phase 4 boundary:
+Active requirements are delivered across two milestones, split at the Phase 4 boundary — with a third, requirement-free **tooling** milestone inserted ahead of them on 2026-08-02:
 
-- **v1.0 — Pipeline Proven** (Phases 1–4, 24 reqs): recovery + provenance, code/data map, verification harness with the original's baselines, and one subsystem (sprite/display) driven end-to-end to a verified `.prg`. Deliverable is a *proven pipeline*.
+- **v1.1 — Emulator Access Hardened** *(active, inserted 2026-08-02; Phases 01.3–01.6, **0 reqs**)*: every proxy tool reaches the agent that needs it, a dead or wedged instance costs one acquisition rather than the session, the broker never warms/grants/retains an instance that is not real, and broker coordination moves into Node behind a TCP control plane. **Carries no requirements by design** — it follows the precedent set by tooling phases 01.1/01.2/01.3, so the 24/20/6 counts below are untouched by it. It exists because emulator tooling had been arriving as one-at-a-time decimal insertions, each interrupting Phase 1, and the outstanding set is now twelve recorded defects — several of them the direct cause of Phase 1 stalling five times. Every remaining v1.0 phase is long unattended emulator work, which is precisely the workload those defects make expensive or impossible, so v1.1 **displaces** v1.0 rather than running beside it.
+- **v1.0 — Pipeline Proven** *(paused behind v1.1)* (Phases 1–4, 24 reqs): recovery + provenance, code/data map, verification harness with the original's baselines, and one subsystem (sprite/display) driven end-to-end to a verified `.prg`. Deliverable is a *proven pipeline*. **Paused, not closed** — `/gsd-complete-milestone` must not be run against it.
 - **v2.0 — Complete Reconstruction** (Phases 5–7, 20 reqs): every remaining subsystem documented and reconstructed, formats proven by round-trip, listing complete, source split, bootable `.d64`, full replay suite passing.
 - **v3.0 — Editable** (not yet phased, 6 reqs): round-trip asset converters, change guide, chamber editor.
 

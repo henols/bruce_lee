@@ -10,6 +10,26 @@ files:
   - .planning/phases/01.2-on-demand-broker-and-per-session-leasing/01.2-REVIEW.md
 ---
 
+> **SPLIT 2026-08-02 — two of these landed in milestone v1.1; the rest stays here.**
+>
+> - **CR-01 (the missing singleton guard) → Phase 01.6, criterion 11. REQUIRED.** This todo's own
+>   argument — *"fixing CR-01 and going cross-project are the same piece of work, not two"* — is
+>   accepted, but the blocker half does not wait for the convenience half. Under a TCP control
+>   plane a listener on a well-known port cannot bind twice, so `EADDRINUSE` is close to a free
+>   singleton guard; 01.6 tests that rather than assuming it. The unexplained port-6510 teardown
+>   in `01.2-CRITERION-13-EVIDENCE.md` §5/§7 goes with it.
+> - **Cross-project reach → Phase 01.6, criterion 12. OPTIONAL** (developer, 2026-08-02: *"we might
+>   get that for free with the new system. If we don't get it it can be ignored."*). TCP is not
+>   workspace-scoped, so only the bootstrap `broker.json` still is — the question shrinks to
+>   whether one file moves to `~/.vice-broker/`.
+> - **Everything else stays in this todo**: ownership metadata, the `manually_started` never-reap
+>   marker, the reaper rule, and D-1.2-D's `0600`/uid-parity posture under a `$HOME` path. Deferred
+>   because 01.6 is about to relocate the state paths this rewrites, and doing both at once makes a
+>   regression impossible to attribute.
+>
+> Do not re-plan the CR-01 work from this file — read Phase 01.6's criteria 11 and 12 in
+> `.planning/ROADMAP.md`, and `.planning/notes/v1.1-todo-coverage.md` for the disposition.
+
 ## Problem
 
 The Phase 01.2 broker is **workspace-scoped by construction**. All coordination state lives in
