@@ -1288,3 +1288,103 @@ one actually dispatched. `resolveLiveIrqHandler()` implements this as `($01 & 0x
 "banked out". Not yet independently verified against a live wedge in this project's own image — the
 first real `vice_diagnose` run over a genuine checkpoint trap is what would promote this to HIGH.
 
+### 2026-08-02 — `vice_diagnose` and `vice_recycle` (and even the older `vice_result_continue`) are unreachable from an agent session's own tool surface, even though the running proxy's code has them fully wired
+
+**Type:** hazard (blocks plan 01.3-05's live trigger hunt entirely, before a single attempt)
+**Evidence:** live, this session, cross-checked against the source directly:
+- `mcp__vice__vice_ping` (a named, directly-callable tool function) works normally and returns a
+  real result — confirming the session's MCP connection to `vice-proxy.mjs` is live and healthy.
+- Neither `vice_diagnose` nor `vice_recycle` appears as a directly-callable named tool function in
+  this session, and a tool-schema search for either name (or for `vice_result_continue`) returns no
+  match — as if none of the three proxy-local synthetic tools exist.
+- The generic escape-hatch tools this session *does* expose, `tools_list`/`tools_call` (both under
+  the `mcp__vice__` prefix), behave as a **lower-level bypass that never reaches
+  `handleToolsCall()`'s synthetic-tool dispatch**: `tools_list` returns the raw 64-tool manifest
+  set with `vice_disk_list` **present** (it should never appear — layer 2/3 of the four-layer
+  deny-list guard exists specifically to keep it out of any `tools/list` response) and with none of
+  the three synthetic tools present; `tools_call({name:"vice_ping"})` succeeds normally (a real host
+  tool, forwarded correctly); `tools_call({name:"vice_recycle"})`, `tools_call({name:"vice_diagnose"})`
+  and `tools_call({name:"vice_result_continue"})` **all three** fail identically with `vice-proxy: the
+  host VICE MCP server ... rejected this call: Tool not found` — the exact wording
+  `aliveButFailedMessage()` (`vice-proxy.mjs:1364-1370`) emits when the **real x64sc host** rejects a
+  forwarded call, meaning `tools_call` forwarded the literal string `"vice_diagnose"` straight to the
+  host rather than intercepting it proxy-side.
+- Directly confirmed this is not a stale-file/stale-process problem: `grep -c
+  "DIAGNOSE_TOOL\|RECYCLE_TOOL" .claude/mcp/vice/vice-proxy.mjs` on the main workspace checkout
+  (`/workspaces/bruce_lee`, the cwd the running `vice-proxy.mjs` process was launched from, confirmed
+  via `/proc/<pid>/cwd`) returns 6 hits, and the dispatch lines (`if (name === RECYCLE_TOOL.name)`,
+  `if (name === DIAGNOSE_TOOL.name)`, the `handleToolsList()` concatenation at `const tools = [...
+  manifestTools, RESULT_CONTINUE_TOOL, RECYCLE_TOOL, DIAGNOSE_TOOL]`) are present at the identical
+  line numbers as this worktree's own copy. The file's mtime (17:01:10 UTC) predates the running
+  process's start time (~17:06 UTC, derived from `/proc/<pid>/stat` field 22 against `/proc/uptime`),
+  so the running process loaded this exact, fully-wired code. The code is correct; the gap is
+  elsewhere.
+- Most likely explanation, not independently confirmed further (this is the point at which the
+  question becomes harness/session-discovery-internal rather than emulator-internal, so the
+  investigation stopped here per D-11's boundary): this session's set of directly-callable named
+  `mcp__vice__vice_*` tool functions was generated from a snapshot that never includes proxy-local
+  synthetic tools by construction — consistent with Key Finding 3's own confirmation that
+  `tools-manifest.json` **never** contains them (`refresh-manifest.mjs` only ever writes real,
+  forwardable host tools). If the harness's per-tool function generation reads that manifest file
+  rather than issuing a live `tools/list` JSON-RPC call through `handleToolsList()`, it would produce
+  exactly this result, and would do so for every proxy-local synthetic tool ever added, not just
+  the three checked here.
+**Confidence:** HIGH for the observed behavior (all four probes reproduced directly, in this
+session); MEDIUM for the causal explanation (the manifest-snapshot hypothesis is the most
+parsimonious account of every observation but was not confirmed by reading the harness's own
+tool-discovery code, which is outside this project's tree).
+**Costs:** this is the reason plan 01.3-05's live trigger hunt could not run a single attempt this
+session — every attempt in the plan's own design needs a `vice_diagnose` verdict, and recovery from
+a genuine wedge needs `vice_recycle`; neither is reachable. Blocks the whole D-05 sequencing
+rationale ("recycle first is what makes the six-attempt budget affordable") from applying in an
+agent session shaped like this one. Filed as an actionable item at
+`.planning/todos/pending/2026-08-02-vice-diagnose-and-vice-recycle-unreachable-from-agent-session.md`.
+
+### 2026-08-01 — arming a stopping checkpoint on the KERNAL default IRQ handler (`$EA31`) bounds a resume to almost exactly one frame regardless of real-world latency
+
+**Type:** trick (re-logged from an orphaned worktree branch — this entry never reached `main`'s
+`RE-FINDINGS.md`, per plan 01.3-05's own instructions to preserve it here with its original
+evidence and confidence intact, append-only)
+**Evidence:** live, 01-04 attempt 6, danish. `$0314/$0315` read `$31/$EA` (untouched default vector
+— this game does not hook a custom IRQ handler, so the stock jiffy/keyboard-scan ISR fires every
+frame off the CIA1 timer). Armed one exec-break stopping checkpoint at `$EA31`. Two independent
+`cycles_stopwatch reset -> execution_run -> vice_registers_get` brackets, with NO `vice_ping`
+polling between, each measured **exactly 19,656 cycles** — one PAL frame, bit-for-bit identical
+both times — regardless of how many real seconds of reasoning passed between the calls.
+`vice_checkpoint_list` confirmed `hit_count` incrementing by exactly 1 per resume.
+**Confidence:** HIGH.
+**Saves:** to advance exactly N frames deterministically: `vice_checkpoint_set_ignore_count(cp,
+N-1)`, set the joystick/key state, ONE `execution_run`, then read state.
+
+**Caveat, recorded rather than smoothed over:** the reported PC after each halt was `$E5CD`/`$E5D1`
+(a KERNAL idle-loop address past the IRQ's RTI), not `$EA31` itself — the checkpoint reliably GATES
+elapsed game time to one frame per resume, but does not necessarily leave the CPU parked at the
+breakpoint address. The frame-count guarantee is the load-bearing part, not the PC.
+
+**The tension this technique creates for a checkpoint-arm-and-resume trigger hunt.** It works by
+*arming a stopping exec checkpoint and resuming* — precisely the call shape plan 01.3-05's trigger
+hunt investigates as the freeze cause (all three recorded freezes share that shape; D-09 retargeted
+the hunt to the family rather than one address). Using it as a measurement instrument while hunting
+it as a suspect risks confounding the experiment or self-inflicting the freeze under study.
+
+### 2026-08-02 — the `$EA31` frame-bounding technique was neither used nor tested this session; the tension was decided, not resolved
+
+**Type:** dead end (an unresolved question, not a conclusion) / confirmation of a procedural decision
+**Evidence:** none live — plan 01.3-05's own trigger hunt was blocked before its first attempt (see
+the entry immediately above this section and `01.3-TRIGGER-HUNT.md`)
+**Confidence:** N/A (no measurement was taken; this entry records a decision, not a fact about the
+emulator)
+**Saves:** a future session resuming the hunt does not have to re-derive the instrument-vs-suspect
+decision from scratch
+
+The decision recorded in `01.3-TRIGGER-HUNT.md`'s setup section, made before any attempt was
+possible: this hunt's procedure would **not** use the `$EA31` frame-bounding technique as
+measurement tooling for its own attempts — every checkpoint armed during an attempt would be the
+checkpoint *under investigation*, never a second, frame-bounding instrument layered on top, because
+that would confound which armed checkpoint (if either) caused an observed freeze. This decision was
+never exercised, because no attempt reached the point of arming any checkpoint at all this session
+(see the `vice_diagnose`/`vice_recycle` unreachability finding above). Neither role — instrument nor
+suspect — was tested live this session. The `$EA31` finding immediately above stands exactly where
+it was: HIGH confidence for the frame-bounding fact itself (established in a *different* session,
+01-04 attempt 6), untested for whether it participates in the freeze this hunt investigates.
+
