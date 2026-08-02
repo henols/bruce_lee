@@ -4,16 +4,16 @@ milestone: v1.0
 milestone_name: Pipeline Proven *
 current_phase: 01
 current_phase_name: recovery-provenance
-status: blocked
-stopped_at: "Wave 4 halted a FOURTH time (attempt 4), but the session was NOT wasted: 01-05 ran to completion afterwards on the user's explicit call, because it touches no emulator. 01-04 state: Tasks 1-2 complete for BOTH releases; Task 3 now saeger 5/7 milestones (death, game-over and restart newly earned this attempt, on top of title-screen and game-start/chamber-1) and danish STILL 0/7, unattempted in any of four sessions; Task 4 not reached. Cause: a SECOND genuine silent stall, in a fresh session's fresh instance, frozen at PC $07DE — the IDENTICAL address attempt 3's stall froze at (N=2, now flagged for investigation). Confirmed three ways: the executor's two 0-cycle brackets, then an independent orchestrator-side bracket after the subagent exited and its worktree was merged (0 cycles, PC $07DE, ping still saying \\\"running\\\"). A stall cannot be repaired in-session. 01-06 was deliberately HELD — it designates the canonical disassembly subject that every later phase builds on, and that decision should rest on a finished completeness claim. RESUME IN A FRESH SESSION with /gsd-execute-phase 1 — it re-dispatches 01-04 (danish's Task 3 from scratch is the biggest remaining gap) and then 01-06."
-last_updated: "2026-08-02T10:05:00.000Z"
+status: executing
+stopped_at: "Wave 4 halted a FOURTH time (attempt 4), but the session was NOT wasted: 01-05 ran to completion afterwards on the user's explicit call, because it touches no emulator. 01-04 state: Tasks 1-2 complete for BOTH releases; Task 3 now saeger 5/7 milestones (death, game-over and restart newly earned this attempt, on top of title-screen and game-start/chamber-1) and danish STILL 0/7, unattempted in any of four sessions; Task 4 not reached. Cause: a SECOND genuine silent stall, in a fresh session's fresh instance, frozen at PC $07DE — the IDENTICAL address attempt 3's stall froze at (N=2, now flagged for investigation). Confirmed three ways: the executor's two 0-cycle brackets, then an independent orchestrator-side bracket after the subagent exited and its worktree was merged (0 cycles, PC $07DE, ping still saying \\\\\\\"running\\\\\\\"). A stall cannot be repaired in-session. 01-06 was deliberately HELD — it designates the canonical disassembly subject that every later phase builds on, and that decision should rest on a finished completeness claim. RESUME IN A FRESH SESSION with /gsd-execute-phase 1 — it re-dispatches 01-04 (danish's Task 3 from scratch is the biggest remaining gap) and then 01-06."
+last_updated: "2026-08-02T10:04:07.553Z"
 last_activity: 2026-08-02
-last_activity_desc: "quick 260802-ci3 + 260802-d6v — all three broker defects from bq6 closed: deterministic .tmp temp path, millisecond boot-time log, and a setsid-backed start --detach that ends foreground fragility without touching the reap-on-signal contract (verified byte-identical). Fixed script force-deployed to tools/; 50/50 tests pass"
+last_activity_desc: Phase 01 execution started
 progress:
   total_phases: 3
   completed_phases: 2
   total_plans: 15
-  completed_plans: 12
+  completed_plans: 13
   percent: 67
 ---
 
@@ -25,15 +25,15 @@ See: .planning/PROJECT.md (updated 2026-07-31)
 
 **Core value:** An ACME source tree that rebuilds a Bruce Lee which plays identically to the original, where every gameplay system is explained well enough that someone could change it.
 **Current milestone:** v1.0 — Pipeline Proven (Phases 1–4, 24 requirements)
-**Current focus:** Phase 1 — Recovery & Provenance (01-05 complete; 01-04 halted a fourth time on a silent host stall, 01-06 deliberately held behind it)
+**Current focus:** Phase 01 — recovery-provenance
 
 ## Current Position
 
 Milestone: v1.0 — Pipeline Proven (Phases 1–4 of 7 total)
-Phase: 1 — Recovery & Provenance
-Plan: 4 of 6 complete (01-01, 01-02, 01-03, 01-05). 01-04 partially executed across four attempts; 01-06 not started.
-Status: BLOCKED on 01-04 — this session's VICE instance is stalled and cannot be recovered in-session. 01-06 is dependency-held behind 01-04 by choice, not by tooling.
-Last activity: 2026-08-02 — Completed quick tasks 260802-ci3 and 260802-d6v: all three broker defects filed by bq6 are now closed. ci3 fixed the temp-file leak (deterministic `.tmp`, `chmod 600` now load-bearing and ordered ahead of the content write) and the `(0s)` boot-time log (now ms with a poll-quantisation caveat). d6v added `start --detach` under `setsid`, closing the `major` foreground-fragility defect — with the reap-on-signal contract verified byte-identical, not merely asserted. The fixed script was force-deployed to `tools/` (sha-verified) so the host runs it on next broker start. 50/50 tests pass; no emulator access in either task
+Phase: 01 (recovery-provenance) — EXECUTING
+Plan: 1 of 6
+Status: Executing Phase 01
+Last activity: 2026-08-02 — Phase 01 execution started
 
 Progress (v1.0): [████░░░░░░] 40% — 8/20 plans
 Progress (overall): [██░░░░░░░░] 23% — 8/35 plans
