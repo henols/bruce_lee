@@ -1264,6 +1264,63 @@ depends on, so this is **not** a reason to stop using it. It is a reason to enum
 checkpoints *first* whenever the machine looks frozen, and to suspect what you armed before
 concluding the emulator died.
 
+### 2026-08-02 — the trigger hunt's own denominator: 0 of 6, blocked before the first attempt
+
+**Type:** dead end (a real, bounded negative — plan 01.3-05's own required outcome statement)
+**Evidence:** live, this session — see `.planning/phases/01.3-wedge-detection-and-recovery/01.3-TRIGGER-HUNT.md`
+in full, and the "unreachable tools" entry above for the reason
+**Confidence:** HIGH (the fact of zero attempts, and the reason for it, are both directly
+established this session — not an inference)
+**Saves:** a future session resuming this hunt does not have to re-discover that `vice_diagnose`/
+`vice_recycle` need to be confirmed reachable, by name, before Variant A's first attempt — checking
+only `vice_ping` is not sufficient, because a healthy `vice_ping` does not imply the rest of the
+proxy-local synthetic-tool surface is reachable in the same session
+
+Neither of the plan's two variants (Variant A, mid-routine, `$07DB`/`$07DE` shape; Variant B,
+IRQ-entry, `$1103` shape) was started. The budget of 6 (3 + 3) is entirely unspent. This is recorded
+as a real result per this project's own rule against fabricating attempts, and per the plan's own
+"if the emulator cannot be reached at all, record that as the outcome and stop" contingency,
+generalized here to cover "the emulator is reachable but the specific tools this hunt's safety case
+depends on are not."
+
+### 2026-08-02 — the checkpoint-trap correlation stands exactly where it was before this hunt ran: neither strengthened nor weakened
+
+**Type:** confirmation (of non-change — an explicit statement that no new evidence moved an
+existing grade, so a future reader does not mistake silence for erosion)
+**Evidence:** this session gathered zero new live evidence (see the two entries immediately above);
+the existing correlation and its caveat, entered 2026-08-02 during phase discussion (§ "the 'silent
+stall' may be a self-inflicted checkpoint trap..." above), are unchanged and not re-graded here
+**Confidence:** MEDIUM, unchanged from the existing entry — cross-session at N=2 (mid-routine) / N=1
+(IRQ-entry), with the counter-evidence (delete/soft-reset/hard-reset/single-step all failing to
+unstick the `$1103` incident) still the reason it is MEDIUM and not HIGH
+**Saves:** tells a future reader explicitly that this plan's own bounded trigger hunt did not touch
+the existing checkpoint-trap grade, rather than leaving that as something to infer from the absence
+of a promotion entry
+
+Plan 01.3-05 set out to either confirm a trigger (promoting this correlation toward HIGH via a
+reproduced attempt) or record a bounded negative against it (attempts made, no reproduction). It did
+neither — it was blocked before its first attempt (see above). The existing correlation's grade is
+therefore **not promoted and not demoted**; it is exactly where the phase-discussion cross-read left
+it. A future session that actually runs Variant A/B is what would move this grade in either
+direction; this session's own contribution is limited to confirming why it could not attempt to.
+
+### 2026-08-02 — `resolveLiveIrqHandler()`'s vector lookup was not exercised live this session; its MEDIUM grade is unchanged
+
+**Type:** dead end (an explicit non-promotion, so the existing grade is not silently assumed stale)
+**Evidence:** this session made zero `vice_diagnose` calls (unreachable — see above) and zero manual
+replications of its vector-lookup logic, since no attempt reached the point of needing one; the
+existing "vector table" (2026-08-01) and "HIRAM bit" (2026-08-02) entries are unchanged
+**Confidence:** HIGH that no live exercise occurred this session (a direct fact about this session);
+the underlying vector-lookup claim itself remains at its pre-existing MEDIUM, untouched
+**Saves:** the plan's own instruction was "if the hunt resolved a live handler and the resolution
+proved correct... re-log it... If it was not exercised live, say so and leave the existing grade
+alone" — this entry is that explicit statement, so a future reader does not have to check whether
+promotion silently happened or was silently skipped
+
+Neither `$0314/$0315` nor `$FFFE/$FFFF` was read this session, live, against a real IRQ-driven
+screen, because Variant B (the variant that would have exercised this lookup) was never started.
+The existing MEDIUM-confidence vector-table entries stand exactly as they were.
+
 ### 2026-08-02 — the exact bit of `$01` that decides which IRQ vector pair is live: HIRAM, bit 1
 
 **Type:** shortcut (sharpens an existing MEDIUM finding)
