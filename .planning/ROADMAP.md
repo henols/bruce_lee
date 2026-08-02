@@ -266,7 +266,7 @@ Also recorded: this phase has **no requirement IDs and no `-SPEC.md`**, so the s
 
  11. **The recovery path is exercised against an actual non-advancing emulator, or the phase records that one could not be produced on demand.** This phase cannot be verified by unit tests alone: its subject is a failure state that has occurred five times unbidden and never once on request. The strongest reproduction candidate on record is the `$DD00`-attribution-then-resume technique, which froze two independent sessions at the identical `PC:2014`. Whether that reproduces a third time is itself a finding worth having.
 
-**Plans**: 5/6 plans executed
+**Plans**: 4/6 plans executed
 
 Plans:
 **Wave 1**
