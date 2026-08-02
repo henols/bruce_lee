@@ -4235,3 +4235,136 @@ test("seam: a repeat arm at the same address is suppressed to a pointer, and an 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ---------------------------------------------------------------------------
+// Plan 01.3-04 task 2: SEAM_HAZARDS -- the table that turns task 1's single
+// hazard into the general mechanism D-06 needs, so plan 01.3-05's confirmed
+// trigger is one entry away, never new plumbing at this seam.
+// ---------------------------------------------------------------------------
+
+const TEST_FILE_PATH = join(HERE, "vice-proxy.test.mjs");
+
+function extractSeamHazardsBody(src) {
+  const startIdx = src.indexOf("const SEAM_HAZARDS = [");
+  assert.ok(startIdx >= 0, "SEAM_HAZARDS definition not found in source");
+  const endIdx = src.indexOf("\n];", startIdx);
+  assert.ok(endIdx > startIdx, "could not isolate SEAM_HAZARDS's own closing bracket");
+  return src.slice(startIdx, endIdx);
+}
+
+function extractSetLiteral(src, constName) {
+  const re = new RegExp(`const ${constName} = new Set\\(\\[([^\\]]*)\\]\\)`);
+  const m = src.match(re);
+  if (!m) return null;
+  return m[1]
+    .split(",")
+    .map((s) => s.trim().replace(/^"|"$/g, ""))
+    .filter(Boolean);
+}
+
+test("structural: every SEAM_HAZARDS entry has a detector, an annotation and a test", () => {
+  const proxySrc = readFileSync(PROXY_PATH, "utf8");
+  const body = extractSeamHazardsBody(proxySrc);
+
+  // Every entry in this table starts with `{ id:` (its first property) --
+  // splitting on that marker isolates each entry's own object-literal text.
+  const entryChunks = body.split(/\{\s*id:/).slice(1);
+  assert.ok(entryChunks.length >= 1, "at least one SEAM_HAZARDS entry must be present");
+
+  const testSrc = readFileSync(TEST_FILE_PATH, "utf8");
+  const seenIds = [];
+  for (const chunk of entryChunks) {
+    const idMatch = chunk.match(/^\s*"([^"]+)"/);
+    assert.ok(idMatch, "every SEAM_HAZARDS entry must carry a string id as its first property");
+    const id = idMatch[1];
+    assert.ok(id.length > 0, "an entry's id must be non-empty");
+    assert.match(chunk, /capabilities:/, `entry "${id}" must declare its capabilities set`);
+    assert.match(chunk, /detect:/, `entry "${id}" must declare a detector`);
+    assert.match(chunk, /render:/, `entry "${id}" must declare a renderer`);
+    assert.ok(testSrc.includes(id), `entry "${id}" must be named by at least one test in vice-proxy.test.mjs`);
+    seenIds.push(id);
+  }
+  assert.ok(seenIds.includes("checkpoint-arming"), "the production checkpoint-arming entry must be present");
+});
+
+test("structural: the refusal set and the annotation set are disjoint", () => {
+  const proxySrc = readFileSync(PROXY_PATH, "utf8");
+  const viceSrc = readFileSync(join(HERE, "vice.mjs"), "utf8");
+
+  const denyMatch = viceSrc.match(/export const DENY_LIST = \[([^\]]*)\]/);
+  assert.ok(denyMatch, "DENY_LIST definition not found in vice.mjs");
+  const denyList = denyMatch[1]
+    .split(",")
+    .map((s) => s.trim().replace(/^"|"$/g, ""))
+    .filter(Boolean);
+  assert.ok(denyList.includes("vice_disk_list"), "sanity: vice_disk_list must still be on the deny list");
+
+  const body = extractSeamHazardsBody(proxySrc);
+  const annotatedCapabilities = new Set();
+  // Inline form: capabilities: new Set(["a", "b"])
+  for (const m of body.matchAll(/capabilities:\s*new Set\(\[([^\]]*)\]\)/g)) {
+    m[1]
+      .split(",")
+      .map((s) => s.trim().replace(/^"|"$/g, ""))
+      .filter(Boolean)
+      .forEach((n) => annotatedCapabilities.add(n));
+  }
+  // Reference form: capabilities: CHECKPOINT_ARMING_TOOLS (a const defined
+  // elsewhere in this same file as `const NAME = new Set([...])`).
+  for (const m of body.matchAll(/capabilities:\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*,/g)) {
+    const resolved = extractSetLiteral(proxySrc, m[1]);
+    if (resolved) resolved.forEach((n) => annotatedCapabilities.add(n));
+  }
+
+  assert.ok(annotatedCapabilities.has("vice_checkpoint_add"), "sanity: the checkpoint-arming entry's capability must be found");
+
+  for (const name of annotatedCapabilities) {
+    assert.ok(
+      !denyList.includes(name),
+      `capability "${name}" must not be BOTH refused (DENY_LIST) and annotated (SEAM_HAZARDS) -- found in both sets`
+    );
+  }
+});
+
+test("synthetic second entry ('test-fixture-synthetic-entry') is detected and annotated through the same SEAM_HAZARDS walk, proving the mechanism is genuinely data-driven", async () => {
+  // vice_ping is deliberately the carrier call here: it is BOTH the seam's
+  // own pre-flight liveness probe (unrelated to this fixture) and, once that
+  // probe succeeds, the actual forwarded tools/call this test drives -- so a
+  // forwarded-call COUNT assertion would conflate the two. What this test
+  // proves instead is that the annotation appears exactly once (the walk
+  // does not re-render it per pass) purely from injecting a table entry via
+  // an env var, with zero changes to the production checkpoint-arming entry.
+  const respond = (name) => (name === "vice_ping" ? { version: "3.10", machine: "C64SC", execution: "paused" } : undefined);
+  const { server } = startFlexibleStandInServer(respond);
+  const port = await listen(server);
+  const proxy = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${port}/mcp`, VICE_SEAM_HAZARDS_TEST_FIXTURE: "1" });
+  try {
+    await handshake(proxy);
+    proxy.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
+    const resp = await proxy.nextMessage();
+    assert.equal(resp.result.isError, false);
+    const text = resp.result.content[0].text;
+    const occurrences = (text.match(/TEST FIXTURE/g) || []).length;
+    assert.equal(occurrences, 1, "the synthetic second entry must be detected and annotated exactly once via the same generic walk");
+  } finally {
+    proxy.child.kill("SIGKILL");
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("structural: SEAM_HAZARDS's checkpoint-arming detector and renderer never route through isErrorText or make a forwarded call", () => {
+  const src = readFileSync(PROXY_PATH, "utf8");
+  for (const fnName of ["detectCheckpointArmingHazard", "renderCheckpointArmingHazard"]) {
+    const startIdx = src.indexOf(`function ${fnName}(`);
+    assert.ok(startIdx >= 0, `${fnName}'s own definition must be found in the source`);
+    const endIdx = src.indexOf("\n}\n", startIdx);
+    assert.ok(endIdx > startIdx, `could not isolate ${fnName}'s own closing brace`);
+    const bodyLines = src
+      .slice(startIdx, endIdx)
+      .split("\n")
+      .filter((l) => !/^\s*\/\//.test(l));
+    const body = bodyLines.join("\n");
+    assert.doesNotMatch(body, /isErrorText/, `${fnName} must never route through isErrorText -- D-16 forbids a refusal`);
+    assert.doesNotMatch(body, /await call\(/, `${fnName} must make no forwarded call of its own -- T-01.3-13`);
+  }
+});

@@ -1990,7 +1990,7 @@ function seamHazardObserveEpoch() {
  * rather than silently skipping: an unparseable address is not evidence of
  * safety.
  */
-function annotateCheckpointHazard(name, args, _payload) {
+function detectCheckpointArmingHazard(name, args) {
   if (!CHECKPOINT_ARMING_TOOLS.has(name)) return undefined;
   // vice_checkpoint_add's own schema: `stop` defaults true, `exec` defaults
   // true -- an ABSENT field is armed, not merely "true when written out".
@@ -2005,14 +2005,19 @@ function annotateCheckpointHazard(name, args, _payload) {
     addrNum === null ? `an unparseable address (raw value: ${JSON.stringify(args && args.start)})` : formatAddress(addrNum);
   const suppressionKey = addrNum === null ? `unparseable:${JSON.stringify(args && args.start)}` : addrLabel;
 
-  if (seamHazardSeen.has(suppressionKey)) {
+  const repeat = seamHazardSeen.has(suppressionKey);
+  if (!repeat) seamHazardSeen.add(suppressionKey);
+  return { addrLabel, repeat };
+}
+
+function renderCheckpointArmingHazard(detection) {
+  const { addrLabel, repeat } = detection;
+  if (repeat) {
     return (
       `vice-proxy hazard (repeat): a stopping exec checkpoint was armed again at ${addrLabel} -- the full ` +
       "hazard note for this address was already issued earlier this session; see that note."
     );
   }
-  seamHazardSeen.add(suppressionKey);
-
   return [
     `vice-proxy hazard: a stopping exec checkpoint was just armed at ${addrLabel}, and the call was NOT ` +
       "blocked -- it will not be, because this is core reverse-engineering technique.",
@@ -2033,6 +2038,72 @@ function annotateCheckpointHazard(name, args, _payload) {
       "carries no stop flag in its own arguments and is therefore NOT annotated by this mechanism -- covered " +
       "by both tools' own descriptions and by vice_diagnose's checkpoint-trap check instead.",
   ].join("\n");
+}
+
+/**
+ * Plan 01.3-04 task 2: turns task 1's single hazard into the general
+ * mechanism D-06 needs -- a table, so the next confirmed trigger (plan
+ * 01.3-05's bounded hunt) is a single entry rather than new plumbing at this
+ * seam. Each entry:
+ *   - id: a short identifier that MUST be named by at least one test in
+ *     vice-proxy.test.mjs (this file's own structural completeness test
+ *     enforces it) -- an entry that ships without a matching test fails the
+ *     suite rather than shipping unproven.
+ *   - capabilities: the Set of tool names this entry's own detect() can ever
+ *     match against. Used ONLY by the disjointness structural test below
+ *     (never for dispatch -- the walk tries every entry against every
+ *     call). Every capability named here must be ABSENT from DENY_LIST: a
+ *     capability with no legitimate use is refused before forwarding, and
+ *     one with a legitimate use is annotated after it, and none is both
+ *     (D-16).
+ *   - detect(name, args, payload): returns a truthy detection payload, or
+ *     nothing. MUST make no forwarded call of its own (T-01.3-13).
+ *   - render(detection): returns the annotation text for a truthy
+ *     detection.
+ *
+ * Plan 01.3-05 is this table's expected next writer, adding the bounded
+ * hunt's own confirmed trigger as one more entry here -- not new plumbing.
+ */
+const SEAM_HAZARDS = [
+  {
+    id: "checkpoint-arming",
+    capabilities: CHECKPOINT_ARMING_TOOLS,
+    detect: detectCheckpointArmingHazard,
+    render: renderCheckpointArmingHazard,
+  },
+];
+
+// TEST-ONLY escape hatch (plan 01.3-04 task 2's data-driven proof): proves
+// the walk below is genuinely data-driven, not hand-wired to the one
+// production entry above, by injecting a SECOND entry the same way a real
+// plan 01.3-05 entry would arrive. Matches against vice_ping -- an existing,
+// universally-forwardable tool -- rather than inventing a synthetic
+// capability name that would need its own manifest/deny-list bookkeeping.
+// Never set outside this file's own test suite.
+if (process.env.VICE_SEAM_HAZARDS_TEST_FIXTURE === "1") {
+  SEAM_HAZARDS.push({
+    id: "test-fixture-synthetic-entry",
+    capabilities: new Set(["vice_ping"]),
+    detect: (name) => (name === "vice_ping" ? { fixture: true } : undefined),
+    render: () => "vice-proxy hazard (TEST FIXTURE): synthetic second SEAM_HAZARDS entry, detected and annotated through the same walk.",
+  });
+}
+
+/**
+ * Walks SEAM_HAZARDS, concatenating every annotation a successful call
+ * attracts. Short-circuits per entry on a falsy detection -- a call matching
+ * no entry costs one array pass and returns undefined, leaving the payload
+ * untouched.
+ */
+function renderSeamHazardAnnotations(name, args, payload) {
+  const notes = [];
+  for (const entry of SEAM_HAZARDS) {
+    const detection = entry.detect(name, args, payload);
+    if (detection) {
+      notes.push(entry.render(detection));
+    }
+  }
+  return notes.length ? notes.join("\n\n") : undefined;
 }
 
 async function handleToolsCall(params) {
@@ -2180,12 +2251,13 @@ async function handleToolsCall(params) {
   }
 
   const rawText = typeof payload === "string" ? payload : JSON.stringify(payload);
-  // D-16 seam hazard annotation (plan 01.3-04): computed and merged into the
-  // TEXT itself, BEFORE wrapPossiblyChunked() runs, so an oversized annotated
-  // result still carries the note inside its own chunking (T-01.3-15) -- a
-  // warning appended AFTER chunking would be lost off the end. Never routes
-  // through isErrorText and never touches the error flag (D-16, T-01.3-12).
-  const hazardNote = annotateCheckpointHazard(name, args, payload);
+  // D-16 seam hazard annotation (plan 01.3-04): computed by walking
+  // SEAM_HAZARDS and merged into the TEXT itself, BEFORE wrapPossiblyChunked()
+  // runs, so an oversized annotated result still carries the note inside its
+  // own chunking (T-01.3-15) -- a warning appended AFTER chunking would be
+  // lost off the end. Never routes through isErrorText and never touches the
+  // error flag (D-16, T-01.3-12).
+  const hazardNote = renderSeamHazardAnnotations(name, args, payload);
   const text = hazardNote ? `${rawText}\n\n${hazardNote}` : rawText;
   const wrapped = wrapPossiblyChunked(text);
   // Append the path note as a trailing content item, never mixed into the
