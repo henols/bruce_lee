@@ -149,8 +149,8 @@ INSTANCES_JSON="$VICE_POOL_DIR/broker-instances.json"
 REQUEST_ID_PATTERN='^req-[0-9]+-[0-9]+-[0-9a-f]{8}$'
 
 usage() {
-  cat <<USAGE
-usage: vice-broker.sh <start [N] | stop | status> [--once] [--dry-run] [--help|-h] [--check-container] [--print-paths]
+  cat <<'USAGE'
+usage: vice-broker.sh <start [N] | stop | status> [--once] [--dry-run] [--detach] [--help|-h] [--check-container] [--print-paths]
 
 Runs identically from either this skill's resources/ (the tracked source of
 truth) or its deployed copy at tools/vice-broker.sh (gitignored, regenerated
@@ -184,6 +184,14 @@ Subcommands:
                 exactly like vice-pool.sh's own start [N]; it DRIVES
                 VICE_BROKER_SPARES (an explicit CLI count wins over the
                 ambient env knob), same as vice-pool.sh's own start [N].
+                With --detach, the daemon re-execs itself under setsid
+                immediately before this trap is installed, leaving the
+                invoking terminal's session and process group entirely, then
+                returns promptly printing the daemon's pid and log path.
+                Detaching changes WHICH SIGNALS CAN REACH the broker; it does
+                NOT change what the broker does when one arrives -- the
+                EXIT/HUP/INT/TERM trap above, its reap, and `stop` below are
+                byte-identical in both modes.
   stop          Best-effort stop of the long-lived broker process recorded
                 in broker.json, if one exists and its pid's identity checks
                 out via ps -- then, in EVERY case (a live broker stopped just
@@ -206,6 +214,16 @@ Flags:
                 from inside the devcontainer, where x64sc does not exist to
                 actually launch, mirroring vice-supervisor.sh's own
                 --dry-run rationale.
+  --detach      Valid on 'start' ONLY -- rejected on 'stop', on 'status', and
+                in combination with --once (a single pass that returns
+                immediately has nothing to detach). Re-execs the broker under
+                setsid so it leaves the invoking terminal's session and
+                process group entirely, appends its stdout and stderr to
+                VICE_BROKER_LOG, and prints the daemon's pid and log path
+                before returning. Detaching changes WHICH SIGNALS CAN REACH
+                the broker; it does NOT change what the broker does when one
+                arrives -- the EXIT/HUP/INT/TERM trap, its reap, and `stop`
+                are identical in both modes.
   --check-container
                 Evaluate the container guard ONLY: print every signal and
                 exit 0 on a host or 3 in a container. Spawns nothing, writes
@@ -266,6 +284,12 @@ Configuration (all environment-overridable):
                             instance (default: 0.0.0.0)
   VICE_BROKER_POLL_MS      The long-lived loop's own sleep interval between
                             passes (default: 500).
+  VICE_BROKER_LOG          Where a --detach'd daemon's stdout and stderr are
+                            APPENDED (never truncated) (default:
+                            <pool dir>/broker.log). Matches no protocol glob
+                            in this script and is deliberately NOT removed by
+                            a state purge -- it is the evidence a detached
+                            run leaves behind.
   VICE_POOL_DIR             Where requests/, grants/, denials/, leases/,
                             broker.json and broker-instances.json live
                             (default: <repo>/.vice-supervisor)
@@ -276,7 +300,8 @@ Configuration (all environment-overridable):
 Exit codes:
   0   success (start, stop, status, --help, or --check-container found no
       container signals)
-  1   usage error, or 'status' found no broker.json
+  1   usage error, 'status' found no broker.json, or --detach was requested
+      but setsid is unavailable on this host
   2   container guard refused to run
   3   --check-container found at least one container signal
 USAGE
@@ -331,6 +356,7 @@ fi
 # someone testing flag parsing from inside a container.
 ONCE=0
 DRY_RUN=0
+DETACH=0
 POSITIONALS=()
 for arg in "$@"; do
   case "$arg" in
@@ -339,6 +365,9 @@ for arg in "$@"; do
       ;;
     --dry-run)
       DRY_RUN=1
+      ;;
+    --detach)
+      DETACH=1
       ;;
     --check-container|--help|-h|--print-paths)
       : # already handled above
@@ -354,6 +383,25 @@ for arg in "$@"; do
   esac
 done
 
+# Recursion guard, half 1 of 2 (T-d6v-01). Task 2 completes the second half by
+# filtering --detach out of the relaunch argv; either guard alone is
+# sufficient, and both exist because they fail in different ways. `set -u` is
+# active, so the marker is read defensively. When VICE_BROKER_DETACHED_CHILD=1,
+# this invocation IS the re-exec'd child a parent's --detach spawned: force
+# DETACH back to 0 so it cannot re-enter the detach branch in cmd_start below
+# (the child still carries --detach on its own command line -- this is what
+# stops it re-detaching), record DETACHED_CHILD=1 for the foreground-warning
+# gate, and unset the marker so nothing this process itself later spawns can
+# ever inherit it. A recursion bug here forks UNBOUNDEDLY ON THE HOST -- the
+# single highest-risk defect in this change.
+if [ "${VICE_BROKER_DETACHED_CHILD:-0}" = "1" ]; then
+  DETACHED_CHILD=1
+  DETACH=0
+  unset VICE_BROKER_DETACHED_CHILD
+else
+  DETACHED_CHILD=0
+fi
+
 if [ "${#POSITIONALS[@]}" -gt 2 ]; then
   echo "usage error: too many positional arguments: ${POSITIONALS[*]}" >&2
   usage >&2
@@ -362,6 +410,16 @@ fi
 
 SUBCOMMAND="${POSITIONALS[0]:-}"
 N_ARG="${POSITIONALS[1]:-}"
+
+# --detach cannot be combined with --once: --once is a single pass that
+# returns immediately, so there is nothing to detach. Checked BEFORE the
+# bare-once-implies-start block below so the combination fails identically
+# whether or not 'start' was typed explicitly.
+if [ "$DETACH" -eq 1 ] && [ "$ONCE" -eq 1 ]; then
+  echo "usage error: '--detach' cannot be combined with '--once' -- '--once' is a single pass that returns immediately and there is nothing to detach" >&2
+  usage >&2
+  exit 1
+fi
 
 if [ -z "$SUBCOMMAND" ] && [ "$ONCE" -eq 1 ]; then
   # --once with no explicit subcommand means "start --once": the one-shot
@@ -382,6 +440,11 @@ if [ "$CHECK_CONTAINER" -eq 0 ]; then
     stop|status)
       if [ -n "$N_ARG" ]; then
         echo "usage error: '$SUBCOMMAND' takes no positional argument" >&2
+        usage >&2
+        exit 1
+      fi
+      if [ "$DETACH" -eq 1 ]; then
+        echo "usage error: '--detach' is only valid on 'start', not '$SUBCOMMAND'" >&2
         usage >&2
         exit 1
       fi
@@ -447,6 +510,16 @@ VICE_BROKER_MCP_HOST="${VICE_BROKER_MCP_HOST:-0.0.0.0}"
 VICE_BROKER_POLL_MS="${VICE_BROKER_POLL_MS:-500}"
 VICE_BROKER_PROBE_CMD="${VICE_BROKER_PROBE_CMD:-}"
 VICE_BROKER_PROBE_TIMEOUT_S="${VICE_BROKER_PROBE_TIMEOUT_S:-5}"
+# Where a --detach'd daemon's stdout/stderr land (Task 2). Three facts, all
+# load-bearing: (1) the .log suffix matches NONE of this script's globs --
+# every one is *.json scoped (spares/, grants/, requests/, the $d/*.json
+# loops) and the verify gate below re-proves it after this change rather than
+# trusting it; (2) the file is APPENDED to, never truncated, so a restart
+# cannot destroy the previous run's evidence; (3) purge_protocol_state()
+# deliberately does NOT remove it -- outliving a purge is the point, and that
+# log is exactly the evidence the 2026-08-02 defect hunt needed. Do not touch
+# purge_protocol_state() to "clean this up".
+VICE_BROKER_LOG="${VICE_BROKER_LOG:-$VICE_POOL_DIR/broker.log}"
 
 # VICE_BROKER_MAX validated as an integer 1..16 (same message shape as the
 # existing start [N] range check) -- must_haves C9/T-01.2-05: this is the

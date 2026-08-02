@@ -1620,6 +1620,58 @@ test("structural: bash -n exits 0; start still refuses in-container with exit 2;
 });
 
 // ---------------------------------------------------------------------------
+// quick-260802-d6v Task 1: --detach parse surface (rejections + --help
+// documentation). The re-exec itself is Task 2; none of these tests starts a
+// daemon, so none needs the detach cleanup protocol.
+
+test("--detach with --once exits 1 and stderr names both flags, for both the explicit 'start' spelling and the bare-subcommand spelling", async () => {
+  await assert.rejects(
+    execFileP("bash", [BROKER_SCRIPT, "start", "--detach", "--once", "--dry-run"], {
+      env: { ...process.env, VICE_SUPERVISOR_ALLOW_CONTAINER: "1", VICE_POOL_DIR: tmpPoolDir() },
+    }),
+    (err) => err.code === 1 && /--detach/.test(err.stderr) && /--once/.test(err.stderr),
+    "explicit 'start --detach --once' must exit 1 naming both flags"
+  );
+
+  await assert.rejects(
+    execFileP("bash", [BROKER_SCRIPT, "--detach", "--once", "--dry-run"], {
+      env: { ...process.env, VICE_SUPERVISOR_ALLOW_CONTAINER: "1", VICE_POOL_DIR: tmpPoolDir() },
+    }),
+    (err) => err.code === 1 && /--detach/.test(err.stderr) && /--once/.test(err.stderr),
+    "bare '--detach --once' (no explicit subcommand) must exit 1 naming both flags"
+  );
+});
+
+test("--detach is refused on 'stop' and on 'status', each naming 'start' as the only valid subcommand", async () => {
+  await assert.rejects(
+    execFileP("bash", [BROKER_SCRIPT, "stop", "--detach"], {
+      env: { ...process.env, VICE_SUPERVISOR_ALLOW_CONTAINER: "1", VICE_POOL_DIR: tmpPoolDir() },
+    }),
+    (err) => err.code === 1 && /start/.test(err.stderr),
+    "'stop --detach' must exit 1 naming 'start'"
+  );
+
+  await assert.rejects(
+    execFileP("bash", [BROKER_SCRIPT, "status", "--detach"], {
+      env: { ...process.env, VICE_SUPERVISOR_ALLOW_CONTAINER: "1", VICE_POOL_DIR: tmpPoolDir() },
+    }),
+    (err) => err.code === 1 && /start/.test(err.stderr),
+    "'status --detach' must exit 1 naming 'start'"
+  );
+});
+
+test("--help documents --detach and VICE_BROKER_LOG, and still documents the EXIT/HUP/INT/TERM trap -- a regression guard on the shutdown contract's documentation, not decoration", async () => {
+  const { stdout } = await execFileP("bash", [BROKER_SCRIPT, "--help"]);
+  assert.match(stdout, /--detach/, "--help must name --detach");
+  assert.match(stdout, /VICE_BROKER_LOG/, "--help must name VICE_BROKER_LOG");
+  assert.match(
+    stdout,
+    /EXIT\/HUP\/INT\/TERM/,
+    "--help must still document the trap -- the shutdown contract must not have been documented away"
+  );
+});
+
+// ---------------------------------------------------------------------------
 // Plan 04, Task 2: grant from a ready spare, refill behind it, and
 // distinguish "not yet" (neither grant nor denial) from "never" (denial with
 // the broker's own reason verbatim).
