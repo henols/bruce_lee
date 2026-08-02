@@ -161,3 +161,119 @@ test("finaliseIncidentRecord() on a record with no prior outcome fields still pr
     assert.match(content, /kill_stage: null/, "a field never supplied to finalise must remain null, not vanish");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Plan 01.3-03 task 1: renderIncidentRecord()'s expanded evidence section --
+// the full criterion-4 evidence set, one fixed-order item per line, with an
+// unavailable item rendered as an EXPLICIT unavailable line rather than
+// silently omitted (must_have 3).
+// ---------------------------------------------------------------------------
+
+function fullEvidenceFixture() {
+  return {
+    bracket: { available: true, value: { cycles: 991234, elapsedMs: 1001 } },
+    registers: { available: true, value: { PC: 0x1103, A: 1, X: 2, Y: 3, SP: 0xf0 } },
+    checkpoints: {
+      available: true,
+      value: [{ checkpoint_num: 3, address: "$4000", enabled: true, flag: "stop" }],
+    },
+    irqHandler: {
+      available: true,
+      value: {
+        target: 0xea31,
+        pairLabel: "the RAM KERNAL IRQ vector pair ($0314/$0315)",
+        explanation: "$01 read as $37 -- the RAM KERNAL IRQ vector pair ($0314/$0315) resolves to $EA31.",
+      },
+    },
+    screenshot: { available: true, value: ".planning/incidents/20260802143000123-port6510-epoch7.png" },
+  };
+}
+
+test("a record rendered from a full evidence object contains every evidence item under one heading, and evidence_complete is true", () => {
+  withTempIncidentsDir(() => {
+    const rendered = renderIncidentRecord({
+      port: 6510,
+      epoch_before: 7,
+      reason: "full evidence test",
+      evidence: fullEvidenceFixture(),
+    });
+    assert.match(rendered, /## Evidence/);
+    assert.match(rendered, /evidence_complete: true/);
+    assert.match(rendered, /cycle bracket: 991234 cycles retired in ~1001ms/);
+    assert.match(rendered, /PC \$1103/);
+    assert.match(rendered, /#3 \$4000 \(stop, enabled\)/);
+    assert.match(rendered, /RAM KERNAL IRQ vector pair/);
+    assert.match(rendered, /screenshot: saved to \.planning\/incidents\/20260802143000123-port6510-epoch7\.png/);
+    // The frontmatter must still parse as YAML with the evidence section present.
+    assert.match(rendered, /^---\n[\s\S]*?\n---\n/);
+  });
+});
+
+test("an evidence object with a rejected item renders that item as an explicit unavailable line, and every other item is still populated; evidence_complete is false", () => {
+  withTempIncidentsDir(() => {
+    const evidence = fullEvidenceFixture();
+    evidence.screenshot = { available: false, reason: "vice_display_screenshot rejected: disk full" };
+    const rendered = renderIncidentRecord({ port: 6510, epoch_before: 7, reason: "partial failure test", evidence });
+    assert.match(rendered, /screenshot: unavailable \(vice_display_screenshot rejected: disk full\)/);
+    assert.match(rendered, /cycle bracket: 991234 cycles retired/, "an unrelated item's failure must not blank out the others");
+    assert.match(rendered, /PC \$1103/);
+    assert.match(rendered, /evidence_complete: false/);
+  });
+});
+
+test("a fully-unavailable evidence object renders every item as an explicit unavailable line, never silently omitted", () => {
+  withTempIncidentsDir(() => {
+    const evidence = {
+      bracket: { available: false, reason: "transport error: reset failed" },
+      registers: { available: false, reason: "transport error: registers_get failed" },
+      checkpoints: { available: false, reason: "transport error: checkpoint_list failed" },
+      irqHandler: { available: false, reason: "transport error: memory_read failed" },
+      screenshot: { available: false, reason: "transport error: screenshot failed" },
+    };
+    const rendered = renderIncidentRecord({ port: 6510, epoch_before: 7, reason: "total failure test", evidence });
+    assert.match(rendered, /cycle bracket: unavailable \(transport error: reset failed\)/);
+    assert.match(rendered, /program counter \/ register snapshot: unavailable \(transport error: registers_get failed\)/);
+    assert.match(rendered, /armed checkpoints: unavailable \(transport error: checkpoint_list failed\)/);
+    assert.match(rendered, /resolved live IRQ handler: unavailable \(transport error: memory_read failed\)/);
+    assert.match(rendered, /screenshot: unavailable \(transport error: screenshot failed\)/);
+    assert.match(rendered, /evidence_complete: false/);
+  });
+});
+
+test("a record with no evidence at all (legacy shape) still renders a well-formed Evidence section and evidence_complete: false", () => {
+  withTempIncidentsDir(() => {
+    const rendered = renderIncidentRecord({ port: 6510, epoch_before: 7, reason: "no evidence" });
+    assert.match(rendered, /## Evidence\n\n\(no evidence captured\)/);
+    assert.match(rendered, /evidence_complete: false/);
+  });
+});
+
+test("a snapshot evidence item (plan 01.3-03 task 2) renders as accepted-with-name when available, and unavailable-with-reason when not", () => {
+  withTempIncidentsDir(() => {
+    const acceptedEvidence = { ...fullEvidenceFixture(), snapshot: { available: true, value: { name: "20260802143000123-port6510-epoch7" } } };
+    const acceptedRendered = renderIncidentRecord({ port: 6510, epoch_before: 7, reason: "snapshot ok", evidence: acceptedEvidence });
+    assert.match(acceptedRendered, /pre-kill snapshot attempt: accepted \(name: 20260802143000123-port6510-epoch7\)/);
+    assert.match(acceptedRendered, /never independently verified as written/);
+
+    const rejectedEvidence = { ...fullEvidenceFixture(), snapshot: { available: false, reason: "vice_snapshot_save rejected: disk full" } };
+    const rejectedRendered = renderIncidentRecord({ port: 6510, epoch_before: 7, reason: "snapshot rejected", evidence: rejectedEvidence });
+    assert.match(rejectedRendered, /pre-kill snapshot attempt: unavailable \(vice_snapshot_save rejected: disk full\)/);
+  });
+});
+
+test("finaliseIncidentRecord() preserves the ALREADY-RENDERED evidence section verbatim across the outcome re-render", () => {
+  withTempIncidentsDir(() => {
+    const path = writeIncidentRecord({ port: 6510, epoch_before: 7, reason: "evidence survives finalise", evidence: fullEvidenceFixture() });
+    const before = readFileSync(path, "utf8");
+    assert.match(before, /evidence_complete: true/);
+    assert.match(before, /cycle bracket: 991234 cycles retired/);
+
+    finaliseIncidentRecord(path, { outcome: "ok", kill_stage: "sigterm", epoch_after: 8 });
+
+    const after = readFileSync(path, "utf8");
+    assert.match(after, /outcome: 'ok'/);
+    assert.match(after, /evidence_complete: true/, "evidence_complete must survive the finalise re-render");
+    assert.match(after, /cycle bracket: 991234 cycles retired/, "the evidence section itself must survive the finalise re-render verbatim");
+    assert.match(after, /screenshot: saved to \.planning\/incidents\/20260802143000123-port6510-epoch7\.png/);
+  });
+});

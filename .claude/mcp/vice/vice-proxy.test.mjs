@@ -2989,6 +2989,251 @@ test("vice_recycle: after a confirmed recycle, a subsequent forwarded call succe
 });
 
 // ---------------------------------------------------------------------------
+// Plan 01.3-03 task 1: gatherWedgeEvidence() -- criterion 4's full evidence
+// set, composed from plan 01.3-02's own primitives (runCycleBracket(),
+// resolveLiveIrqHandler()) plus the register/checkpoint/screenshot reads,
+// exercised end to end through vice_recycle (gatherWedgeEvidence() is
+// proxy-internal with no export, same as handleDiagnose()'s own primitives
+// in the section above -- reached only through the tool surface).
+// ---------------------------------------------------------------------------
+
+/** A sentinel telling startFlexibleStandInServer()'s request handler to
+ * deliberately never respond -- the connection is left open until the
+ * client's own AbortSignal.timeout fires. Exercises the capture-step
+ * deadline (CAPTURE_STEP_TIMEOUT_MS / VICE_RECYCLE_CAPTURE_TIMEOUT_MS)
+ * rather than an immediate rejection. */
+const HANG = Symbol("vice-proxy-test: hang, never respond");
+
+/** MUST live INSIDE the mounted workspace -- unlike tmpIncidentsDir() above
+ * (deliberately outside it, for the pre-existing recycle tests that never
+ * exercise the screenshot's path translation), this section's "healthy"
+ * fixtures need a REAL translation to succeed end to end, not merely
+ * demonstrate the out-of-workspace refusal path. Cleaned up by the caller's
+ * own finally block, same as tmpIncidentsDir(). */
+function tmpWorkspaceIncidentsDir() {
+  return mkdtempSync(join(repoRoot(), ".planning", "vice-proxy-evidence-test-"));
+}
+
+/**
+ * A `respond(name, args)` function for gatherWedgeEvidence()'s own forwarded
+ * reads: a healthy default for every tool it calls (vice_ping,
+ * vice_checkpoint_list, vice_registers_get, vice_memory_read, the cycle
+ * bracket's vice_cycles_stopwatch/vice_execution_run/vice_execution_pause,
+ * vice_display_screenshot, and vice_snapshot_save), with any field
+ * override-able per test via `overrides`.
+ */
+function healthyEvidenceRespond(overrides = {}) {
+  const {
+    checkpoints = [],
+    registers = { PC: 0x1000, A: 0, X: 0, Y: 0, SP: 0xf0 },
+    port01 = 0x37, // banked in
+    ramVector = [0x31, 0xea],
+    stopwatchCycles = 500000,
+  } = overrides;
+  return (name, args) => {
+    if (name === "vice_ping") return { version: "3.10", machine: "C64SC", execution: "paused" };
+    if (name === "vice_checkpoint_list") return { checkpoints };
+    if (name === "vice_registers_get") return registers;
+    if (name === "vice_memory_read") {
+      if (args.address === "$01") return memHex([port01]);
+      if (args.address === "$0314") return memHex(ramVector);
+    }
+    if (name === "vice_cycles_stopwatch") {
+      if (args.action === "read") return { cycles: stopwatchCycles };
+      return { status: "ok" };
+    }
+    if (name === "vice_execution_run") return { status: "ok" };
+    if (name === "vice_execution_pause") return { status: "ok" };
+    if (name === "vice_display_screenshot") return { status: "ok" };
+    if (name === "vice_snapshot_save") return { status: "ok" };
+    return undefined;
+  };
+}
+
+test("vice_recycle: a healthy capture produces a full evidence object -- bracket, registers, checkpoints, IRQ handler and a translated screenshot path", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vice-proxy-recycle-evidence-healthy-"));
+  const evidenceDir = tmpWorkspaceIncidentsDir();
+  const respond = healthyEvidenceRespond({
+    checkpoints: [{ checkpoint_num: 9, start: "$4000", stop: true, exec: true, enabled: true, hit_count: 2 }],
+  });
+  const { server, requests } = startFlexibleStandInServer(respond);
+  const port = await listen(server);
+  const proxy = startProxy({
+    VICE_POOL_DIR: dir,
+    VICE_BROKER_BASE_PORT: String(port),
+    VICE_MCP_HOST: "127.0.0.1",
+    VICE_INCIDENTS_DIR: evidenceDir,
+  });
+  try {
+    await handshake(proxy);
+    const { id: leaseId } = await acquireLeaseViaBroker(proxy, dir, port, 3);
+    writeEpochFileFixture(dir, port, { epoch: 1 });
+
+    proxy.send({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "vice_recycle", arguments: { reason: "evidence test" } } });
+    const recycleId = await waitForRecycleRequestId(dir, leaseId);
+    writeEpochFileFixture(dir, port, { epoch: 2 });
+    writeRecycleAckFixture(dir, recycleId, { target_id: leaseId, port, outcome: "ok", kill_stage: "sigterm", epoch_before: 1 });
+
+    const resp = await proxy.nextMessage();
+    assert.equal(resp.result.isError, false);
+
+    const incidentFile = readdirSync(evidenceDir).find((f) => f.endsWith(".md"));
+    assert.ok(incidentFile, "an incident record must have been written");
+    const content = readFileSync(join(evidenceDir, incidentFile), "utf8");
+
+    assert.match(content, /## Evidence/);
+    assert.match(content, /cycle bracket: \d+ cycles retired/);
+    assert.match(content, /PC \$1000/);
+    assert.match(content, /#9 \$4000 \(stop, enabled\)/);
+    assert.match(content, /RAM IRQ vector pair/);
+    assert.match(content, /screenshot: saved to /);
+    assert.match(content, /pre-kill snapshot attempt: accepted \(name: /);
+    assert.match(content, /evidence_complete: true/);
+
+    const screenshotCall = requests.find((r) => r && r.method === "tools/call" && r.params && r.params.name === "vice_display_screenshot");
+    assert.ok(screenshotCall, "the screenshot capability must have been called");
+    const receivedPath = screenshotCall.params.arguments.path;
+    const translatedPrefix = hostPath(evidenceDir);
+    assert.ok(
+      receivedPath.startsWith(translatedPrefix),
+      `expected the stand-in's received screenshot path (${receivedPath}) to start with the translated prefix (${translatedPrefix})`
+    );
+    assert.ok(!receivedPath.startsWith(evidenceDir), "the argument must be the translated HOST path, not the container path");
+
+    assert.match(resp.result.content[0].text, /Snapshot: accepted/);
+  } finally {
+    proxy.child.kill("SIGKILL");
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(evidenceDir, { recursive: true, force: true });
+  }
+});
+
+test("vice_recycle: a rejected screenshot capture records unavailable with the reason, and every other evidence entry is still populated", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vice-proxy-recycle-evidence-noscreenshot-"));
+  const evidenceDir = tmpWorkspaceIncidentsDir();
+  const healthy = healthyEvidenceRespond({});
+  const respond = (name, args) => (name === "vice_display_screenshot" ? undefined : healthy(name, args));
+  const { server } = startFlexibleStandInServer(respond);
+  const port = await listen(server);
+  const proxy = startProxy({
+    VICE_POOL_DIR: dir,
+    VICE_BROKER_BASE_PORT: String(port),
+    VICE_MCP_HOST: "127.0.0.1",
+    VICE_INCIDENTS_DIR: evidenceDir,
+  });
+  try {
+    await handshake(proxy);
+    const { id: leaseId } = await acquireLeaseViaBroker(proxy, dir, port, 3);
+    writeEpochFileFixture(dir, port, { epoch: 1 });
+
+    proxy.send({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "vice_recycle", arguments: { reason: "no screenshot test" } } });
+    const recycleId = await waitForRecycleRequestId(dir, leaseId);
+    writeEpochFileFixture(dir, port, { epoch: 2 });
+    writeRecycleAckFixture(dir, recycleId, { target_id: leaseId, port, outcome: "ok", kill_stage: "sigterm", epoch_before: 1 });
+
+    const resp = await proxy.nextMessage();
+    assert.equal(resp.result.isError, false, "a rejected screenshot must not fail the recycle");
+
+    const incidentFile = readdirSync(evidenceDir).find((f) => f.endsWith(".md"));
+    const content = readFileSync(join(evidenceDir, incidentFile), "utf8");
+    assert.match(content, /screenshot: unavailable \(/);
+    assert.match(content, /cycle bracket: \d+ cycles retired/, "the bracket entry must still be populated");
+    assert.match(content, /PC \$1000/, "the register entry must still be populated");
+    assert.match(content, /evidence_complete: false/);
+  } finally {
+    proxy.child.kill("SIGKILL");
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(evidenceDir, { recursive: true, force: true });
+  }
+});
+
+test("vice_recycle: a rejected checkpoint enumeration records unavailable for that entry, and the capture still returns", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vice-proxy-recycle-evidence-nocheckpoints-"));
+  const incidentsDir = tmpIncidentsDir();
+  const healthy = healthyEvidenceRespond({});
+  const respond = (name, args) => (name === "vice_checkpoint_list" ? undefined : healthy(name, args));
+  const { server } = startFlexibleStandInServer(respond);
+  const port = await listen(server);
+  const proxy = startProxy({
+    VICE_POOL_DIR: dir,
+    VICE_BROKER_BASE_PORT: String(port),
+    VICE_MCP_HOST: "127.0.0.1",
+    VICE_INCIDENTS_DIR: incidentsDir,
+  });
+  try {
+    await handshake(proxy);
+    const { id: leaseId } = await acquireLeaseViaBroker(proxy, dir, port, 3);
+    writeEpochFileFixture(dir, port, { epoch: 1 });
+
+    proxy.send({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "vice_recycle", arguments: { reason: "no checkpoints test" } } });
+    const recycleId = await waitForRecycleRequestId(dir, leaseId);
+    writeEpochFileFixture(dir, port, { epoch: 2 });
+    writeRecycleAckFixture(dir, recycleId, { target_id: leaseId, port, outcome: "ok", kill_stage: "sigterm", epoch_before: 1 });
+
+    const resp = await proxy.nextMessage();
+    assert.equal(resp.result.isError, false);
+
+    const incidentFile = readdirSync(incidentsDir).find((f) => f.endsWith(".md"));
+    const content = readFileSync(join(incidentsDir, incidentFile), "utf8");
+    assert.match(content, /armed checkpoints: unavailable \(/);
+    assert.match(content, /cycle bracket: \d+ cycles retired/);
+    assert.match(content, /RAM IRQ vector pair/);
+  } finally {
+    proxy.child.kill("SIGKILL");
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(incidentsDir, { recursive: true, force: true });
+  }
+});
+
+test("vice_recycle: a stand-in that rejects every read produces a fully-populated (all-unavailable) evidence object, and the capture still returns rather than throwing", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vice-proxy-recycle-evidence-allrejected-"));
+  const incidentsDir = tmpIncidentsDir();
+  // Only vice_ping is answered (needed for lease acquisition and the
+  // generic path's own preflight probe) -- every evidence-specific read is
+  // left unhandled, which the stand-in answers with an immediate JSON-RPC
+  // error (never a hang).
+  const respond = (name) => (name === "vice_ping" ? { version: "3.10", machine: "C64SC", execution: "paused" } : undefined);
+  const { server } = startFlexibleStandInServer(respond);
+  const port = await listen(server);
+  const proxy = startProxy({
+    VICE_POOL_DIR: dir,
+    VICE_BROKER_BASE_PORT: String(port),
+    VICE_MCP_HOST: "127.0.0.1",
+    VICE_INCIDENTS_DIR: incidentsDir,
+  });
+  try {
+    await handshake(proxy);
+    const { id: leaseId } = await acquireLeaseViaBroker(proxy, dir, port, 3);
+    writeEpochFileFixture(dir, port, { epoch: 1 });
+
+    proxy.send({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "vice_recycle", arguments: { reason: "all rejected test" } } });
+    const recycleId = await waitForRecycleRequestId(dir, leaseId);
+    writeEpochFileFixture(dir, port, { epoch: 2 });
+    writeRecycleAckFixture(dir, recycleId, { target_id: leaseId, port, outcome: "ok", kill_stage: "sigterm", epoch_before: 1 });
+
+    const resp = await proxy.nextMessage();
+    assert.equal(resp.result.isError, false, "the recycle must still complete even when every evidence read is rejected");
+
+    const incidentFile = readdirSync(incidentsDir).find((f) => f.endsWith(".md"));
+    const content = readFileSync(join(incidentsDir, incidentFile), "utf8");
+    assert.match(content, /cycle bracket: unavailable \(/);
+    assert.match(content, /program counter \/ register snapshot: unavailable \(/);
+    assert.match(content, /armed checkpoints: unavailable \(/);
+    assert.match(content, /resolved live IRQ handler: unavailable \(/);
+    assert.match(content, /screenshot: unavailable \(/);
+    assert.match(content, /evidence_complete: false/);
+  } finally {
+    proxy.child.kill("SIGKILL");
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(incidentsDir, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // Plan 01.3-01 task 2: the two structural guards keeping this phase inside
 // the only-permitted-route rule (criteria 5, 8, 9 in 01.3-VALIDATION.md).
 // ---------------------------------------------------------------------------

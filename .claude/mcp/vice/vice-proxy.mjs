@@ -51,10 +51,14 @@ import {
 } from "./vice-broker-client.mjs";
 // The recycle path's own incident record (plan 01.3-01) -- written BEFORE
 // anything is killed (D-17), never through any network call of its own.
-import { writeIncidentRecord, finaliseIncidentRecord } from "./incident-record.mjs";
+// incidentAssetPath()/incidentAssetStem() (plan 01.3-03) are the SAME stem-
+// building logic incidentRecordPath() itself uses -- imported here so the
+// evidence gatherer's screenshot and the pre-kill snapshot's name can never
+// drift onto a second, independent naming rule.
+import { writeIncidentRecord, finaliseIncidentRecord, incidentAssetPath, incidentAssetStem } from "./incident-record.mjs";
 import { readFileSync, unlinkSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 
 const HERE_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -555,14 +559,27 @@ async function handleRecycle(args) {
   const clientPidRaw = Number(process.env.CLAUDE_PID);
   const clientPid = Number.isFinite(clientPidRaw) ? clientPidRaw : null;
   const { port } = activeInstance();
+  const epochBefore = preKillEpoch.present ? preKillEpoch.epoch : null;
+  const at = new Date().toISOString();
+
+  // Plan 01.3-03 (D-17, extended): gather the FULL criterion-4 evidence set
+  // -- including the best-effort pre-kill snapshot -- BEFORE the record is
+  // written. There is no argument, environment variable or branch between
+  // here and the record write that can reach the request write with any of
+  // this still ungathered; every step above degrades to unavailable rather
+  // than aborting, so this line always completes.
+  const evidence = await gatherWedgeEvidence({ at, port, epoch: epochBefore });
+  evidence.snapshot = await captureSnapshotAttempt({ at, port, epoch: epochBefore });
 
   // D-17: the record is written BEFORE the request -- capturing is
   // structurally impossible to skip, not a discipline to remember.
   const recordPath = writeIncidentRecord({
+    at,
     port,
-    epoch_before: preKillEpoch.present ? preKillEpoch.epoch : null,
+    epoch_before: epochBefore,
     reason,
     session_id: sessionId,
+    evidence,
   });
 
   const id = newRequestId();
@@ -614,6 +631,11 @@ async function handleRecycle(args) {
   // forwarded call fail the drift guard.
   rebaselineEpochAfterRecycle();
 
+  const snapshotNote =
+    evidence.snapshot && evidence.snapshot.available
+      ? `accepted (name: ${evidence.snapshot.value.name})`
+      : `unavailable (${evidence.snapshot && evidence.snapshot.reason ? evidence.snapshot.reason : "no reason recorded"})`;
+
   return {
     content: [
       {
@@ -622,6 +644,7 @@ async function handleRecycle(args) {
           `vice_recycle: kill stage "${killStage}". Epoch before: ${preKillEpoch.present ? preKillEpoch.epoch : "unknown"}, ` +
           `epoch after: ${afterEpoch.present ? afterEpoch.epoch : "unknown"} (${epochMoved() ? "moved" : "did not move within the timeout"}). ` +
           `Readiness probe: ${probe.alive ? "the respawned instance answered" : `not yet answering (${probe.reason})`}. ` +
+          `Snapshot: ${snapshotNote}. ` +
           `Incident record: ${recordPath}. This run is VOID -- resume from the last recorded milestone snapshot.`,
       },
     ],
@@ -1033,6 +1056,134 @@ async function handleDiagnose(_args) {
       `vice_diagnose: an unexpected error occurred while gathering evidence: ${e && e.message ? e.message : e}`
     );
   }
+}
+
+// -------------------------------------------- vice_recycle: evidence gather
+//
+// Plan 01.3-03 (criterion 4): the destructive path's own evidence set,
+// composed ENTIRELY from reads already forwardable through call() -- no new
+// host capability, no second route. runCycleBracket() and
+// resolveLiveIrqHandler() are plan 01.3-02's own single definitions, reused
+// here rather than re-derived (this plan's own key_links) -- criterion 2's
+// single-bracket-definition guard is a PHASE property, not a plan one.
+
+/**
+ * Capture-step deadline (T-01.3-10): a TRANSPORT deadline bounding how long
+ * ANY single evidence-gathering step (including the pre-kill snapshot
+ * attempt, task 2) may wait for its own forwarded call(s) before this
+ * wrapper gives up and records an explicit unavailable-with-reason entry.
+ *
+ * This is deliberately DIFFERENT from the project's standing prohibition on
+ * WALL-CLOCK PACING (never sleep to wait for the emulated machine to reach
+ * some state -- synchronise on checkpoint hits and cycle counts instead):
+ * that rule governs synchronising INPUT/WAITS against the emulated game's
+ * own state. This deadline governs a capture step's patience with the
+ * TRANSPORT alone -- exactly the kind of deadline call()'s own
+ * AbortSignal.timeout already applies per forwarded call, just bounding the
+ * WHOLE step (which may issue several forwarded calls, e.g. the bracket) so
+ * one non-answering read can never stall the whole gather, and the
+ * snapshot attempt can never stall the recycle itself (D-19). Overridable
+ * purely so this file's own test suite can exercise a "never answers"
+ * fixture in milliseconds rather than minutes -- production always uses the
+ * generous default.
+ */
+const CAPTURE_STEP_TIMEOUT_MS = Number(process.env.VICE_RECYCLE_CAPTURE_TIMEOUT_MS || 8000);
+
+/**
+ * Runs one evidence-gathering step, turning any rejection, transport
+ * failure or capture-step deadline into an explicit `{ available: false,
+ * reason }` entry rather than letting it abort the whole gather -- the
+ * whole point (D-17, D-19) is that a wedged machine will fail SOME of these
+ * and the record must still exist. Never throws.
+ */
+async function captureStep(fn) {
+  let timer;
+  try {
+    const value = await Promise.race([
+      fn(),
+      new Promise((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`capture step deadline of ${CAPTURE_STEP_TIMEOUT_MS}ms exceeded`)),
+          CAPTURE_STEP_TIMEOUT_MS
+        );
+      }),
+    ]);
+    return { available: true, value };
+  } catch (e) {
+    return { available: false, reason: e && e.message ? e.message : String(e) };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Assembles criterion-4's evidence set for an incident record: one cycle
+ * bracket (runCycleBracket(), plan 01.3-02 -- NEVER a second bracket
+ * definition), the program counter and full register snapshot, the full
+ * checkpoint enumeration (address, enabled flag, stop-or-continue), the
+ * resolved live IRQ handler (resolveLiveIrqHandler(), plan 01.3-02), and a
+ * screenshot written to a path in the incidents directory sharing the
+ * record's own stem. Every step goes through captureStep() above, so no
+ * step can abort the gather.
+ *
+ * `at`/`port`/`epoch` name the SAME triple the caller passes to
+ * writeIncidentRecord(), so the screenshot's path shares that record's stem
+ * (best-effort: the very rare case of a same-millisecond/port/epoch
+ * collision forcing writeIncidentRecord() to append a numeric suffix onto
+ * the actual .md file is not reflected here, since this path is computed
+ * BEFORE that write happens).
+ */
+async function gatherWedgeEvidence({ at, port, epoch }) {
+  const bracket = await captureStep(() => runCycleBracket());
+  const registers = await captureStep(() => call("vice_registers_get", {}));
+  const checkpoints = await captureStep(async () => {
+    const result = await call("vice_checkpoint_list", {});
+    const list = Array.isArray(result && result.checkpoints) ? result.checkpoints : [];
+    return list.map((c) => ({
+      checkpoint_num: c && c.checkpoint_num,
+      address: formatAddress(toAddressNumber(c && c.start)),
+      enabled: Boolean(c && c.enabled !== false),
+      flag: c && c.stop ? "stop" : "continue",
+    }));
+  });
+  const irqHandler = await captureStep(() => resolveLiveIrqHandler());
+
+  // The screenshot's path argument must be translated (T-01.3-11's sibling
+  // concern): handleToolsCall() applies rewriteArguments() before
+  // forwarding, and this proxy-local caller does NOT pass through that seam
+  // -- so it is called explicitly here. Skipping this would write the file
+  // to a host path that does not exist and return a success the record
+  // would then be lying about.
+  const screenshotContainerPath = incidentAssetPath({ at, port, epoch, ext: "png" });
+  const screenshot = await captureStep(async () => {
+    const { args: translated } = rewriteArguments({ path: screenshotContainerPath }, "vice_display_screenshot");
+    await call("vice_display_screenshot", translated);
+    return relative(repoRoot(), screenshotContainerPath);
+  });
+
+  return { bracket, registers, checkpoints, irqHandler, screenshot };
+}
+
+/**
+ * The best-effort pre-kill snapshot (plan 01.3-03 task 2, D-19): the LAST
+ * capture step, run immediately before the incident record is written. It
+ * takes a NAME, not a path -- vice_snapshot_save's own contract -- so the
+ * file lands in the host emulator's own snapshot directory and nothing
+ * container-side can confirm it landed there. The record therefore says
+ * the ATTEMPT was accepted, never that a file was verified (T-01.3-11): the
+ * wording must not overstate what was established. A rejection, a
+ * transport failure or a capture-step deadline records unavailable with
+ * the reason verbatim and moves on -- it cannot fail or stall the recycle.
+ * The name is built from the SAME timestamp/port/epoch triple the incident
+ * record's own stem uses, so the two artifacts are trivially correlated
+ * later.
+ */
+async function captureSnapshotAttempt({ at, port, epoch }) {
+  const name = incidentAssetStem({ at, port, epoch });
+  return captureStep(async () => {
+    await call("vice_snapshot_save", { name, description: "vice_recycle pre-kill evidence capture" });
+    return { name };
+  });
 }
 
 // --------------------------------------------------- unreachable diagnostics
