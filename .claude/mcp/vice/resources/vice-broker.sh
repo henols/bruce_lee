@@ -1206,19 +1206,33 @@ maintain_spares() {
       if [ "$(read_spare_field "$f" state)" = "launching" ]; then
         port="$(read_spare_field "$f" port)"
         if [ -n "$port" ] && probe_ready "$port"; then
-          local launched_at now_ns elapsed_ns elapsed_s content
+          local launched_at now_ns elapsed_ns elapsed_ms content
           launched_at="$(read_spare_field "$f" launched_at)"
           now_ns="$(date +%s%N)"
-          elapsed_s="?"
+          elapsed_ms="?"
+          # Milliseconds, not whole seconds: the previous
+          # elapsed_s=$((elapsed_ns / 1000000000)) integer-divided every
+          # sub-second boot down to zero, which reads as "instant, or
+          # unmeasured" rather than as a number -- that is why an ~8x-wrong
+          # ~8s boot assumption went unchallenged long enough to reach a
+          # design note, a todo and a spike, while the real measurement
+          # existed the whole time and just displayed as nothing. The "?"
+          # fallback for a missing/unreadable launched_at is unchanged: an
+          # unmeasurable boot still renders "?", never "0ms".
           if [ -n "$launched_at" ]; then
             elapsed_ns=$((now_ns - launched_at))
             [ "$elapsed_ns" -lt 0 ] && elapsed_ns=0
-            elapsed_s=$((elapsed_ns / 1000000000))
+            elapsed_ms=$((elapsed_ns / 1000000))
           fi
           content="$(cat "$f")"
           content="$(printf '%s' "$content" | sed 's/"state": *"launching"/"state": "ready"/; s/"ready_at": *null/"ready_at": '"$now_ns"'/')"
           write_json_atomic "$f" "$content"
-          echo "vice-broker: port $port launching -> ready (${elapsed_s}s)"
+          # The caveat names the real poll interval (never a hardcoded
+          # literal) because this pass runs once every VICE_BROKER_POLL_MS:
+          # the figure is an UPPER BOUND on boot time, not a measurement of
+          # it. The precise source remains the nanosecond launched_at/
+          # ready_at fields in the spare record itself.
+          echo "vice-broker: port $port launching -> ready (${elapsed_ms}ms, upper bound: polled every ${VICE_BROKER_POLL_MS}ms)"
         fi
       fi
     done
