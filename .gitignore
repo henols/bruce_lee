@@ -101,3 +101,21 @@ recovery/*/dumps/probe-*.png
 /tools/vice-broker.sh
 /tools/lib/container-guard.sh
 /tools/lib/repo-root.sh
+# vice-broker.mjs and vice-launcher.sh (Phase 01.6 plan 01) join them --
+# resources/ is now generated-but-committed for these two, tsc-emitted for
+# the former, hand-authored for the latter; tools/ stays the disposable
+# deployment target for both, same as every other entry in this block.
+/tools/vice-broker.mjs
+/tools/vice-launcher.sh
+
+# node_modules for .claude/mcp/vice/'s own npm toolchain (Phase 01.6 plan
+# 01) -- the FIRST node_modules this repository has ever had. No leading
+# slash: gitignore matches an unanchored pattern at ANY depth, which is
+# deliberate here (not merely the default) -- an untracked root node_modules/
+# existed at this repo's top level as of 2026-08-02 (01.6-01-PLAN.md's
+# planning_notes, T-01.6-22); it has since been removed by developer decision
+# (not adopted), but a scoped entry would still leave any FUTURE untracked
+# root tree polluting `git status`. package-lock.json is NOT ignored here --
+# it is committed (the compiler version is a build input now that its output
+# is committed).
+node_modules/

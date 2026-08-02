@@ -1653,7 +1653,18 @@ test("RESOURCES_DIR (quick-260731-p8a, path-anchor regression): points at the MO
     // (install-resources.mjs's walk() is dynamic), but THIS list is
     // deliberately hardcoded so a wrong path-anchor hop count still fails
     // loudly rather than silently comparing two equally-wrong lists.
-    ["lib/container-guard.sh", "lib/repo-root.sh", "vice-broker.sh", "vice-pool.sh", "vice-supervisor.sh"]
+    // vice-broker.mjs and vice-launcher.sh (Phase 01.6 plan 01) join them --
+    // the first generated-but-committed resources/ entries in this tree
+    // (tsc-emitted and hand-authored respectively); same reasoning applies.
+    [
+      "lib/container-guard.sh",
+      "lib/repo-root.sh",
+      "vice-broker.mjs",
+      "vice-broker.sh",
+      "vice-launcher.sh",
+      "vice-pool.sh",
+      "vice-supervisor.sh",
+    ]
   );
 });
 
