@@ -46,6 +46,11 @@ function sanitiseUtcTimestamp(at) {
 }
 
 function sanitiseInt(value) {
+  // null/undefined/"" all coerce to 0 (or NaN) under a bare Number(), which
+  // would silently misreport "no port/epoch known" as the real port 0 --
+  // excluded FIRST, before the coercion, rather than trusting Number()'s
+  // own permissiveness here.
+  if (value === null || value === undefined || value === "") return "unknown";
   const n = Number(value);
   return Number.isInteger(n) ? n : "unknown";
 }

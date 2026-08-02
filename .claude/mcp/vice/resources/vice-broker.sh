@@ -1561,14 +1561,21 @@ signal_recorded_pid() {
 # already_exited / identity_refused / sigterm / sigkill to stdout -- the
 # caller captures that word verbatim for the ack's kill_stage field, never
 # reporting "requested" as "recycled" (T-01.3-03). An already-exited pid is
-# NOT a failure: the machine being gone is the goal, so that case returns 0
-# exactly like a genuine kill, while identity_refused returns 1 -- the two
-# outcomes a caller must be able to tell apart.
+# NOT a failure: the machine being gone is the goal, so EVERY already_exited
+# case returns 0 exactly like a genuine kill -- an empty/null pid included,
+# since from this function's perspective "nothing to kill" and "the kill -0
+# probe found nothing" are the same fact -- while identity_refused returns 1,
+# the one outcome a caller must be able to tell apart from every other word.
+# (In practice handle_recycle_request() below never reaches this function
+# with an empty/null pid -- it writes its own pid_lookup_failed ack first --
+# so the empty/null branch is defensive, not a live path; its exit code
+# still has to agree with the stage word it prints, or a future caller that
+# skips that earlier guard inherits a silent contradiction.)
 signal_vice_child_pid() {
   local pid="$1" expected_bin="$2" label="$3"
   if [ -z "$pid" ] || [ "$pid" = "null" ]; then
     echo "already_exited"
-    return 1
+    return 0
   fi
   if ! kill -0 "$pid" 2>/dev/null; then
     echo "already_exited"
@@ -1661,10 +1668,17 @@ handle_recycle_request() {
   target_id="$(extract_target_id_field "$req_file")"
   reason="$(grep -o '"reason": *"[^"]*"' "$req_file" 2>/dev/null | head -1 | sed 's/.*"reason": *"//; s/"$//' || true)"
 
+  # An invalid/missing target_id is a MALFORMED request, not a resolvable-
+  # but-absent target -- matches process_requests()'s own "skipping request
+  # ... invalid or missing id" idiom exactly: skipped with a logged reason,
+  # writing NO file anywhere (no ack, and the request file itself is left in
+  # place, never deleted -- identical to how a malformed "id" field is
+  # handled one level up). This is deliberately distinct from the "no grant
+  # record" case below, which names a well-formed target_id that simply
+  # does not resolve -- that case DOES write an ack, because there a real
+  # recycle attempt was made and failed, which is worth acking.
   if [ -z "$target_id" ] || ! is_valid_request_id "$target_id"; then
-    write_recycle_ack "$id" "$target_id" "" "" "" "no_signal" "" "target_lookup_failed" "target id missing or invalid: \"$target_id\""
-    rm -f "$req_file"
-    echo "vice-broker: recycle $id -- refused, invalid or missing target_id \"$target_id\"" >&2
+    echo "vice-broker: skipping recycle $id -- invalid or missing target_id: \"$target_id\"" >&2
     return 0
   fi
 

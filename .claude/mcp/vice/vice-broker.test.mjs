@@ -2624,3 +2624,62 @@ test("recycle: an acquire request with no op field at all is still granted exact
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("recycle: a target id that fails the id pattern is skipped with a logged reason and writes no file anywhere", async () => {
+  const dir = tmpPoolDir();
+  try {
+    const recycleId = "req-9-9090-2a2a2a2a";
+    // "not-a-valid-id" fails REQUEST_ID_PATTERN outright -- a malformed
+    // request, distinct from a well-formed-but-nonexistent target (which
+    // DOES get an ack; see the "no grant record" test above).
+    writeRecycleRequestFile(dir, recycleId, { targetId: "not-a-valid-id" });
+
+    const { stderr } = await runBrokerOnce(dir, { basePort: 7309 });
+
+    assert.match(stderr, /skipping recycle req-9-9090-2a2a2a2a.*invalid or missing target_id/);
+    assert.equal(existsSync(join(dir, "recycle-acks", `${recycleId}.json`)), false, "an invalid target_id must write no ack file");
+    // The request file itself is left in place, exactly like
+    // process_requests()'s own invalid-"id" skip -- never silently deleted.
+    assert.equal(existsSync(join(dir, "requests", `${recycleId}.json`)), true, "a malformed recycle request must not be consumed");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// signal_vice_child_pid() unit-level contract (raised at the 01.3-01 tracer
+// checkpoint): an empty/null pid and a genuinely-dead pid must print the
+// SAME stage word (already_exited) AND return the SAME exit code (0) --
+// "the machine being gone is the goal" applies identically to both, per the
+// function's own header comment. Exercised by extracting the function's own
+// body via the identical sed idiom this file's acceptance criteria already
+// use to inspect it (rather than sourcing the whole script, which runs its
+// own argument-parsing/container-guard/mkdir side effects unconditionally
+// and is not designed to be sourced as a library) -- a small, isolated
+// harness for a function this file otherwise only exercises indirectly
+// through handle_recycle_request(), which never reaches this branch itself
+// (it writes its own pid_lookup_failed ack first).
+test("signal_vice_child_pid: an empty/null pid reports already_exited and returns 0 -- identical stage word AND exit code to a genuinely-exited pid", async () => {
+  const { stdout: fnBody } = await execFileP("bash", ["-c", `sed -n '/^signal_vice_child_pid() {/,/^}/p' '${BROKER_SCRIPT}'`]);
+  assert.ok(fnBody.includes("signal_vice_child_pid()"), "sanity: the function body must have been extracted");
+
+  const script = `
+set -u
+VICE_BROKER_KILL_WAIT_S=1
+${fnBody}
+out="$(signal_vice_child_pid "" "whatever" "test-empty")"
+rc=$?
+echo "EMPTY_STAGE:$out"
+echo "EMPTY_RC:$rc"
+
+out="$(signal_vice_child_pid "null" "whatever" "test-null")"
+rc=$?
+echo "NULL_STAGE:$out"
+echo "NULL_RC:$rc"
+`;
+  const { stdout } = await execFileP("bash", ["-c", script]);
+  assert.match(stdout, /EMPTY_STAGE:already_exited/);
+  assert.match(stdout, /EMPTY_RC:0/, "an empty pid must return 0, matching the already_exited word it prints");
+  assert.match(stdout, /NULL_STAGE:already_exited/);
+  assert.match(stdout, /NULL_RC:0/, "the literal string \"null\" must return 0, matching the already_exited word it prints");
+});
