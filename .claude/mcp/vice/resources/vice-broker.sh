@@ -498,14 +498,24 @@ port_in_use() {
 # script writes -- broker.json, broker-instances.json, grants/<id>.json,
 # denials/<id>.json -- goes through here, so there is exactly one place the
 # tmp-then-mv atomicity rule lives. $1 = final path, $2 = fully-rendered
-# content. `mktemp` already creates its file mode 0600 regardless of umask
-# (GNU coreutils); the explicit chmod below is a second, self-documenting
-# guarantee of the uid-parity precondition's owner-only posture (D-1.2-D),
-# not a defensive widening -- it keeps the mode correct even if this script
-# is ever run against a `mktemp` implementation with a looser default.
+# content. The temp path is a deterministic sibling of the final path
+# ("$final_path.tmp"), not a randomly-named file: a crash between write and
+# rename leaves at most one stray file per target, bounded by construction,
+# rather than an unbounded set of randomly-named orphans accumulating in the
+# pool dir. Because the temp file is no longer created by a utility with an
+# implicit owner-only default, it is created empty under the ambient umask
+# and tightened to mode 600 BEFORE any content reaches it -- the explicit
+# chmod below is now the ONLY guarantee of the uid-parity precondition's
+# owner-only posture (D-1.2-D), not a redundant second one, so its ordering
+# ahead of the content write is load-bearing. Glob-safety confirmed: every
+# `*.json` glob in this script (spares/, grants/, requests/, and the
+# `$d/*.json` loops) is scoped such that a `.json.tmp` suffix never matches,
+# so this transient temp file is invisible to maintain_spares(),
+# drop_dead_instance_records() and the start-time validator.
 write_json_atomic() {
   local final_path="$1" content="$2" tmp
-  tmp="$(mktemp "$VICE_POOL_DIR/.broker.XXXXXX")"
+  tmp="$final_path.tmp"
+  : >"$tmp"
   chmod 600 "$tmp"
   printf '%s\n' "$content" >"$tmp"
   mv "$tmp" "$final_path"
@@ -1196,19 +1206,33 @@ maintain_spares() {
       if [ "$(read_spare_field "$f" state)" = "launching" ]; then
         port="$(read_spare_field "$f" port)"
         if [ -n "$port" ] && probe_ready "$port"; then
-          local launched_at now_ns elapsed_ns elapsed_s content
+          local launched_at now_ns elapsed_ns elapsed_ms content
           launched_at="$(read_spare_field "$f" launched_at)"
           now_ns="$(date +%s%N)"
-          elapsed_s="?"
+          elapsed_ms="?"
+          # Milliseconds, not whole seconds: the previous
+          # elapsed_s=$((elapsed_ns / 1000000000)) integer-divided every
+          # sub-second boot down to zero, which reads as "instant, or
+          # unmeasured" rather than as a number -- that is why an ~8x-wrong
+          # ~8s boot assumption went unchallenged long enough to reach a
+          # design note, a todo and a spike, while the real measurement
+          # existed the whole time and just displayed as nothing. The "?"
+          # fallback for a missing/unreadable launched_at is unchanged: an
+          # unmeasurable boot still renders "?", never "0ms".
           if [ -n "$launched_at" ]; then
             elapsed_ns=$((now_ns - launched_at))
             [ "$elapsed_ns" -lt 0 ] && elapsed_ns=0
-            elapsed_s=$((elapsed_ns / 1000000000))
+            elapsed_ms=$((elapsed_ns / 1000000))
           fi
           content="$(cat "$f")"
           content="$(printf '%s' "$content" | sed 's/"state": *"launching"/"state": "ready"/; s/"ready_at": *null/"ready_at": '"$now_ns"'/')"
           write_json_atomic "$f" "$content"
-          echo "vice-broker: port $port launching -> ready (${elapsed_s}s)"
+          # The caveat names the real poll interval (never a hardcoded
+          # literal) because this pass runs once every VICE_BROKER_POLL_MS:
+          # the figure is an UPPER BOUND on boot time, not a measurement of
+          # it. The precise source remains the nanosecond launched_at/
+          # ready_at fields in the spare record itself.
+          echo "vice-broker: port $port launching -> ready (${elapsed_ms}ms, upper bound: polled every ${VICE_BROKER_POLL_MS}ms)"
         fi
       fi
     done

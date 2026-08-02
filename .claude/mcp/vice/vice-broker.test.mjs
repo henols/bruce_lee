@@ -186,8 +186,12 @@ function runBrokerOnceDryRun(dir, basePort) {
  * needed by this file's own tests). Plan 04 adds `spares`/`max`/`probeCmd`/
  * `script` (which broker script binary to invoke -- defaults to the real,
  * tracked one; overridden by tests exercising the missing-supervisor-script
- * denial, which run a temp copy of the whole resources/ dir instead). */
-function runBrokerOnce(dir, { basePort = 7000, ttlS, dryRun = true, spares = 0, max, probeCmd, script = BROKER_SCRIPT } = {}) {
+ * denial, which run a temp copy of the whole resources/ dir instead).
+ * Quick task 260802-ci3 adds `pollMs`, setting VICE_BROKER_POLL_MS only when
+ * the caller passes one, so every existing caller is unaffected -- lets a
+ * test prove the boot-time log line's poll-interval caveat reads the
+ * variable rather than the 500 default. */
+function runBrokerOnce(dir, { basePort = 7000, ttlS, dryRun = true, spares = 0, max, probeCmd, pollMs, script = BROKER_SCRIPT } = {}) {
   const env = {
     ...process.env,
     VICE_SUPERVISOR_ALLOW_CONTAINER: "1",
@@ -198,6 +202,7 @@ function runBrokerOnce(dir, { basePort = 7000, ttlS, dryRun = true, spares = 0, 
   if (ttlS !== undefined) env.VICE_BROKER_TTL_S = String(ttlS);
   if (max !== undefined) env.VICE_BROKER_MAX = String(max);
   if (probeCmd !== undefined) env.VICE_BROKER_PROBE_CMD = probeCmd;
+  if (pollMs !== undefined) env.VICE_BROKER_POLL_MS = String(pollMs);
   const args = ["--once"];
   if (dryRun) args.push("--dry-run");
   return execFileP("bash", [script, ...args], { env });
@@ -1329,6 +1334,110 @@ test("maintain_spares: with a never-succeeding probe, no grant is ever issued an
     // written into it -- the real assertion is that it holds NO FILES.
     const grantFiles = existsSync(join(dir, "grants")) ? readdirSync(join(dir, "grants")).filter((f) => f.endsWith(".json")) : [];
     assert.deepEqual(grantFiles, [], "no grant can ever come from an entry that never becomes ready");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(dirname(probe), { recursive: true, force: true });
+  }
+});
+
+test("write_json_atomic: a --once --dry-run pass promoting a launching spare leaves no .broker.* file and no *.tmp file anywhere under the pool dir, and every protocol file it wrote is intact JSON at mode 600", async () => {
+  const dir = tmpPoolDir();
+  const probe = alwaysSucceedProbe();
+  try {
+    const port = 7730;
+    writeSpareFile(dir, port, { state: "launching" });
+
+    await runBrokerOnce(dir, { basePort: port, spares: 0, probeCmd: probe });
+
+    const allFiles = listAllFilesRecursive(dir);
+    assert.ok(
+      !allFiles.some((f) => /(^|\/)\.broker\./.test(f)),
+      `expected no .broker.* file anywhere under the pool dir, found: ${JSON.stringify(allFiles)}`
+    );
+    assert.ok(
+      !allFiles.some((f) => f.endsWith(".tmp")),
+      `expected no leftover *.tmp file anywhere under the pool dir, found: ${JSON.stringify(allFiles)}`
+    );
+
+    const brokerJsonPath = join(dir, "broker.json");
+    const brokerInstancesPath = join(dir, "broker-instances.json");
+    const sparePath = join(dir, "spares", `${port}.json`);
+
+    for (const p of [brokerJsonPath, brokerInstancesPath, sparePath]) {
+      const parsed = JSON.parse(readFileSync(p, "utf8")); // throws if not valid JSON
+      assert.ok(parsed, `${p} must parse as JSON`);
+      assert.equal(statSync(p).mode & 0o777, 0o600, `${p} must be mode 600`);
+    }
+    assert.equal(JSON.parse(readFileSync(sparePath, "utf8")).state, "ready", "the planted spare must have been promoted");
+
+    // Structural: write_json_atomic() no longer names the old random-name
+    // utility, and does contain both the ".tmp" suffix and the explicit
+    // chmod 600 -- slice starts at the definition line, deliberately AFTER
+    // the header comment, so the comment's historical discussion of the old
+    // approach cannot trip this assertion; it is about code, not prose.
+    const src = readFileSync(BROKER_SCRIPT, "utf8");
+    const defStart = src.indexOf("write_json_atomic() {");
+    const defEnd = src.indexOf("\n}\n", defStart);
+    assert.ok(defStart > 0 && defEnd > defStart, "write_json_atomic() must be found in the source");
+    const body = src.slice(defStart, defEnd);
+    assert.doesNotMatch(body, /mktemp/, "write_json_atomic() body must no longer call mktemp");
+    assert.match(body, /\.tmp/, "write_json_atomic() body must construct a .tmp sibling path");
+    assert.match(body, /chmod 600/, "write_json_atomic() body must still chmod 600 explicitly");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(dirname(probe), { recursive: true, force: true });
+  }
+});
+
+test("maintain_spares boot-time log: a promotion whose spare record carries a launch timestamp 250ms in the past logs a millisecond figure >= 250 plus a poll-interval caveat that reads VICE_BROKER_POLL_MS, not a hardcoded default", async () => {
+  const dir = tmpPoolDir();
+  const probe = alwaysSucceedProbe();
+  try {
+    const port = 7740;
+    // 250ms in the past, in the nanosecond units the field uses -- the same
+    // Number idiom writeSpareFile()'s own default already uses -- so the
+    // lower bound is deterministic instead of hoping a subprocess spawn
+    // takes measurable time, while never pinning an exact value.
+    writeSpareFile(dir, port, { state: "launching", launchedAt: Date.now() * 1e6 - 250e6 });
+
+    const { stdout } = await runBrokerOnce(dir, { basePort: port, spares: 0, probeCmd: probe, pollMs: 137 });
+
+    const match = stdout.match(/launching -> ready \((\d+)ms, upper bound: polled every (\d+)ms\)/);
+    assert.ok(match, `expected the promotion log line shape in stdout, got: ${stdout}`);
+    assert.ok(Number(match[1]) >= 250, `expected elapsed ms >= 250, got ${match[1]}`);
+    assert.equal(Number(match[2]), 137, "the poll-interval caveat must equal the distinctive VICE_BROKER_POLL_MS passed, not the 500 default");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(dirname(probe), { recursive: true, force: true });
+  }
+});
+
+test("maintain_spares boot-time log: a spare record with no launched_at key at all renders '?' in the elapsed position and never a zero millisecond figure", async () => {
+  const dir = tmpPoolDir();
+  const probe = alwaysSucceedProbe();
+  try {
+    const port = 7741;
+    const sparePath = writeSpareFile(dir, port, { state: "launching" });
+    // launchedAt: null is NOT sufficient -- writeSpareFile() still emits the
+    // key with a null value, and what the shell branch tests is whether the
+    // extracted value is EMPTY. Only deleting the key genuinely reproduces
+    // that.
+    const record = JSON.parse(readFileSync(sparePath, "utf8"));
+    delete record.launched_at;
+    writeFileSync(sparePath, JSON.stringify(record, null, 2) + "\n");
+
+    const { stdout } = await runBrokerOnce(dir, { basePort: port, spares: 0, probeCmd: probe });
+
+    assert.match(
+      stdout,
+      new RegExp(`port ${port} launching -> ready \\(\\?ms, upper bound: polled every \\d+ms\\)`),
+      `expected the '?' fallback for a missing launched_at, got: ${stdout}`
+    );
+    assert.doesNotMatch(
+      stdout,
+      new RegExp(`port ${port} launching -> ready \\(0ms`),
+      `a missing launched_at must never render as 0ms, got: ${stdout}`
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
     rmSync(dirname(probe), { recursive: true, force: true });
