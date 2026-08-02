@@ -36,57 +36,48 @@ independence, which is why D-3 exists.
 Chosen over plain `.mjs` after the trade was put explicitly (see § The trade, below). The
 developer reaffirmed TypeScript after the cost was named, so it is locked, not a default.
 
-**D-3. No orphaned `x64sc`. Ever. This is a hard constraint, not a goal.**
-The developer's phrasing was *"when a SIGKILL shows up the broker must tell the supervisors to take
-down the x64sc processes."* The intent is adopted in full; the mechanism cannot be that, and the
-reason is a kernel fact rather than a design preference.
+**D-3. A SIGKILLed broker leaves its `x64sc` processes running, and that is accepted.**
+*Revised within the same session.* The first phrasing was a hard constraint — *"it cant leave any
+orphand x64sc processes … when a SIGKILL shows up the broker must tell the supervisors to take down
+the x64sc processes."* When told that SIGKILL cannot be caught and shown what guaranteeing it would
+actually take, the developer withdrew the constraint: *"Worst case its ok to leave x64sc processes
+they can be closed manually quite easy, dont over work it. Accept sigkill and leve the prosesses
+running."*
 
-## The SIGKILL correction
+So the mechanism is one layer, not three:
+
+- **Catchable shutdown** — `SIGTERM`, `SIGINT`, `SIGHUP`, `uncaughtException`, `unhandledRejection`,
+  normal exit: the broker kills every child it launched, identity-verified against the pid recorded
+  at spawn (reusing Phase 01.3 criterion 6's verified-kill discipline, not re-deriving it). Cheap,
+  natural in one process, and it covers every ordinary shutdown.
+- **SIGKILL, OOM-kill, power loss** — the emulators stay running. Cleaned up by hand. No detector,
+  no registry-for-hygiene, no prevention.
+
+**Dropped as over-engineering, not deferred:** `PR_SET_PDEATHSIG` (needs a native addon on the host,
+or a per-instance wrapper process — which is the supervisor D-1 deletes) and cgroup-per-run with
+`cgroup.kill` on startup. Neither is a pending idea; both were considered and declined.
+
+**Criterion 7 is untouched by this relaxation.** Unconditional identity-verified reap on broker
+startup stays, because it is not about tidiness: without it a restarted broker sees zero connections,
+concludes every emulator is free, and hands a live one to a second session. A stray that survived a
+SIGKILL is exactly what it must refuse to hand out. Phase 01.5 criterion 3 (a grant proven live
+before it is honoured) is the same rule from the other side.
+
+## The kernel fact, kept on record
+
+Kept even though the constraint it defeated is gone, so nobody later files "orphans after SIGKILL"
+as a defect and proposes a handler for it.
 
 **SIGKILL (9) and SIGSTOP (19) cannot be caught, blocked or handled.** A process receiving SIGKILL
 executes no further instructions — no signal handler, no `process.on("exit")`, no `atexit`, no
 `finally`. In a one-process design there is additionally no supervisor left to be told anything.
 Any orphan-prevention scheme that requires the dying process to run code is unavailable by
-construction.
+construction — which is why the first phrasing of D-3 could not be built as stated, and why the
+relaxation is the right call rather than a compromise.
 
-Recording this explicitly because it is exactly the class of assumption this project has been burned
-by before: a mechanism that reads as obviously correct, is never tested against the failure it
-exists for, and turns out to be structurally incapable of firing.
-
-The constraint is therefore delivered in three layers:
-
-**L1 — every catchable signal.** `SIGTERM`, `SIGINT`, `SIGHUP`, `uncaughtException`,
-`unhandledRejection` and normal exit: the broker kills every tracked child itself, identity-verified
-against the pid recorded at spawn — reusing Phase 01.3 criterion 6's verified-kill discipline rather
-than re-deriving it. This is the "take them down" behaviour and it covers every ordinary shutdown.
-It is *not* a guarantee, because it does not cover the case the constraint is written for.
-
-**L2 — SIGKILL, OOM-kill, power loss: the guarantee moves to startup.** Since nothing runs at death,
-the load-bearing mechanism is:
-
-- a **durable pid registry written at spawn time**, before the instance is ever grantable (Phase
-  01.5 criterion 3 already requires the epoch record to carry the pid, and already requires a
-  `kill -0`/port probe before a grant is honoured); and
-- **unconditional identity-verified reap on startup** — which Phase 01.6 criterion 7 *already
-  mandates*, for precisely this reason: *"The reap must be unconditional on startup, not only on
-  clean shutdown, since a SIGKILLed broker never runs its shutdown path."*
-
-The window in which a stray `x64sc` can exist is bounded by "the broker is down", and during that
-window nothing can be granted — there is no broker to grant it. So a stray can exist briefly; it
-can never be handed to a session, and it can never be mistaken for continuity, because the reap
-bumps its epoch and `assertSameMachine()` already turns that into `MachineRestartedError`.
-
-**L2 is non-negotiable. It is the layer that makes D-3 true.**
-
-**L3 — prevention, investigated with a recorded verdict.** The only route that kills strays at the
-instant the parent dies *without* reintroducing a per-instance process is a **cgroup per broker
-run** — put every launched `x64sc` in it, and write `cgroup.kill` on startup. `PR_SET_PDEATHSIG` is
-the textbook answer and is **rejected here**: Node core has no `prctl` binding, so it needs either a
-native addon (a compile-on-host dependency, on the machine nobody is watching) or a per-instance
-wrapper process — which is the supervisor process D-1 just deleted. cgroup access is host-dependent,
-so this is answered with evidence, and **a negative answer is a real result** — the same standard
-Phase 01.3 criterion 8 and Phase 01.6 criterion 12 already apply to host-side unknowns. If cgroups
-are unavailable, L1+L2 ship and the verdict is recorded.
+Recording it explicitly because it is exactly the class of assumption this project has been burned by
+before: a mechanism that reads as obviously correct, is never tested against the failure it exists
+for, and turns out to be structurally incapable of firing.
 
 ## The trade on TypeScript, recorded so it is not re-argued from zero
 
@@ -126,7 +117,7 @@ test asserting `resources/` is in sync with the TS source.
 | 1 (host `node` gate) | Strengthened. The version bound becomes a `tsconfig` `target`, not a hope. Still record the host's actual `node --version` at first invocation. |
 | **2 (what moves vs stays)** | **Amended — this is the criterion the decision rewrites.** Its "Staying" list (`launch_instance`, `signal_recorded_pid`, `reap_all_instances`, the daemon loop and traps, `port_in_use`, the host `curl` probe) no longer stays. It moves, because there is no second process to hold it. |
 | 4 (the lease is the connection) | Unchanged and now cheaper — one process owning both the control listener and the child processes needs no cross-process handshake to tie them together. |
-| 7 (reap on startup bumps every epoch) | **Promoted from a correctness rule to the load-bearing half of D-3.** Already worded as unconditional-on-startup; that wording is now doing more work than when written. |
+| 7 (reap on startup bumps every epoch) | **Unchanged in wording, heavier in load.** It is *not* part of D-3 — D-3 no longer guarantees anything about orphans. Criterion 7 stands on its own footing: a restarted broker must not hand a still-running emulator to a second session. With the supervisor collapsed inward and strays now explicitly tolerated, it is the only thing enforcing that. |
 | 8 (broker death takes the session) | Unchanged in verdict, larger in blast radius: with supervision in-process, broker death ends supervision too. Already an accepted trade; the acceptance now covers more. |
 | 9 (existing suite passes across the move) | Harder. The suite is `.mjs` and invoked by glob; a TS build changes how tests are authored and run. Sequence so the suite stays green continuously rather than being ported in one jump. |
 | 10 (`install-resources.mjs` deploys new files) | Unchanged mechanism, higher stakes — it now deploys build output, so a stale build deploys stale code silently. |
@@ -155,4 +146,5 @@ test asserting `resources/` is in sync with the TS source.
 - Design source it joins: `.planning/notes/broker-control-plane-over-tcp.md`,
   `.planning/seeds/broker-restart-reaps-and-voids.md`
 - Phase 01.5 must land first regardless — its criterion 3 (a grant proven live before it is honoured)
-  and criterion 4 (lazy replenishment) are prerequisites for L2's pid registry being meaningful.
+  is the other half of criterion 7's guard, and matters *more* now that a stray `x64sc` is an accepted
+  outcome rather than a prevented one.
