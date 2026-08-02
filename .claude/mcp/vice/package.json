@@ -1,0 +1,14 @@
+{
+  "name": "vice-mcp",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test '*.test.*'",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "build": "node build.ts"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.3",
+    "typescript": "7.0.2"
+  }
+}
