@@ -1087,3 +1087,49 @@ those as proxy defects; the cycle-bracket rule above remains the answer.
 **Deployment caveat:** the MCP server process is spawned once per session. A session already
 running when the fix landed keeps the old behaviour until it is restarted — which is exactly
 how it was verified here.
+
+### 2026-08-02 — real agent think-time between tool calls lets the emulator run unattended, at full speed, for far longer than intended, unless execution is EXPLICITLY paused; this likely confounds every "hazard counter" finding recorded so far
+
+**Type:** hazard (methodology), plus a confirmation of the fix
+**Evidence:** live, 01-04 attempt 5, danish Task 3, first play-through session
+**Confidence:** HIGH (measured directly, reproduced immediately with a control)
+
+Sequence observed: pressed F7 to start a 1-player game, confirmed via screenshot that chamber 1
+was already active (HUD showing `FALLS 04`, cycle bracket healthy). Between that screenshot and
+the next one — with only a handful of `mcp__vice__vice_memory_read` / `vice_registers_get` /
+`vice_cycles_stopwatch` calls in between, and **zero joystick input sent** — the game had already
+progressed through a "PLAYER 1" interstitial and reached a full `GAME OVER / PLAYER 1 / 000000`
+screen. `vice_cycles_stopwatch` read **258,504,308** cycles elapsed since the F7 press, i.e.
+roughly **262 seconds of PAL emulated time** (~985 kHz clock) — all of it real, unattended
+execution while the agent was composing tool calls and reasoning between messages, not anything
+the game's own logic did in response to input. A second confirmation: calling
+`vice_execution_pause` and then immediately re-reading the stopwatch still showed the cycle count
+climb another ~20,000,000 cycles before finally settling — consistent with the pause taking effect
+only once actually processed, with real elapsed agent-side latency counted as running time right up
+until that point. Once genuinely paused, however, two consecutive `vice_cycles_stopwatch read` calls
+with nothing in between returned the **identical** value (278,035,001 twice) — confirming the pause,
+once landed, holds solidly with no further drift.
+
+**This directly threatens the FALLS-counter hazard conclusion attempt 4 recorded** ("depletes ~1 per
+input event regardless of direction"): if the machine keeps running at full native speed through
+every one of the agent's non-input observation calls (screenshots, memory reads, registers_get),
+then the elapsed real time between "enter the room" and "send the first joystick tap" is itself
+enough emulated seconds for Bruce Lee to die from ordinary gameplay hazards (patrolling enemies,
+falling objects) with **no** relationship to the discrete input count at all. Attempt 4's six
+failed restarts, and this session's own near-instant `GAME OVER` with zero input sent, are both
+consistent with "the agent's own tool-call/reasoning latency burns real game-seconds unattended",
+which is a confound attempt 4 had no way to rule out because it never paused between its own
+observation steps either.
+
+**The fix, adopted from this point in this session onward:** call `mcp__vice__vice_execution_pause`
+immediately after every observation (screenshot, memory read, register read) that is not
+immediately followed by a deliberate scripted input, and resume with `vice_execution_run` only for
+the bounded duration of that input (a `vice_joystick_tap`'s own frame count, or a short explicit
+poll-and-repause window). Never leave the machine in "running" state across a reasoning step.
+
+**Saves/costs:** if this holds up under a repeat test with pausing disciplined from the very start
+of a room, it could turn the FALLS-counter "hazard" from a room-navigation puzzle into a solved
+non-issue — the room may not be especially difficult at all once the agent stops burning its own
+budget as unattended game-seconds. Costs: this session's first life on danish, spent confirming the
+theory rather than progressing. A future session (or the rest of this one) should verify by holding
+strict discipline from the very first frame of a chamber and comparing survival time.
