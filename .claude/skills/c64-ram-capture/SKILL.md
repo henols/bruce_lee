@@ -8,8 +8,6 @@ description: Capture a running C64's full 64K RAM as a verified flat image, and 
 Reach the emulator only through the `mcp__vice__*` tools. They are the one
 permitted route. Never open a connection to the emulator by any other means.
 
-Never call `mcp__vice__vice_disk_list`.
-
 ## Boot a disk
 
 1. `mcp__vice__vice_disk_attach` with the disk image.
