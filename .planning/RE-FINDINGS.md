@@ -1133,3 +1133,39 @@ non-issue — the room may not be especially difficult at all once the agent sto
 budget as unattended game-seconds. Costs: this session's first life on danish, spent confirming the
 theory rather than progressing. A future session (or the rest of this one) should verify by holding
 strict discipline from the very first frame of a chamber and comparing survival time.
+
+**Confirmation, same session, immediately after adopting the discipline:** with `vice_execution_pause`
+called after every observation from this point forward, danish's chamber 1 opening room -- the same
+room that cost saeger six restart-from-title attempts in attempt 4, all attributed to the FALLS
+counter -- was crossed cleanly: FALLS held at `04` through two full `right` taps with no depletion at
+all, only dropping (`04`->`03`->`02`->`01`->`00`) during a stretch of enemy contact/attack exchanges,
+and did **not** cause an immediate death at `00` -- Bruce Lee continued taking `right` input and
+crossing further ground (from spawn at sprite x=52 past the pedestal at x=136, to x=244 at the
+doorway, then further to x=304 with the sprite disabled, i.e. genuinely progressing through and past
+the room) while `FALLS` sat at `00` for several more actions before an eventual `GAME OVER`. This
+reframes the FALLS counter: it is not a simple per-input death timer, and disciplined pausing alone
+turned what previously read as an impassable hazard into a room that was crossed on the very next
+attempt. **Confidence raised to HIGH** for the "unpaused agent think-time is a real confound"
+half of this finding; the exact FALLS trigger condition (still not root-caused at the disassembly
+level) remains MEDIUM/open.
+
+### 2026-08-02 — a genuine mid-session host VICE crash during 01-04 attempt 5's danish Task 3 restart test, self-healed on the next call (epoch 4 -> 5)
+
+**Type:** hazard, plus a confirmation the self-heal mechanism still works
+**Evidence:** live -- 01-04 attempt 5, danish Task 3, immediately after capturing a fully-evidenced
+GAME OVER milestone (screen-matrix signature, sprite_enable, registers, cycles_advanced all read
+successfully) and issuing `vice_execution_run` + `vice_keyboard_matrix(F7)` to test the restart
+milestone. The next `vice_ping` reported `execution:"running"`, but the following
+`vice_execution_pause` failed with `UND_ERR_SOCKET` naming a specific lease/port/pid ("may have
+crashed after being granted"). The next `vice_ping` call reported the epoch drift explicitly
+(`4 -> 5`, new pid, new spawned_at timestamp), and the call after THAT succeeded normally
+(`execution:"paused"`, i.e. a fresh boot). `vice_checkpoint_list` on the new instance immediately
+returned `count:0`.
+**Confidence:** HIGH (matches the exact three-call shape documented in the 2026-08-01 epoch-drift
+entries above: loud transport error -> epoch-drift report -> clean resume on the new instance).
+**Costs/saves:** voided only the in-flight restart-test step (nothing else, since the GAME OVER
+evidence had already been read successfully on the prior, confirmed-live instance moments earlier
+with no crash indicator in between) -- the whole boot procedure had to be redone from
+`vice_disk_attach` on the new epoch-5 instance to get back into a session. Confirms yet again that
+this class of crash is self-healing and does not require abandoning the session, unlike a genuine
+silent stall (which has no such recovery and must be abandoned per the standing rule).

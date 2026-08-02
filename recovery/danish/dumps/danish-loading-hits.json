@@ -6,7 +6,13 @@
   "machine": "C64SC",
   "video_standard": "PAL",
   "technique_note": "Mid-run, the developer corrected the arming technique via the coordinator (three steering messages) after this task initially armed all 173 WATCH_SET-resolved sentinels (171 never-populated ranges + 1 register + 1 loader-reentry range) as live checkpoints -- reproducing the exact 174-checkpoint bombardment failure the reverted prior attempt hit. All 173 were torn down (teardown proof recorded below) and replaced with the technique the developer specified: reconnaissance by pause -> vice_registers_get -> vice_backtrace -> vice_disassemble -> resume, and a SMALL, earned, reproducible live set for the parts that must be re-armable. This run's live-armed set for danish is therefore 2 checkpoints (the loader-reentry stopping sentinel and the $DD00 counting sentinel) plus 2 small structural diagnostic write-watches on the IRQ/BRK vectors ($0314-$0315, $FFFE-$FFFF), not the full 173-entry WATCH_SET resolution. The full WATCH_SET resolution remains recorded in RELEASES.json's watch_set field as data for plan 02-02's hand-off (D-11) -- 02-02's own exhaustive all-chambers trace may have a different time/risk budget -- but this run's own coverage claim rests only on the small set actually armed and calibrated below, plus the reconnaissance-derived main-loop and IRQ-path evidence.",
-  "identity_changes": [],
+  "identity_changes": [
+    {
+      "when": "attempt 5, 2026-08-02, immediately after capturing the game-over milestone's full mechanical evidence and issuing vice_execution_run + vice_keyboard_matrix(F7) to test the restart milestone",
+      "what": "epoch 4 -> 5 (new pid 32923, spawned_at 2026-08-02T10:37:31Z). vice_execution_pause failed with UND_ERR_SOCKET naming a specific stale lease, the next vice_ping reported the epoch drift explicitly, and the call after that succeeded normally (execution:\"paused\", a fresh boot). vice_checkpoint_list on the new instance immediately returned count:0.",
+      "action": "voided only the in-flight restart-test step; the game-over milestone's evidence (screen signature, sprite_enable, registers, cycles_advanced) had already been read successfully on the prior confirmed-live epoch-4 instance with no crash indicator in between, so it stands unchanged. The whole boot procedure was redone from vice_disk_attach on the new epoch-5 instance to continue the play-through."
+    }
+  ],
   "irq_path_reconnaissance": {
     "method": "vice_execution_pause -> vice_registers_get -> vice_memory_read($01) -> vice_memory_read(vector) -> vice_disassemble -> vice_execution_run, per the developer's steering",
     "bank_state_at_check": {
@@ -82,16 +88,64 @@
       { "name": "reg:$DD00", "tier": "counting", "start": 56576, "end": 56576, "hits": 0 }
     ]
   },
-  "run_status": "blocked",
-  "run_status_note": "Task 2 (above) is complete and genuinely evidenced -- nothing about it is blocked. Task 3's play-through for THIS release specifically was never attempted in any session to date: attempt 2 (this file's own Task 2 work) halted on a host-side stall before Task 3 could start; attempt 3 spent its live-emulator budget earning saeger's Task 2 pass (which attempt 2 had left blocked) and then began saeger's own Task 3 play-through, which itself halted on a fresh (silent, non-epoch-changing) stall after 2 milestones -- see recovery/saeger/dumps/saeger-loading-hits.json. Danish's own Task 3 pass was not reached at all in attempts 2 or 3. Attempt 4 (2026-08-01, a fresh session) also did not reach it: the whole session's live budget went to saeger (re-deriving its boot from scratch, reaching 5 of 7 milestones -- death, game-over and restart newly this session, on top of the already-durable title-screen and game-start-chamber1 -- see recovery/saeger/dumps/saeger-loading-hits.json), and the session then hit a SECOND genuine silent host VICE stall (distinct occurrence from attempt 3's, though at the identical frozen PC $07DE) before danish's play-through could even begin. This is recorded as blocked/not-attempted rather than as a completed zero-milestone result, per the same rule that governs an unevidenced zero anywhere else in this record.",
-  "milestones": [],
+  "run_status": "partial",
+  "run_status_note": "Task 2 (above) is complete and genuinely evidenced. Task 3's play-through for danish was FIRST attempted this session (attempt 5, 2026-08-02) after four prior attempts left it entirely untouched (see attempt 1-4 halt records). This session re-derived the boot from scratch, adopted a strict vice_execution_pause-after-every-observation discipline (see .planning/RE-FINDINGS.md 2026-08-02 entry -- unpaused agent think-time was burning real game-seconds unattended, likely confounding earlier sessions' saeger FALLS-counter conclusions), and reached 4 of 7 required milestones with full mechanical proof: title-screen (re-confirmed), game-start-chamber1, death (a non-terminal FALLS-depletion respawn), and game-over (full screen-matrix signature + sprite_enable + registers + cycles_advanced). A host VICE crash (epoch 4->5) interrupted the restart-milestone test immediately after game-over was captured; the crash self-healed on the next call per the documented pattern, voiding only the restart attempt, not the already-captured game-over evidence. Remaining for danish: a second real chamber transition, both opponents encountered (one green enemy contact observed, evidentiary_gap noted below), a restart, per the identity_changes entry above.",
+  "milestones": [
+    {
+      "name": "title-screen",
+      "reached": true,
+      "screen_signature": "5bd33261ae91e055be878de2312fe97ec2dd82ef2b4607dc2bae59ea6adc8315",
+      "sprite_enable": 1,
+      "screenshot": "recovery/danish/dumps/danish-loading-attempt5-title.png",
+      "cycles_advanced": 18492325,
+      "retries": 0,
+      "snapshot_name": null,
+      "note": "Baseline signature for this session's screen-matrix comparisons. Screen base $8C00 (VIC bank 2 + VM 3, derived from $DD00=$C1, $D018=$31)."
+    },
+    {
+      "name": "game-start-chamber1",
+      "reached": true,
+      "screen_signature": "12e6ed2ca8abf272ea3dc291aa9b1ac2ad26f3da540e773a264a20a658e6c836",
+      "sprite_enable": 19,
+      "screenshot": "recovery/danish/dumps/danish-loading-attempt5-check1.png",
+      "cycles_advanced": 80063552,
+      "retries": 0,
+      "snapshot_name": null,
+      "note": "F7 held 10 frames from title started a 1-player game; signature differs from title baseline, confirming arrival. Screen base $8C00 (VM 3), charset base $8800 (CB 1) -- different charset than title, same VIC bank/screen matrix location. Danish shares saeger's identical chamber-1 layout and FALLS-counter HUD mechanic (both 4-start)."
+    },
+    {
+      "name": "death",
+      "reached": true,
+      "screen_signature": null,
+      "sprite_enable": 3,
+      "screenshot": "recovery/danish/dumps/danish-loading-attempt5-check18.png",
+      "cycles_advanced": 81041688,
+      "retries": 0,
+      "snapshot_name": null,
+      "evidentiary_gap": "Screen-matrix hash was read for this exact pause (matches the chamber1 room hash, as expected since death respawns in the same room) but was not separately hashed and recorded as a distinct signature field here since a room-identity match, not a distinct-state match, is what death implies; screenshot + sprite_enable + Bruce's sprite reset to spawn coordinates (x=52,y=225) + cycles_advanced are the primary evidence.",
+      "note": "FALLS depleted 04->00 over several right-taps and one fire+right attack exchange with a green enemy (not per-input-event as attempt 4 concluded -- see RE-FINDINGS.md 2026-08-02 entries); Bruce's sprite position reset to the spawn point (x=52,y=225) confirming a genuine respawn, HUD FALLS read 00."
+    },
+    {
+      "name": "game-over",
+      "reached": true,
+      "screen_signature": "3e16a2f4e4cbab1cc9080d704b94ec83a02af19ab45af702e8c131bcfb0c6e73",
+      "sprite_enable": 0,
+      "screenshot": "recovery/danish/dumps/danish-loading-attempt5-check22.png",
+      "cycles_advanced": 106083432,
+      "retries": 0,
+      "snapshot_name": null,
+      "note": "Full mechanical proof: signature differs from title baseline (confirmed via file-based sha256, avoiding a manual-transcription risk that produced one discarded bad hash first), sprite_enable=0 (no sprites on the GAME OVER text screen), screenshot shows 'GAME OVER / PLAYER 1 / 000000'. Reached after FALLS sat at 00 for several more actions (not an immediate kill at 00) while Bruce continued progressing (sprite x reached 304, then disabled) before the final life was lost."
+    }
+  ],
   "scope_not_attempted": [
-    "The entire Task 3 milestone set for danish (title screen re-confirmation, at least two real chamber transitions, both opponents, a death, a game over, a restart) -- not attempted in any session to date; see run_status_note."
+    "A second real chamber transition for danish -- Bruce reached sprite x=304 (past the doorway area) with sprite 0 disabled just before GAME OVER, suggestive of an in-progress transition, but no distinct room screen-matrix signature was captured before the life ended.",
+    "Both opponents encountered for danish -- one green enemy contact was observed and attributed to the FALLS depletion during the death sequence, but no dedicated collision-attribution capture (PC/backtrace/disassembly) was taken, and the second (white/gorilla-like) enemy visible in the room was never engaged.",
+    "Restart for danish -- the F7-after-game-over test was interrupted by the epoch 4->5 host crash immediately after being issued; not yet re-attempted this session."
   ],
   "hits": [],
-  "input_notes": "Task 2 only: boot danish, walk the $0900 cracktro gate holding SPACE (matrix), release at the $08B1 trigger checkpoint. No gameplay input issued yet -- see Task 3 for the play-through, which has not been attempted for this release in any session to date.",
+  "input_notes": "Task 2: boot danish, walk the $0900 cracktro gate holding SPACE (matrix), release at the $08B1 trigger checkpoint. Task 3 (attempt 5, this session): F7 held 10 frames from title to start a 1-player game; vice_joystick_tap(right, 30-90 frames) repeatedly to cross chamber 1's opening room rightward, one vice_joystick_tap(right, fire:true, 20 frames) attack near a green enemy contact; vice_joystick_set(right) then vice_joystick_set(center) tested once (caused a fall, reverted to joystick_tap thereafter). Strict discipline adopted: vice_execution_pause immediately after every screenshot/memory-read/registers observation, vice_execution_run only for the bounded duration of the next scripted input -- see RE-FINDINGS.md.",
   "teardown": {
     "checkpoints_remaining": 0,
-    "enumerated_at": "post-idle-calibration, via an explicit mcp__vice__vice_checkpoint_list call after deleting checkpoints 1, 174, 175, 176 individually by checkpoint_num"
+    "enumerated_at": "post-idle-calibration (Task 2), via an explicit mcp__vice__vice_checkpoint_list call after deleting checkpoints 1, 174, 175, 176 individually by checkpoint_num. Re-confirmed count:0 on the fresh epoch-5 instance (2026-08-02) after the host crash, before any new checkpoint was armed for the continued play-through."
   }
 }
