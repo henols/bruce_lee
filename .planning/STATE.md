@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: Pipeline Proven *
 current_phase: 01.3
-current_phase_name: recovery-provenance
-status: executing
-stopped_at: Phase 01.3 context gathered
-last_updated: "2026-08-02T13:33:33.374Z"
+current_phase_name: wedge-detection-and-recovery
+status: Ready to execute
+stopped_at: Phase 01.3 planned — 6 plans, 6 waves
+last_updated: "2026-08-02T14:30:00.000Z"
 last_activity: 2026-08-02
-last_activity_desc: Phase 01.3 inserted; before that, Phase 01 wave 4 re-dispatched (attempt 5), danish's Task 3 pass reached 5/7
+last_activity_desc: Phase 01.3 planned — 6 plans across 6 sequential waves; research, pattern map and validation strategy written; plan-checker passed with zero issues
 progress:
   total_phases: 4
   completed_phases: 2
@@ -25,14 +25,16 @@ See: .planning/PROJECT.md (updated 2026-07-31)
 
 **Core value:** An ACME source tree that rebuilds a Bruce Lee which plays identically to the original, where every gameplay system is explained well enough that someone could change it.
 **Current milestone:** v1.0 — Pipeline Proven (Phases 1–4, 24 requirements)
-**Current focus:** Phase 01 — recovery-provenance
+**Current focus:** Phase 01.3 — wedge-detection-and-recovery
 
 ## Current Position
 
 Milestone: v1.0 — Pipeline Proven (Phases 1–4 of 7 total)
-Phase: 01.3 (wedge-detection-and-recovery) — INSERTED 2026-08-02, not yet planned
+Phase: 01.3 (wedge-detection-and-recovery) — **PLANNED 2026-08-02.** 6 plans in 6 sequential waves; 0 executed. Plan-checker passed with zero issues; decision coverage 22/22.
 Phase 01 (recovery-provenance) — **PARKED mid-execution, not abandoned.** 4 of 6 plans complete (01-01, 01-02, 01-03, 01-05). 01-04 partially executed across FIVE attempts; 01-06 not started, held by choice.
-Plan: none active. `/gsd-plan-phase 01.3` is the next step.
+Plan: none active. `/gsd-execute-phase 01.3` is the next step.
+
+**Phase 01.3 shape (for whoever picks it up):** wave 1 is a `tracer` — `vice_recycle` end to end against a *healthy* instance, which is provable without ever meeting a real wedge. Waves 2–4 add `vice_diagnose` (checkpoint-trap check before any resume), the incident record, and the D-16 seam annotation that warns rather than refuses. Wave 5 is the bounded trigger hunt (budget **6 attempts**, a count — never a duration). Wave 6 reaches the answers that are discharged by decision and ends at a blocking human-verify checkpoint. **No parallelism, and that is a finding**: every code plan owns `vice-proxy.mjs`, so waves 1–4 are sequential on file ownership, and 5–6 are sequential on evidence.
 Status: 01.3 was inserted ahead of 01-04's remaining work by developer decision — a wedged emulator has no recovery path, and both 01-04's remaining play-through and Phase 2's exhaustive trace are long unattended emulator sessions. 01-04 is resumable at any time: both releases sit at 5/7 Task 3 milestones (parity), Task 4 not reached, and attempt 5 ended with a HEALTHY instance.
 
 **Known-failing check, carried forward for whoever resumes 01-04:** the plan's own Task 3 automated verification fails today — `saeger`'s `death` milestone is recorded `reached: true` with `cycles_advanced: null` and an explicit `evidentiary_gap` (no screen-matrix SHA-256 captured, attempt 4). Attempt 6 must re-capture that signature, not merely reach the two remaining milestones. danish's five milestones all carry full mechanical proof and pass.

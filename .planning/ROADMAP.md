@@ -269,12 +269,28 @@ Also recorded: this phase has **no requirement IDs and no `-SPEC.md`**, so the s
 **Plans**: 6 plans
 
 Plans:
+**Wave 1**
 
 - [ ] 01.3-01-PLAN.md — Tracer: `vice_recycle` end to end — capture a record, identity-verified kill of the emulator child, supervisor respawn on the same port, epoch confirmed *(strictly first, per D-05)*
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 01.3-02-PLAN.md — `vice_diagnose`: the checkpoint-trap check before any resume, then the single-definition cycle bracket and the five-verdict classification
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
 - [ ] 01.3-03-PLAN.md — One evidence gatherer wired into the destructive path, the full incident-record format, and the best-effort pre-kill snapshot
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
 - [ ] 01.3-04-PLAN.md — The seam hazard annotation that warns and never refuses, in a table a confirmed trigger joins as one entry
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
 - [ ] 01.3-05-PLAN.md — The bounded trigger hunt: six attempts, both recorded variants, findings logged as they are found
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
 - [ ] 01.3-06-PLAN.md — The answers reached by decision, the continuity confirmation, the coverage delta, and the human-verify checkpoint
 
 **Parallelisation**: none. Every code plan owns `vice-proxy.mjs`, so waves 1-4 are strictly sequential
