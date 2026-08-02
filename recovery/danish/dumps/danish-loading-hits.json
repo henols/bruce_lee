@@ -11,6 +11,16 @@
       "when": "attempt 5, 2026-08-02, immediately after capturing the game-over milestone's full mechanical evidence and issuing vice_execution_run + vice_keyboard_matrix(F7) to test the restart milestone",
       "what": "epoch 4 -> 5 (new pid 32923, spawned_at 2026-08-02T10:37:31Z). vice_execution_pause failed with UND_ERR_SOCKET naming a specific stale lease, the next vice_ping reported the epoch drift explicitly, and the call after that succeeded normally (execution:\"paused\", a fresh boot). vice_checkpoint_list on the new instance immediately returned count:0.",
       "action": "voided only the in-flight restart-test step; the game-over milestone's evidence (screen signature, sprite_enable, registers, cycles_advanced) had already been read successfully on the prior confirmed-live epoch-4 instance with no crash indicator in between, so it stands unchanged. The whole boot procedure was redone from vice_disk_attach on the new epoch-5 instance to continue the play-through."
+    },
+    {
+      "when": "attempt 5, same session, ~10 minutes later, immediately after re-booting on the epoch-5 instance and re-entering chamber1 (Bruce back at spawn x=52,y=225, FALLS 04), attempting a fire+right attack tap near the pole",
+      "what": "epoch 5 -> 6 (new pid 113631, spawned_at 2026-08-02T10:43:40Z). Same shape: UND_ERR_SOCKET then ECONNREFUSED on the tap/pause calls, then the next vice_ping reported the epoch drift explicitly, then the call after that succeeded (execution:\"paused\", fresh boot).",
+      "action": "voided the whole in-progress chamber1 re-entry (nothing had been captured as evidence yet on this leg -- only a screenshot at spawn with FALLS 04, no new milestone reached). Redid the full boot from vice_disk_attach on the new epoch-6 instance."
+    },
+    {
+      "when": "attempt 5, same session, ~10 minutes later, near sprite x=76 on the last (4th) life while re-approaching the x~290-300 hazard zone that had killed Bruce twice already at that same location",
+      "what": "epoch 6 -> 7 (new pid 259402, spawned_at 2026-08-02T10:54:50Z). Same three-call shape as the prior two occurrences.",
+      "action": "voided the in-progress approach (no new milestone evidence lost). Redid the full boot from vice_disk_attach on the new epoch-7 instance. Three host crashes in roughly 20 minutes of continuous live work this session -- matching the historical rate recorded during saeger's attempt-4 boot."
     }
   ],
   "irq_path_reconnaissance": {
