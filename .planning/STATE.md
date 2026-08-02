@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: Pipeline Proven *
-current_phase: 01
+current_phase: 01.3
 current_phase_name: recovery-provenance
 status: executing
-stopped_at: "Wave 4 halted a FIFTH time (attempt 5) — but on a GAMEPLAY obstacle and an exhausted live budget, NOT on a host stall. This is the first 01-04 attempt to end with its instance still healthy: an orchestrator-side bracket taken after the subagent exited and its worktree was merged read 17,989,083 cycles. Largest single-session gain of the five attempts: danish's Task 3 went 0/7 → 5/7 (title-screen, game-start-chamber1, death, game-over, restart, each with full mechanical proof), reaching exact parity with saeger's 5/7 from attempt 4. saeger untouched this session. Task 4 (checkpoint:human-verify) still not reached; RECOVER-04 still unsatisfied. Headline finding, logged live: unpaused agent think-time between tool calls burns real emulated game-seconds unattended — 262 real seconds elapsed with zero input sent — so vice_execution_pause must follow EVERY observation. Once that discipline was adopted, danish's opening hazard room was crossed on the next try, which likely confounds attempt 4's 'FALLS depletes per input event' conclusion for saeger. Remaining obstacle is precisely located, not mysterious: six independent deaths at the identical sprite x-coordinate (~290–304) on danish chamber 1's ground path, filed as a pending todo with concrete next steps. Three host VICE crashes occurred and all self-healed, costing no evidence. 01-06 remains HELD pending a developer decision — it designates the canonical disassembly subject every later phase builds on, and the hold's stated condition (a finished completeness claim) is still unmet, though 01-06 has no technical dependency on 01-04 and touches no emulator."
-last_updated: "2026-08-02T12:21:07.246Z"
+stopped_at: Phase 01.3 context gathered
+last_updated: "2026-08-02T13:33:33.374Z"
 last_activity: 2026-08-02
-last_activity_desc: Phase 01 wave 4 re-dispatched (attempt 5); danish's Task 3 pass finally started and reached 5/7
+last_activity_desc: Phase 01.3 inserted; before that, Phase 01 wave 4 re-dispatched (attempt 5), danish's Task 3 pass reached 5/7
 progress:
   total_phases: 4
   completed_phases: 2
@@ -278,6 +278,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-08-01T11:37:08.628Z
-Stopped at: Completed 01.2-05-PLAN.md: two-session leasing proven, VICE standing constraint narrowed (D-1.2-C)
-Resume file: None
+Last session: 2026-08-02T13:33:33.361Z
+Stopped at: Phase 01.3 context gathered
+Resume file: .planning/phases/01.3-wedge-detection-and-recovery/01.3-CONTEXT.md
