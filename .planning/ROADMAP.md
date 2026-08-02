@@ -266,10 +266,20 @@ Also recorded: this phase has **no requirement IDs and no `-SPEC.md`**, so the s
 
  11. **The recovery path is exercised against an actual non-advancing emulator, or the phase records that one could not be produced on demand.** This phase cannot be verified by unit tests alone: its subject is a failure state that has occurred five times unbidden and never once on request. The strongest reproduction candidate on record is the `$DD00`-attribution-then-resume technique, which froze two independent sessions at the identical `PC:2014`. Whether that reproduces a third time is itself a finding worth having.
 
-**Plans**: not yet planned
+**Plans**: 6 plans
 
 Plans:
-- [ ] TBD (`/gsd-plan-phase 01.3`)
+
+- [ ] 01.3-01-PLAN.md — Tracer: `vice_recycle` end to end — capture a record, identity-verified kill of the emulator child, supervisor respawn on the same port, epoch confirmed *(strictly first, per D-05)*
+- [ ] 01.3-02-PLAN.md — `vice_diagnose`: the checkpoint-trap check before any resume, then the single-definition cycle bracket and the five-verdict classification
+- [ ] 01.3-03-PLAN.md — One evidence gatherer wired into the destructive path, the full incident-record format, and the best-effort pre-kill snapshot
+- [ ] 01.3-04-PLAN.md — The seam hazard annotation that warns and never refuses, in a table a confirmed trigger joins as one entry
+- [ ] 01.3-05-PLAN.md — The bounded trigger hunt: six attempts, both recorded variants, findings logged as they are found
+- [ ] 01.3-06-PLAN.md — The answers reached by decision, the continuity confirmation, the coverage delta, and the human-verify checkpoint
+
+**Parallelisation**: none. Every code plan owns `vice-proxy.mjs`, so waves 1-4 are strictly sequential
+on file ownership, and waves 5-6 are sequential on evidence — the hunt needs recovery working (D-05),
+and the phase record needs the hunt's denominator. Waves are 1 through 6, one plan each.
 
 **Decisions to resolve here**:
 
