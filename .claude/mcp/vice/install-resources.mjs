@@ -19,9 +19,20 @@
 // ARGUMENT and imports NOTHING from repo-root.mjs. Do not "clean this up" by
 // adding `import { repoRoot } from "./repo-root.mjs"` here -- that importable
 // convenience is exactly the cycle described above.
-import { existsSync, mkdirSync, readdirSync, readFileSync, copyFileSync, statSync, chmodSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+  copyFileSync,
+  statSync,
+  chmodSync,
+  renameSync,
+  unlinkSync,
+} from "node:fs";
 import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { dirname, join, isAbsolute, resolve, sep } from "node:path";
 
 import { hostPath, SET_ENV_HINT } from "./hostpath.mjs";
 
@@ -124,6 +135,146 @@ export function hostLaunchInstructions(root) {
   ].join("\n");
 }
 
+/** The manifest's basename -- a dotfile under the deployment target,
+ * gitignored alongside every other deployed path (see .gitignore's
+ * deployed-path block). It is the ONLY thing pruneResources() below is ever
+ * allowed to consult when deciding what to delete (T-01.6-11): never a
+ * directory walk of installTargetDir(), which also holds tracked reverse-
+ * engineering tooling sharing the same `tools/` directory. */
+export const DEPLOY_MANIFEST_NAME = ".vice-deployed.json";
+
+/** Where the manifest lives, for a given repo root -- always beneath
+ * installTargetDir(root), same as every other deployed entry. */
+export function deployManifestPath(root) {
+  return join(installTargetDir(root), DEPLOY_MANIFEST_NAME);
+}
+
+/** Reads and parses the deploy manifest, returning its recorded relative-path
+ * entries. Never throws (D-3, and this codebase's standing never-throw-on-
+ * untrusted-read discipline -- the manifest is untrusted input by
+ * construction, T-01.6-13): a missing file, an unreadable file, malformed
+ * JSON, a non-object top-level shape, and an `entries` field that isn't an
+ * array are ALL treated identically as "nothing has been recorded here yet"
+ * -- an empty array. Two nested try/catch layers: the outer catches a read
+ * failure (ENOENT, EACCES, a directory at that path, ...), the inner catches
+ * a JSON.parse failure -- matching readJsonMaybe()'s posture elsewhere in
+ * this module tree (vice-broker-client.mjs) exactly. */
+export function readDeployManifest(root) {
+  let raw;
+  try {
+    raw = readFileSync(deployManifestPath(root), "utf8");
+  } catch {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return [];
+    if (!Array.isArray(parsed.entries)) return [];
+    return parsed.entries;
+  } catch {
+    return [];
+  }
+}
+
+/** Writes the deploy manifest through the same tmp-sibling, mode-restricted,
+ * rename sequence every other state file in this subsystem uses
+ * (vice-broker.mts's writeBrokerRecord(): tmp file created empty, chmod 0600
+ * BEFORE any content reaches it, then content written, then renamed into
+ * place -- so the manifest is never briefly world-readable, V4). `entries`
+ * is sorted before being written so the on-disk manifest is stable and
+ * diff-friendly across runs that deploy the same resource set in a
+ * different enumeration order. */
+export function writeDeployManifest(root, entries) {
+  const target = deployManifestPath(root);
+  mkdirSync(dirname(target), { recursive: true });
+  const tmpPath = `${target}.tmp-${process.pid}-${Date.now()}`;
+  writeFileSync(tmpPath, "");
+  chmodSync(tmpPath, 0o600);
+  writeFileSync(tmpPath, JSON.stringify({ entries: [...entries].sort() }, null, 2) + "\n");
+  renameSync(tmpPath, target);
+}
+
+/** True iff `entry` is a safe manifest candidate: a plain relative path (no
+ * leading "/" and no drive-letter-style absolute form), containing no
+ * parent-directory ("..") path segment, whose resolved absolute location
+ * sits AT OR BENEATH `targetDir` -- rejecting an absolute path, a
+ * `..`-escaping path, and anything else that would resolve outside the
+ * deployment target (T-01.6-12). Every check here runs BEFORE any
+ * filesystem access is attempted on `entry`. */
+function isSafeManifestCandidate(entry, targetDir) {
+  if (typeof entry !== "string" || entry.length === 0) return false;
+  if (isAbsolute(entry)) return false;
+  if (entry.split(/[\\/]/).includes("..")) return false;
+  const resolved = resolve(targetDir, entry);
+  return resolved === targetDir || resolved.startsWith(targetDir.endsWith(sep) ? targetDir : targetDir + sep);
+}
+
+/**
+ * Removes a deployed file this installer previously placed under
+ * installTargetDir(root) but which no longer corresponds to a current
+ * resources/ entry -- the delete half installResources() alone never had
+ * (RESEARCH.md's Runtime State Inventory: "install-resources.mjs's current
+ * installResources() only ever adds/overwrites -- it has no delete/prune
+ * step"; a retired executable would otherwise linger on the host forever).
+ *
+ * The candidate set is EXACTLY `readDeployManifest(root)` minus the current
+ * `resourceEntries()` -- never a directory walk of `installTargetDir(root)`,
+ * which is a MIXED directory also holding tracked reverse-engineering
+ * tooling (d64-parse.mjs, diff-images.mjs, watch-loads.mjs,
+ * recovery-schema.mjs, releases.mjs and their tests). A file present in the
+ * target but ABSENT from the manifest is therefore left untouched no matter
+ * what it is: the prune can only ever reach a path it recorded having placed
+ * there itself (T-01.6-11).
+ *
+ * Every candidate is validated by isSafeManifestCandidate() BEFORE any
+ * unlink is attempted; a rejected candidate is pushed to `skipped` (nothing
+ * was attempted) with the reason named in the warning, never to `failed`.
+ * Each unlink that IS attempted is individually wrapped in its own
+ * try/catch: a failure is pushed to `failed` and warned through `log`,
+ * never thrown (D-3) -- the same per-entry posture `installResources()`
+ * already applies to each copy. Never removes a directory.
+ *
+ * Returns { pruned, skipped, failed }, arrays of the candidate's manifest-
+ * recorded relative path.
+ */
+export function pruneResources({ root, log = console.error } = {}) {
+  const pruned = [];
+  const skipped = [];
+  const failed = [];
+
+  const manifestEntries = readDeployManifest(root);
+  const currentEntries = new Set(resourceEntries());
+  const targetDir = installTargetDir(root);
+
+  for (const entry of manifestEntries) {
+    if (currentEntries.has(entry)) continue; // still a current resource -- nothing to prune
+
+    if (!isSafeManifestCandidate(entry, targetDir)) {
+      skipped.push(entry);
+      log(
+        `warn: install-resources: prune refused manifest entry ${JSON.stringify(entry)} -- it is not a ` +
+          "plain relative path resolving beneath the deployment target (absolute path, parent-directory " +
+          "hop, or an escape outside the target). Refusing rather than acting on it (T-01.6-12)."
+      );
+      continue;
+    }
+
+    const resolvedTarget = resolve(targetDir, entry);
+    try {
+      unlinkSync(resolvedTarget);
+      pruned.push(entry);
+    } catch (e) {
+      failed.push(entry);
+      log(
+        `warn: install-resources: prune failed to remove retired entry ${entry} from ${resolvedTarget} -- ` +
+          `${e.message}. Continuing; a failed prune must never break the caller.`
+      );
+    }
+  }
+
+  return { pruned, skipped, failed };
+}
+
 /**
  * Copies every `missing` entry, and `diverged`/`present` ones only when
  * `force` is true, creating parent directories as needed and setting each
@@ -134,8 +285,16 @@ export function hostLaunchInstructions(root) {
  * pushed to `failed` and warned through `log`, never thrown (D-3) -- a
  * read-only filesystem must never turn a working `ping` into an error.
  *
- * Returns { installed, skipped, diverged, failed }, arrays of the resource's
- * relative path.
+ * After the copy loop, prunes any manifest-recorded entry that is no longer
+ * a current resource, then rewrites the manifest from the current
+ * `resourceEntries()` -- so the manifest always reflects "what this
+ * installer would deploy right now", ready for the NEXT call's prune to
+ * compare against. The manifest write itself is wrapped separately (never
+ * throws, D-3): an unwritable target that already made every copy above
+ * fail must not ALSO throw out of the manifest write.
+ *
+ * Returns { installed, skipped, diverged, failed, pruned }, arrays of the
+ * resource's relative path (or, for `pruned`, the manifest's recorded path).
  */
 export function installResources({ root, force = false, log = console.error } = {}) {
   const installed = [];
@@ -173,16 +332,33 @@ export function installResources({ root, force = false, log = console.error } = 
     }
   }
 
+  const { pruned } = pruneResources({ root, log });
+
+  // Never throws (D-3): an unwritable root that already made every copy
+  // above fail must not ALSO throw out of the manifest write. Nothing here
+  // is added to `failed` -- that array's existing meaning is "a resource
+  // copy failed", and a manifest-write failure is a distinct, best-effort
+  // bookkeeping step the next call's prune degrades gracefully from (an
+  // unwritten manifest reads back as empty, per readDeployManifest()).
+  try {
+    writeDeployManifest(root, resourceEntries());
+  } catch (e) {
+    log(
+      `warn: install-resources: failed to write the deploy manifest -- ${e.message}. ` +
+        "Continuing; a failed manifest write must never break the caller."
+    );
+  }
+
   // The default `log` is console.error, and NOTHING in this module writes to
   // stdout (D-4): `tools --json` and `pool status` emit machine-readable
   // output on stdout, and a stray banner there would corrupt it. This is the
   // one place that condition matters -- only print when something actually
-  // changed.
-  if (installed.length > 0) {
+  // changed (installed OR pruned).
+  if (installed.length > 0 || pruned.length > 0) {
     log(hostLaunchInstructions(root));
   }
 
-  return { installed, skipped, diverged, failed };
+  return { installed, skipped, diverged, failed, pruned };
 }
 
 // Fire-once latch: set BEFORE any work is attempted, so a throw partway

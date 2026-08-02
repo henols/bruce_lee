@@ -107,6 +107,12 @@ recovery/*/dumps/probe-*.png
 # deployment target for both, same as every other entry in this block.
 /tools/vice-broker.mjs
 /tools/vice-launcher.sh
+# The deploy manifest (Phase 01.6 plan 03) -- install-resources.mjs's own
+# record of what it has placed under tools/, and the ONLY input its prune
+# step ever consults (never a directory walk -- tools/ is mixed, and also
+# holds tracked reverse-engineering tooling). Disposable like every other
+# entry in this block: a real host regenerates it on the next deploy.
+/tools/.vice-deployed.json
 
 # node_modules for .claude/mcp/vice/'s own npm toolchain (Phase 01.6 plan
 # 01) -- the FIRST node_modules this repository has ever had. No leading
