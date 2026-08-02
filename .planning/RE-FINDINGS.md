@@ -948,6 +948,92 @@ a spike README — which is why the mismatch went unnoticed for as long as it di
 lesson: a client-side deadline shorter than the platform's measured budget is a self-imposed cap
 that reads to everyone downstream as a platform limit, not a config default someone can just raise.
 
+### 2026-08-02 — boot time measured live on the host: sub-second, not the assumed ~8s
+
+**Type:** confirmation (promotes a previously LOW-graded assumption)
+**Evidence:** live on the host — nanosecond `launched_at`/`ready_at` fields read from
+`.vice-supervisor/spares/*.json` before the broker was shut down, during a
+`VICE_BROKER_BASE_PORT=6540 tools/vice-broker.sh start 3` run.
+
+| Port | launched_at (ns) | ready_at (ns) | elapsed |
+|---|---|---|---|
+| 6541 | 1785658461697376099 | 1785658462352542811 | 0.655 s |
+| 6542 | 1785658462399346879 | 1785658463038645810 | 0.639 s |
+| 6543 | 1785658820902732602 | 1785658821608383711 | 0.706 s |
+
+**Confidence:** HIGH that boot is sub-second; MEDIUM for any specific figure — `ready_at` is stamped when `maintain_spares()` observes `probe_ready()` succeed and passes run every `VICE_BROKER_POLL_MS=500`, so each figure is an upper bound with up to ~0.5s of poll latency in it, and true boot sits somewhere in ~0.14–0.71s.
+**Saves / costs:** any future wave-width or pool-sizing arithmetic now starts from a measured
+sub-second boot instead of a guess, and the measurement route itself — read the nanosecond fields
+out of the broker's own spare records — is reusable in minutes.
+
+### 2026-08-02 — supersedes the 2026-08-01 grant-poll entry: the timeout was never the cap, `VICE_BROKER_MAX` is
+
+**Type:** correction / dead end retired
+**Evidence:** live measurement (the boot-time entry directly above) plus the two constants as
+originally read (`GRANT_POLL_TIMEOUT_MS=25000`, tool-call budget >=150s).
+**Confidence:** HIGH for the retraction; MEDIUM for the ~36 figure, since it inherits the upper-bound boot number.
+**Saves / costs:** this entry supersedes the 2026-08-01 entry above titled "the container-side
+grant poll gives up at 25s while the measured tool-call budget is >=150s, so parallel wave width
+is capped at about three agents by a default nobody chose" — its two constants were correct and
+remain so; its LOW-graded ~8s boot input was the part that failed. At ~0.7s per serialised boot
+the 25s deadline binds at roughly 36 agents, so `VICE_BROKER_MAX=16` binds first and the timeout
+was never the cap. General lesson: an entry whose conclusion rests on one unmeasured input should
+be re-read as soon as that input is measured, because the conclusion had already propagated into
+a design note, a todo and a spike before the measurement existed.
+
+### 2026-08-02 — the boot-time log rounds every sub-second boot down to `(0s)`
+
+**Type:** hazard
+**Evidence:** live — the four `(0s)` log lines observed alongside the nanosecond records that
+contradict them, from the same 2026-08-02 host run.
+**Confidence:** HIGH for the rendering, MEDIUM for the integer-division attribution, since the host script was not read in this container.
+**Saves / costs:** `maintain_spares()` computes elapsed seconds with integer division
+(`elapsed_s=$((elapsed_ns / 1000000000))`), so every sub-second boot renders as `(0s)` — all four
+launches in the 2026-08-02 log did (e.g. `vice-broker: port 6540 launching -> ready (0s)`). The
+only human-readable boot figure in the system rounds the true value to zero and reads as "instant,
+or unmeasured," while full nanosecond precision sits unused in the JSON one directory away. This
+is why an 8x-wrong boot assumption survived for a day with nothing to contradict it: a
+rounded-to-zero display of a value the system measures precisely is worse than no display, because
+it reads as an answer.
+
+### 2026-08-02 — host validation of serialised spare warming PASSED: zero races across four launches, instant grant, clean reap
+
+**Type:** confirmation
+**Evidence:** live — the verbatim broker output from
+`VICE_BROKER_BASE_PORT=6540 tools/vice-broker.sh start 3`, plus `mcp__vice__vice_ping` answering
+`{"status":"ok","version":"3.10","machine":"C64SC","execution":"paused"}` from the granted
+instance.
+**Confidence:** HIGH.
+**Saves / costs:** four launches, strictly one per pass, each reaching `ready` before the next
+began, with zero SEGV, zero exit-1 and zero exit-0 races — the exact 2026-08-01
+three-simultaneous-boot failure (one SEGV, one exit 1, one exit 0 at an identical spawn second)
+did not recur. Instant grant from a warm spare (`granted request
+req-132346-1785658820506-ed4707b4 -> port 6540 (from ready spare)`), floor restored by the
+immediate launch of the next port, clean reap of 4 on `^C` (`reap saw 4 recorded instance(s),
+terminated 4`) with protocol state purged. The serialisation fix is now confirmed on the machine
+it was written for, so the GPU/audio init race can be treated as closed rather than as a suspect
+the next time a wave misbehaves.
+
+### 2026-08-02 — defect 4 reproduced a second time: a deliberate broker shutdown poisons a session exactly like a crash
+
+**Type:** hazard, second sighting
+**Evidence:** live — two consecutive `mcp__vice__vice_ping` calls returning byte-identical
+`ECONNREFUSED` against the cached grant (`req-132346-1785658820506-ed4707b4`, port 6540, epoch 3,
+pid 3493998) after the broker's `^C` reaped this session's granted instance, plus
+`.vice-supervisor/6540/supervisor.log` showing `caught signal, shutting down` / `terminating
+child pid 3493998` / `clean shutdown` (proving the emulator was signalled, not crashed) and
+`.vice-supervisor/6540/logs/x64sc-20260802-081421.log` truncating mid-line inside `MCP-Tools: Handling tools/ca` (proving x64sc died mid-request).
+**Confidence:** HIGH.
+**Saves / costs:** the proxy holds a dead grant for the session's whole life with no re-request
+path. The new fact this run adds: an orderly, intentional broker shutdown poisons a session
+exactly as a crash does, so "the host is fine now" never recovers it — the remedy is a new
+session, and a session that loses its instance loses its accumulated context. Distinguish
+carefully: the reap-everything contract is deliberate and correct (qpq chose it because orphans
+cost more than an interrupted session); the fragility is that the broker only runs in the
+foreground. Logged here as a reproduction only — no duplicate todo is opened, because defect 4
+already has one:
+`.planning/todos/pending/2026-08-01-vice-broker-spare-warming-and-stale-grant-defects.md`.
+
 ## Corrections to earlier entries
 
 ### 2026-08-01 — CORRECTION: the `vice_disk_attach` relative-path failure was a deleted contract, not a translation defect — and it is now fixed

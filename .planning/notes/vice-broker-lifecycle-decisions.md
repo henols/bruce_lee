@@ -1,6 +1,7 @@
 ---
 title: The VICE broker becomes one Node application, and its lifecycle policy is rewritten rather than translated
 date: 2026-08-01
+corrected: 2026-08-02
 context: >
   Produced by a /gsd-explore session on rewriting the host VICE broker (tools/vice-broker.sh,
   tools/vice-pool.sh, tools/vice-supervisor.sh, lib/container-guard.sh, lib/repo-root.sh — 2,997
@@ -24,6 +25,30 @@ the rewrite's own discuss cycle to close, not one this note answers by omission.
 
 This is quick-task work, not a ROADMAP phase — see Decision 7 for why, and for the precedent that
 already established the pattern.
+
+## Correction — 2026-08-02: boot time measured, and Decision 4 withdrawn
+
+Boot time was measured live on the host on 2026-08-02, via the nanosecond `launched_at`/`ready_at`
+fields in the broker's own `.vice-supervisor/spares/*.json` records, read before the broker was
+shut down. It came out sub-second — roughly 0.65s as an upper bound — not the ~8s Decision 4's
+arithmetic assumed, an input that was labelled an assumption in the same breath as its own table.
+That is roughly 11x smaller than the assumption, and it withdraws Decision 4's conclusion below:
+the 25s grant timeout was never the constraint capping wave width. `VICE_BROKER_MAX` (Decision 5.4,
+and spike 005) is the binding constraint on wave width, and always was.
+
+| Port | launched_at (ns) | ready_at (ns) | elapsed |
+|---|---|---|---|
+| 6541 | 1785658461697376099 | 1785658462352542811 | 0.655 s |
+| 6542 | 1785658462399346879 | 1785658463038645810 | 0.639 s |
+| 6543 | 1785658820902732602 | 1785658821608383711 | 0.706 s |
+
+These are upper bounds, not exact boot times: `ready_at` is stamped when `maintain_spares()`
+observes `probe_ready()` succeed, and passes run every `VICE_BROKER_POLL_MS=500`, so up to ~0.5s of
+each figure is poll latency rather than boot itself, making the figure an upper bound on the true
+value rather than the true value itself — true boot sits somewhere in ~0.14–0.71s. The claim this
+note makes anywhere it refers to boot time is "sub-second, roughly 0.65s measured, true value at or
+below that" — never a bare figure standing alone as the boot time. A bare figure presented that way
+is exactly the folklore this project has already paid for once.
 
 ## Current shape
 
@@ -113,7 +138,13 @@ property the rewrite MUST preserve, because it is what keeps every granted insta
 boot-fresh machine. One replacement boot is enqueued immediately on release, exactly as today, just
 against a floor of 1 instead of 3.
 
-## Decision 4 — the 25s grant timeout is the real cap on wave width
+**Strengthened 2026-08-02:** a sub-second measured boot makes holding warm spares beyond the first
+even less valuable than the three arguments above already made it — the latency a spare buys back
+is now known to be under a second, not an unmeasured guess.
+
+## Decision 4 — RETRACTED (2026-08-02): the 25s grant timeout was never the cap on wave width
+
+### The withdrawn version — the original conclusion, as recorded 2026-08-01
 
 `GRANT_POLL_TIMEOUT_MS` defaults to 25000 (`.claude/mcp/vice/vice-broker-client.mjs:213`) — this is
 the container-side deadline the client polls against while waiting for a grant. Spike 003 measured
@@ -139,6 +170,41 @@ roughly 125s of proven budget that spike 003 already established exists. Raising
 `GRANT_POLL_TIMEOUT_MS` toward ~120000ms is a near-one-line change that widens waves NOW,
 independently of the broker rewrite — nothing in the rewrite has to land before it. This is
 written up as its own todo (task 2 of this quick task), and that todo is the thing to do first.
+
+**This is the withdrawn version, kept verbatim.** It is committed and may be quoted elsewhere, so
+it stays visible rather than deleted — see below for why it fell and what replaces it.
+
+### Why it fell — the ~8s input was ~11x too large
+
+The ~8s boot figure the table above rested on, already labelled an assumption in the same breath
+as the table, was measured live on the host on 2026-08-02 at sub-second — roughly 0.65s as an
+upper bound (see the correction banner above for the full port table and the poll-quantisation
+caveat). Every entry in the withdrawn table was computed against the wrong input.
+
+### The corrected arithmetic
+
+| Wave width | Last agent waits | Under the 25s ceiling |
+|---|---|---|
+| 5 | ~2.8 s | fine |
+| 10 | ~6.3 s | fine |
+| 16 (= current `VICE_BROKER_MAX`) | ~10.5 s | fine |
+| ~36 | ~25 s | the actual cliff |
+
+### The corrected conclusion
+
+The 25s deadline caps waves at roughly 36 agents, more than double `VICE_BROKER_MAX=16`. The
+timeout was never the binding constraint; `VICE_BROKER_MAX` is (Decision 5.4, spike 005).
+
+### Priority, lowered
+
+The withdrawn version above called raising `GRANT_POLL_TIMEOUT_MS` a near-one-line fix and "the
+thing to do first". That framing is retracted along with the conclusion it rested on. Raising it
+toward ~120000ms (`.claude/mcp/vice/vice-broker-client.mjs:213`) remains a cheap robustness
+improvement — headroom on a slow or contended host, within the spike-003 `>=150s` budget
+(`.planning/spikes/003-timeout-budgets/README.md:139`) — and it is still independent of the
+rewrite, but it is no longer urgent and no longer unlocks anything: the number it was meant to
+unlock, wave width above ~3, was never actually gated by this constant. The priority is lowered,
+plainly, and spike 005 / `VICE_BROKER_MAX` is what matters for wave width now.
 
 ## Decision 5 — four lifecycle defects a mechanical shell-to-JS translation would preserve
 
@@ -186,6 +252,28 @@ tested. This number, not the pool floor from Decision 3, is the real ceiling on 
 get once the grant timeout (Decision 4) stops being the binding constraint. Spike 005 (task 3 of
 this quick task) is the experiment designed to measure it.
 
+**Elevated 2026-08-02:** with Decision 4 retracted, this is now the load-bearing open question on
+wave width — the number that actually caps a wave, not a side concern. Spike 005 is promoted from
+nice-to-have to the next thing worth doing. New data point from the same 2026-08-02 host run: 4
+concurrent x64sc instances ran on the host simultaneously (3 warm spares plus 1 granted) with no
+incident, so the floor on the ceiling is now at least 4, measured. Those four were brought up
+serialised, one per pass, so this data point bears on the steady-state arm of spike 005 and says
+nothing about the simultaneous-init arm — 16 remains otherwise unverified, exactly as this
+subsection already said.
+
+### The foreground-only deployment shape, found fragile — 2026-08-02
+
+The reap-everything-on-signal contract itself is deliberate and stays: `260801-qpq` chose it on
+2026-08-01 because orphans cost more than an interrupted session, and nothing below reopens that
+decision. The defect is the deployment shape, not the contract — the broker only runs in the
+**foreground**, with no detached mode, so a stray Ctrl-C, a closed terminal or a SIGHUP from an
+ending SSH/VS Code session destroys every live session's emulator. Observed directly on
+2026-08-02: `^C` produced `vice-broker: reap saw 4 recorded instance(s), terminated 4`, protocol
+state was purged, and this session's own `mcp__vice__vice_ping` then returned `ECONNREFUSED`
+against its cached grant. The rewrite should ship a detached or nohup-able run mode and/or a loud
+warning at start naming what a Ctrl-C will destroy. **Reversing the reap contract is NOT the
+fix** — nobody should read this paragraph as licence to undo qpq.
+
 ### A pair of indistinguishable states worth recording alongside these four
 
 A deliberate zero-spares configuration and a broken host with no `curl` and no
@@ -193,6 +281,25 @@ A deliberate zero-spares configuration and a broken host with no `curl` and no
 line the container-side agent never sees. This is not one of the four numbered defects, but it is
 the same shape of failure (a policy question the rewrite should not carry forward silently) and
 belongs in the same section.
+
+## Host validation of the 2026-08-01 shutdown work (260801-qpq) — PASSED 2026-08-02
+
+This is the first host confirmation the broker has ever had. On 2026-08-02 a human started the
+broker on the host with `VICE_BROKER_BASE_PORT=6540 tools/vice-broker.sh start 3`, and the
+lifecycle behaviour designed and committed on 2026-08-01 as `260801-qpq` was exercised live for
+the first time.
+
+- **Serialised warming, zero races.** Four launches, strictly one per pass, each reaching `ready`
+  before the next began: zero SEGV, zero exit-1, zero exit-0 races — the 2026-08-01 outage's
+  three-simultaneous-boot failure (one SEGV, one exit 1, one exit 0, all at an identical spawn
+  second) did not recur.
+- **Instant grant from a warm spare:** `vice-broker: granted request
+  req-132346-1785658820506-ed4707b4 -> port 6540 (from ready spare)`.
+- **Floor restored:** `vice-broker: launched port 6543 (reason: spare)` immediately after the
+  grant, restoring the warm floor to 3.
+- **Clean reap of 4 on signal:** `^C` produced `vice-broker: reap saw 4 recorded instance(s),
+  terminated 4`, followed by `vice-broker: purged protocol state under
+  /home/henrik/dev/henrik/git/bruce_lee/.vice-supervisor` — 4 = 3 spares + 1 grant.
 
 ## Decision 6 — the name `spares` is part of the problem
 
@@ -217,9 +324,10 @@ scaffolding maintenance, sized and tracked the same way its five predecessors we
 
 ## What is not yet measured
 
-- **The ~8s boot time.** Assumed throughout Decision 4's table, never measured. The whole
-  wave-width arithmetic in that table rests on this number, and it should be measured before it is
-  treated as more than a planning estimate.
+- **Boot time — MEASURED 2026-08-02.** Sub-second, roughly 0.65s as an upper bound; see the
+  correction banner near the top of this note for the full port table and the poll-quantisation
+  caveat. This gap is closed, and Decision 4's wave-width arithmetic has been redone against the
+  measured figure rather than the ~8s assumption.
 - **The concurrent-x64sc ceiling.** `VICE_BROKER_MAX=16` (Decision 5.4) is an unverified constant
   the rewrite would otherwise inherit unexamined. Spike 005 designs the experiment; it has not been
   run.
@@ -240,3 +348,11 @@ scaffolding maintenance, sized and tracked the same way its five predecessors we
   keeps unchanged; this note is entirely about what runs behind that protocol on the host side.
 - `.planning/spikes/003-timeout-budgets/README.md` — the source of the >=150s tool-call budget
   measurement that Decision 4's table is built against.
+- `.planning/todos/pending/2026-08-02-broker-atomic-write-temp-files-leak-into-the-pool-dir.md` —
+  the atomic-write temp-file leak found during the 2026-08-02 host validation run.
+- `.planning/todos/pending/2026-08-02-vice-broker-has-no-detached-run-mode.md` — the
+  foreground-fragility item above, filed as its own todo.
+- `.planning/todos/pending/2026-08-02-broker-boot-time-log-rounds-sub-second-to-zero.md` — why
+  the ~8s assumption went unchallenged for a day.
+- `.planning/RE-FINDINGS.md` — the durable record of the 2026-08-02 measurement, the supersession
+  of the 2026-08-01 grant-poll entry, and the defect-4 reproduction.

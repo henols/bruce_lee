@@ -54,12 +54,23 @@ context and a PulseAudio handle (see the defects todo,
 
 That crash was during concurrent **initialization**. Whether the host survives 8 or 16 instances
 that are already **running** — past their init race, sitting idle or actively serving MCP calls —
-is a different question, and it is completely unanswered. It matters because this ceiling, not the
-pool floor, is the real cap on how wide a `/gsd-execute-phase` wave can get once the grant-timeout
-cap (Decision 4 of the lifecycle-decisions note) is no longer the binding constraint — and the Node
-broker rewrite would otherwise inherit 16 as an unexamined constant. This question originates from
-`.planning/notes/vice-broker-lifecycle-decisions.md` Decision 5.4, which names it explicitly and
-links back here.
+is a different question, and it is completely unanswered. **This is now the binding open question
+on wave width, as of 2026-08-02.** Decision 4 of the lifecycle-decisions note, which originally
+conditioned this spike's importance on the grant timeout ceasing to be the binding constraint, has
+been retracted: boot was measured live on the host at sub-second, and the 25s grant-timeout
+deadline turns out to imply a cliff at roughly 36 agents — more than double `VICE_BROKER_MAX=16` —
+so the timeout was never the binding constraint in the first place. `VICE_BROKER_MAX` is, and the
+Node broker rewrite would otherwise inherit 16 as an unexamined constant. This question originates
+from `.planning/notes/vice-broker-lifecycle-decisions.md` Decision 5.4, which names it explicitly
+and links back here.
+
+### New data point — 2026-08-02
+
+Four concurrent x64sc instances (3 warm spares + 1 granted) ran on the host simultaneously on
+2026-08-02 with no incident, so the measured floor on the ceiling is now at least 4. Caveat: they
+were brought up serialised, one per pass, and were idle rather than actively serving, so this bears
+on Arm A's steady state and says nothing about Arm B's init race. Arm A's ladder can therefore
+start above K=4 if the human wants to save time, without deleting the lower rungs from the design.
 
 ## How to Run
 
@@ -115,8 +126,9 @@ Three possible outcomes, and what each means:
 
 - **Ceiling under 16** — the current default is optimistic, and the rewrite must lower
   `VICE_BROKER_MAX` to match what was actually measured.
-- **Ceiling at or above 16** — the default is safe, and the wave-width cap is entirely the grant
-  timeout from Decision 4, not this ceiling.
+- **Ceiling at or above 16** — the default is safe, and the cap is whatever `VICE_BROKER_MAX` is
+  set to, since the grant timeout (Decision 4, retracted 2026-08-02) has roughly 36 agents of room
+  before it would bind.
 - **Ceiling that moves between runs** — the limit is contention, not a fixed count, and the broker
   needs a probe-based admission check rather than a hardcoded max.
 
