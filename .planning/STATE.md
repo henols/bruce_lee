@@ -93,7 +93,7 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-12 pending — see `.planning/todos/pending/`. The dependency chain was
+17 pending — see `.planning/todos/pending/`. The dependency chain was
 **absorb the skills → extract the package → share broker state**; its first step is now **done**
 (2026-08-01, `e0f9915`), which unblocks the second. Sharing state without sharing code means N
 drifting implementations, while sharing code without sharing state means N brokers racing:
@@ -117,6 +117,16 @@ drifting implementations, while sharing code without sharing state means N broke
   and both `01-04-ATTEMPT-N-HALT.md` records first, then write a decision-ordered procedure that
   delegates per-address detail to `c64-memory-mapping`. Must clear the same keep/cut bar as the
   todo above — decision points, not narration of the `mcp__vice__*` tool list.
+
+- **Widen the RE vector sweep — all vectors, live RESTORE and soft reset, ROM vs RAM-under-ROM**
+  (tooling, minor) — feeds the "vectors" step of the todo above. The logged vector table covers six
+  pairs and stops at "check `$01`"; it misses the `$0300–$0333` indirects (**`$0328` STOP and
+  `$0330/$0332` LOAD/SAVE are where a cracker hooks**, which is a provenance signal on both disks)
+  and the `$8000` `CBM80` autostart block. Two additions make it decisive: exercise the machine
+  live via `vice_keyboard_restore` and `vice_machine_reset {soft|hard}`, and disambiguate any
+  vector landing in a ROM window by reading it a second time with `vice_memory_read`'s
+  `bank: 'ram'` — a difference from stock KERNAL means the game has code hidden under ROM, which
+  nothing currently looks for.
 
 - **Extract the VICE MCP into its own project and publish it as an installable package** (tooling,
   major) — `.claude/mcp/vice/` is ~14,650 vendored lines with no `package.json`; copying is the only
