@@ -101,6 +101,25 @@ test("criterion 2: .mcp.json registers exactly one static, url-less stdio entry 
   assert.ok(Array.isArray(entry.args) && entry.args.length === 1, `expected args to be a one-element array, got ${JSON.stringify(entry.args)}`);
   const scriptPath = join(REPO_ROOT, entry.args[0]);
   assert.ok(existsSync(scriptPath), `the vice entry's args[0] (${entry.args[0]}) must resolve to an existing file at ${scriptPath}`);
+
+  // Plan 03 (Criterion 10 scaffold, T-01.6-14): the resolvability check above
+  // proves SOME file exists at args[0] -- it does not prove that file is
+  // still the proxy entry point rather than some other existing file the
+  // path got accidentally repointed at. Tightened with a basename check: the
+  // module extensions listed here are exactly what Phase 01.6.1's TypeScript
+  // conversion is expected to produce for this entry point (.mjs today; .ts
+  // or .mts if the conversion lets Node's native TypeScript stripping run the
+  // proxy directly rather than emitting to resources/ first) -- this is not
+  // yet decided, so all three are accepted without picking a winner early.
+  const basename = entry.args[0].split("/").pop();
+  assert.match(
+    basename,
+    /^vice-proxy\.(mjs|mts|ts)$/,
+    `.mcp.json's vice entry resolves to an existing file, but its basename (${basename}) is not the proxy ` +
+      "entry point (expected vice-proxy.<mjs|mts|ts>). THIS PATH IS HARDCODED AND READ ONCE, AT SESSION " +
+      "START: a move or rename of the proxy that does not update this same path in the same commit costs " +
+      "the agent ALL emulator access at the very next session start -- not degraded service, none at all."
+  );
 });
 
 // ============================================================================

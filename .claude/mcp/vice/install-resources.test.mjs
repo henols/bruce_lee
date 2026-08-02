@@ -13,9 +13,9 @@
 // vice-session.mjs.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, existsSync, readFileSync, writeFileSync, statSync, chmodSync } from "node:fs";
+import { mkdtempSync, existsSync, readFileSync, writeFileSync, mkdirSync, statSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, sep } from "node:path";
+import { join, dirname, sep } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
@@ -25,6 +25,11 @@ import {
   resourceEntries,
   installResources,
   ensureResourcesInstalled,
+  DEPLOY_MANIFEST_NAME,
+  deployManifestPath,
+  readDeployManifest,
+  writeDeployManifest,
+  pruneResources,
 } from "./install-resources.mjs";
 
 const execFileP = promisify(execFile);
@@ -191,5 +196,130 @@ test("installResources(): never throws when the target root is unwritable -- it 
     assert.ok(warnings.length > 0, "expected at least one warning logged instead of a thrown exception");
   } finally {
     chmodSync(root, 0o700); // restore so the temp dir can be cleaned up
+  }
+});
+
+// ============================================================================
+// Plan 03, Task 1: pruneResources()/readDeployManifest()/writeDeployManifest()
+// -- the delete half installResources() never had (RESEARCH.md's Runtime
+// State Inventory). Every test below drives a SYNTHETIC temp root, same
+// idiom as the rest of this file; nothing here ever touches the real repo's
+// tools/.
+// ============================================================================
+
+test("readDeployManifest(): a missing, malformed, or shape-wrong manifest reads as an empty list -- never throws (T-01.6-13)", () => {
+  const root = mkdtempSync(join(tmpdir(), "vice-manifest-malformed-"));
+  assert.deepEqual(readDeployManifest(root), [], "a missing manifest file must read as an empty list");
+
+  const manifestPath = deployManifestPath(root);
+  mkdirSync(dirname(manifestPath), { recursive: true });
+
+  writeFileSync(manifestPath, "not json at all {{{");
+  assert.deepEqual(readDeployManifest(root), [], "malformed JSON must read as an empty list");
+
+  writeFileSync(manifestPath, JSON.stringify(["a", "b"]));
+  assert.deepEqual(readDeployManifest(root), [], "a non-object top-level shape (bare array) must read as an empty list");
+
+  writeFileSync(manifestPath, JSON.stringify({ entries: "not-an-array" }));
+  assert.deepEqual(readDeployManifest(root), [], "a non-array entries field must read as an empty list");
+
+  writeFileSync(manifestPath, JSON.stringify({ entries: ["vice-supervisor.sh"] }));
+  assert.deepEqual(readDeployManifest(root), ["vice-supervisor.sh"], "a well-formed manifest must read back its entries");
+});
+
+test("writeDeployManifest()/readDeployManifest(): round-trips a sorted entry list", () => {
+  const root = mkdtempSync(join(tmpdir(), "vice-manifest-roundtrip-"));
+  writeDeployManifest(root, ["b.sh", "a.sh", "lib/c.sh"]);
+  assert.deepEqual(readDeployManifest(root), ["a.sh", "b.sh", "lib/c.sh"]);
+  assert.ok(existsSync(join(installTargetDir(root), DEPLOY_MANIFEST_NAME)), "the manifest file must exist at the documented path");
+});
+
+test("installResources(): a full install-then-prune round trip leaves the manifest equal to the current resourceEntries() set", () => {
+  const root = mkdtempSync(join(tmpdir(), "vice-install-manifest-sync-"));
+  installResources({ root, log: () => {} });
+  assert.deepEqual([...readDeployManifest(root)].sort(), [...resourceEntries()].sort());
+});
+
+test("pruneResources(): a manifest entry naming a file no longer in resources/ is removed from the deployment target", () => {
+  const root = mkdtempSync(join(tmpdir(), "vice-prune-retired-"));
+  installResources({ root, log: () => {} });
+  const survivor = join(installTargetDir(root), "vice-supervisor.sh");
+  assert.ok(existsSync(survivor), "sanity: vice-supervisor.sh must exist before the retirement is simulated");
+
+  // Simulate a retirement: a manifest naming a file that is no longer a
+  // current resource, with that file actually present on disk (as a real
+  // prior deploy would have left it).
+  const staleTarget = join(installTargetDir(root), "vice-pool-retired.sh");
+  writeFileSync(staleTarget, "# stale retired script\n");
+  writeDeployManifest(root, [...resourceEntries(), "vice-pool-retired.sh"]);
+
+  const result = pruneResources({ root, log: () => {} });
+
+  assert.ok(result.pruned.includes("vice-pool-retired.sh"), "expected the retired entry to be pruned");
+  assert.ok(!existsSync(staleTarget), "the retired file must actually be removed from disk");
+  assert.ok(existsSync(survivor), "a still-current resource must never be touched by the prune");
+});
+
+test("pruneResources(): a file present under the deployment target but ABSENT from the manifest is left untouched -- this is what protects tracked reverse-engineering tooling sharing tools/", () => {
+  const root = mkdtempSync(join(tmpdir(), "vice-prune-untracked-"));
+  installResources({ root, log: () => {} });
+  // Simulate tools/d64-parse.mjs: tracked reverse-engineering tooling this
+  // installer never deployed and never recorded in its own manifest.
+  const untracked = join(installTargetDir(root), "d64-parse.mjs");
+  writeFileSync(untracked, "// tracked reverse-engineering tooling, not a deployed resource\n");
+
+  const result = pruneResources({ root, log: () => {} });
+
+  assert.ok(!result.pruned.includes("d64-parse.mjs"), "a file absent from the manifest must never be pruned, even though it is not a current resource");
+  assert.ok(existsSync(untracked), "the untracked, tracked-in-git file must survive the prune untouched");
+});
+
+test("pruneResources(): a manifest entry containing a parent-directory hop is refused before any filesystem access, and reported skipped", () => {
+  const root = mkdtempSync(join(tmpdir(), "vice-prune-escape-parent-"));
+  installResources({ root, log: () => {} });
+
+  const escapee = "../outside-the-target.txt";
+  writeDeployManifest(root, [...resourceEntries(), escapee]);
+
+  const warnings = [];
+  const result = pruneResources({ root, log: (m) => warnings.push(m) });
+
+  assert.ok(result.skipped.includes(escapee), "expected the escaping entry to be reported skipped");
+  assert.equal(result.pruned.length, 0, "nothing should be pruned when the only retired candidate escapes the target");
+  assert.ok(warnings.some((w) => /refus|parent-directory|escape/i.test(w)), "expected a warning naming why the entry was refused");
+});
+
+test("pruneResources(): an absolute-path manifest entry is refused and reported skipped", () => {
+  const root = mkdtempSync(join(tmpdir(), "vice-prune-escape-absolute-"));
+  installResources({ root, log: () => {} });
+
+  const escapee = "/etc/passwd";
+  writeDeployManifest(root, [...resourceEntries(), escapee]);
+
+  const result = pruneResources({ root, log: () => {} });
+
+  assert.ok(result.skipped.includes(escapee), "expected an absolute-path entry to be refused and reported skipped");
+  assert.equal(result.pruned.length, 0, "nothing should be pruned when the only retired candidate is an absolute path");
+  assert.ok(existsSync("/etc/passwd"), "sanity: the real /etc/passwd must survive completely untouched");
+});
+
+test("pruneResources(): an unlink failure on a read-only deployment target is reported as failed, not thrown (D-3)", () => {
+  const root = mkdtempSync(join(tmpdir(), "vice-prune-unlinkfail-"));
+  installResources({ root, log: () => {} });
+  const staleTarget = join(installTargetDir(root), "vice-pool-retired.sh");
+  writeFileSync(staleTarget, "# stale\n");
+  writeDeployManifest(root, [...resourceEntries(), "vice-pool-retired.sh"]);
+
+  chmodSync(installTargetDir(root), 0o500); // read+execute, no write -- unlink of a file inside requires write on the containing dir
+  const warnings = [];
+  try {
+    let result;
+    assert.doesNotThrow(() => {
+      result = pruneResources({ root, log: (m) => warnings.push(m) });
+    });
+    assert.ok(result.failed.includes("vice-pool-retired.sh"), "expected the unlink failure to be reported as failed");
+    assert.ok(warnings.length > 0, "expected a warning logged instead of a thrown exception");
+  } finally {
+    chmodSync(installTargetDir(root), 0o700); // restore so the temp dir can be cleaned up
   }
 });

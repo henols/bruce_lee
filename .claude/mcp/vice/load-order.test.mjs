@@ -1,0 +1,288 @@
+// node:test coverage of Criterion 10's load-order landmine (01.6-RESEARCH.md
+// §E): install-resources.mjs takes the repo root as an ARGUMENT and imports
+// NOTHING from repo-root.mjs, specifically to avoid a module cycle that
+// crashes with "Cannot access 'HERE' before initialization" the moment
+// repo-root.mjs's own `ensureResourcesInstalled({ root: repoRoot() })` call
+// (at the bottom of its module body) runs before install-resources.mjs has
+// finished evaluating.
+//
+// RESEARCH.md §E reproduced this LIVE, twice, and found the crash is
+// specifically a TOP-LEVEL-SYNCHRONOUS-ACCESS hazard: a lazily-called
+// reintroduction of the forbidden import does NOT crash today, while still
+// leaving the codebase one reordering away from it. That nuance is why this
+// file drives a STATIC SOURCE-TEXT check rather than a runtime-crash-based
+// test -- only a text-level check forbids the import categorically,
+// regardless of how it would be called.
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { readdirSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+
+// ============================================================================
+// Part 1: the direct guard -- install-resources.mjs never imports from
+// repo-root.mjs, in any form.
+// ============================================================================
+
+// STATEMENT-ANCHORED, deliberately. 01.6-RESEARCH.md §E(c)'s own proposed
+// regex (`/from\s+["']\.\/repo-root(\.[jt]s)?["']/`) has TWO problems, both
+// found by the planner and neither recorded anywhere before this task:
+//
+//   1. Its extension group `(\.[jt]s)?` covers only the two-letter forms
+//      (.js, .ts) -- against TODAY's sources, where the only specifier that
+//      exists is "./repo-root.mjs", that regex would never match ANYTHING,
+//      making the gate pass unconditionally and catch nothing. Widened below
+//      to `(?:\.[cm]?[jt]s)?`, covering .js/.ts/.mjs/.cjs/.mts/.cts, plus the
+//      bare extensionless form (the group is optional).
+//   2. Widening the extension group creates a SECOND trap: install-
+//      resources.mjs's own header comment (lines 19-21) quotes the forbidden
+//      import VERBATIM, in prose: `adding \`import { repoRoot } from
+//      "./repo-root.mjs"\` here`. An UNANCHORED search for that specifier
+//      text matches this comment line and fails the gate on a file that is
+//      entirely correct -- a self-invalidating check a later maintainer
+//      would be tempted to "fix" by weakening it further.
+//
+// The fix for trap 2 is anchoring the pattern to the START of a statement:
+// optional leading whitespace, then the literal `import` keyword, optionally
+// followed by the type-only modifier (`import type { ... }`). The header
+// comment's line begins with `// Do not "clean this up"...` -- `//` is not
+// `import`, so the anchor excludes it structurally, regardless of what the
+// comment goes on to quote. A type-only NAMED import (`import { type
+// repoRoot } from ...`) is also caught: the anchor only requires `import`
+// plus optional whitespace before the (unconstrained) import clause, so it
+// matches regardless of where inside the clause a `type` keyword appears.
+//
+// `[^;]*?` (not `[\s\S]*?`) bounds the lazy match to the CURRENT statement --
+// real import statements contain no internal `;`, so this cannot leak across
+// an unrelated import's own terminator into a later, unrelated `from`
+// clause, while still spanning the multi-line brace lists this module tree
+// actually uses (a negated character class matches newlines even though `.`
+// does not).
+//
+// A type-only import (`import type { repoRoot } from "./repo-root.mjs"`) is
+// erased before module resolution even happens -- confirmed live in
+// 01.6-RESEARCH.md §E(b) -- so it happens to be harmless TODAY. It is
+// rejected here anyway: that safety is an ACCIDENT of erasure, not evidence
+// of discipline, and special-casing it as "fine" would teach exactly the
+// wrong lesson about why this rule exists.
+const IMPORT_REPO_ROOT_PATTERN =
+  /^[ \t]*import(?:\s+type)?\s+[^;]*?from\s+["']\.\/repo-root(?:\.[cm]?[jt]s)?["']/m;
+
+/** Wraps IMPORT_REPO_ROOT_PATTERN as a named predicate so both the real-file
+ * assertion and the regression tests below read the same way. */
+function importsRepoRoot(text) {
+  return IMPORT_REPO_ROOT_PATTERN.test(text);
+}
+
+test("importsRepoRoot(): regression corpus -- catches every import shape, including type-only and the widened .mjs extension; never fires on prose that merely quotes the import", () => {
+  assert.ok(
+    importsRepoRoot('import { repoRoot } from "./repo-root.mjs";'),
+    "a plain .mjs value import must be caught -- this is the exact shape RESEARCH.md §E(c)'s own " +
+      "proposed regex would have missed entirely (its extension group only covers .js/.ts)"
+  );
+  assert.ok(
+    importsRepoRoot('import type { repoRoot } from "./repo-root.mjs";'),
+    "a type-only import (`import type { ... }`) must be caught -- it is erased before module " +
+      "resolution and so happens to be harmless today, which is exactly why a naive 'it's just a " +
+      "type import' exemption would send the wrong signal (RESEARCH.md §E(b))"
+  );
+  assert.ok(
+    importsRepoRoot('import { type repoRoot } from "./repo-root.mjs";'),
+    "a named type-only import (`import { type repoRoot }`) must also be caught"
+  );
+  assert.ok(
+    importsRepoRoot('import { repoRoot } from "./repo-root.ts";'),
+    "a future .ts conversion of the specifier must still be caught"
+  );
+  assert.ok(
+    importsRepoRoot('import { repoRoot } from "./repo-root";'),
+    "a bare, extensionless specifier must be caught"
+  );
+  assert.ok(
+    importsRepoRoot('import {\n  repoRoot,\n  supervisorDir,\n} from "./repo-root.mjs";'),
+    "a multi-line brace-list import must be caught -- this module tree's own real imports (this very " +
+      "file's edit history) span multiple lines"
+  );
+  assert.ok(
+    !importsRepoRoot(
+      '// Do not "clean this up" by adding `import { repoRoot } from "./repo-root.mjs"` here -- that\n' +
+        "// importable convenience is exactly the cycle described above."
+    ),
+    "prose that merely QUOTES the forbidden import inside a comment (install-resources.mjs's own " +
+      "header, verbatim) must NOT be classified as an import -- an unanchored search would fail this " +
+      "file for describing the rule it correctly follows"
+  );
+  assert.ok(
+    !importsRepoRoot('import { hostPath, SET_ENV_HINT } from "./hostpath.mjs";'),
+    "an unrelated sibling import must not false-positive"
+  );
+});
+
+test("Criterion 10: install-resources.mjs never imports from repo-root.mjs, in any form", () => {
+  const src = readFileSync(join(HERE, "install-resources.mjs"), "utf8");
+  assert.ok(
+    !importsRepoRoot(src),
+    "install-resources.mjs must not import from repo-root.mjs -- this reintroduces the module cycle " +
+      "documented in this file's own header comment (lines 6-21) and reproduced LIVE in " +
+      "01.6-RESEARCH.md §E, crashing with exactly: " +
+      '"ReferenceError: Cannot access \'HERE\' before initialization". The cycle is avoided ' +
+      "structurally today because install-resources.mjs takes the repo root as a PARAMETER; see its " +
+      "own header for the full rationale, and 01.6-RESEARCH.md §E for the live reproduction (including " +
+      "the nuance that a LAZILY-called reintroduction would not crash today while still being one " +
+      "reordering away from it -- which is why this is a static text check, not a runtime one)."
+  );
+});
+
+// ============================================================================
+// Part 2: the cycle allowlist -- the scaffold Phase 01.6.1 widens to
+// TypeScript sources. Today it has exactly one recorded member: the live
+// three-module cycle repo-root.mjs -> install-resources.mjs -> hostpath.mjs
+// -> repo-root.mjs, surviving only because hostpath.mjs's own hop into
+// repo-root.mjs (`repoRoot()`) is consumed by install-resources.mjs's
+// hostLaunchInstructions(), which is itself called lazily from inside
+// installResources() -- never at any of the three modules' own top level.
+// ============================================================================
+
+/** Flat module files directly under this directory (siblings, matching this
+ * module tree's own flattened layout) -- test files excluded, since a test
+ * importing its subject is not part of the PRODUCTION import graph this
+ * check polices. */
+function listModuleFiles() {
+  return readdirSync(HERE, { withFileTypes: true })
+    .filter((dirent) => dirent.isFile())
+    .map((dirent) => dirent.name)
+    .filter((name) => /\.(mjs|mts|cjs|ts|js)$/.test(name))
+    .filter((name) => !name.includes(".test."));
+}
+
+/** Every relative import specifier `text` names, from BOTH shapes this
+ * module tree actually uses: `import {...} from "./x"` (and `export {...}
+ * from "./x"`, a re-export) and the bare side-effect form `import "./x"`
+ * (vice-probe.mjs's own shape). Bounded to the flat directory's own siblings
+ * -- every real specifier here is a `./name.ext` form, since scripts/ was
+ * flattened away and nothing in this directory imports from a subdirectory
+ * sibling.
+ *
+ * STATEMENT-ANCHORED, same reasoning as IMPORT_REPO_ROOT_PATTERN above and
+ * for the identical reason: an unanchored `from\s+["'](\.[^"']+)["']` search
+ * also matches a relative specifier quoted inside a comment -- exactly
+ * install-resources.mjs's own header, which quotes `from "./repo-root.mjs"`
+ * verbatim in prose. An unanchored version of this extractor was tried
+ * first and produced a PHANTOM 2-node cycle (`install-resources.mjs` ->
+ * `repo-root.mjs`) purely from that comment text, caught by this file's own
+ * "module enumeration" sanity test failing in an unexpected shape --
+ * anchoring to a real statement start (optional whitespace, then `import`/
+ * `export`, never `//`) removes the phantom edge structurally. */
+function extractRelativeImportSpecifiers(text) {
+  const specifiers = new Set();
+  for (const m of text.matchAll(/^[ \t]*(?:import|export)(?:\s+type)?\s+[^;]*?from\s+["'](\.[^"']+)["']/gm)) {
+    specifiers.add(m[1]);
+  }
+  for (const m of text.matchAll(/^[ \t]*import\s+["'](\.[^"']+)["']/gm)) {
+    specifiers.add(m[1]);
+  }
+  return specifiers;
+}
+
+/** Adjacency map: module basename -> array of module basenames it imports,
+ * restricted to edges landing on another file in `moduleNames` (a specifier
+ * resolving outside this flat set, e.g. into resources/ or a test file, is
+ * simply not an edge in this graph). */
+function buildImportGraph(moduleNames) {
+  const moduleSet = new Set(moduleNames);
+  const graph = new Map();
+  for (const name of moduleNames) {
+    const text = readFileSync(join(HERE, name), "utf8");
+    const edges = [];
+    for (const specifier of extractRelativeImportSpecifiers(text)) {
+      const basename = specifier.split("/").pop();
+      if (moduleSet.has(basename) && basename !== name) edges.push(basename);
+    }
+    graph.set(name, edges);
+  }
+  return graph;
+}
+
+/** Every SIMPLE cycle that includes `startNode`, found by a DFS rooted at
+ * `startNode` itself -- fixing the rotation point this way means a directed
+ * cycle through `startNode` is discovered exactly once (in the one
+ * direction its edges actually run), rather than once per rotation. A path
+ * that revisits some OTHER already-on-stack node before returning to
+ * `startNode` is abandoned (not a cycle through startNode at this
+ * traversal), matching this test's only concern: cycles that pass through
+ * repo-root.mjs specifically. */
+function findCyclesThroughNode(graph, startNode) {
+  const cycles = [];
+  const stack = [startNode];
+  const onStack = new Set([startNode]);
+
+  function dfs(node) {
+    for (const next of graph.get(node) || []) {
+      if (next === startNode) {
+        cycles.push([...stack]);
+      } else if (!onStack.has(next)) {
+        stack.push(next);
+        onStack.add(next);
+        dfs(next);
+        onStack.delete(next);
+        stack.pop();
+      }
+    }
+  }
+  dfs(startNode);
+  return cycles;
+}
+
+/** Canonicalizes each found cycle to its sorted member list (a cycle is
+ * reported as the SET of modules participating in it, not as one specific
+ * traversal order) and dedupes, so two different corners of a DFS finding
+ * "the same" cycle collapse to one entry. */
+function canonicalCycles(cycles) {
+  const seen = new Set();
+  const out = [];
+  for (const cycle of cycles) {
+    const sorted = [...cycle].sort();
+    const key = sorted.join(",");
+    if (!seen.has(key)) {
+      seen.add(key);
+      out.push(sorted);
+    }
+  }
+  out.sort((a, b) => a.join(",").localeCompare(b.join(",")));
+  return out;
+}
+
+// The recorded allowlist. Exactly one member today: the live cycle
+// documented in install-resources.mjs's own header, repo-root.mjs's own
+// header, and 01.6-RESEARCH.md §E. Widening this to TypeScript sources
+// (.ts/.mts specifiers) and deciding whether to break the cycle outright are
+// Phase 01.6.1 criterion B's job, not this scaffold's -- this file only
+// records what is true of the FLAT .mjs graph as it stands today.
+const ALLOWED_CYCLES_THROUGH_REPO_ROOT = [["hostpath.mjs", "install-resources.mjs", "repo-root.mjs"]];
+
+test("cycle allowlist: module enumeration under .claude/mcp/vice/ returns a non-empty flat set", () => {
+  const moduleNames = listModuleFiles();
+  assert.ok(moduleNames.length > 0, "module enumeration returned nothing -- path resolution is broken, not a real pass");
+  assert.ok(moduleNames.includes("repo-root.mjs"), "expected repo-root.mjs to be part of the enumerated module set");
+  assert.ok(moduleNames.includes("install-resources.mjs"));
+  assert.ok(moduleNames.includes("hostpath.mjs"));
+});
+
+test("cycle allowlist: exactly the recorded three-module cycle passes through repo-root.mjs", () => {
+  const moduleNames = listModuleFiles();
+  const graph = buildImportGraph(moduleNames);
+  const cycles = canonicalCycles(findCyclesThroughNode(graph, "repo-root.mjs"));
+
+  assert.deepEqual(
+    cycles,
+    ALLOWED_CYCLES_THROUGH_REPO_ROOT,
+    `the set of cycles through repo-root.mjs changed -- expected exactly ${JSON.stringify(ALLOWED_CYCLES_THROUGH_REPO_ROOT)}, ` +
+      `got ${JSON.stringify(cycles)}. A NEW cycle through repo-root.mjs must be justified by amending ` +
+      "ALLOWED_CYCLES_THROUGH_REPO_ROOT in this test, not silently allowed through on the same luck that " +
+      "keeps today's recorded cycle from crashing (a lazy call site, not a structural guarantee). " +
+      "Widening this allowlist to TypeScript sources, and deciding whether to break the cycle outright, " +
+      "belong to Phase 01.6.1 criterion B and are not settled here."
+  );
+});
