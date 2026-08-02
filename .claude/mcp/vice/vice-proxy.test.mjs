@@ -2686,15 +2686,19 @@ function writeRecycleAckFixture(dir, id, fields) {
 }
 
 /** Waits for exactly one NEW request file (excluding the acquire lease's own
- * id) to appear under dir/requests -- the recycle request handleRecycle()
+ * id, plus any additional ids named in `extraExcludeIds` -- e.g. an earlier
+ * recycle's own request file, which nothing in this test harness deletes
+ * since the fake ack is written directly rather than via a real broker
+ * pass) to appear under dir/requests -- the recycle request handleRecycle()
  * writes. Returns its id. */
-async function waitForRecycleRequestId(dir, excludeId) {
+async function waitForRecycleRequestId(dir, excludeId, extraExcludeIds = []) {
   const reqDir = join(dir, "requests");
+  const excluded = new Set([excludeId, ...extraExcludeIds].map((id) => `${id}.json`));
   const found = await waitForCondition(() => {
     if (!existsSync(reqDir)) return null;
     const files = readdirSync(reqDir)
       .filter((f) => f.endsWith(".json"))
-      .filter((f) => f !== `${excludeId}.json`);
+      .filter((f) => !excluded.has(f));
     return files.length > 0 ? files[0].replace(/\.json$/, "") : null;
   });
   assert.ok(found, "a recycle request file must appear under requests/");
@@ -2782,16 +2786,16 @@ test("vice_recycle: no broker lease held yet for this session is refused, writes
   }
 });
 
-test("vice_recycle: the incident record file exists on disk before the recycle request file does", async () => {
+test("vice_recycle: the incident record -- with its evidence section already complete -- exists on disk before the recycle request file does", async () => {
   const dir = mkdtempSync(join(tmpdir(), "vice-proxy-recycle-order-"));
-  const incidentsDir = tmpIncidentsDir();
-  const { server } = startStandInServer();
+  const evidenceDir = tmpWorkspaceIncidentsDir();
+  const { server } = startFlexibleStandInServer(healthyEvidenceRespond({}));
   const port = await listen(server);
   const proxy = startProxy({
     VICE_POOL_DIR: dir,
     VICE_BROKER_BASE_PORT: String(port),
     VICE_MCP_HOST: "127.0.0.1",
-    VICE_INCIDENTS_DIR: incidentsDir,
+    VICE_INCIDENTS_DIR: evidenceDir,
   });
   try {
     await handshake(proxy);
@@ -2803,11 +2807,21 @@ test("vice_recycle: the incident record file exists on disk before the recycle r
     const recycleId = await waitForRecycleRequestId(dir, leaseId);
 
     // The moment the request file exists, the incident record must ALREADY
-    // be there -- writeIncidentRecord() runs synchronously before
-    // writeRecycleRequest() inside handleRecycle(), with no await between
-    // the two (D-17's automated form, criterion 4).
-    const incidentFiles = readdirSync(incidentsDir).filter((f) => f.endsWith(".md"));
+    // be there, carrying its full criterion-4 evidence section --
+    // gatherWedgeEvidence() and captureSnapshotAttempt() run, then
+    // writeIncidentRecord() runs, all with no await between the LAST of
+    // those and writeRecycleRequest() (D-17's automated form, criterion 4,
+    // strengthened by plan 01.3-03 from plan 01.3-01's minimal-record form).
+    const incidentFiles = readdirSync(evidenceDir).filter((f) => f.endsWith(".md"));
     assert.equal(incidentFiles.length, 1, "exactly one incident record must exist by the time the request file appears");
+    const contentAtRequestTime = readFileSync(join(evidenceDir, incidentFiles[0]), "utf8");
+    assert.match(
+      contentAtRequestTime,
+      /evidence_complete: true/,
+      "the evidence section must already be COMPLETE at the moment the request file appears -- not merely present"
+    );
+    assert.match(contentAtRequestTime, /cycle bracket: \d+ cycles retired/);
+    assert.match(contentAtRequestTime, /pre-kill snapshot attempt: accepted \(name: /);
 
     // Bump the epoch and provide a successful ack so the pending call
     // resolves and this test can tear down cleanly.
@@ -2819,7 +2833,7 @@ test("vice_recycle: the incident record file exists on disk before the recycle r
     proxy.child.kill("SIGKILL");
     await new Promise((resolve) => server.close(resolve));
     rmSync(dir, { recursive: true, force: true });
-    rmSync(incidentsDir, { recursive: true, force: true });
+    rmSync(evidenceDir, { recursive: true, force: true });
   }
 });
 
@@ -3234,6 +3248,186 @@ test("vice_recycle: a stand-in that rejects every read produces a fully-populate
 });
 
 // ---------------------------------------------------------------------------
+// Plan 01.3-03 task 2: the pre-kill snapshot attempt (last capture step,
+// D-19) and the two guards over the whole gather-then-record ordering
+// (the strengthened filesystem-ordering test above, and the region-scoped
+// source check below).
+// ---------------------------------------------------------------------------
+
+test("vice_recycle: a rejected snapshot attempt records unavailable with the reason, and the recycle still completes", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vice-proxy-recycle-snapshot-rejected-"));
+  const incidentsDir = tmpIncidentsDir();
+  const healthy = healthyEvidenceRespond({});
+  const respond = (name, args) => (name === "vice_snapshot_save" ? undefined : healthy(name, args));
+  const { server } = startFlexibleStandInServer(respond);
+  const port = await listen(server);
+  const proxy = startProxy({
+    VICE_POOL_DIR: dir,
+    VICE_BROKER_BASE_PORT: String(port),
+    VICE_MCP_HOST: "127.0.0.1",
+    VICE_INCIDENTS_DIR: incidentsDir,
+  });
+  try {
+    await handshake(proxy);
+    const { id: leaseId } = await acquireLeaseViaBroker(proxy, dir, port, 3);
+    writeEpochFileFixture(dir, port, { epoch: 1 });
+
+    proxy.send({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "vice_recycle", arguments: { reason: "snapshot rejected test" } } });
+    const recycleId = await waitForRecycleRequestId(dir, leaseId);
+    writeEpochFileFixture(dir, port, { epoch: 2 });
+    writeRecycleAckFixture(dir, recycleId, { target_id: leaseId, port, outcome: "ok", kill_stage: "sigterm", epoch_before: 1 });
+
+    const resp = await proxy.nextMessage();
+    assert.equal(resp.result.isError, false, "a rejected snapshot must not fail the recycle");
+    assert.match(resp.result.content[0].text, /Snapshot: unavailable \(/);
+
+    const incidentFile = readdirSync(incidentsDir).find((f) => f.endsWith(".md"));
+    const content = readFileSync(join(incidentsDir, incidentFile), "utf8");
+    assert.match(content, /pre-kill snapshot attempt: unavailable \(/);
+  } finally {
+    proxy.child.kill("SIGKILL");
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(incidentsDir, { recursive: true, force: true });
+  }
+});
+
+test("vice_recycle: an unanswered snapshot call does not prevent the recycle from completing", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vice-proxy-recycle-snapshot-hang-"));
+  const incidentsDir = tmpIncidentsDir();
+  const healthy = healthyEvidenceRespond({});
+  const respond = (name, args) => (name === "vice_snapshot_save" ? HANG : healthy(name, args));
+  const { server } = startFlexibleStandInServer(respond);
+  const port = await listen(server);
+  const proxy = startProxy({
+    VICE_POOL_DIR: dir,
+    VICE_BROKER_BASE_PORT: String(port),
+    VICE_MCP_HOST: "127.0.0.1",
+    VICE_INCIDENTS_DIR: incidentsDir,
+    // Overrides the 8s production default so this fixture's deliberate hang
+    // resolves in milliseconds rather than minutes -- see CAPTURE_STEP_TIMEOUT_MS's
+    // own header comment in vice-proxy.mjs for why this is a TRANSPORT
+    // deadline, never the forbidden wall-clock pacing of the emulated machine.
+    VICE_RECYCLE_CAPTURE_TIMEOUT_MS: "200",
+  });
+  try {
+    await handshake(proxy);
+    const { id: leaseId } = await acquireLeaseViaBroker(proxy, dir, port, 3);
+    writeEpochFileFixture(dir, port, { epoch: 1 });
+
+    proxy.send({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "vice_recycle", arguments: { reason: "snapshot hang test" } } });
+    const recycleId = await waitForRecycleRequestId(dir, leaseId);
+    writeEpochFileFixture(dir, port, { epoch: 2 });
+    writeRecycleAckFixture(dir, recycleId, { target_id: leaseId, port, outcome: "ok", kill_stage: "sigterm", epoch_before: 1 });
+
+    const resp = await proxy.nextMessage(15000);
+    assert.equal(resp.result.isError, false, "the recycle must still complete despite the hung snapshot call");
+    assert.match(resp.result.content[0].text, /Snapshot: unavailable/i);
+
+    const incidentFile = readdirSync(incidentsDir).find((f) => f.endsWith(".md"));
+    const content = readFileSync(join(incidentsDir, incidentFile), "utf8");
+    assert.match(content, /pre-kill snapshot attempt: unavailable \(/);
+  } finally {
+    proxy.child.kill("SIGKILL");
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(incidentsDir, { recursive: true, force: true });
+  }
+});
+
+test("vice_recycle: two recycles at the same port and epoch produce two distinct record files, and the first is byte-unchanged", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vice-proxy-recycle-twice-"));
+  const incidentsDir = tmpIncidentsDir();
+  const { server } = startFlexibleStandInServer(healthyEvidenceRespond({}));
+  const port = await listen(server);
+  const proxy = startProxy({
+    VICE_POOL_DIR: dir,
+    VICE_BROKER_BASE_PORT: String(port),
+    VICE_MCP_HOST: "127.0.0.1",
+    VICE_INCIDENTS_DIR: incidentsDir,
+  });
+  try {
+    await handshake(proxy);
+    const { id: leaseId } = await acquireLeaseViaBroker(proxy, dir, port, 3);
+    // epoch.json reads 1 at the moment EACH recycle's own preKillEpoch is
+    // captured (handleRecycle()'s very first read) -- that is the "same
+    // port and epoch" this test is about, since it drives the incident
+    // record's own filename stem. It is bumped and reset around each ack
+    // below purely so each call's OWN post-kill "epoch moved" wait (a
+    // separate, unrelated concern) resolves quickly rather than spinning
+    // to its ~30s deadline.
+    writeEpochFileFixture(dir, port, { epoch: 1 });
+
+    proxy.send({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "vice_recycle", arguments: { reason: "first recycle" } } });
+    const recycleId1 = await waitForRecycleRequestId(dir, leaseId);
+    writeEpochFileFixture(dir, port, { epoch: 2 });
+    writeRecycleAckFixture(dir, recycleId1, { target_id: leaseId, port, outcome: "ok", kill_stage: "sigterm", epoch_before: 1 });
+    const resp1 = await proxy.nextMessage();
+    assert.equal(resp1.result.isError, false);
+
+    const filesAfterFirst = readdirSync(incidentsDir).filter((f) => f.endsWith(".md"));
+    assert.equal(filesAfterFirst.length, 1);
+    const firstPath = join(incidentsDir, filesAfterFirst[0]);
+    const firstContentAfterFirstRecycle = readFileSync(firstPath, "utf8");
+    assert.match(firstContentAfterFirstRecycle, /first recycle/);
+
+    // Reset epoch.json back to 1 BEFORE issuing the second recycle, so its
+    // own preKillEpoch read (handleRecycle()'s first line) sees the SAME
+    // epoch value as the first call did -- rebaselineEpochAfterRecycle()
+    // clears the session, not the lease, so a second vice_recycle call can
+    // be issued immediately, same as production.
+    writeEpochFileFixture(dir, port, { epoch: 1 });
+    proxy.send({ jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "vice_recycle", arguments: { reason: "second recycle" } } });
+    const recycleId2 = await waitForRecycleRequestId(dir, leaseId, [recycleId1]);
+    writeEpochFileFixture(dir, port, { epoch: 2 });
+    writeRecycleAckFixture(dir, recycleId2, { target_id: leaseId, port, outcome: "ok", kill_stage: "sigterm", epoch_before: 1 });
+    const resp2 = await proxy.nextMessage();
+    assert.equal(resp2.result.isError, false);
+
+    const filesAfterSecond = readdirSync(incidentsDir).filter((f) => f.endsWith(".md"));
+    assert.equal(filesAfterSecond.length, 2, "two recycles at the same port/epoch must produce two distinct files, not one clobbered file");
+
+    const firstContentAfterSecondRecycle = readFileSync(firstPath, "utf8");
+    assert.equal(
+      firstContentAfterSecondRecycle,
+      firstContentAfterFirstRecycle,
+      "the first record must be byte-unchanged after the second recycle writes its own file"
+    );
+
+    const secondFile = filesAfterSecond.find((f) => join(incidentsDir, f) !== firstPath);
+    const secondContent = readFileSync(join(incidentsDir, secondFile), "utf8");
+    assert.match(secondContent, /second recycle/);
+  } finally {
+    proxy.child.kill("SIGKILL");
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(incidentsDir, { recursive: true, force: true });
+  }
+});
+
+test("structural: within handleRecycle(), the record write appears before the request write (D-17's ordering guard, region-scoped)", () => {
+  const src = readFileSync(PROXY_PATH, "utf8");
+  const startIdx = src.indexOf("async function handleRecycle(args)");
+  assert.ok(startIdx >= 0, "handleRecycle()'s own definition must be found in the source");
+  const endIdx = src.indexOf("\n}\n", startIdx);
+  assert.ok(endIdx > startIdx, "could not isolate handleRecycle()'s own closing brace");
+  const body = src.slice(startIdx, endIdx);
+
+  const recordCallIdx = body.indexOf("writeIncidentRecord(");
+  const requestCallIdx = body.indexOf("writeRecycleRequest(");
+  assert.ok(recordCallIdx >= 0, "writeIncidentRecord( must appear inside handleRecycle()'s own body");
+  assert.ok(requestCallIdx >= 0, "writeRecycleRequest( must appear inside handleRecycle()'s own body");
+
+  // Mirrors "checked by comparing the two line numbers grep -n reports" --
+  // an earlier byte offset within the same isolated body is exactly an
+  // earlier line number would be.
+  assert.ok(
+    recordCallIdx < requestCallIdx,
+    "the incident record write must appear (and therefore execute) before the recycle request write inside handleRecycle()"
+  );
+});
+
+// ---------------------------------------------------------------------------
 // Plan 01.3-01 task 2: the two structural guards keeping this phase inside
 // the only-permitted-route rule (criteria 5, 8, 9 in 01.3-VALIDATION.md).
 // ---------------------------------------------------------------------------
@@ -3356,6 +3550,13 @@ function startFlexibleStandInServer(respond) {
       }
       if (msg && msg.method === "tools/call" && msg.params) {
         const payload = respond(msg.params.name, msg.params.arguments || {});
+        // Plan 01.3-03 task 2's HANG sentinel: deliberately never respond,
+        // leaving the connection open until the client's own
+        // AbortSignal.timeout fires -- exercises the capture-step deadline
+        // rather than an immediate rejection.
+        if (payload === HANG) {
+          return;
+        }
         if (payload !== undefined) {
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(
