@@ -60,7 +60,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 ### Milestone v1.1 — Emulator Access Hardened *(active, inserted 2026-08-02)*
 
-Execution order is **01.6 → 01.4 → 01.5 → 01.7 → 01.3**, not numeric order.
+Execution order is **01.6 → 01.6.1 → 01.6.2 → 01.6.3 → 01.4 → 01.5 → 01.7 → 01.3**, not numeric order.
 
 > **RE-SEQUENCED 2026-08-02 (developer).** Was `01.4 → 01.5 → 01.6 → 01.3`. The developer chose to
 > land the TypeScript conversion **before** any further work on the files it rewrites, which forced
@@ -77,7 +77,10 @@ Execution order is **01.6 → 01.4 → 01.5 → 01.7 → 01.3**, not numeric ord
 - [ ] **Phase 01.3: Wedge Detection and Recovery** *(INSERTED — **PAUSED at 5/6 plans**, resumes LAST)* - Close the gap the broker cannot see: `x64sc` alive and answering, but the emulated CPU retiring zero cycles. Paused 2026-08-02 with only 01.3-06 outstanding: `vice_recycle` is a control-plane command living on the file protocol that Phase **01.7** replaces, and both of this phase's tools are unreachable from an agent session until Phase 01.4 lands, so its final plan cannot be verified live. Resumes once 01.4 and 01.7 have closed. Note its recovery path was designed against a *separate* supervisor process holding the respawn loop; Phase 01.6 collapses that inward, so re-read before resuming
 - [ ] **Phase 01.4: Tool Surface Reachability** *(INSERTED — now runs **second**, in TypeScript)* - Make every tool the proxy implements reach the agent that needs it, in every session shape the project uses including subagents, and close the deny-list hole the generic call path opens. `vice_diagnose` and `vice_recycle` are written, 268/268 green and invisible; `mcp__vice__*` was structurally absent from an executor subagent's schema; `vice_disk_list` was observed in a `tools_list` response
 - [ ] **Phase 01.5: Session and Broker Survivability** *(INSERTED — now runs **third**, in TypeScript)* - A dead instance costs one acquisition, not the session, and the broker never warms, grants or retains an instance that is not real. Four recorded defects, one of which is the root cause of the 2026-08-01 outage, plus the spawn-policy redefinition and the port-band and timeout corrections
-- [ ] **Phase 01.6: One Broker Application in TypeScript** *(INSERTED — **scope amended and split 2026-08-02**; now runs **first**)* - Retire every host-side shell script except a single broker launcher (3,444 lines of bash), convert all 16,522 lines of `.claude/mcp/vice/` JS to TypeScript, and fold broker + supervisor + pool into **one application running as one process** that holds all its state in one place. No transport change here — that is 01.7. A SIGKILLed broker leaves its emulators running and that is accepted. ~~Gated on whether the host has a usable `node`~~ **gate cleared 2026-08-02 — the host has `node` on PATH**
+- [ ] **Phase 01.6: Conversion Foundation and Scope Reduction** *(INSERTED — **split four ways 2026-08-02 at plan time**; runs **first**)* - Prove the whole TypeScript build topology end-to-end on one real module before 16,000 lines ride on it, and reduce the scope: delete the `vice-pool` subsystem and `vice.mjs`'s CLI behind a confirmation gate, record the locked decision that reverses, and fix the `.gitignore` / `.mcp.json` landmines that a file move would otherwise trip. Holds the shared C1–C10 criteria register for all four groups. ~~Gated on whether the host has a usable `node`~~ **gate cleared 2026-08-02 — the host has `node` on PATH**
+- [ ] **Phase 01.6.1: Container-Side Conversion to TypeScript** *(INSERTED 2026-08-02 — split out of 01.6)* - Convert the 11 surviving `.mjs` modules (5,316 lines) and 5 surviving test files (5,518 lines) to TypeScript with the suite green **continuously**, not green at the end. Widen the TDZ static check to the transitive `repo-root → install-resources → hostpath → repo-root` cycle the planner found, and bar `enum`/`namespace`/parameter-properties mechanically from the first file
+- [ ] **Phase 01.6.2: The One-Process Host Broker** *(INSERTED 2026-08-02 — split out of 01.6)* - 2,546 lines of host-side bash become one TypeScript process owning coordination, per-instance supervision and the warm-spare pool. Includes the `vice-broker.test.mjs` **redesign** (2,685 lines / 61 tests — it verifies the daemon by spawning it and reading on-disk state, which stops existing), the single-`in_flight`-owner race test, and D-04: the epoch file survives as a second on-disk exception, written by the broker
+- [ ] **Phase 01.6.3: `@mastra/mcp` Adoption** *(INSERTED 2026-08-02 — split out of 01.6, deliberately last)* - Swap the ~164-line generic JSON-RPC seam in the proxy for `@mastra/mcp` (developer decision D-01, taken against research's HIGH-confidence advice), with the ~88–94% of project-specific logic working unchanged, a decided `COVERAGE.md` capability matrix, a blocking package-legitimacy checkpoint, and D-06: whether to bundle to preserve the container's zero-dependency-clone property
 - [ ] **Phase 01.7: The TCP Control Plane** *(INSERTED 2026-08-02 — split out of old 01.6)* - Replace the file-messaging protocol with one TCP control connection per proxy whose lifetime *is* the lease, so connection close — including on SIGKILL — is the release, enforced by the kernel. Bootstrap stays a file for discovery; the emulator data plane is untouched; broker restart reaps unconditionally and voids via the existing epoch mechanism; CR-01's singleton guard closes here
 
 ### Milestone v1.0 — Pipeline Proven *(paused behind v1.1)*
@@ -412,7 +415,7 @@ and the phase record needs the hunt's denominator. Waves are 1 through 6, one pl
 
 ---
 
-### Phase 01.6: One Broker Application in TypeScript
+### Phase 01.6: Conversion Foundation and Scope Reduction
 
 > **SCOPE AMENDED AND SPLIT 2026-08-02 (developer).** This phase was scoped from a todo about
 > *shrinking* `vice-broker.sh`. That was narrower than intended, three times over. The broker, the
@@ -423,15 +426,62 @@ and the phase record needs the hunt's denominator. Waves are 1 through 6, one pl
 >
 > **The transport change left this phase** and is now Phase 01.7, because the developer chose to land
 > the conversion before any further work on the files it rewrites, and "convert first" only means
-> something if the conversion is separable. This phase therefore **runs first in v1.1** and changes no
-> protocol.
+> something if the conversion is separable. The conversion therefore **runs first in v1.1** and changes
+> no protocol.
 >
-> Rationale, the trade on TypeScript, and the kernel constraint behind criterion 14 are recorded in
+> Rationale, the trade on TypeScript, and the kernel constraint behind criterion 5 are recorded in
 > `.planning/notes/one-process-broker-in-typescript.md`.
 
-**Goal**: One TypeScript application, running as one process, owns broker coordination, per-instance supervision and the pool, and holds all its state in a single place — with exactly one shell script left in the repo and no protocol change
+> **SPLIT AGAIN 2026-08-02 (developer, at plan time).** `gsd-planner` returned
+> `## PHASE SPLIT RECOMMENDED` rather than plans, with a quantified reason: post-D-02 the work is
+> **13,478 lines changed plus 2,546 bash lines re-expressed**, and four single files each exceed one
+> task's context budget alone (`vice-proxy.test.mjs` 4,370 · `vice-broker.test.mjs` 2,685 ·
+> `vice-proxy.mjs` 2,441 · `vice-broker.sh` 2,103). Honouring the phase's own "keep the suite green
+> continuously" discipline yields **18 plans across 5 waves**; standard granularity is 3–5. Compressing
+> them means ~3,000-line conversion tasks — precisely the volume this phase's own risk section names as
+> where an agent-driven conversion drifts. The developer chose the split over `--chunked`, because it
+> puts a real seal between *"the container half is converted and the suite is green"* and *"the host
+> half is a new process whose test suite was itself rewritten in the same change"* — which is where
+> the risk actually lives.
+>
+> **Groups, run serially:** `01.6` (foundation, topology, scope reduction) → `01.6.1` (container-side
+> conversion) → `01.6.2` (the one-process host broker) → `01.6.3` (`@mastra/mcp` adoption).
+> Serial, not parallel: 01.6.2 writes TypeScript against conventions and types 01.6.1 establishes, so
+> concurrent runs would make a suite regression ambiguous in attribution — the same discipline D-2d
+> preserved by keeping 01.5 before 01.7. **01.6.3 runs last on PATTERNS.md's explicit recommendation:**
+> convert `vice-proxy` hand-rolled first, then swap the ~164-line seam in isolation, so 2,100+ lines of
+> project logic do not need re-verifying at the same time as a new dependency lands.
+>
+> The four research artifacts (`01.6-RESEARCH.md`, `01.6-CONTEXT.md`, `01.6-PATTERNS.md`,
+> `01.6-VALIDATION.md`) stay in this phase's directory and remain valid for **all four groups** — they
+> were produced against the undivided scope. Every sub-phase reads them.
+
+**Goal**: The TypeScript build pipeline is proven end-to-end on one real module, and the conversion's scope is reduced to what will actually be converted — with the `vice-pool` subsystem deleted, its removal gated on confirmation, and the locked decision it reverses recorded in writing
 
 **Depends on**: Nothing. ~~Phase 01.5 (defects fixed in place first, so this relocates working code)~~ — **that dependency is inverted as of 2026-08-02.** The developer chose conversion-first, so there is no bash left for 01.5 to fix in place; 01.5 now runs *after* this phase and fixes its defects in TypeScript. The discipline that dependency protected is preserved by 01.5 still running before **01.7**, so a transport regression still has one candidate cause. ~~Gated on an unanswered external fact~~ — **the host-`node` gate was cleared 2026-08-02; see criterion 1.**
+
+**Criteria ownership across the four groups.** The ten numbered criteria below are the **shared
+acceptance bar for the whole conversion** and are kept here, verbatim, as the single register. Each
+sub-phase names the register items it must satisfy; read this section for their full text.
+
+| Group | Owns | Adds |
+|---|---|---|
+| **01.6** — foundation, topology, scope reduction | C1 (mechanism), C3 (mechanism), C9, C6+C10 scaffolds | **D-02** deletion + confirmation gate, **D-03** override record |
+| **01.6.1** — container-side conversion | C3 (TS half), C7, C8, C10 | — |
+| **01.6.2** — the one-process host broker | C2, C4, C5, C6, C1 (recorded), C7 | **D-04** epoch file |
+| **01.6.3** — `@mastra/mcp` adoption | C3 (host clause) | **D-01**, `COVERAGE.md`, **D-06** bundling decision |
+
+**This group's own success criteria** (in addition to the register items it owns):
+
+  A. **The tracer proves the whole topology before anything rides on it.** One real module — not a toy — goes `vice-launcher.sh` (container-guarded) → `exec node tools/vice-broker.js` → `broker.ts` compiled by `tsc` into `resources/vice-broker.js` with a generated banner → deployed by `install-resources.mjs` → runs under bare `node` with no `node_modules` → writes `broker.json` with `pid`, `started_at` and **the host's `node --version`** (criterion 1's deliverable). Verified by the `resources/`-in-sync test plus a test that executes the emitted JS.
+
+  B. **`vice-pool.mjs`, `vice-pool.sh`, `vice-session.mjs`, `vice.mjs`'s CLI and their tests are deleted** (CONTEXT D-02 + D-05), **after** a blocking confirmation that no host-side automation or documented manual workflow invokes them. Container-side grep reached MEDIUM confidence only; the container cannot see the host. Getting this wrong strands Phase 1's dormant recovery pipeline.
+
+  C. **The Phase 01.2 `D-1.2-B` override is recorded where a later reader meets the old decision** (CONTEXT D-03). `D-1.2-B` says these files are *"left entirely untouched… 'superseded in intent' is not 'safe to delete'."* D-02 reverses it. A locked decision reversed without a record is the failure this project already names for confidence grades.
+
+  D. **`.gitignore` and `.mcp.json` are corrected in the same change that moves files.** `.gitignore` lines 99–103 name deployed files **individually** (`/tools/vice-broker.sh`, `/tools/vice-pool.sh`, `/tools/vice-supervisor.sh`, `/tools/lib/container-guard.sh`, `/tools/lib/repo-root.sh`) rather than ignoring `tools/` wholesale — because `tools/` also holds **tracked** RE tooling (`d64-parse.mjs`, `watch-loads.mjs`, …). When the deployed set becomes `.js`, `.gitignore` must change with it, and **C6's "excluding gitignored `tools/`" phrasing is wrong for a mixed directory and would produce a false gate — fix the check, not just the ignore list.** Separately, `.mcp.json` hardcodes `.claude/mcp/vice/vice-proxy.mjs`: any move or rename that does not update it in the same commit **loses all emulator access at the next session start.** This is the highest-blast-radius one-line change in the whole conversion and it appears in no source artifact. *(Both found by the planner, 2026-08-02.)*
+
+  E. **`install-resources.mjs` gains a prune step, or the absence of one is recorded as accepted.** It has none today, and `tools/` currently holds all three stale `.sh` copies. Once the deployed set changes shape, a missing prune leaves stale executables on the host.
 
 **Verification hazard, stated up front:** this phase now runs **before 01.4**, which means the only
 available proof of equivalence is the test suite — and 01.4's central finding is that a green suite
@@ -482,6 +532,91 @@ carried forward as 01.4's problem, rather than one the suite has settled.
  10. **The conversion does not "tidy" the load-order hazard it will be tempted to tidy.** `install-resources.mjs` carries an explicit comment that it takes the repo root as an **argument** and imports **nothing** from `repo-root.mjs`, because `repo-root.mjs`'s `const HERE` is still in its temporal dead zone when this module evaluates — and it says in so many words *"Do not 'clean this up' by adding `import { repoRoot } from './repo-root.mjs'` here."* A mechanical language conversion, especially one an agent runs across 16,522 lines, is exactly the process that performs that cleanup and breaks module initialisation silently. The hazard is re-read, preserved, and covered by a test that fails if the import is ever added back.
 
 **Risks**: ~~The gate may close the phase~~ — cleared 2026-08-02, see criterion 1. **This phase now runs FIRST, so it has no live-session verification available at all** — see the verification-hazard note above. Its only proof of equivalence is a test suite that Phase 01.4 has already demonstrated can be 268/268 green while three tools are uncallable from a real session. That is the single largest risk here and it cannot be engineered away by adding tests of the same shape. **The host Node version is an unknown constraint**: `node` is present but its version is not recorded, and the converted code inherits whatever it is; establish it in the first plan rather than discovering it through a syntax error on a machine nobody is watching — though criterion 3's `tsconfig` `target` turns this from a landmine into a pinned setting. **A TypeScript build step lands between committed source and deployed artifact for the first time in this repo** — a stale build deploys stale code silently, on a machine nobody is watching, and `resources/` inverts from authored source to generated output while `./.claude/CLAUDE.md` still instructs editing it directly. **16,522 lines is a volume at which an agent-driven conversion drifts**: 6,426 lines of source plus 10,096 of tests, and the tests are the equivalence proof, so a conversion bug that lands in *both* halves is invisible. Convert in slices that keep the suite green continuously rather than in one jump. **Collapsing the per-instance supervisor inward removes an independent channel**: `vice-supervisor.sh` currently outlives broker restarts, which is what makes the restart-epoch file trustworthy on its own. **Concurrency moves from a poll loop to an event loop** — the single `in_flight` flag that prevents a repeat of the 2026-08-01 triple-launch must survive as a single owner; TypeScript makes this easier than bash, but only if it is deliberate. **No host-side Node precedent exists in this repo**, so deployment, module resolution and the shell→Node call boundary are all first-time work, not copies of an established pattern.
+
+---
+
+### Phase 01.6.1: Container-Side Conversion to TypeScript
+
+> **Split out of Phase 01.6 on 2026-08-02** (planner returned `## PHASE SPLIT RECOMMENDED`; developer
+> approved the four-way split). Read Phase 01.6's section first — the criteria register, the scope
+> amendment, the verification hazard and the risk list are shared and are not repeated here. All four
+> research artifacts live in `.planning/phases/01.6-broker-in-node-and-tcp-control-plane/` and apply
+> to this group unchanged.
+
+**Goal**: Every surviving container-side `.mjs` module and its tests are TypeScript, the suite is green continuously across the move, and the two hazards a mechanical conversion would erase are covered by tests that fail if they are re-introduced
+
+**Depends on**: Phase 01.6 (the build topology must be proven and the deletion landed, so this group converts only what survives and against a pipeline that is known to work)
+
+**Owns from Phase 01.6's criteria register**: C3 (the TypeScript half — authored TS, host receives only JS), C7 (the duplicated request-id regex is deleted, not synced), C8 (the existing suite passes across the move; `--once` and `VICE_BROKER_PROBE_CMD` stay real seams), C10 (the load-order hazard is preserved, not tidied).
+
+**Scope**: 11 surviving `.mjs` source files (5,316 lines) and 5 surviving test files (5,518 lines) after D-02's deletions. `vice-proxy.mjs` (2,441) and `vice-proxy.test.mjs` (4,370) each need their own plan — they exceed one task's context budget alone.
+
+**This group's own success criteria**:
+
+  A. **The suite is green continuously, not green at the end.** A conversion bug that lands in *both* a source file and its test is invisible; per-file conversion with that file's own test run at each commit is what makes it visible. Slicing strategy is RESEARCH.md §A5.
+
+  B. **C10's static check covers the transitive path, not just the direct import.** The planner found an already-existing, undocumented three-module cycle: `repo-root.mjs` → `install-resources.mjs` → `hostpath.mjs` → `repo-root.mjs`. It survives only because `hostPath()` is called lazily inside `hostLaunchInstructions()`, never at `install-resources.mjs`'s top level — the same "lazy call does not crash" nuance RESEARCH.md §E reproduced, one hop further out. **The check specified in VALIDATION.md (`!/from ["']\.\/repo-root(\.[jt]s)?["']/`) would not catch a reintroduction routed through `hostpath`.** Either widen the check to the transitive path or break the cycle — deliberately, either way.
+
+  C. **`enum`, `namespace` and constructor parameter properties never enter the codebase.** Container Node v24.18.1 strips types natively and unflagged (verified live) but rejects all three; a file using them passes `tsc` and fails at `node --test`. Enforce mechanically via `erasableSyntaxOnly` from the first converted file, not by convention.
+
+**Risks**: This is the bulk of the line count and the place a mechanical conversion drifts silently. `vice-proxy.mjs`'s ~2,100 lines of project-specific logic (broker leasing, epoch/liveness, recycle/diagnose, deny-list, path rewriting, incident capture) must come through untouched — 01.6.3 swaps its transport seam afterwards, and doing both at once would make a regression ambiguous.
+
+---
+
+### Phase 01.6.2: The One-Process Host Broker
+
+> **Split out of Phase 01.6 on 2026-08-02.** Read Phase 01.6's section first — shared criteria
+> register, scope amendment, verification hazard and risks are there.
+
+**Goal**: 2,546 lines of host-side bash become one TypeScript process that owns coordination, per-instance supervision and the warm-spare pool, holding all its state in one place — with exactly one shell script left in the repo and no protocol change
+
+**Depends on**: Phase 01.6.1 (this group writes TypeScript against the conventions, types and build settings that group establishes; running them concurrently would make a suite regression ambiguous in attribution)
+
+**Owns from Phase 01.6's criteria register**: C2 (all three host-side shell scripts retire into one application, nothing shell-shaped carved out to stay behind), C4 (state in one place, in process), C5 (catchable shutdown kills every child, identity-verified; SIGKILL orphans accepted), C6 (exactly one shell script survives, container guard survives with it), C1 (the host's actual `node --version` recorded), C7 (the bash half of the request-id regex).
+
+**Scope**: `vice-broker.sh` (2,103) + `vice-supervisor.sh` (443) re-expressed as one process, plus the `vice-broker.test.mjs` **redesign** (2,685 lines / 61 tests) and the surviving launcher.
+
+**This group's own success criteria**:
+
+  A. **`vice-broker.test.mjs` is redesigned, not ported.** It verifies the bash daemon by spawning it as a real subprocess and inspecting on-disk `grants/`/`spares/` files. Once state moves in-process per C4, that verification mechanism mostly stops existing. It is the single largest item in the conversion and must be sized as its own work, never folded into a generic "convert `vice-broker.sh`" line item.
+
+  B. **D-04 — the per-instance restart-epoch file survives as a second on-disk exception, written by the broker, contract unchanged.** *(Decided by the developer 2026-08-02 at plan time; RESEARCH.md §D3 raised it and neither the design note nor this roadmap had named it.)* `readEpoch()`'s entire value is a liveness check that costs zero MCP traffic, which requires *some* on-disk record; today `vice-supervisor.sh`'s `write_epoch()` writes it and D-1 folds that process away. So C4's "one place" has **two** file exceptions, not one: `broker.json` for discovery and the epoch file for zero-traffic liveness. The file's format, location and semantics do not change — only its writer. Redesigning the epoch check is transport-shaped work and stays in 01.7.
+
+  C. **The single `in_flight` owner survives the move from a poll loop to an event loop.** The 2026-08-01 outage launched three `x64sc` processes simultaneously; that guard is why. A concurrency race test — two concurrent launch requests against a **stubbed** spawn, asserting exactly one spawn — is a required deliverable. **No real emulator: `mcp__vice__*` is the only route to VICE and tests must not open their own.**
+
+  D. **Identity-verified kill is reused, not re-derived.** Phase 01.3 criterion 6 already established the discipline.
+
+  E. **The tool-surface claim is carried forward as explicitly unverified.** This is the group where the host broker changes shape, and no live-session verification exists until 01.4. A green suite proves language and structural equivalence only.
+
+**Risks**: Collapsing the per-instance supervisor inward removes an independent channel — `vice-supervisor.sh` currently outlives broker restarts, which is what makes the epoch file trustworthy on its own. D-04 keeps the file but not that independence; 01.7's unconditional reap-on-startup is what pays for it.
+
+---
+
+### Phase 01.6.3: `@mastra/mcp` Adoption
+
+> **Split out of Phase 01.6 on 2026-08-02, and deliberately placed last** — PATTERNS.md's explicit
+> recommendation: convert `vice-proxy` hand-rolled first, then swap the seam in isolation, so 2,100+
+> lines of project logic do not need re-verifying at the same time as a new dependency lands.
+
+**Goal**: The generic MCP/JSON-RPC plumbing in the proxy is served by `@mastra/mcp` instead of being hand-rolled, with the project-specific ~88–94% working unchanged and the capability surface decided rather than defaulted
+
+**Depends on**: Phase 01.6.2 (and transitively 01.6.1 — the proxy must already be TypeScript and green before its transport seam is swapped)
+
+**Owns from Phase 01.6's criteria register**: C3 (the host clause — the host needs `node` and never `tsc` or `npm`).
+
+**This group's own success criteria**:
+
+  A. **D-01 — `@mastra/mcp` is adopted.** *(Developer decision, 2026-08-02, taken against RESEARCH.md §B6's HIGH-confidence recommendation to keep the proxy hand-rolled. The recommendation was read, priced and overridden; recorded so a later reader sees a choice, not an accident.)* The seam is the ~150–300 lines of generic plumbing near the top of `vice-proxy.mjs` — `writeMessage()`, `respond()`, `errorResponse()`, `handleInitialize()`, and the `handleToolsCall()` routing skeleton. PATTERNS.md cuts it by function name and line.
+
+  B. **The ~88–94% that no SDK touches keeps working.** Broker leasing, epoch/liveness (`currentEpoch()`, `epochChanged()`, `checkEpochAndRebaseline()`), `handleRecycle()`, `handleDiagnose()`, wedge evidence gathering, deny-list enforcement, `rewriteArguments()`, incident capture, and the ten agent-facing broker-absent/dead/launch-failed message strings Phase 01.4 named. The 4,370-line proxy test suite is what proves the swap.
+
+  C. **`COVERAGE.md` enumerates `@mastra/mcp`'s capability surface with a decision on every row.** `INTEGRATE` is the default and the matrix is the subtraction record; **every `OPT-OUT` carries a one-line reason.** Expect most rows to be `OPT-OUT` — this project has no Mastra primitives to expose — and each still needs its reason. A missing or malformed matrix **blocks the phase seal** at `verify:pre`.
+
+  D. **D-06 — whether to bundle is decided here, not assumed.** *(Deferred to this group by the developer, 2026-08-02.)* The planner established that CONTEXT D-01's original premise was factually wrong: `install-resources.mjs` deploys only `resources/`, and `vice-proxy.mjs` **never reaches the host** — so criterion 3's host clause is satisfiable without a bundler, via VALIDATION.md's own stated check (no file under `resources/` imports a bare specifier outside `node:*`; the deployed artifact runs under bare `node` with no `node_modules`). What bundling actually protects is **container-side**: today the vice MCP server starts with zero dependencies, so a fresh clone works on bare `node`. A runtime `@mastra/mcp` dependency ends that — **the agent loses all emulator access on a clone that has not run `npm install`.** Decide deliberately: bundle and keep the property, or drop it and wire `npm install` into provisioning. Either is defensible; leaving it undecided is not.
+
+  E. **Package legitimacy is verified before install, as a blocking human checkpoint.** `@mastra/mcp` (453 K/wk) and `@mastra/core` (1.36 M/wk) were both flagged `[SUS]` by the legitimacy audit on a weak "too-new" heuristic. Non-auto-approvable.
+
+**Risks**: This is the first runtime dependency this repository has ever had — `@mastra/core` is ~59 MB unpacked across 33 direct dependencies, and it is an agent-orchestration framework whose `MCPServer` exists to expose *Mastra's own* agents and tools. Research rated the fit a mismatch. Reversible, but only by re-hand-rolling the seam — rated **costly**, not one-way.
 
 ---
 
