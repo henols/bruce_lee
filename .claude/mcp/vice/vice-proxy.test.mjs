@@ -379,8 +379,9 @@ test("tools/list reads the committed snapshot with no emulator", async () => {
     const resp = await proxy.nextMessage();
     const tools = resp.result.tools;
     // Both fixture tools, PLUS the always-present synthetic
-    // vice_result_continue tool (task 3) -- tools/list never omits it.
-    assert.equal(tools.length, 3, "both fixture tools plus the synthetic continuation tool must come back");
+    // vice_result_continue tool (task 3) AND vice_recycle (plan 01.3-01) --
+    // tools/list never omits either synthetic tool.
+    assert.equal(tools.length, 4, "both fixture tools plus both synthetic tools must come back");
 
     const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
     assert.ok(byName.vice_ping, "vice_ping must be present");
@@ -432,13 +433,13 @@ test("tools/list survives a missing or corrupt snapshot", async () => {
         proxy.send({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} });
         const resp = await proxy.nextMessage();
         // "Empty tools array" means empty of MANIFEST-derived tools -- the
-        // always-present synthetic vice_result_continue tool (task 3) is
-        // not sourced from the manifest at all, so a broken manifest can't
-        // take it down with it.
+        // always-present synthetic tools (vice_result_continue, task 3; and
+        // vice_recycle, plan 01.3-01) are not sourced from the manifest at
+        // all, so a broken manifest can't take either of them down with it.
         assert.deepEqual(
           resp.result.tools.map((t) => t.name),
-          ["vice_result_continue"],
-          `expected only the synthetic continuation tool for ${manifestFile}`
+          ["vice_result_continue", "vice_recycle"],
+          `expected only the synthetic tools for ${manifestFile}`
         );
 
         // The child must still be alive and answer a SUBSEQUENT
@@ -455,7 +456,7 @@ test("tools/list survives a missing or corrupt snapshot", async () => {
 
         proxy.send({ jsonrpc: "2.0", id: 4, method: "tools/list", params: {} });
         const secondList = await proxy.nextMessage();
-        assert.deepEqual(secondList.result.tools.map((t) => t.name), ["vice_result_continue"]);
+        assert.deepEqual(secondList.result.tools.map((t) => t.name), ["vice_result_continue", "vice_recycle"]);
 
         assert.equal(proxy.child.exitCode, null, "the proxy process must still be running");
         assert.equal(proxy.child.killed, false);

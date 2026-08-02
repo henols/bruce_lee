@@ -141,6 +141,14 @@ LEASES_DIR="$VICE_POOL_DIR/leases"
 SPARES_DIR="$VICE_POOL_DIR/spares"
 BROKER_JSON="$VICE_POOL_DIR/broker.json"
 INSTANCES_JSON="$VICE_POOL_DIR/broker-instances.json"
+# Recycle acks (plan 01.3-01) -- one file per recycle request id, written by
+# handle_recycle_request()/write_recycle_ack() below and polled by the
+# container side's pollRecycleAck() (vice-broker-client.mjs). Deliberately
+# NOT included in purge_protocol_state()'s removal list, matching
+# $DENIALS_DIR's own rationale immediately above that function: an ack is a
+# message already addressed to a container that has not read it yet, not
+# live state a shutdown should discard out from under it.
+RECYCLE_ACKS_DIR="$VICE_POOL_DIR/recycle-acks"
 
 # A request id is matched against this shape before it is ever used to build
 # a path (T-01.2-01) -- kept byte-identical to vice-broker-client.mjs's own
@@ -544,7 +552,7 @@ if ! [[ "$VICE_BROKER_SPARES" =~ ^[0-9]+$ ]] || [ "$VICE_BROKER_SPARES" -lt 0 ] 
   exit 1
 fi
 
-mkdir -p "$VICE_POOL_DIR" "$REQUESTS_DIR" "$GRANTS_DIR" "$DENIALS_DIR" "$LEASES_DIR" "$SPARES_DIR"
+mkdir -p "$VICE_POOL_DIR" "$REQUESTS_DIR" "$GRANTS_DIR" "$DENIALS_DIR" "$LEASES_DIR" "$SPARES_DIR" "$RECYCLE_ACKS_DIR"
 
 # ---------------------------------------------------------------- json helpers
 #
@@ -647,6 +655,23 @@ extract_id_field() {
   grep -o '"id": *"[^"]*"' "$1" 2>/dev/null | head -1 | sed 's/.*"id": *"//; s/"$//' || true
 }
 
+# Extracts the "op" field's value -- the FIRST value this protocol has ever
+# read from that field (plan 01.3-01). Every request predating recycle
+# carries no op field at all, and process_requests() below treats that
+# absence identically to "acquire" -- an old request must still be granted
+# exactly as it is today. Same idiom as extract_id_field() above, same
+# trailing `|| true` for the identical set -e/pipefail reason.
+extract_op_field() {
+  grep -o '"op": *"[^"]*"' "$1" 2>/dev/null | head -1 | sed 's/.*"op": *"//; s/"$//' || true
+}
+
+# Extracts a recycle request's "target_id" field -- the id of the GRANT
+# being recycled, distinct from the recycle request's own "id"
+# (extract_id_field above). Same idiom, same `|| true`.
+extract_target_id_field() {
+  grep -o '"target_id": *"[^"]*"' "$1" 2>/dev/null | head -1 | sed 's/.*"target_id": *"//; s/"$//' || true
+}
+
 # Next free port at or above VICE_BROKER_BASE_PORT, "free" meaning not
 # already recorded as some other live grant's OR spare's port -- scans every
 # existing grants/*.json AND spares/*.json "port" field with the same
@@ -728,6 +753,53 @@ read_spare_field() {
       ;;
     *)
       grep -o "\"$field\": *[^,}[:space:]]*" "$file" 2>/dev/null | sed "s/.*\"$field\": *//" || true
+      ;;
+  esac
+}
+
+# Generic reader for a grants/<id>.json record, mirroring read_spare_field()'s
+# grep-against-known-shape idiom above (no jq). $1 = file path, $2 = field
+# name. Only "port" (a bare number) and "epoch_file" (a quoted string) are
+# supported -- the only two fields handle_recycle_request() below ever needs
+# from a grant record. Deliberately does NOT support "supervisor_pid": that
+# field is vice-supervisor.sh's own bash pid, never the recycle target
+# (T-01.3-04) -- there is no reader here for a caller to reach for by
+# accident.
+read_grant_field() {
+  local file="$1" field="$2"
+  [ -f "$file" ] || return 0
+  case "$field" in
+    epoch_file)
+      grep -o "\"$field\": *\"[^\"]*\"" "$file" 2>/dev/null | sed "s/.*\"$field\": *\"//; s/\"$//" || true
+      ;;
+    port)
+      grep -o "\"$field\": *[^,}[:space:]]*" "$file" 2>/dev/null | sed "s/.*\"$field\": *//" || true
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+}
+
+# Generic reader for an epoch.json record (written by vice-supervisor.sh's
+# own write_epoch()) -- same grep-against-known-shape idiom. $1 = file path,
+# $2 = field name. "pid" is a bare number (the x64sc child's own pid --
+# the ONLY source of a recycle target, per T-01.3-04); "vice_bin" is a
+# quoted string (the binary name the supervisor itself recorded, and the
+# identity signal_vice_child_pid() below verifies against -- never a
+# hardcoded name).
+read_epoch_field() {
+  local file="$1" field="$2"
+  [ -f "$file" ] || return 0
+  case "$field" in
+    vice_bin)
+      grep -o "\"$field\": *\"[^\"]*\"" "$file" 2>/dev/null | sed "s/.*\"$field\": *\"//; s/\"$//" || true
+      ;;
+    pid)
+      grep -o "\"$field\": *[^,}[:space:]]*" "$file" 2>/dev/null | sed "s/.*\"$field\": *//" || true
+      ;;
+    *)
+      return 0
       ;;
   esac
 }
@@ -1180,7 +1252,7 @@ JSON
 # snapshot -- a request that appears mid-pass waits for the NEXT pass, never
 # this one.
 process_requests() {
-  local req_file id total_now port in_flight
+  local req_file id op total_now port in_flight
   [ -d "$REQUESTS_DIR" ] || return 0
 
   # A single in-flight flag, initialised ONCE before the loop from
@@ -1206,6 +1278,17 @@ process_requests() {
     id="$(extract_id_field "$req_file")"
     if [ -z "$id" ] || ! is_valid_request_id "$id"; then
       echo "vice-broker: skipping request $(basename "$req_file") -- invalid or missing id: \"$id\"" >&2
+      continue
+    fi
+
+    # Recycle dispatch (plan 01.3-01): read BEFORE grant_from_spare() is ever
+    # reached, so a recycle request never falls through the acquire path. Any
+    # value other than the recycle verb -- including the empty string, every
+    # acquire request that predates this field -- falls through unchanged
+    # below; recycle is additive, never a change to the acquire default.
+    op="$(extract_op_field "$req_file")"
+    if [ "$op" = "recycle" ]; then
+      handle_recycle_request "$id" "$req_file"
       continue
     fi
 
@@ -1461,6 +1544,174 @@ signal_recorded_pid() {
     waited_ms=$((waited_ms + 200))
   done
   return 0
+}
+
+# Parameterised SIBLING of signal_recorded_pid() above, not a call to it
+# (plan 01.3-01): same guard order, same `ps -o args=` identity check, same
+# SIGTERM-then-poll-then-SIGKILL escalation discipline -- but matched against
+# a CALLER-SUPPLIED expected binary name ($2) rather than the hardcoded
+# $SUPERVISOR_SCRIPT. This is the recycle path's own kill primitive and is
+# NEVER used against a supervisor's own pid (T-01.3-04) -- verifying against
+# the value the supervisor itself wrote to its own epoch file is strictly
+# stronger than a hardcoded name, because that file states which binary THIS
+# instance was actually launched with.
+#
+# $1 = pid, $2 = expected binary name (read from the target's own epoch
+# file), $3 = label (log lines only). Prints EXACTLY ONE of
+# already_exited / identity_refused / sigterm / sigkill to stdout -- the
+# caller captures that word verbatim for the ack's kill_stage field, never
+# reporting "requested" as "recycled" (T-01.3-03). An already-exited pid is
+# NOT a failure: the machine being gone is the goal, so that case returns 0
+# exactly like a genuine kill, while identity_refused returns 1 -- the two
+# outcomes a caller must be able to tell apart.
+signal_vice_child_pid() {
+  local pid="$1" expected_bin="$2" label="$3"
+  if [ -z "$pid" ] || [ "$pid" = "null" ]; then
+    echo "already_exited"
+    return 1
+  fi
+  if ! kill -0 "$pid" 2>/dev/null; then
+    echo "already_exited"
+    return 0
+  fi
+
+  local args
+  args="$(ps -o args= -p "$pid" 2>/dev/null || true)"
+  case "$args" in
+    *"$expected_bin"*)
+      ;;
+    *)
+      echo "vice-broker: refusing to signal pid $pid for $label -- ps reports \"$args\", which does not match expected binary \"$expected_bin\" (possible pid reuse)" >&2
+      echo "identity_refused"
+      return 1
+      ;;
+  esac
+
+  kill -TERM "$pid" 2>/dev/null || true
+  local waited_ms=0 limit_ms=$((VICE_BROKER_KILL_WAIT_S * 1000))
+  while kill -0 "$pid" 2>/dev/null; do
+    if [ "$waited_ms" -ge "$limit_ms" ]; then
+      echo "vice-broker: pid $pid ($label) did not exit within ${VICE_BROKER_KILL_WAIT_S}s of SIGTERM -- sending SIGKILL" >&2
+      kill -KILL "$pid" 2>/dev/null || true
+      echo "sigkill"
+      return 0
+    fi
+    sleep 0.2
+    waited_ms=$((waited_ms + 200))
+  done
+  echo "sigterm"
+  return 0
+}
+
+# Writes recycle-acks/$id.json through the shared write_json_atomic()
+# choke point -- every field named in 01.3-01-PLAN.md's ack table. $1=id
+# (the recycle request's own id) $2=target_id $3=port $4=x64sc_pid
+# $5=vice_bin $6=kill_stage $7=epoch_before $8=outcome $9=reason. Deleting
+# the request file is the CALLER's job (handle_recycle_request(), matching
+# deny()'s own division of labour), not this function's.
+write_recycle_ack() {
+  local id="$1" target_id="$2" port="$3" x64sc_pid="$4" vice_bin="$5" kill_stage="$6" epoch_before="$7" outcome="$8" reason="$9"
+  local now content port_field pid_field bin_field epoch_field
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  port_field="${port:-null}"
+  pid_field="${x64sc_pid:-null}"
+  if [ -n "$vice_bin" ]; then
+    bin_field="\"$(json_escape "$vice_bin")\""
+  else
+    bin_field="null"
+  fi
+  epoch_field="${epoch_before:-null}"
+  content="$(cat <<JSON
+{
+  "version": 1,
+  "id": "$(json_escape "$id")",
+  "target_id": "$(json_escape "$target_id")",
+  "port": $port_field,
+  "x64sc_pid": $pid_field,
+  "vice_bin": $bin_field,
+  "kill_stage": "$(json_escape "$kill_stage")",
+  "epoch_before": $epoch_field,
+  "outcome": "$(json_escape "$outcome")",
+  "reason": "$(json_escape "$reason")",
+  "acked_at": "$now"
+}
+JSON
+)"
+  write_json_atomic "$RECYCLE_ACKS_DIR/$id.json" "$content"
+}
+
+# Dispatched from process_requests() above when a request's "op" field reads
+# "recycle". $1=id (the recycle request's own id, already validated by the
+# caller) $2=path to the request file.
+#
+# The recycle TARGET pid is read ONLY from the resolved grant's own epoch
+# file's "pid" field -- NEVER from that grant's own recorded
+# "supervisor_pid" (T-01.3-04, RESEARCH Key Finding 1 Fact A): that field is
+# vice-supervisor.sh's own bash pid, and signalling it fires that script's
+# own signal trap, tearing the (supervisor, x64sc) PAIR down with NO
+# respawn -- the opposite of what a recycle is for. Every lookup along this
+# chain that cannot be satisfied writes an ack naming exactly which step
+# failed and returns WITHOUT signalling anything (D-21) -- this function
+# never aborts the enclosing broker pass, matching every other per-request
+# handler here (deny(), grant_from_spare()).
+handle_recycle_request() {
+  local id="$1" req_file="$2"
+  local target_id reason grant_file port epoch_file pid vice_bin epoch_before stage outcome
+
+  target_id="$(extract_target_id_field "$req_file")"
+  reason="$(grep -o '"reason": *"[^"]*"' "$req_file" 2>/dev/null | head -1 | sed 's/.*"reason": *"//; s/"$//' || true)"
+
+  if [ -z "$target_id" ] || ! is_valid_request_id "$target_id"; then
+    write_recycle_ack "$id" "$target_id" "" "" "" "no_signal" "" "target_lookup_failed" "target id missing or invalid: \"$target_id\""
+    rm -f "$req_file"
+    echo "vice-broker: recycle $id -- refused, invalid or missing target_id \"$target_id\"" >&2
+    return 0
+  fi
+
+  grant_file="$GRANTS_DIR/$target_id.json"
+  if [ ! -e "$grant_file" ]; then
+    write_recycle_ack "$id" "$target_id" "" "" "" "no_signal" "" "grant_lookup_failed" "no grant record found for target $target_id"
+    rm -f "$req_file"
+    echo "vice-broker: recycle $id -- refused, no grant record for target $target_id" >&2
+    return 0
+  fi
+
+  port="$(read_grant_field "$grant_file" port)"
+  epoch_file="$(read_grant_field "$grant_file" epoch_file)"
+  if [ -z "$epoch_file" ] || [ ! -e "$epoch_file" ]; then
+    write_recycle_ack "$id" "$target_id" "$port" "" "" "no_signal" "" "epoch_lookup_failed" "grant's epoch file missing or unreadable: \"$epoch_file\""
+    rm -f "$req_file"
+    echo "vice-broker: recycle $id -- refused, epoch file missing or unreadable for target $target_id" >&2
+    return 0
+  fi
+
+  pid="$(read_epoch_field "$epoch_file" pid)"
+  vice_bin="$(read_epoch_field "$epoch_file" vice_bin)"
+  epoch_before="$(grep -o '"epoch"[[:space:]]*:[[:space:]]*[0-9]\+' "$epoch_file" 2>/dev/null | head -1 | grep -o '[0-9]\+$' || true)"
+
+  if [ -z "$pid" ] || [ "$pid" = "null" ]; then
+    write_recycle_ack "$id" "$target_id" "$port" "" "$vice_bin" "no_signal" "$epoch_before" "pid_lookup_failed" "epoch file carries no pid for target $target_id"
+    rm -f "$req_file"
+    echo "vice-broker: recycle $id -- refused, epoch file carries no pid for target $target_id" >&2
+    return 0
+  fi
+
+  stage="$(signal_vice_child_pid "$pid" "$vice_bin" "recycle $id -> target $target_id")" || true
+  case "$stage" in
+    identity_refused)
+      outcome="identity_refused"
+      ;;
+    already_exited|sigterm|sigkill)
+      outcome="ok"
+      ;;
+    *)
+      outcome="unknown_stage"
+      ;;
+  esac
+
+  write_recycle_ack "$id" "$target_id" "$port" "$pid" "$vice_bin" "$stage" "$epoch_before" "$outcome" "$reason"
+  rm -f "$req_file"
+  echo "vice-broker: recycle $id -- target $target_id, stage=$stage, outcome=$outcome"
 }
 
 # Walks EVERY grants/*.json and spares/*.json record, reading each one's
