@@ -1264,3 +1264,27 @@ depends on, so this is **not** a reason to stop using it. It is a reason to enum
 checkpoints *first* whenever the machine looks frozen, and to suspect what you armed before
 concluding the emulator died.
 
+### 2026-08-02 — the exact bit of `$01` that decides which IRQ vector pair is live: HIRAM, bit 1
+
+**Type:** shortcut (sharpens an existing MEDIUM finding)
+**Evidence:** doc-derived — standard 6510 processor-port bit assignment (`$01`: bit 0 LORAM, bit 1
+HIRAM, bit 2 CHAREN), applied while implementing `vice_diagnose`'s `resolveLiveIrqHandler()`
+(plan 01.3-02)
+**Confidence:** MEDIUM — standard, well-documented C64 hardware fact, not yet cross-checked live
+against this project's own recovered image
+**Saves:** the existing "vector table" entry (2026-08-01) says to check `$01` before trusting
+either vector pair but does not name which bit decides; this closes that gap with one line instead
+of a re-derivation next time a vector lookup is implemented
+
+The 6510 processor port at `$01` controls memory banking via three bits: bit 0 (LORAM, BASIC ROM),
+bit 1 (**HIRAM**, KERNAL ROM), bit 2 (CHAREN, character ROM vs I/O). The default power-on value is
+`$37` (`0011 0111`) — all three set, i.e. BASIC+KERNAL+I/O all banked in. **HIRAM (bit 1, mask
+`0x02`) is specifically the bit that decides which IRQ vector pair is live**: when set, the KERNAL
+ROM is banked in and the CPU's hardware IRQ/BRK vector (`$FFFE/$FFFF`) resolves to the ROM's own
+fixed dispatcher, which itself indirects through the RAM-resident `$0314/$0315` pair — so
+`$0314/$0315` is the pair to trust while HIRAM is set. When HIRAM is clear, the KERNAL is replaced
+by RAM and the CPU reads `$FFFE/$FFFF` directly with no ROM indirection, so *that* pair becomes the
+one actually dispatched. `resolveLiveIrqHandler()` implements this as `($01 & 0x02) === 0` deciding
+"banked out". Not yet independently verified against a live wedge in this project's own image — the
+first real `vice_diagnose` run over a genuine checkpoint trap is what would promote this to HIGH.
+
