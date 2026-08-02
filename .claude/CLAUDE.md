@@ -200,9 +200,17 @@ the tools handle the boundary.
   rather than fixing them inline — a triage rule about not derailing a plan, not a ban on
   maintaining the implementation.
 - `.claude/mcp/` is the tracked `mcp__vice__` implementation. It is read and edited only when the
-  task at hand *is* maintaining that implementation, as opposed to using it to reach the emulator
-  — in that case, edit the host shell scripts in its `resources/` directory; the deployed copies
-  are generated and gitignored, so hand-editing them elsewhere is silently overwritten.
+  task at hand *is* maintaining that implementation, as opposed to using it to reach the emulator.
+  Three tiers exist, in the order a maintainer touches them: **authored TypeScript** source lives
+  flat in `.claude/mcp/vice/` (`.ts`/`.mts` files, siblings of `resources/`) — this is what a
+  maintainer edits. **`resources/` is generated, but committed** — `tsc` emits here, every
+  generated file carries a banner naming its source and warning that edits are overwritten, it is
+  never hand-edited, and never trusted without rebuilding first, since a stale build looks
+  identical to a fresh one until you diff it (`resources-sync.test.ts` does that diff on every
+  test run). The one exception is `resources/vice-launcher.sh`, which stays hand-authored — it is
+  not generated, and lives there only because the installer deploys the whole directory as a unit.
+  **`tools/` remains generated and gitignored**, exactly as before — a disposable host deployment
+  target, copied from `resources/` by the existing deployment mechanism, never hand-edited either.
 - `.vice-supervisor/` is runtime state written by the running broker/supervisor/pool; nobody
   hand-edits it, in either mode of work.
 
