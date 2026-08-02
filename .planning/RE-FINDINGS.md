@@ -1169,3 +1169,36 @@ with no crash indicator in between) -- the whole boot procedure had to be redone
 `vice_disk_attach` on the new epoch-5 instance to get back into a session. Confirms yet again that
 this class of crash is self-healing and does not require abandoning the session, unlike a genuine
 silent stall (which has no such recovery and must be abandoned per the standing rule).
+
+### 2026-08-02 — danish chamber 1's ground-level rightward path dies at the SAME precise sprite x-coordinate (~290-304) every time, across six independent attempts; the room's central chain-ladder was never climbed
+
+**Type:** hazard / dead end (a specific technique tried and ruled out)
+**Evidence:** live -- 01-04 attempt 5, danish Task 3, six independent play-throughs of chamber 1's
+opening room across this session (three following host-crash re-boots, one following a fresh
+restart), tracked via `mcp__vice__vice_sprite_get` on Bruce's own sprite (sprite 0) at each step
+**Confidence:** HIGH (six independent repetitions, same outcome, precise coordinate match each
+time -- this is not attributable to timing variance or enemy randomness)
+
+Every attempt that walked Bruce rightward from the starting pole reached almost exactly sprite
+`x=296-304` before an immediate death (sprite disabled, next screenshot shows the `PLAYER 1`
+interstitial), regardless of how many enemy encounters or fire+right attacks preceded it along the
+way. This is a different failure mode from saeger's own chamber-1 FALLS-counter hazard (attempt 4):
+here the death is tied to a **precise horizontal position**, not to an elapsed input count. Three
+techniques were tried and ruled out as the fix: (1) plain `right` taps through the zone -- always
+died; (2) a `right`+`fire` attack tap at the same zone -- always died; (3) an `up` tap attempted at
+three different x-positions along the path (76, 148, 196) to test whether the room's visible
+central blue chain-ladder structure is climbable -- produced only continued forward walking or a
+duck/crouch animation at every position tried, never vertical ascent. A fourth technique (a
+diagonal jump via `direction: ["up","right"]` on `vice_joystick_tap`) was attempted once but failed
+on a tool-parameter format error (the direction array was passed as a JSON string instead of an
+actual array) and was not successfully retried before the session's live budget ran out.
+**Saves/costs:** a future session should NOT re-spend lives re-confirming this exact wall exists --
+six repetitions is more than enough. Two concrete next steps, in priority order: (a) retry the
+diagonal-jump array syntax correctly (`direction: ["up","right"]` as an actual array parameter, not
+a string) exactly at the x~280-296 approach to the hazard, since a jump-over is the most likely fix
+for a "precise x-coordinate kill" shape (consistent with a pit/trap/spike at that exact location);
+(b) if that fails, arm a live disassembly/backtrace capture (stopping checkpoint or a paused-state
+read) at the moment of death to identify the exact code path and hazard type mechanically, rather
+than continuing blind trial-and-error. The central chain-ladder's climb point, if one exists, was
+never found in this session and remains a completely open question -- it may require a jump onto
+it rather than a simple directional approach.
