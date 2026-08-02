@@ -379,8 +379,9 @@ test("tools/list reads the committed snapshot with no emulator", async () => {
     const resp = await proxy.nextMessage();
     const tools = resp.result.tools;
     // Both fixture tools, PLUS the always-present synthetic
-    // vice_result_continue tool (task 3) -- tools/list never omits it.
-    assert.equal(tools.length, 3, "both fixture tools plus the synthetic continuation tool must come back");
+    // vice_result_continue tool (task 3) AND vice_recycle (plan 01.3-01) --
+    // tools/list never omits either synthetic tool.
+    assert.equal(tools.length, 4, "both fixture tools plus both synthetic tools must come back");
 
     const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
     assert.ok(byName.vice_ping, "vice_ping must be present");
@@ -432,13 +433,13 @@ test("tools/list survives a missing or corrupt snapshot", async () => {
         proxy.send({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} });
         const resp = await proxy.nextMessage();
         // "Empty tools array" means empty of MANIFEST-derived tools -- the
-        // always-present synthetic vice_result_continue tool (task 3) is
-        // not sourced from the manifest at all, so a broken manifest can't
-        // take it down with it.
+        // always-present synthetic tools (vice_result_continue, task 3; and
+        // vice_recycle, plan 01.3-01) are not sourced from the manifest at
+        // all, so a broken manifest can't take either of them down with it.
         assert.deepEqual(
           resp.result.tools.map((t) => t.name),
-          ["vice_result_continue"],
-          `expected only the synthetic continuation tool for ${manifestFile}`
+          ["vice_result_continue", "vice_recycle"],
+          `expected only the synthetic tools for ${manifestFile}`
         );
 
         // The child must still be alive and answer a SUBSEQUENT
@@ -455,7 +456,7 @@ test("tools/list survives a missing or corrupt snapshot", async () => {
 
         proxy.send({ jsonrpc: "2.0", id: 4, method: "tools/list", params: {} });
         const secondList = await proxy.nextMessage();
-        assert.deepEqual(secondList.result.tools.map((t) => t.name), ["vice_result_continue"]);
+        assert.deepEqual(secondList.result.tools.map((t) => t.name), ["vice_result_continue", "vice_recycle"]);
 
         assert.equal(proxy.child.exitCode, null, "the proxy process must still be running");
         assert.equal(proxy.child.killed, false);
@@ -2628,6 +2629,430 @@ test("output-limit warning: exactly one stderr line when MAX_MCP_OUTPUT_TOKENS i
     );
   } finally {
     proxySufficient.child.kill("SIGKILL");
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Plan 01.3-01 task 2: vice_recycle's proxy-side half -- every failure mode
+// returns a well-formed result (never a throw, never a hang), the incident
+// record is written before the request (D-17), and a confirmed recycle
+// re-baselines the epoch guard. Every test here redirects incident-
+// record.mjs's own writes via VICE_INCIDENTS_DIR (its test-only override,
+// mirroring VICE_POOL_DIR) so nothing here ever touches the real, permanent
+// .planning/incidents/.
+// ---------------------------------------------------------------------------
+
+function tmpIncidentsDir() {
+  return mkdtempSync(join(tmpdir(), "vice-proxy-incidents-"));
+}
+
+function writeEpochFileFixture(dir, port, { epoch = 1, pid = 40001, viceBin = "x64sc" } = {}) {
+  mkdirSync(join(dir, String(port)), { recursive: true });
+  writeFileSync(
+    join(dir, String(port), "epoch.json"),
+    JSON.stringify({
+      epoch,
+      spawned_at: new Date().toISOString(),
+      pid,
+      supervisor_pid: pid + 1,
+      vice_bin: viceBin,
+      vice_args: [],
+      log: null,
+      dry_run: false,
+    })
+  );
+}
+
+function writeRecycleAckFixture(dir, id, fields) {
+  const adir = join(dir, "recycle-acks");
+  mkdirSync(adir, { recursive: true });
+  const record = {
+    version: 1,
+    id,
+    target_id: null,
+    port: null,
+    x64sc_pid: null,
+    vice_bin: null,
+    kill_stage: null,
+    epoch_before: null,
+    outcome: null,
+    reason: null,
+    acked_at: new Date().toISOString(),
+    ...fields,
+  };
+  writeFileSync(join(adir, `${id}.json`), JSON.stringify(record, null, 2) + "\n");
+}
+
+/** Waits for exactly one NEW request file (excluding the acquire lease's own
+ * id) to appear under dir/requests -- the recycle request handleRecycle()
+ * writes. Returns its id. */
+async function waitForRecycleRequestId(dir, excludeId) {
+  const reqDir = join(dir, "requests");
+  const found = await waitForCondition(() => {
+    if (!existsSync(reqDir)) return null;
+    const files = readdirSync(reqDir)
+      .filter((f) => f.endsWith(".json"))
+      .filter((f) => f !== `${excludeId}.json`);
+    return files.length > 0 ? files[0].replace(/\.json$/, "") : null;
+  });
+  assert.ok(found, "a recycle request file must appear under requests/");
+  return found;
+}
+
+test("vice_recycle: a missing or empty reason returns a well-formed error result naming the requirement, writes no record and no request", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vice-proxy-recycle-reason-"));
+  const incidentsDir = tmpIncidentsDir();
+  const { server } = startStandInServer();
+  const port = await listen(server);
+  const proxy = startProxy({
+    VICE_POOL_DIR: dir,
+    VICE_BROKER_BASE_PORT: String(port),
+    VICE_MCP_HOST: "127.0.0.1",
+    VICE_INCIDENTS_DIR: incidentsDir,
+  });
+  try {
+    await handshake(proxy);
+
+    proxy.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "vice_recycle", arguments: {} } });
+    const resp = await proxy.nextMessage();
+    assert.equal(resp.result.isError, true, "a missing reason must be refused");
+    assert.match(resp.result.content[0].text, /reason/i);
+
+    proxy.send({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "vice_recycle", arguments: { reason: "   " } } });
+    const resp2 = await proxy.nextMessage();
+    assert.equal(resp2.result.isError, true, "a whitespace-only reason must be refused identically to a missing one");
+
+    assert.equal(existsSync(join(dir, "requests")), false, "no request must be written for either refusal");
+    assert.equal(readdirSync(incidentsDir).length, 0, "no incident record must be written for either refusal");
+  } finally {
+    proxy.child.kill("SIGKILL");
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(incidentsDir, { recursive: true, force: true });
+  }
+});
+
+test("vice_recycle: with the endpoint override set returns a well-formed error result naming that no broker is in the loop, writes no request", async () => {
+  const incidentsDir = tmpIncidentsDir();
+  const { server } = startStandInServer();
+  const port = await listen(server);
+  const proxy = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${port}/mcp`, VICE_INCIDENTS_DIR: incidentsDir });
+  try {
+    await handshake(proxy);
+    proxy.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "vice_recycle", arguments: { reason: "test" } } });
+    const resp = await proxy.nextMessage();
+    assert.equal(resp.result.isError, true);
+    assert.match(resp.result.content[0].text, /VICE_MCP_URL/);
+    assert.equal(readdirSync(incidentsDir).length, 0, "no incident record must be written when there is no broker to ask");
+  } finally {
+    proxy.child.kill("SIGKILL");
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(incidentsDir, { recursive: true, force: true });
+  }
+});
+
+test("vice_recycle: no broker lease held yet for this session is refused, writes no record and no request", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vice-proxy-recycle-nolease-"));
+  const incidentsDir = tmpIncidentsDir();
+  const { server } = startStandInServer();
+  const port = await listen(server);
+  const proxy = startProxy({
+    VICE_POOL_DIR: dir,
+    VICE_BROKER_BASE_PORT: String(port),
+    VICE_MCP_HOST: "127.0.0.1",
+    VICE_INCIDENTS_DIR: incidentsDir,
+  });
+  try {
+    await handshake(proxy);
+    // vice_recycle as the FIRST forwarded call -- no other tools/call has
+    // ever acquired a broker lease for this session.
+    proxy.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "vice_recycle", arguments: { reason: "test" } } });
+    const resp = await proxy.nextMessage();
+    assert.equal(resp.result.isError, true);
+    assert.match(resp.result.content[0].text, /no broker lease is held/);
+    assert.equal(existsSync(join(dir, "requests")), false);
+    assert.equal(readdirSync(incidentsDir).length, 0);
+  } finally {
+    proxy.child.kill("SIGKILL");
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(incidentsDir, { recursive: true, force: true });
+  }
+});
+
+test("vice_recycle: the incident record file exists on disk before the recycle request file does", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vice-proxy-recycle-order-"));
+  const incidentsDir = tmpIncidentsDir();
+  const { server } = startStandInServer();
+  const port = await listen(server);
+  const proxy = startProxy({
+    VICE_POOL_DIR: dir,
+    VICE_BROKER_BASE_PORT: String(port),
+    VICE_MCP_HOST: "127.0.0.1",
+    VICE_INCIDENTS_DIR: incidentsDir,
+  });
+  try {
+    await handshake(proxy);
+    const { id: leaseId } = await acquireLeaseViaBroker(proxy, dir, port, 3);
+    writeEpochFileFixture(dir, port, { epoch: 1 });
+
+    proxy.send({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "vice_recycle", arguments: { reason: "ordering test" } } });
+
+    const recycleId = await waitForRecycleRequestId(dir, leaseId);
+
+    // The moment the request file exists, the incident record must ALREADY
+    // be there -- writeIncidentRecord() runs synchronously before
+    // writeRecycleRequest() inside handleRecycle(), with no await between
+    // the two (D-17's automated form, criterion 4).
+    const incidentFiles = readdirSync(incidentsDir).filter((f) => f.endsWith(".md"));
+    assert.equal(incidentFiles.length, 1, "exactly one incident record must exist by the time the request file appears");
+
+    // Bump the epoch and provide a successful ack so the pending call
+    // resolves and this test can tear down cleanly.
+    writeEpochFileFixture(dir, port, { epoch: 2 });
+    writeRecycleAckFixture(dir, recycleId, { target_id: leaseId, port, outcome: "ok", kill_stage: "sigterm", epoch_before: 1 });
+    const resp = await proxy.nextMessage();
+    assert.equal(resp.result.isError, false);
+  } finally {
+    proxy.child.kill("SIGKILL");
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(incidentsDir, { recursive: true, force: true });
+  }
+});
+
+test("vice_recycle: an ack whose kill stage is the escalated one produces a result naming that stage verbatim", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vice-proxy-recycle-sigkill-"));
+  const incidentsDir = tmpIncidentsDir();
+  const { server } = startStandInServer();
+  const port = await listen(server);
+  const proxy = startProxy({
+    VICE_POOL_DIR: dir,
+    VICE_BROKER_BASE_PORT: String(port),
+    VICE_MCP_HOST: "127.0.0.1",
+    VICE_INCIDENTS_DIR: incidentsDir,
+  });
+  try {
+    await handshake(proxy);
+    const { id: leaseId } = await acquireLeaseViaBroker(proxy, dir, port, 3);
+    writeEpochFileFixture(dir, port, { epoch: 1 });
+
+    proxy.send({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "vice_recycle", arguments: { reason: "escalation test" } } });
+    const recycleId = await waitForRecycleRequestId(dir, leaseId);
+
+    writeEpochFileFixture(dir, port, { epoch: 2 });
+    writeRecycleAckFixture(dir, recycleId, { target_id: leaseId, port, outcome: "ok", kill_stage: "sigkill", epoch_before: 1 });
+
+    const resp = await proxy.nextMessage();
+    assert.equal(resp.result.isError, false);
+    assert.match(resp.result.content[0].text, /"sigkill"/, "the escalated kill stage must be named verbatim in the result");
+
+    const incidentPath = join(incidentsDir, readdirSync(incidentsDir)[0]);
+    const incidentContent = readFileSync(incidentPath, "utf8");
+    assert.match(incidentContent, /kill_stage: 'sigkill'/, "the finalised incident record must also carry the real stage");
+  } finally {
+    proxy.child.kill("SIGKILL");
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(incidentsDir, { recursive: true, force: true });
+  }
+});
+
+test("vice_recycle: an ack with a refusal produces an error result naming the refusal, and finalises the incident record with that outcome", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vice-proxy-recycle-refused-"));
+  const incidentsDir = tmpIncidentsDir();
+  const { server } = startStandInServer();
+  const port = await listen(server);
+  const proxy = startProxy({
+    VICE_POOL_DIR: dir,
+    VICE_BROKER_BASE_PORT: String(port),
+    VICE_MCP_HOST: "127.0.0.1",
+    VICE_INCIDENTS_DIR: incidentsDir,
+  });
+  try {
+    await handshake(proxy);
+    const { id: leaseId } = await acquireLeaseViaBroker(proxy, dir, port, 3);
+    writeEpochFileFixture(dir, port, { epoch: 1 });
+
+    proxy.send({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "vice_recycle", arguments: { reason: "refusal test" } } });
+    const recycleId = await waitForRecycleRequestId(dir, leaseId);
+
+    writeRecycleAckFixture(dir, recycleId, {
+      target_id: leaseId,
+      port,
+      outcome: "identity_refused",
+      kill_stage: "identity_refused",
+      epoch_before: 1,
+      reason: "ps args did not match",
+    });
+
+    const resp = await proxy.nextMessage();
+    assert.equal(resp.result.isError, true, "a refusal must never be reported as success");
+    assert.match(resp.result.content[0].text, /identity_refused|refused/i);
+
+    const incidentPath = join(incidentsDir, readdirSync(incidentsDir)[0]);
+    const incidentContent = readFileSync(incidentPath, "utf8");
+    assert.match(incidentContent, /outcome: 'identity_refused'/);
+  } finally {
+    proxy.child.kill("SIGKILL");
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(incidentsDir, { recursive: true, force: true });
+  }
+});
+
+test("vice_recycle: an ack that never arrives before the deadline produces a well-formed error result naming the timeout and the record path, never a hang and never a throw", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vice-proxy-recycle-timeout-"));
+  const incidentsDir = tmpIncidentsDir();
+  const { server } = startStandInServer();
+  const port = await listen(server);
+  const proxy = startProxy({
+    VICE_POOL_DIR: dir,
+    VICE_BROKER_BASE_PORT: String(port),
+    VICE_MCP_HOST: "127.0.0.1",
+    VICE_INCIDENTS_DIR: incidentsDir,
+    VICE_BROKER_RECYCLE_TIMEOUT_MS: "300", // keep the test fast -- no ack will ever be written
+  });
+  try {
+    await handshake(proxy);
+    const { id: leaseId } = await acquireLeaseViaBroker(proxy, dir, port, 3);
+    writeEpochFileFixture(dir, port, { epoch: 1 });
+
+    proxy.send({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "vice_recycle", arguments: { reason: "timeout test" } } });
+    await waitForRecycleRequestId(dir, leaseId);
+
+    // No ack is ever written -- the poll must give up at its own deadline
+    // rather than hang the proxy forever.
+    const resp = await proxy.nextMessage(5000);
+    assert.equal(resp.result.isError, true);
+    assert.match(resp.result.content[0].text, /timeout|no ack arrived/i);
+    assert.match(resp.result.content[0].text, /\.md/, "the error must name the incident record's path");
+
+    assert.equal(proxy.child.exitCode, null, "the proxy must still be alive after a recycle timeout");
+    assert.equal(proxy.child.killed, false);
+
+    const incidentPath = join(incidentsDir, readdirSync(incidentsDir)[0]);
+    const incidentContent = readFileSync(incidentPath, "utf8");
+    assert.match(incidentContent, /outcome: 'timeout'/);
+  } finally {
+    proxy.child.kill("SIGKILL");
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(incidentsDir, { recursive: true, force: true });
+  }
+});
+
+test("vice_recycle: after a confirmed recycle, a subsequent forwarded call succeeds rather than failing the epoch drift guard", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vice-proxy-recycle-rebaseline-"));
+  const incidentsDir = tmpIncidentsDir();
+  const { server, requests } = startStandInServer();
+  const port = await listen(server);
+  const proxy = startProxy({
+    VICE_POOL_DIR: dir,
+    VICE_BROKER_BASE_PORT: String(port),
+    VICE_MCP_HOST: "127.0.0.1",
+    VICE_INCIDENTS_DIR: incidentsDir,
+  });
+  try {
+    await handshake(proxy);
+    const { id: leaseId } = await acquireLeaseViaBroker(proxy, dir, port, 3);
+    writeEpochFileFixture(dir, port, { epoch: 1 });
+
+    proxy.send({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "vice_recycle", arguments: { reason: "rebaseline test" } } });
+    const recycleId = await waitForRecycleRequestId(dir, leaseId);
+
+    // Simulate the deliberate identity change a real recycle causes: the
+    // epoch actually moves.
+    writeEpochFileFixture(dir, port, { epoch: 2 });
+    writeRecycleAckFixture(dir, recycleId, { target_id: leaseId, port, outcome: "ok", kill_stage: "sigterm", epoch_before: 1 });
+
+    const recycleResp = await proxy.nextMessage();
+    assert.equal(recycleResp.result.isError, false);
+
+    // A subsequent forwarded call, against the SAME (now epoch-2) instance,
+    // must succeed -- not be refused as drift, which is exactly what
+    // rebaselineEpochAfterRecycle() exists to prevent.
+    const requestsBefore = requests.filter((r) => r && r.method === "tools/call").length;
+    proxy.send({ jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
+    const pingResp = await proxy.nextMessage();
+    assert.equal(pingResp.result.isError, false, "a forwarded call after a confirmed recycle must not fail the epoch drift guard");
+    const requestsAfter = requests.filter((r) => r && r.method === "tools/call").length;
+    assert.ok(requestsAfter > requestsBefore, "the forwarded call must actually have reached the stand-in host, not been refused pre-flight");
+  } finally {
+    proxy.child.kill("SIGKILL");
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(incidentsDir, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Plan 01.3-01 task 2: the two structural guards keeping this phase inside
+// the only-permitted-route rule (criteria 5, 8, 9 in 01.3-VALIDATION.md).
+// ---------------------------------------------------------------------------
+
+test("structural: the set of .mjs files under .claude/mcp/vice/ containing a network-call construct is exactly vice.mjs and vice-probe.mjs", () => {
+  // Directory-enumerating, matching skill-docs.test.mjs's own idiom -- a
+  // future module joining this directory is covered the moment it lands on
+  // disk, with no test file to remember to update. A "network-call
+  // construct" here means an actual outbound call site (`fetch(`), not
+  // merely the word "fetch" appearing in prose or a variable name.
+  const NETWORK_CALL_PATTERN = /\bfetch\s*\(/;
+  const files = readdirSync(HERE)
+    .filter((f) => f.endsWith(".mjs") && !f.endsWith(".test.mjs"))
+    .sort();
+  assert.ok(files.length > 0, "module directory enumerated as empty -- glob or path resolution is broken");
+
+  const offenders = files.filter((f) => NETWORK_CALL_PATTERN.test(readFileSync(join(HERE, f), "utf8")));
+  assert.deepEqual(
+    offenders.sort(),
+    ["vice-probe.mjs", "vice.mjs"],
+    `the network-call module set changed -- expected exactly ["vice-probe.mjs", "vice.mjs"], got ${JSON.stringify(offenders)}. ` +
+      "A module reaching the host outside the sanctioned transport is the violation, not merely a style break."
+  );
+});
+
+test("structural: neither synthetic tool name appears in tools-manifest.json, and both appear in a live tools/list response", async () => {
+  const manifestText = readFileSync(join(HERE, "tools-manifest.json"), "utf8");
+  assert.ok(!manifestText.includes("vice_recycle"), "vice_recycle must never be added to the committed manifest -- it is served proxy-local");
+  assert.ok(!manifestText.includes("vice_result_continue"), "vice_result_continue must never be added to the committed manifest either");
+
+  const { server } = startStandInServer();
+  const port = await listen(server);
+  const proxy = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${port}/mcp` });
+  try {
+    await handshake(proxy);
+    proxy.send({ jsonrpc: "2.0", id: 3, method: "tools/list", params: {} });
+    const resp = await proxy.nextMessage();
+    const names = resp.result.tools.map((t) => t.name);
+    assert.ok(names.includes("vice_recycle"), "vice_recycle must be present in a live tools/list response");
+    assert.ok(names.includes("vice_result_continue"), "vice_result_continue must be present in a live tools/list response");
+  } finally {
+    proxy.child.kill("SIGKILL");
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("vice_disk_list is still absent from tools/list and still refused at tools/call, with both synthetic tools present", async () => {
+  const { server, requests } = startStandInServer();
+  const port = await listen(server);
+  const proxy = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${port}/mcp` });
+  try {
+    await handshake(proxy);
+    proxy.send({ jsonrpc: "2.0", id: 3, method: "tools/list", params: {} });
+    const listResp = await proxy.nextMessage();
+    const names = listResp.result.tools.map((t) => t.name);
+    assert.ok(!names.includes("vice_disk_list"), "vice_disk_list must remain absent");
+    assert.ok(names.includes("vice_recycle"));
+    assert.ok(names.includes("vice_result_continue"));
+
+    proxy.send({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "vice_disk_list", arguments: {} } });
+    const callResp = await proxy.nextMessage();
+    assert.equal(callResp.result.isError, true, "vice_disk_list must still be refused at call time");
+    assert.equal(requests.length, 0, "the refusal must make no request to the stand-in host");
+  } finally {
+    proxy.child.kill("SIGKILL");
     await new Promise((resolve) => server.close(resolve));
   }
 });

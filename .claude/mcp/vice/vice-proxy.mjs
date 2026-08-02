@@ -45,7 +45,13 @@ import {
   readBrokerLiveness,
   requestsDir,
   brokerRootDir,
+  writeRecycleRequest,
+  pollRecycleAck,
+  RECYCLE_ACK_TIMEOUT_MS,
 } from "./vice-broker-client.mjs";
+// The recycle path's own incident record (plan 01.3-01) -- written BEFORE
+// anything is killed (D-17), never through any network call of its own.
+import { writeIncidentRecord, finaliseIncidentRecord } from "./incident-record.mjs";
 import { readFileSync, unlinkSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
@@ -251,6 +257,35 @@ const RESULT_CONTINUE_TOOL = {
   },
 };
 
+// The recycle tool (plan 01.3-01, task 1): the only new HOST-SIDE ACTION
+// this phase adds. Served entirely proxy-local -- like RESULT_CONTINUE_TOOL
+// above, it is never in tools-manifest.json (RESEARCH Key Finding 3), so a
+// manifest regenerate can never drop it. Deliberately split from
+// vice_diagnose (D-03): this tool NEVER gates on a verdict, so there is no
+// "confirm"/"mode" argument and no shared state between the two tools to
+// keep in sync -- the separation itself is the safety.
+const RECYCLE_TOOL = {
+  name: "vice_recycle",
+  description:
+    "DESTRUCTIVE. Kills and respawns THIS session's own emulator in place, on the same port, via " +
+    "the host supervisor's existing respawn loop -- the same instance, not a different one. The " +
+    "restart epoch changes, so any run in flight is void and must be resumed from the last recorded " +
+    'milestone snapshot. A self-inflicted checkpoint stop (the emulator merely paused at an armed ' +
+    "checkpoint) is NOT a wedge and must not be recycled. Requires a non-empty \"reason\" naming why " +
+    "this recycle is happening; that reason is written to a permanent, repo-tracked incident record " +
+    "BEFORE anything is killed.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      reason: {
+        type: "string",
+        description: "Why this recycle is happening -- written verbatim into the incident record.",
+      },
+    },
+    required: ["reason"],
+  },
+};
+
 function manifestPath() {
   return process.env.VICE_TOOLS_MANIFEST
     ? resolve(process.env.VICE_TOOLS_MANIFEST)
@@ -301,7 +336,7 @@ function handleToolsList() {
   //      tool, not a curated subset -- the host's tool set is not this
   //      repo's to enumerate.
   const manifestTools = readManifestTools().filter((t) => !DENY_LIST.includes(t.name));
-  const tools = [...manifestTools, RESULT_CONTINUE_TOOL].map((t) => ({
+  const tools = [...manifestTools, RESULT_CONTINUE_TOOL, RECYCLE_TOOL].map((t) => ({
     ...t,
     _meta: { ...(t._meta || {}), "anthropic/maxResultSizeChars": OUTPUT_CHAR_CAP },
   }));
@@ -407,6 +442,171 @@ function checkEpochAndRebaseline(when) {
 
 function isErrorText(text) {
   return { content: [{ type: "text", text }], isError: true };
+}
+
+// ------------------------------------------------------------ vice_recycle
+//
+// Re-baselines the proxy's own epoch tracking after a CONFIRMED recycle.
+// Mirrors ensureBrokerLease()'s own `viceSession = null` re-baseline
+// (further down this file) for the identical reason: a recycle is a
+// DELIBERATE identity change, and without this the very next forwarded
+// call would fail its own epoch drift guard against a baseline that is now
+// stale by construction. Clearing epochBaseline too (not just viceSession)
+// means nothing in between reads the stale value before the next
+// ensureViceSession() call re-populates both from a fresh read.
+function rebaselineEpochAfterRecycle() {
+  viceSession = null;
+  epochBaseline = null;
+}
+
+/** Renders a human-facing message for a recycle ack whose kill stage was
+ * NOT a successful kill -- named per outcome so an operator reading the
+ * result can tell "no grant record" from "unreadable epoch file" from "no
+ * pid recorded" from "identity mismatch" without opening the broker log
+ * (matches resources/vice-broker.sh's own per-outcome ack strings). */
+function recycleAckOutcomeMessage(ack) {
+  const outcome = ack && typeof ack.outcome === "string" ? ack.outcome : "unknown";
+  const stage = ack && typeof ack.kill_stage === "string" ? ack.kill_stage : "unknown";
+  const reason = ack && typeof ack.reason === "string" && ack.reason ? ` (${ack.reason})` : "";
+  switch (outcome) {
+    case "identity_refused":
+      return (
+        `vice_recycle: the host refused to signal the target -- its process identity did not match ` +
+        `the binary recorded in its own epoch file (kill stage: ${stage}). The instance was NOT ` +
+        `killed and is still running.`
+      );
+    case "target_lookup_failed":
+      return `vice_recycle: the host could not resolve this session's own recycle target (kill stage: ${stage})${reason}.`;
+    case "grant_lookup_failed":
+      return `vice_recycle: the host found no grant record for this session's target (kill stage: ${stage})${reason}.`;
+    case "epoch_lookup_failed":
+      return `vice_recycle: the host could not read the target's epoch file (kill stage: ${stage})${reason}.`;
+    case "pid_lookup_failed":
+      return `vice_recycle: the target's own epoch file carries no pid to signal (kill stage: ${stage})${reason}.`;
+    default:
+      return `vice_recycle: the host reported outcome "${outcome}" (kill stage: ${stage})${reason}.`;
+  }
+}
+
+/**
+ * Handles the destructive vice_recycle tool. Fixed order, and the order is
+ * the point (plan 01.3-01 task 1): read the current epoch first; refuse
+ * (no incident record, no request) when no broker lease is held yet or an
+ * explicit VICE_MCP_URL override is in effect -- there is no broker to ask
+ * and no supervisor to respawn either way; write the incident record BEFORE
+ * anything else touches the host (D-17); only then write the recycle
+ * request; await the ack; on anything other than a successful kill,
+ * finalise the record with that outcome and return a well-formed error
+ * naming the stage verbatim; on a successful kill, poll for the epoch to
+ * move and probe readiness as two SEPARATE facts (T-01.3-03), finalise the
+ * record, re-baseline, and return success. Never throws past this point --
+ * every branch is a well-formed isError result (a dead stdio proxy is
+ * unrecoverable for the session).
+ */
+async function handleRecycle(args) {
+  const rawReason = args && typeof args.reason === "string" ? args.reason : "";
+  const reason = rawReason.trim();
+  if (!reason) {
+    return isErrorText(
+      'vice_recycle requires a non-empty "reason" string naming why this recycle is happening -- it ' +
+        "becomes the incident record's own explanation, written before anything is killed. No record " +
+        "and no request were written."
+    );
+  }
+
+  const preKillEpoch = readEpoch();
+
+  if (process.env.VICE_MCP_URL) {
+    return isErrorText(
+      "vice_recycle: VICE_MCP_URL is set, so this session talks to an explicitly overridden endpoint " +
+        "with no broker to ask and no supervisor to respawn it. Recycle only applies to a broker-" +
+        "granted instance. No record and no request were written."
+    );
+  }
+  if (!brokerLeaseId) {
+    return isErrorText(
+      "vice_recycle: no broker lease is held yet for this session -- recycle only applies to an " +
+        "instance already granted to this session. Make at least one other forwarded call first. " +
+        "No record and no request were written."
+    );
+  }
+
+  const sessionId = process.env.CLAUDE_CODE_SESSION_ID || null;
+  const clientPidRaw = Number(process.env.CLAUDE_PID);
+  const clientPid = Number.isFinite(clientPidRaw) ? clientPidRaw : null;
+  const { port } = activeInstance();
+
+  // D-17: the record is written BEFORE the request -- capturing is
+  // structurally impossible to skip, not a discipline to remember.
+  const recordPath = writeIncidentRecord({
+    port,
+    epoch_before: preKillEpoch.present ? preKillEpoch.epoch : null,
+    reason,
+    session_id: sessionId,
+  });
+
+  const id = newRequestId();
+  writeRecycleRequest({ id, targetId: brokerLeaseId, reason, sessionId, clientPid });
+
+  const pollResult = await pollRecycleAck(id);
+  if (!pollResult.acked) {
+    finaliseIncidentRecord(recordPath, { outcome: "timeout" });
+    return isErrorText(
+      `vice_recycle: no ack arrived from the host within the timeout (${pollResult.reason}). Incident ` +
+        `record: ${recordPath}. The instance's state is now unknown -- treat it as neither confirmed ` +
+        `killed nor confirmed alive.`
+    );
+  }
+
+  const ack = pollResult.ack || {};
+  const killStage = typeof ack.kill_stage === "string" ? ack.kill_stage : null;
+  const successfulKill = killStage === "already_exited" || killStage === "sigterm" || killStage === "sigkill";
+
+  if (!successfulKill) {
+    finaliseIncidentRecord(recordPath, { outcome: ack.outcome || "refused", kill_stage: killStage });
+    return isErrorText(`${recycleAckOutcomeMessage(ack)} Incident record: ${recordPath}.`);
+  }
+
+  // The kill succeeded -- confirm the machine actually came back. The epoch
+  // bump and the readiness probe are reported as two SEPARATE facts
+  // (T-01.3-03): "the epoch moved" is bookkeeping, "the instance answers"
+  // is evidence, and neither substitutes for the other.
+  const epochDeadline = Date.now() + RECYCLE_ACK_TIMEOUT_MS;
+  let afterEpoch = readEpoch();
+  const epochMoved = () =>
+    afterEpoch.present && (!preKillEpoch.present || afterEpoch.epoch > preKillEpoch.epoch);
+  while (Date.now() < epochDeadline && !epochMoved()) {
+    await new Promise((r) => setTimeout(r, 250));
+    afterEpoch = readEpoch();
+  }
+
+  const { url, port: instancePort } = activeInstance();
+  const probe = await probeInstance({ url, port: instancePort });
+
+  finaliseIncidentRecord(recordPath, {
+    outcome: "ok",
+    kill_stage: killStage,
+    epoch_after: afterEpoch.present ? afterEpoch.epoch : null,
+  });
+
+  // Immediately before returning success -- the deliberate identity change
+  // this tool exists to cause would otherwise make every subsequent
+  // forwarded call fail the drift guard.
+  rebaselineEpochAfterRecycle();
+
+  return {
+    content: [
+      {
+        type: "text",
+        text:
+          `vice_recycle: kill stage "${killStage}". Epoch before: ${preKillEpoch.present ? preKillEpoch.epoch : "unknown"}, ` +
+          `epoch after: ${afterEpoch.present ? afterEpoch.epoch : "unknown"} (${epochMoved() ? "moved" : "did not move within the timeout"}). ` +
+          `Readiness probe: ${probe.alive ? "the respawned instance answered" : `not yet answering (${probe.reason})`}. ` +
+          `Incident record: ${recordPath}. This run is VOID -- resume from the last recorded milestone snapshot.`,
+      },
+    ],
+    isError: false,
+  };
 }
 
 // --------------------------------------------------- unreachable diagnostics
@@ -1169,6 +1369,15 @@ async function handleToolsCall(params) {
   // before any deny-list or epoch logic and NEVER forwarded to the host.
   if (name === "vice_result_continue") {
     return handleResultContinue(args);
+  }
+
+  // The recycle tool: also entirely a proxy-local concern (plan 01.3-01),
+  // served in the same synthetic-tool slot as vice_result_continue above --
+  // before any deny-list or epoch logic, and NEVER forwarded to the host as
+  // a plain tools/call (handleRecycle() drives the broker's own recycle
+  // request protocol itself).
+  if (name === RECYCLE_TOOL.name) {
+    return handleRecycle(args);
   }
 
   // Layer 1: call-time deny-list refusal, before any forwarding logic and

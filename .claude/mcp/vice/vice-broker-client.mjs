@@ -68,6 +68,14 @@ export function brokerLeasesDir(dir = brokerRootDir()) {
   return join(dir, "leases");
 }
 
+// Recycle acks (plan 01.3-01) -- one file per recycle request id, written by
+// resources/vice-broker.sh's write_recycle_ack() and polled by
+// pollRecycleAck() below. A sibling of grantsDir()/denialsDir() above, on
+// the SAME .vice-supervisor/ bind mount -- no new channel.
+export function recycleAcksDir(dir = brokerRootDir()) {
+  return join(dir, "recycle-acks");
+}
+
 export function brokerJsonPath(dir = brokerRootDir()) {
   return join(dir, "broker.json");
 }
@@ -122,6 +130,36 @@ export function writeRequest({ id, op = "acquire", sessionId = null, clientPid =
     version: 1,
     id,
     op,
+    proxy_pid: process.pid,
+    session_id: sessionId,
+    client_pid: clientPid,
+    created_at: new Date().toISOString(),
+  };
+  writeJsonAtomic(join(dir, `${id}.json`), dir, record);
+  return record;
+}
+
+// -------------------------------------------------------- writeRecycleRequest
+//
+// Writes requests/<id>.json with op:"recycle" -- the first value that field
+// has ever carried (plan 01.3-01). Both `id` (this request's own id) and
+// `targetId` (the grant being recycled) are validated against
+// REQUEST_ID_PATTERN BEFORE either is used to build any path (T-01.3-06),
+// matching writeRequest()'s own precondition above.
+export function writeRecycleRequest({ id, targetId, reason, sessionId = null, clientPid = null } = {}) {
+  if (!isValidRequestId(id)) {
+    throw new Error(`writeRecycleRequest: invalid request id: ${id}`);
+  }
+  if (!isValidRequestId(targetId)) {
+    throw new Error(`writeRecycleRequest: invalid target id: ${targetId}`);
+  }
+  const dir = requestsDir();
+  const record = {
+    version: 1,
+    id,
+    op: "recycle",
+    target_id: targetId,
+    reason: typeof reason === "string" ? reason : "",
     proxy_pid: process.pid,
     session_id: sessionId,
     client_pid: clientPid,
@@ -231,6 +269,31 @@ export async function pollGrant(id, { timeoutMs = GRANT_POLL_TIMEOUT_MS, pollMs 
     }
     if (Date.now() >= deadline) {
       return { granted: false, grant: null, denial: null, reason: `no grant or denial appeared within ${timeoutMs}ms` };
+    }
+    await sleepMs(Math.max(0, Math.min(pollMs, deadline - Date.now())));
+  }
+}
+
+// ----------------------------------------------------------- pollRecycleAck
+//
+// Structurally the SAME poll-to-deadline loop as pollGrant() above, reading
+// recycle-acks/<id>.json instead -- a malformed or half-written ack file is
+// treated as not-yet-there rather than thrown, matching readJsonMaybe()'s
+// never-throw posture throughout this module.
+export const RECYCLE_ACK_TIMEOUT_MS = Number(process.env.VICE_BROKER_RECYCLE_TIMEOUT_MS || 30000);
+export const RECYCLE_ACK_POLL_INTERVAL_MS = 500;
+
+export async function pollRecycleAck(id, { timeoutMs = RECYCLE_ACK_TIMEOUT_MS, pollMs = RECYCLE_ACK_POLL_INTERVAL_MS } = {}) {
+  const ackPath = join(recycleAcksDir(), `${id}.json`);
+  const deadline = Date.now() + timeoutMs;
+
+  while (true) {
+    const ack = readJsonMaybe(ackPath);
+    if (ack) {
+      return { acked: true, ack, reason: null };
+    }
+    if (Date.now() >= deadline) {
+      return { acked: false, ack: null, reason: `no recycle ack appeared within ${timeoutMs}ms` };
     }
     await sleepMs(Math.max(0, Math.min(pollMs, deadline - Date.now())));
   }

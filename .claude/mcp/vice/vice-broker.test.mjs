@@ -2214,3 +2214,472 @@ test("start N: an explicit positional beats the VICE_BROKER_SPARES env knob", as
     "with no positional the env knob still applies"
   );
 });
+
+// ---------------------------------------------------------------------------
+// Plan 01.3-01: vice_recycle's host-side half. These tests drive
+// handle_recycle_request() (and its helpers) directly against a planted
+// grant + epoch file, mirroring this file's own established fixture idiom
+// (writeGrantFile, writeSpareFile) rather than depending on a live proxy or
+// a real x64sc anywhere.
+
+/** Spawns a detached, long-lived bash process whose OWN `ps -o args=` output
+ * contains `marker` verbatim (the script's own basename embedded in its
+ * command line) -- standing in for the x64sc child a recycle targets. Traps
+ * TERM/INT/HUP so a graceful SIGTERM exits cleanly, same as a real x64sc
+ * responds to (and same shape as brokerCopyWithSleepingSupervisor()'s own
+ * stub above). Returns { pid, scriptPath }; the caller is responsible for
+ * making sure the process is gone (SIGKILL fallback) and the temp dir is
+ * removed. */
+function spawnStubViceChild(marker) {
+  const dir = mkdtempSync(join(tmpdir(), "vice-broker-x64sc-stub-"));
+  const scriptPath = join(dir, marker);
+  writeFileSync(
+    scriptPath,
+    "#!/usr/bin/env bash\n" +
+      "trap 'exit 0' TERM INT HUP\n" +
+      "sleep 300 &\n" +
+      "wait $!\n"
+  );
+  chmodSync(scriptPath, 0o755);
+  const child = spawn("bash", [scriptPath], { stdio: "ignore", detached: true });
+  return { pid: child.pid, scriptPath, dir };
+}
+
+/** Writes an epoch.json at `path` in exactly the shape
+ * vice-supervisor.sh's own write_epoch() produces -- the fields
+ * handle_recycle_request() / read_epoch_field() read (pid, vice_bin) plus
+ * the surrounding fields a real epoch file always carries. */
+function writeEpochFile(path, { epoch = 1, pid, viceBin, dryRun = false } = {}) {
+  mkdirSync(dirname(path), { recursive: true });
+  const content =
+    "{\n" +
+    `  "epoch": ${epoch},\n` +
+    `  "spawned_at": "${new Date().toISOString()}",\n` +
+    `  "pid": ${pid},\n` +
+    `  "supervisor_pid": ${pid + 1},\n` +
+    `  "vice_bin": "${viceBin}",\n` +
+    `  "vice_args": [],\n` +
+    `  "log": null,\n` +
+    `  "dry_run": ${dryRun}\n` +
+    "}\n";
+  writeFileSync(path, content);
+}
+
+/** Writes requests/<id>.json with op:"recycle", in exactly the shape
+ * vice-broker-client.mjs's own writeRecycleRequest() produces. */
+function writeRecycleRequestFile(dir, id, { targetId, reason = "test recycle", proxyPid = process.pid } = {}) {
+  const rdir = join(dir, "requests");
+  mkdirSync(rdir, { recursive: true });
+  const record = {
+    version: 1,
+    id,
+    op: "recycle",
+    target_id: targetId,
+    reason,
+    proxy_pid: proxyPid,
+    session_id: null,
+    client_pid: null,
+    created_at: new Date().toISOString(),
+  };
+  writeFileSync(join(rdir, `${id}.json`), JSON.stringify(record, null, 2) + "\n");
+}
+
+function readRecycleAck(dir, id) {
+  return JSON.parse(readFileSync(join(dir, "recycle-acks", `${id}.json`), "utf8"));
+}
+
+test("tracer: vice_recycle captures, kills the x64sc child, and the supervisor respawns on the same port", async () => {
+  const dir = tmpPoolDir();
+  const marker = "x64sc-stub-tracer";
+  const stub = spawnStubViceChild(marker);
+  try {
+    await waitFor(() => {
+      try {
+        process.kill(stub.pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+
+    const targetId = "req-9-9000-cafecafe";
+    const recycleId = "req-9-9001-deadbeef";
+    const port = 7300;
+
+    const grantPath = writeGrantFile(dir, targetId, { port });
+    const leasePath = writeLeaseFile(dir, targetId);
+    const epochFile = join(dir, String(port), "epoch.json");
+    writeEpochFile(epochFile, { epoch: 5, pid: stub.pid, viceBin: marker });
+    writeRecycleRequestFile(dir, recycleId, { targetId, reason: "tracer: prove the whole path once" });
+
+    await runBrokerOnce(dir, { basePort: port });
+
+    // The stub process (standing in for the x64sc child) must be gone --
+    // the identity-verified kill actually fired.
+    const stubGone = await waitFor(() => {
+      try {
+        process.kill(stub.pid, 0);
+        return false;
+      } catch {
+        return true;
+      }
+    });
+    assert.ok(stubGone, "the stub x64sc child must be gone after the recycle");
+
+    // The ack must exist and record a successful kill stage.
+    const ack = readRecycleAck(dir, recycleId);
+    assert.equal(ack.target_id, targetId);
+    assert.equal(ack.port, port);
+    assert.equal(ack.x64sc_pid, stub.pid);
+    assert.equal(ack.vice_bin, marker);
+    assert.match(ack.kill_stage, /^(sigterm|sigkill)$/, "a genuinely live stub must be terminated via SIGTERM (or SIGKILL escalation)");
+    assert.equal(ack.epoch_before, 5);
+    assert.equal(ack.outcome, "ok");
+
+    // The request file must be gone -- handled exactly once.
+    assert.equal(existsSync(join(dir, "requests", `${recycleId}.json`)), false, "the recycle request file must be consumed");
+
+    // The grant and lease both survive the recycle -- port and lease
+    // continuity is the whole point of D-01 (signal the child, not the
+    // broker's own bookkeeping).
+    assert.equal(existsSync(grantPath), true, "the grant must survive a recycle -- only the child is killed, never the grant");
+    assert.equal(existsSync(leasePath), true, "the lease must survive a recycle");
+  } finally {
+    try {
+      process.kill(stub.pid, "SIGKILL");
+    } catch {
+      /* already gone */
+    }
+    rmSync(stub.dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("recycle: the target pid comes from epoch.json, never from a grant record's own supervisor_pid", async () => {
+  const dir = tmpPoolDir();
+  const marker = "x64sc-stub-pid-source";
+  const stub = spawnStubViceChild(marker);
+  try {
+    await waitFor(() => {
+      try {
+        process.kill(stub.pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+
+    const targetId = "req-9-9010-a1a1a1a1";
+    const recycleId = "req-9-9011-b2b2b2b2";
+    const port = 7301;
+
+    // The grant's OWN recorded supervisor_pid is THIS TEST RUNNER's pid --
+    // a real, alive pid whose ps args do NOT match the epoch file's own
+    // vice_bin. If handle_recycle_request() ever read supervisor_pid
+    // instead of the epoch file's pid, this test process itself would be
+    // targeted (and refused, since its args never contain the marker) --
+    // proving the wrong source was consulted. The RIGHT source (the epoch
+    // file's own pid) names the genuinely live stub, which must actually
+    // be killed for this test to pass.
+    writeGrantFile(dir, targetId, { port, supervisorPid: process.pid });
+    writeLeaseFile(dir, targetId);
+    const epochFile = join(dir, String(port), "epoch.json");
+    writeEpochFile(epochFile, { epoch: 3, pid: stub.pid, viceBin: marker });
+    writeRecycleRequestFile(dir, recycleId, { targetId });
+
+    await runBrokerOnce(dir, { basePort: port });
+
+    const stubGone = await waitFor(() => {
+      try {
+        process.kill(stub.pid, 0);
+        return false;
+      } catch {
+        return true;
+      }
+    });
+    assert.ok(stubGone, "the epoch file's own pid (the stub) must be the one killed, not the grant's recorded supervisor_pid");
+
+    // This test runner's own pid must be completely unaffected.
+    process.kill(process.pid, 0);
+
+    const ack = readRecycleAck(dir, recycleId);
+    assert.equal(ack.x64sc_pid, stub.pid, "the ack must record the epoch file's pid as the target, not supervisor_pid");
+  } finally {
+    try {
+      process.kill(stub.pid, "SIGKILL");
+    } catch {
+      /* already gone */
+    }
+    rmSync(stub.dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("recycle: an identity mismatch is refused and acked, and the process is still alive afterwards", async () => {
+  const dir = tmpPoolDir();
+  try {
+    const targetId = "req-9-9020-c3c3c3c3";
+    const recycleId = "req-9-9021-d4d4d4d4";
+    const port = 7302;
+
+    // process.pid (this very test runner) is a REAL, ALIVE pid whose own
+    // `ps` args do not mention the fabricated binary name below -- exactly
+    // the "possible pid reuse" shape signal_vice_child_pid() must refuse
+    // to signal, mirroring the existing supervisor-pid refusal tests'
+    // own shape (L791, L912) but through the recycle path instead.
+    writeGrantFile(dir, targetId, { port });
+    writeLeaseFile(dir, targetId);
+    const epochFile = join(dir, String(port), "epoch.json");
+    writeEpochFile(epochFile, { epoch: 2, pid: process.pid, viceBin: "definitely-not-this-process" });
+    writeRecycleRequestFile(dir, recycleId, { targetId });
+
+    const { stderr } = await runBrokerOnce(dir, { basePort: port });
+
+    assert.match(stderr, /refusing to signal pid \d+.*possible pid reuse/);
+    // This process must still be alive -- kill(pid, 0) throws if not.
+    process.kill(process.pid, 0);
+
+    const ack = readRecycleAck(dir, recycleId);
+    assert.equal(ack.kill_stage, "identity_refused");
+    assert.equal(ack.outcome, "identity_refused");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("recycle: a target id with no grant record acks with an outcome naming that missing lookup, and a later well-formed request in the same pass is still processed", async () => {
+  const dir = tmpPoolDir();
+  const marker = "x64sc-stub-later-request";
+  const stub = spawnStubViceChild(marker);
+  try {
+    await waitFor(() => {
+      try {
+        process.kill(stub.pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+
+    const missingTargetId = "req-9-9030-e5e5e5e5";
+    const badRecycleId = "req-9-9031-f6f6f6f6";
+    const goodTargetId = "req-9-9032-07070707";
+    const goodRecycleId = "req-9-9033-18181818";
+    const port = 7303;
+
+    // No grant file written for missingTargetId at all.
+    writeRecycleRequestFile(dir, badRecycleId, { targetId: missingTargetId });
+
+    // A second, well-formed recycle request in the SAME pass, targeting a
+    // real grant -- proving the missing-grant failure above did not abort
+    // the rest of this broker pass.
+    writeGrantFile(dir, goodTargetId, { port });
+    writeLeaseFile(dir, goodTargetId);
+    const epochFile = join(dir, String(port), "epoch.json");
+    writeEpochFile(epochFile, { epoch: 1, pid: stub.pid, viceBin: marker });
+    writeRecycleRequestFile(dir, goodRecycleId, { targetId: goodTargetId });
+
+    await runBrokerOnce(dir, { basePort: port });
+
+    const badAck = readRecycleAck(dir, badRecycleId);
+    assert.equal(badAck.outcome, "grant_lookup_failed");
+    assert.equal(existsSync(join(dir, "requests", `${badRecycleId}.json`)), false);
+
+    const goodAck = readRecycleAck(dir, goodRecycleId);
+    assert.equal(goodAck.outcome, "ok", "a later well-formed recycle request in the same pass must still be processed");
+    assert.equal(existsSync(join(dir, "requests", `${goodRecycleId}.json`)), false);
+  } finally {
+    try {
+      process.kill(stub.pid, "SIGKILL");
+    } catch {
+      /* already gone */
+    }
+    rmSync(stub.dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("recycle: a grant whose epoch file is missing acks with an outcome naming that failure and sends no signal", async () => {
+  const dir = tmpPoolDir();
+  try {
+    const targetId = "req-9-9040-29292929";
+    const recycleId = "req-9-9041-3a3a3a3a";
+    const port = 7304;
+
+    // A grant record whose epoch_file simply does not exist on disk.
+    writeGrantFile(dir, targetId, { port });
+    writeLeaseFile(dir, targetId);
+    writeRecycleRequestFile(dir, recycleId, { targetId });
+
+    await runBrokerOnce(dir, { basePort: port });
+
+    const ack = readRecycleAck(dir, recycleId);
+    assert.equal(ack.outcome, "epoch_lookup_failed");
+    assert.equal(ack.kill_stage, "no_signal");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("recycle: an epoch file with no pid acks with an outcome naming that failure and sends no signal", async () => {
+  const dir = tmpPoolDir();
+  try {
+    const targetId = "req-9-9050-4b4b4b4b";
+    const recycleId = "req-9-9051-5c5c5c5c";
+    const port = 7305;
+
+    writeGrantFile(dir, targetId, { port });
+    writeLeaseFile(dir, targetId);
+    const epochFile = join(dir, String(port), "epoch.json");
+    writeEpochFile(epochFile, { epoch: 1, pid: "null", viceBin: "whatever" });
+    writeRecycleRequestFile(dir, recycleId, { targetId });
+
+    await runBrokerOnce(dir, { basePort: port });
+
+    const ack = readRecycleAck(dir, recycleId);
+    assert.equal(ack.outcome, "pid_lookup_failed");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("recycle: a target pid that has already exited acks with the already-exited stage and a successful outcome", async () => {
+  const dir = tmpPoolDir();
+  try {
+    const targetId = "req-9-9060-6d6d6d6d";
+    const recycleId = "req-9-9061-7e7e7e7e";
+    const port = 7306;
+
+    // Spawn a process and let it exit immediately, so its pid is genuinely
+    // dead by the time the broker pass runs -- "the machine being gone is
+    // the goal", not a failure.
+    const shortLived = spawn("bash", ["-c", "exit 0"], { stdio: "ignore" });
+    const deadPid = shortLived.pid;
+    await new Promise((resolveExit) => shortLived.once("exit", resolveExit));
+    await waitFor(() => {
+      try {
+        process.kill(deadPid, 0);
+        return false;
+      } catch {
+        return true;
+      }
+    });
+
+    writeGrantFile(dir, targetId, { port });
+    writeLeaseFile(dir, targetId);
+    const epochFile = join(dir, String(port), "epoch.json");
+    writeEpochFile(epochFile, { epoch: 1, pid: deadPid, viceBin: "whatever" });
+    writeRecycleRequestFile(dir, recycleId, { targetId });
+
+    await runBrokerOnce(dir, { basePort: port });
+
+    const ack = readRecycleAck(dir, recycleId);
+    assert.equal(ack.kill_stage, "already_exited");
+    assert.equal(ack.outcome, "ok", "an already-exited target is a SUCCESS -- the machine being gone is the goal");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("recycle: a malformed request with an op field but no readable id is skipped, and the pass continues", async () => {
+  const dir = tmpPoolDir();
+  try {
+    const rdir = join(dir, "requests");
+    mkdirSync(rdir, { recursive: true });
+    // No "id" field at all -- extract_id_field() must yield empty, and
+    // process_requests() must skip this file before ever reaching the op
+    // dispatch, exactly like any other id-less request.
+    writeFileSync(join(rdir, "malformed.json"), JSON.stringify({ version: 1, op: "recycle", target_id: "req-1-1-aaaaaaaa" }));
+
+    const goodTargetId = "req-9-9070-8f8f8f8f";
+    writeGrantFile(dir, goodTargetId, { port: 7307 });
+    writeLeaseFile(dir, goodTargetId);
+
+    const { stderr } = await runBrokerOnce(dir, { basePort: 7307 });
+    assert.match(stderr, /skipping request malformed\.json/);
+    // The pass must not have crashed -- the grant above is still there
+    // (nothing touched it), proving the rest of the pass ran to completion.
+    assert.equal(existsSync(join(dir, "grants", `${goodTargetId}.json`)), true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("recycle: an acquire request with no op field at all is still granted exactly as before -- the recycle branch is additive", async () => {
+  const dir = tmpPoolDir();
+  const { server } = startStandInServer();
+  const standInPort = await listen(server);
+  try {
+    const id = "req-9-9080-9a9a9a9a";
+    writeRequestFile(dir, id); // op: "acquire", the pre-recycle shape
+    writeLeaseFile(dir, id); // a real proxy creates the lease BEFORE polling for a grant
+
+    await runBrokerOnce(dir, { basePort: standInPort, spares: 0 });
+    await runBrokerOnce(dir, { basePort: standInPort, spares: 0 }); // promote launching -> ready, then grant
+
+    const grantPath = join(dir, "grants", `${id}.json`);
+    assert.equal(existsSync(grantPath), true, "an acquire request with no op field must still be granted");
+  } finally {
+    await new Promise((resolveClose) => server.close(resolveClose));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("recycle: a target id that fails the id pattern is skipped with a logged reason and writes no file anywhere", async () => {
+  const dir = tmpPoolDir();
+  try {
+    const recycleId = "req-9-9090-2a2a2a2a";
+    // "not-a-valid-id" fails REQUEST_ID_PATTERN outright -- a malformed
+    // request, distinct from a well-formed-but-nonexistent target (which
+    // DOES get an ack; see the "no grant record" test above).
+    writeRecycleRequestFile(dir, recycleId, { targetId: "not-a-valid-id" });
+
+    const { stderr } = await runBrokerOnce(dir, { basePort: 7309 });
+
+    assert.match(stderr, /skipping recycle req-9-9090-2a2a2a2a.*invalid or missing target_id/);
+    assert.equal(existsSync(join(dir, "recycle-acks", `${recycleId}.json`)), false, "an invalid target_id must write no ack file");
+    // The request file itself is left in place, exactly like
+    // process_requests()'s own invalid-"id" skip -- never silently deleted.
+    assert.equal(existsSync(join(dir, "requests", `${recycleId}.json`)), true, "a malformed recycle request must not be consumed");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// signal_vice_child_pid() unit-level contract (raised at the 01.3-01 tracer
+// checkpoint): an empty/null pid and a genuinely-dead pid must print the
+// SAME stage word (already_exited) AND return the SAME exit code (0) --
+// "the machine being gone is the goal" applies identically to both, per the
+// function's own header comment. Exercised by extracting the function's own
+// body via the identical sed idiom this file's acceptance criteria already
+// use to inspect it (rather than sourcing the whole script, which runs its
+// own argument-parsing/container-guard/mkdir side effects unconditionally
+// and is not designed to be sourced as a library) -- a small, isolated
+// harness for a function this file otherwise only exercises indirectly
+// through handle_recycle_request(), which never reaches this branch itself
+// (it writes its own pid_lookup_failed ack first).
+test("signal_vice_child_pid: an empty/null pid reports already_exited and returns 0 -- identical stage word AND exit code to a genuinely-exited pid", async () => {
+  const { stdout: fnBody } = await execFileP("bash", ["-c", `sed -n '/^signal_vice_child_pid() {/,/^}/p' '${BROKER_SCRIPT}'`]);
+  assert.ok(fnBody.includes("signal_vice_child_pid()"), "sanity: the function body must have been extracted");
+
+  const script = `
+set -u
+VICE_BROKER_KILL_WAIT_S=1
+${fnBody}
+out="$(signal_vice_child_pid "" "whatever" "test-empty")"
+rc=$?
+echo "EMPTY_STAGE:$out"
+echo "EMPTY_RC:$rc"
+
+out="$(signal_vice_child_pid "null" "whatever" "test-null")"
+rc=$?
+echo "NULL_STAGE:$out"
+echo "NULL_RC:$rc"
+`;
+  const { stdout } = await execFileP("bash", ["-c", script]);
+  assert.match(stdout, /EMPTY_STAGE:already_exited/);
+  assert.match(stdout, /EMPTY_RC:0/, "an empty pid must return 0, matching the already_exited word it prints");
+  assert.match(stdout, /NULL_STAGE:already_exited/);
+  assert.match(stdout, /NULL_RC:0/, "the literal string \"null\" must return 0, matching the already_exited word it prints");
+});
