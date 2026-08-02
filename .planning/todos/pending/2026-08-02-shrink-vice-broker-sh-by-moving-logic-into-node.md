@@ -12,6 +12,23 @@ files:
   - .claude/mcp/vice/install-resources.mjs
 ---
 
+## ⚠ Re-scoped a SECOND time, 2026-08-02 (developer) — read this before the text below
+
+**This todo's title and scope are now narrower than the work.** The developer clarified that the
+**supervisor and the pool** were always meant to land in the same application as the broker, and that
+it is **one process**, in **TypeScript**. All 3,157 lines of host-side bash retire
+(`vice-broker.sh` 2,103 + `vice-pool.sh` 611 + `vice-supervisor.sh` 443), not just the coordination
+logic inside one of them — and the "only genuinely shell-shaped work stays in bash" split this todo
+argues for below **is superseded**: nothing stays.
+
+Authoritative record: `.planning/notes/one-process-broker-in-typescript.md`.
+Amended criteria: ROADMAP Phase 01.6, criterion 2 (rewritten) and criteria 13–15 (new).
+
+Everything below remains accurate about *what needs moving and why*. Treat its
+**moving-vs-staying boundary** as historical.
+
+---
+
 ## Re-scoped 2026-08-02 — this is no longer a file-size cleanup
 
 Filed originally as `minor`: *"1,838 lines of bash is too much bash."* A `/gsd-explore` session
