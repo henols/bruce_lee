@@ -160,6 +160,83 @@ async function waitFor(predicate, { timeoutMs = 8000, pollMs = 20 } = {}) {
   return null;
 }
 
+// ---------------------------------------------------------------------------
+// quick-260802-d6v Task 2/3 shared helpers: start a real detached broker and
+// reap it unconditionally. Every test using these registers cleanup via
+// `t.after(() => reapDetached(dir, ref))` as its FIRST statement after
+// creating the temp dir -- BEFORE anything that can throw -- because these
+// tests spawn a genuinely detached, long-lived process that by construction
+// ignores the signals a test runner would normally use and outlives its
+// parent. `t.after` rather than `try/finally`: these tests can time out on a
+// hung parent, and a `finally` behind an unresolved `await` never runs while
+// an `after` hook does.
+
+/** Starts `vice-broker.sh start --detach --dry-run` against `dir` and parses
+ * the parent-only stdout announcement for the child's pid and log path.
+ * Returns { pid, logPath, stdout }. */
+async function startDetached(dir, opts = {}) {
+  const { stdout } = await execFileP("bash", [BROKER_SCRIPT, "start", "--detach", "--dry-run"], {
+    env: {
+      ...process.env,
+      VICE_SUPERVISOR_ALLOW_CONTAINER: "1",
+      VICE_POOL_DIR: dir,
+      VICE_BROKER_SPARES: "0",
+      VICE_BROKER_POLL_MS: "200",
+      ...opts,
+    },
+  });
+  const pidMatch = stdout.match(/detached broker running as pid (\d+)/);
+  const logMatch = stdout.match(/-- log: (\S+)/);
+  assert.ok(pidMatch, `expected a parsable pid in stdout, got: ${stdout}`);
+  assert.ok(logMatch, `expected a parsable log path in stdout, got: ${stdout}`);
+  return { pid: Number(pidMatch[1]), logPath: logMatch[1], stdout };
+}
+
+/** Unconditional cleanup for a detached broker: collects candidate pids from
+ * `ref.pid`/`ref.pids` (which may be undefined if the test failed before
+ * parsing) AND from broker.json's own "pid" field if readable -- the
+ * fallback is what makes a leak impossible even when the test never got far
+ * enough to record a pid. Kills every candidate, waits for it to be gone,
+ * asserts so (a leak must fail loudly, not pass quietly), then removes dir. */
+async function reapDetached(dir, ref) {
+  const candidates = new Set();
+  if (ref && ref.pid) candidates.add(ref.pid);
+  if (ref && Array.isArray(ref.pids)) {
+    for (const p of ref.pids) candidates.add(p);
+  }
+  try {
+    const brokerJson = JSON.parse(readFileSync(join(dir, "broker.json"), "utf8"));
+    if (brokerJson && brokerJson.pid) candidates.add(brokerJson.pid);
+  } catch {
+    /* no broker.json, or unreadable -- nothing to add */
+  }
+
+  for (const pid of candidates) {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {
+      /* already gone */
+    }
+  }
+
+  for (const pid of candidates) {
+    const gone = await waitFor(
+      () => {
+        try {
+          process.kill(pid, 0);
+          return false;
+        } catch {
+          return true;
+        }
+      },
+      { timeoutMs: 8000 }
+    );
+    assert.ok(gone, `detached pid ${pid} must be gone after reapDetached -- a leaked daemon is worse than the defect being fixed`);
+  }
+
+  rmSync(dir, { recursive: true, force: true });
+}
+
 function runBrokerOnceDryRun(dir, basePort) {
   return execFileP("bash", [BROKER_SCRIPT, "--once", "--dry-run"], {
     env: {
@@ -936,6 +1013,133 @@ test("shutdown: a daemon sent SIGTERM terminates the supervisor pid recorded in 
     rmSync(dirname(brokerScript), { recursive: true, force: true });
   }
 });
+
+// ---------------------------------------------------------------------------
+// quick-260802-d6v Task 2: the --detach re-exec under setsid, and the
+// foreground Ctrl-C warning. Every detach test here declares
+// `{ timeout: 30000 }` and registers `t.after(() => reapDetached(dir, ref))`
+// as its first statement -- node:test has no default timeout, so a
+// regression that makes the parent block would otherwise hang the suite
+// forever, and a leaked detached daemon polling every 200ms is worse than
+// the defect this task fixes.
+
+test(
+  "start --detach: the promise resolves promptly, announces a live pid and log path, the child does not recurse, and a second run appends",
+  { timeout: 30000 },
+  async (t) => {
+    const dir = tmpPoolDir();
+    const ref = { pids: [] };
+    t.after(() => reapDetached(dir, ref));
+
+    const first = await startDetached(dir, { VICE_BROKER_BASE_PORT: "9500" });
+    ref.pids.push(first.pid);
+
+    // Reaching this assertion at all proves the promise resolved -- a
+    // regression that made the parent block would instead time out the
+    // whole test via the explicit { timeout: 30000 } above.
+    process.kill(first.pid, 0); // throws if not a live process
+    assert.equal(first.logPath, join(dir, "broker.log"), "the default log path must be <pool dir>/broker.log");
+    assert.ok(existsSync(first.logPath), "the log file must exist");
+
+    const logNonEmpty = await waitFor(() => {
+      try {
+        return readFileSync(first.logPath, "utf8").length > 0;
+      } catch {
+        return false;
+      }
+    });
+    assert.ok(logNonEmpty, "the log must accumulate content from the daemon");
+
+    // Recursion assertion: the parent-only announcement string must be
+    // ABSENT from the child's own log -- its presence would mean the child
+    // re-detached instead of taking the daemon path.
+    const logContent = readFileSync(first.logPath, "utf8");
+    assert.doesNotMatch(
+      logContent,
+      /detached broker running as pid/,
+      "the child's own log must never contain the parent-only detach announcement -- its presence would prove recursion"
+    );
+
+    // A second --detach against the SAME dir/log must APPEND, not truncate:
+    // the first run's bytes must still be present afterward.
+    const second = await startDetached(dir, { VICE_BROKER_BASE_PORT: "9500" });
+    ref.pids.push(second.pid);
+    assert.notEqual(second.pid, first.pid, "the second run must be a genuinely different process");
+
+    const logAfterSecond = readFileSync(second.logPath, "utf8");
+    assert.ok(
+      logAfterSecond.startsWith(logContent) || logAfterSecond.includes(logContent),
+      "the first run's log bytes must still be present after a second --detach -- append, never truncate"
+    );
+  }
+);
+
+test(
+  "start --detach: the detached daemon is a genuine session leader, in a DIFFERENT session than the test runner",
+  { timeout: 30000 },
+  async (t) => {
+    const dir = tmpPoolDir();
+    const ref = {};
+    t.after(() => reapDetached(dir, ref));
+
+    const { pid } = await startDetached(dir, { VICE_BROKER_BASE_PORT: "9510" });
+    ref.pid = pid;
+
+    const { stdout: childSidOut } = await execFileP("ps", ["-o", "sid=", "-p", String(pid)]);
+    const { stdout: selfSidOut } = await execFileP("ps", ["-o", "sid=", "-p", String(process.pid)]);
+    const childSid = childSidOut.trim();
+    const selfSid = selfSidOut.trim();
+
+    assert.notEqual(childSid, selfSid, "the detached daemon's session id must differ from the test runner's own");
+    assert.equal(childSid, String(pid), "the detached daemon must be its own session leader (sid == pid)");
+  }
+);
+
+test(
+  "start (foreground, no --detach): warns on stderr naming Ctrl-C, other agents' sessions, and --detach, before it starts polling",
+  { timeout: 30000 },
+  async (t) => {
+    const child = spawn("bash", [BROKER_SCRIPT, "start", "--dry-run"], {
+      env: {
+        ...process.env,
+        VICE_SUPERVISOR_ALLOW_CONTAINER: "1",
+        VICE_POOL_DIR: tmpPoolDir(),
+        VICE_BROKER_SPARES: "0",
+        VICE_BROKER_POLL_MS: "200",
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    t.after(async () => {
+      if (child.exitCode === null) {
+        try {
+          child.kill("SIGTERM");
+        } catch {
+          /* already gone */
+        }
+        await waitFor(() => child.exitCode !== null, { timeoutMs: 8000 });
+      }
+      if (child.exitCode === null) {
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          /* already gone */
+        }
+      }
+    });
+
+    let stderrAcc = "";
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk) => {
+      stderrAcc += chunk;
+    });
+
+    const gotWarning = await waitFor(() => /FOREGROUND/.test(stderrAcc) && stderrAcc);
+    assert.ok(gotWarning, `expected a foreground warning on stderr, got so far: ${stderrAcc}`);
+    assert.match(stderrAcc, /Ctrl-C/, "the warning must name Ctrl-C");
+    assert.match(stderrAcc, /other agents/i, "the warning must name other agents' sessions dying");
+    assert.match(stderrAcc, /--detach/, "the warning must point at --detach as the remedy");
+  }
+);
 
 test("start --once: drops a non-dry-run record whose recorded pid is dead, drops a spare recorded ready whose port has no listener, and leaves a grant whose pid is a live, identity-matching supervisor untouched", async () => {
   const dir = tmpPoolDir();

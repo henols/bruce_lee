@@ -354,6 +354,13 @@ fi
 # nothing, exactly like --help/--print-paths above, so there is no reason to
 # require VICE_SUPERVISOR_ALLOW_CONTAINER=1 just to report a usage error to
 # someone testing flag parsing from inside a container.
+# Captured BEFORE the flag-parse loop below consumes "$@" into individual
+# case arms: a function's "$@" is its own, so cmd_start()'s detach re-exec
+# (Task 2) cannot recover the script's original argv without this top-level
+# copy -- there is no other way to hand the ORIGINAL invocation back to a
+# re-exec'd child from inside a function.
+ORIGINAL_ARGV=("$@")
+
 ONCE=0
 DRY_RUN=0
 DETACH=0
@@ -1640,6 +1647,84 @@ cmd_start() {
     write_broker_json "$started_at"
     broker_once
     return 0
+  fi
+
+  # Re-exec under setsid (Task 2, quick-260802-d6v). Sits AFTER the --once
+  # early-return above (drop_dead_instance_records() has already run) and
+  # BEFORE the trap install below -- both halves of this ordering are
+  # load-bearing:
+  #   - After drop_dead_instance_records(): the child adopts an
+  #     already-validated record set rather than re-deriving one from state a
+  #     dead broker left behind.
+  #   - Before the trap install: a parent that registered the EXIT trap and
+  #     THEN returned would run broker_shutdown on its own exit and reap the
+  #     very instances its own child is adopting -- the whole correctness
+  #     argument for this placement.
+  # ONCE can never be 1 here (Task 1 rejects --detach --once at parse time),
+  # so placing this after the --once early return satisfies both constraints
+  # at once.
+  if [ "$DETACH" -eq 1 ]; then
+    if ! command -v setsid >/dev/null 2>&1; then
+      echo "vice-broker: --detach requires setsid (util-linux), which was not found on this host -- refusing rather than substituting a weaker mechanism that would only LOOK detached" >&2
+      exit 1
+    fi
+
+    # Second, independent recursion guard (T-d6v-01): filter --detach out of
+    # the relaunch argv. The VICE_BROKER_DETACHED_CHILD env marker consumed
+    # at parse time (Task 1) is the first guard; either alone is sufficient,
+    # and both exist because they fail in different ways.
+    local relaunch=() a
+    for a in "${ORIGINAL_ARGV[@]}"; do
+      [ "$a" = "--detach" ] && continue
+      relaunch+=("$a")
+    done
+    # Guards bash's unbound-empty-array hazard under `set -u`. Cannot happen
+    # in practice -- a subcommand is required and 'start' is never filtered
+    # -- but the expansion above is not worth betting on.
+    if [ "${#relaunch[@]}" -eq 0 ]; then
+      relaunch=(start)
+    fi
+
+    # The pool dir is already created (mkdir -p above, near the configuration
+    # block), but VICE_BROKER_LOG may point outside it.
+    mkdir -p "$(dirname "$VICE_BROKER_LOG")"
+
+    # bash "$SELF_PATH" rather than executing the script directly: this
+    # file's own tests invoke it as `bash <path>`, so the script need not
+    # carry the execute bit. `>>` (never `>`) so a restart cannot destroy the
+    # previous run's evidence. Stdin from /dev/null and both stdout/stderr
+    # redirected to the log are what RELEASE the parent's inherited stdio --
+    # without them a piped caller blocks until the daemon exits, the very
+    # failure this task exists to remove, re-created one layer down. No
+    # `cd /`: SELF_PATH and VICE_POOL_DIR may both be relative, so cwd is
+    # deliberately inherited. setsid is invoked WITHOUT --fork, so it does
+    # not fork and $! below is the pid that becomes the broker -- that pid is
+    # authoritative, not a guess.
+    VICE_BROKER_DETACHED_CHILD=1 setsid bash "$SELF_PATH" "${relaunch[@]}" \
+      </dev/null >>"$VICE_BROKER_LOG" 2>&1 &
+    local child_pid=$!
+    disown "$child_pid" 2>/dev/null || true
+
+    # This exact phrase is parent-only and is what the recursion test greps
+    # the child's own log for -- its ABSENCE there is the evidence the child
+    # took the daemon path, not the detach branch.
+    echo "vice-broker: detached broker running as pid $child_pid -- log: $VICE_BROKER_LOG"
+    echo "vice-broker: stop it with 'vice-broker.sh stop' -- the shutdown contract is unchanged, stopping it still reaps every instance it tracks"
+    return 0
+  fi
+
+  # Foreground Ctrl-C warning / detached-daemon self-notice, gated on
+  # DETACHED_CHILD (set at parse time, Task 1). Do NOT gate the trap itself
+  # below on anything -- trap broker_shutdown EXIT HUP INT TERM is installed
+  # identically in both modes.
+  if [ "$DETACHED_CHILD" -eq 1 ]; then
+    # The parent-only announcement string above must NOT appear on this
+    # path -- that absence is what makes the recursion assertion meaningful.
+    echo "vice-broker: this process (pid $$) is the detached daemon -- terminal signals cannot reach it; use 'stop' to shut it down" >&2
+  else
+    echo "vice-broker: WARNING -- this broker is running in the FOREGROUND." >&2
+    echo "vice-broker: a Ctrl-C in this terminal, closing this terminal, or a SIGHUP from an ending SSH/VS Code session will TERMINATE EVERY INSTANCE this broker tracks -- including instances leased to OTHER AGENTS' LIVE SESSIONS, which then lose their accumulated context." >&2
+    echo "vice-broker: use --detach to run this broker outside the current terminal session instead." >&2
   fi
 
   # broker_shutdown() (defined above, beside reap_all_instances() and
