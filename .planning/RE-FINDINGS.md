@@ -1202,3 +1202,65 @@ read) at the moment of death to identify the exact code path and hazard type mec
 than continuing blind trial-and-error. The central chain-ladder's climb point, if one exists, was
 never found in this session and remains a completely open question -- it may require a jump onto
 it rather than a simple directional approach.
+
+### 2026-08-02 — the "silent stall" may be a self-inflicted checkpoint trap, and all three recorded incidents share an armed stopping checkpoint, not an address
+
+**Type:** hypothesis (a shortcut if it holds; the strongest candidate mechanism on record)
+**Evidence:** cross-read of three already-recorded incidents during `/gsd-discuss-phase 01.3` — no
+new live execution. Derived from
+`.planning/todos/pending/2026-08-01-vice-registers-frozen-after-reset-during-01-04-task2.md`,
+`…-vice-silent-stall-during-01-04-task3-saeger-playthrough.md` and
+`…-vice-silent-stall-attempt4-froze-at-same-pc-as-attempt3.md`.
+**Confidence:** MEDIUM — the correlation is real and covers 3/3 incidents, the mechanism is
+consistent with every recorded symptom, and it is testable in minutes. It has not been reproduced.
+**Saves:** potentially the entire recovery path — a checkpoint trap needs no restart, no kill and no
+lost session, only a checkpoint deleted. Also saves killing a *healthy* instance in the belief it
+was wedged.
+
+**The correlation.** The common factor across all three freezes is not `$DD00` and not chamber-1
+entry. It is: **a stopping exec checkpoint was armed, and execution was resumed.**
+
+- Attempt 3 and attempt 4 both froze at `PC:2014` (`$07DE`) — the instruction immediately after
+  `STA $DD00`, which is exactly where a stopping checkpoint on that store had just parked the
+  machine before execution was resumed.
+- The 01-04 Task 2 incident began *immediately after* an exec+stop checkpoint was armed at
+  **`$1103`, an IRQ-handler entry**, on a title screen with a confirmed live raster-split IRQ chain
+  `$1103→$1574→$152C`.
+
+**The tell, and it is the strongest single piece of evidence:** in the `$1103` incident,
+`vice_checkpoint_list` reported that checkpoint at **`hit_count: 0`** after multiple resume/poll
+cycles — on an IRQ-driven screen where `$1103` must execute every frame. A checkpoint that cannot
+register a hit on an address the machine is obliged to execute means the machine was not getting
+there.
+
+**The mechanism this implies.** An armed stopping checkpoint pins the PC because every resume
+re-enters the trap before any useful work retires. That reproduces the full documented signature
+with nothing else required: the cycle bracket reads exactly `0`; `vice_ping` answers
+`execution:"running"` because VICE's execution flag flips before the trap fires; and
+`vice_registers_get` returns a byte-identical PC every time because **the machine genuinely never
+moved** — which is a simpler explanation than the "stale/cached register-reporting path" the
+original todo reached for.
+
+**How to test it, container-side, in two reads.** Before running any cycle bracket:
+`vice_checkpoint_list` to enumerate what is armed, then resolve the live IRQ handler — `$0314/$0315`
+normally, `$FFFE/$FFFF` when `$01` has the ROMs banked out (see the 2026-08-01 vector-table entry).
+An armed *stopping* checkpoint at or inside the live IRQ path, with the PC pinned at or just past
+it, is the signature. **No `vice_execution_run` is needed to reach this verdict** — which matters,
+because `vice_execution_run` is this project's leading crash suspect (D-1.2-F) and the liveness
+bracket requires it.
+
+**The counter-evidence, which is why this is MEDIUM and not HIGH.** In the `$1103` incident,
+deleting the offending checkpoint did **not** unfreeze the machine, and neither did a soft reset, a
+hard reset, nor an explicit `vice_execution_step({count:1})`. So a checkpoint trap may be the
+*onset* without being the whole story — it may be what tips VICE into a state it cannot leave.
+Do not assume delete-and-resume always recovers it.
+
+**Costs if wrong:** none beyond two cheap reads. Checking for a checkpoint trap before running a
+bracket is strictly cheaper than the bracket itself.
+
+**Consequence for technique, applicable immediately and independently of Phase 01.3:** a stopping
+exec checkpoint on an IRQ handler entry is core RE technique that Phase 2's exhaustive trace
+depends on, so this is **not** a reason to stop using it. It is a reason to enumerate armed
+checkpoints *first* whenever the machine looks frozen, and to suspect what you armed before
+concluding the emulator died.
+
