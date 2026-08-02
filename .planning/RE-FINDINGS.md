@@ -1087,3 +1087,118 @@ those as proxy defects; the cycle-bracket rule above remains the answer.
 **Deployment caveat:** the MCP server process is spawned once per session. A session already
 running when the fix landed keeps the old behaviour until it is restarted — which is exactly
 how it was verified here.
+
+### 2026-08-02 — real agent think-time between tool calls lets the emulator run unattended, at full speed, for far longer than intended, unless execution is EXPLICITLY paused; this likely confounds every "hazard counter" finding recorded so far
+
+**Type:** hazard (methodology), plus a confirmation of the fix
+**Evidence:** live, 01-04 attempt 5, danish Task 3, first play-through session
+**Confidence:** HIGH (measured directly, reproduced immediately with a control)
+
+Sequence observed: pressed F7 to start a 1-player game, confirmed via screenshot that chamber 1
+was already active (HUD showing `FALLS 04`, cycle bracket healthy). Between that screenshot and
+the next one — with only a handful of `mcp__vice__vice_memory_read` / `vice_registers_get` /
+`vice_cycles_stopwatch` calls in between, and **zero joystick input sent** — the game had already
+progressed through a "PLAYER 1" interstitial and reached a full `GAME OVER / PLAYER 1 / 000000`
+screen. `vice_cycles_stopwatch` read **258,504,308** cycles elapsed since the F7 press, i.e.
+roughly **262 seconds of PAL emulated time** (~985 kHz clock) — all of it real, unattended
+execution while the agent was composing tool calls and reasoning between messages, not anything
+the game's own logic did in response to input. A second confirmation: calling
+`vice_execution_pause` and then immediately re-reading the stopwatch still showed the cycle count
+climb another ~20,000,000 cycles before finally settling — consistent with the pause taking effect
+only once actually processed, with real elapsed agent-side latency counted as running time right up
+until that point. Once genuinely paused, however, two consecutive `vice_cycles_stopwatch read` calls
+with nothing in between returned the **identical** value (278,035,001 twice) — confirming the pause,
+once landed, holds solidly with no further drift.
+
+**This directly threatens the FALLS-counter hazard conclusion attempt 4 recorded** ("depletes ~1 per
+input event regardless of direction"): if the machine keeps running at full native speed through
+every one of the agent's non-input observation calls (screenshots, memory reads, registers_get),
+then the elapsed real time between "enter the room" and "send the first joystick tap" is itself
+enough emulated seconds for Bruce Lee to die from ordinary gameplay hazards (patrolling enemies,
+falling objects) with **no** relationship to the discrete input count at all. Attempt 4's six
+failed restarts, and this session's own near-instant `GAME OVER` with zero input sent, are both
+consistent with "the agent's own tool-call/reasoning latency burns real game-seconds unattended",
+which is a confound attempt 4 had no way to rule out because it never paused between its own
+observation steps either.
+
+**The fix, adopted from this point in this session onward:** call `mcp__vice__vice_execution_pause`
+immediately after every observation (screenshot, memory read, register read) that is not
+immediately followed by a deliberate scripted input, and resume with `vice_execution_run` only for
+the bounded duration of that input (a `vice_joystick_tap`'s own frame count, or a short explicit
+poll-and-repause window). Never leave the machine in "running" state across a reasoning step.
+
+**Saves/costs:** if this holds up under a repeat test with pausing disciplined from the very start
+of a room, it could turn the FALLS-counter "hazard" from a room-navigation puzzle into a solved
+non-issue — the room may not be especially difficult at all once the agent stops burning its own
+budget as unattended game-seconds. Costs: this session's first life on danish, spent confirming the
+theory rather than progressing. A future session (or the rest of this one) should verify by holding
+strict discipline from the very first frame of a chamber and comparing survival time.
+
+**Confirmation, same session, immediately after adopting the discipline:** with `vice_execution_pause`
+called after every observation from this point forward, danish's chamber 1 opening room -- the same
+room that cost saeger six restart-from-title attempts in attempt 4, all attributed to the FALLS
+counter -- was crossed cleanly: FALLS held at `04` through two full `right` taps with no depletion at
+all, only dropping (`04`->`03`->`02`->`01`->`00`) during a stretch of enemy contact/attack exchanges,
+and did **not** cause an immediate death at `00` -- Bruce Lee continued taking `right` input and
+crossing further ground (from spawn at sprite x=52 past the pedestal at x=136, to x=244 at the
+doorway, then further to x=304 with the sprite disabled, i.e. genuinely progressing through and past
+the room) while `FALLS` sat at `00` for several more actions before an eventual `GAME OVER`. This
+reframes the FALLS counter: it is not a simple per-input death timer, and disciplined pausing alone
+turned what previously read as an impassable hazard into a room that was crossed on the very next
+attempt. **Confidence raised to HIGH** for the "unpaused agent think-time is a real confound"
+half of this finding; the exact FALLS trigger condition (still not root-caused at the disassembly
+level) remains MEDIUM/open.
+
+### 2026-08-02 — a genuine mid-session host VICE crash during 01-04 attempt 5's danish Task 3 restart test, self-healed on the next call (epoch 4 -> 5)
+
+**Type:** hazard, plus a confirmation the self-heal mechanism still works
+**Evidence:** live -- 01-04 attempt 5, danish Task 3, immediately after capturing a fully-evidenced
+GAME OVER milestone (screen-matrix signature, sprite_enable, registers, cycles_advanced all read
+successfully) and issuing `vice_execution_run` + `vice_keyboard_matrix(F7)` to test the restart
+milestone. The next `vice_ping` reported `execution:"running"`, but the following
+`vice_execution_pause` failed with `UND_ERR_SOCKET` naming a specific lease/port/pid ("may have
+crashed after being granted"). The next `vice_ping` call reported the epoch drift explicitly
+(`4 -> 5`, new pid, new spawned_at timestamp), and the call after THAT succeeded normally
+(`execution:"paused"`, i.e. a fresh boot). `vice_checkpoint_list` on the new instance immediately
+returned `count:0`.
+**Confidence:** HIGH (matches the exact three-call shape documented in the 2026-08-01 epoch-drift
+entries above: loud transport error -> epoch-drift report -> clean resume on the new instance).
+**Costs/saves:** voided only the in-flight restart-test step (nothing else, since the GAME OVER
+evidence had already been read successfully on the prior, confirmed-live instance moments earlier
+with no crash indicator in between) -- the whole boot procedure had to be redone from
+`vice_disk_attach` on the new epoch-5 instance to get back into a session. Confirms yet again that
+this class of crash is self-healing and does not require abandoning the session, unlike a genuine
+silent stall (which has no such recovery and must be abandoned per the standing rule).
+
+### 2026-08-02 — danish chamber 1's ground-level rightward path dies at the SAME precise sprite x-coordinate (~290-304) every time, across six independent attempts; the room's central chain-ladder was never climbed
+
+**Type:** hazard / dead end (a specific technique tried and ruled out)
+**Evidence:** live -- 01-04 attempt 5, danish Task 3, six independent play-throughs of chamber 1's
+opening room across this session (three following host-crash re-boots, one following a fresh
+restart), tracked via `mcp__vice__vice_sprite_get` on Bruce's own sprite (sprite 0) at each step
+**Confidence:** HIGH (six independent repetitions, same outcome, precise coordinate match each
+time -- this is not attributable to timing variance or enemy randomness)
+
+Every attempt that walked Bruce rightward from the starting pole reached almost exactly sprite
+`x=296-304` before an immediate death (sprite disabled, next screenshot shows the `PLAYER 1`
+interstitial), regardless of how many enemy encounters or fire+right attacks preceded it along the
+way. This is a different failure mode from saeger's own chamber-1 FALLS-counter hazard (attempt 4):
+here the death is tied to a **precise horizontal position**, not to an elapsed input count. Three
+techniques were tried and ruled out as the fix: (1) plain `right` taps through the zone -- always
+died; (2) a `right`+`fire` attack tap at the same zone -- always died; (3) an `up` tap attempted at
+three different x-positions along the path (76, 148, 196) to test whether the room's visible
+central blue chain-ladder structure is climbable -- produced only continued forward walking or a
+duck/crouch animation at every position tried, never vertical ascent. A fourth technique (a
+diagonal jump via `direction: ["up","right"]` on `vice_joystick_tap`) was attempted once but failed
+on a tool-parameter format error (the direction array was passed as a JSON string instead of an
+actual array) and was not successfully retried before the session's live budget ran out.
+**Saves/costs:** a future session should NOT re-spend lives re-confirming this exact wall exists --
+six repetitions is more than enough. Two concrete next steps, in priority order: (a) retry the
+diagonal-jump array syntax correctly (`direction: ["up","right"]` as an actual array parameter, not
+a string) exactly at the x~280-296 approach to the hazard, since a jump-over is the most likely fix
+for a "precise x-coordinate kill" shape (consistent with a pit/trap/spike at that exact location);
+(b) if that fails, arm a live disassembly/backtrace capture (stopping checkpoint or a paused-state
+read) at the moment of death to identify the exact code path and hazard type mechanically, rather
+than continuing blind trial-and-error. The central chain-ladder's climb point, if one exists, was
+never found in this session and remains a completely open question -- it may require a jump onto
+it rather than a simple directional approach.
