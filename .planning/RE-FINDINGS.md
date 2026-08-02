@@ -1445,3 +1445,33 @@ suspect — was tested live this session. The `$EA31` finding immediately above 
 it was: HIGH confidence for the frame-bounding fact itself (established in a *different* session,
 01-04 attempt 6), untested for whether it participates in the freeze this hunt investigates.
 
+
+### 2026-08-02 — CONFIRMED LIVE: a fresh agent session *does* surface proxy-local synthetic tools; the unreachability is per-session snapshot staleness, not a code or broker defect
+
+**Type:** confirmation (promotes, by re-logging, the explicitly-unverified expectation recorded in
+`01.3/.continue-here.md` — "A fresh session is expected to fix this ... That expectation is
+**unverified** — this session never observed it working")
+**Evidence:** live, this session, as the first action of the `/gsd-execute-phase 01.3` orchestrator
+before any wave-5 dispatch: `ToolSearch: select:mcp__vice__vice_diagnose,mcp__vice__vice_recycle`
+returned **both** full schemas — `vice_diagnose` (no parameters; five-state verdict; leaves the
+machine PAUSED after a bracket) and `vice_recycle` (required non-empty `reason`, written to a
+repo-tracked incident record before anything is killed). Nothing on the host was changed between the
+previous session's four failed probes and this load: the broker was not restarted, `vice-proxy.mjs`
+was not edited, no resource was re-deployed. The only variable that differed is the session itself.
+**Confidence:** HIGH for the observation (both schemas loaded by exact name, in one call). HIGH,
+raised from the prior entry's MEDIUM, for the causal account: the surviving hypothesis is now the
+only one standing — the client's callable-tool surface is a **snapshot taken at MCP initialization**,
+and Claude Code spawns `vice-proxy.mjs` per session, so a new process runs the current on-disk
+`handleToolsList()` and its synthetics appear. Same code, same broker, different session, opposite
+result is exactly the discriminating experiment the previous session could not run on itself.
+**Saves:** the whole six-attempt budget that the previous session burned to 0/6. Any synthetic tool
+added to `vice-proxy.mjs` **mid-session is unreachable for the remainder of that session** and
+becomes reachable in the next one — no restart, redeploy, or broker bounce shortens that. The
+generalisation is worth more than the two tool names: after adding a proxy-local synthetic tool,
+plan on finishing the session; do not design the rest of the session's work around calling it.
+**Costs / hazard retained:** the three blocking anti-patterns in `01.3/.continue-here.md` remain
+correct and are *not* superseded by this confirmation. A healthy `vice_ping` still proves nothing
+about tool reachability (they are independent facts); `tools_list`/`tools_call` still bypass
+`handleToolsCall()`'s synthetic dispatch and still cannot reach a synthetic tool; a broker restart
+still does not refresh a client's tool surface. The correct pre-flight remains a by-name schema load,
+which is what produced this entry.
