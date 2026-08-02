@@ -5,7 +5,7 @@ milestone_name: Pipeline Proven *
 current_phase: 01
 current_phase_name: recovery-provenance
 status: executing
-stopped_at: "Wave 4 halted a FOURTH time (attempt 4), but the session was NOT wasted: 01-05 ran to completion afterwards on the user's explicit call, because it touches no emulator. 01-04 state: Tasks 1-2 complete for BOTH releases; Task 3 now saeger 5/7 milestones (death, game-over and restart newly earned this attempt, on top of title-screen and game-start/chamber-1) and danish STILL 0/7, unattempted in any of four sessions; Task 4 not reached. Cause: a SECOND genuine silent stall, in a fresh session's fresh instance, frozen at PC $07DE — the IDENTICAL address attempt 3's stall froze at (N=2, now flagged for investigation). Confirmed three ways: the executor's two 0-cycle brackets, then an independent orchestrator-side bracket after the subagent exited and its worktree was merged (0 cycles, PC $07DE, ping still saying \\\\\\\"running\\\\\\\"). A stall cannot be repaired in-session. 01-06 was deliberately HELD — it designates the canonical disassembly subject that every later phase builds on, and that decision should rest on a finished completeness claim. RESUME IN A FRESH SESSION with /gsd-execute-phase 1 — it re-dispatches 01-04 (danish's Task 3 from scratch is the biggest remaining gap) and then 01-06."
+stopped_at: "Wave 4 halted a FIFTH time (attempt 5) — but on a GAMEPLAY obstacle and an exhausted live budget, NOT on a host stall. This is the first 01-04 attempt to end with its instance still healthy: an orchestrator-side bracket taken after the subagent exited and its worktree was merged read 17,989,083 cycles. Largest single-session gain of the five attempts: danish's Task 3 went 0/7 → 5/7 (title-screen, game-start-chamber1, death, game-over, restart, each with full mechanical proof), reaching exact parity with saeger's 5/7 from attempt 4. saeger untouched this session. Task 4 (checkpoint:human-verify) still not reached; RECOVER-04 still unsatisfied. Headline finding, logged live: unpaused agent think-time between tool calls burns real emulated game-seconds unattended — 262 real seconds elapsed with zero input sent — so vice_execution_pause must follow EVERY observation. Once that discipline was adopted, danish's opening hazard room was crossed on the next try, which likely confounds attempt 4's 'FALLS depletes per input event' conclusion for saeger. Remaining obstacle is precisely located, not mysterious: six independent deaths at the identical sprite x-coordinate (~290–304) on danish chamber 1's ground path, filed as a pending todo with concrete next steps. Three host VICE crashes occurred and all self-healed, costing no evidence. 01-06 remains HELD pending a developer decision — it designates the canonical disassembly subject every later phase builds on, and the hold's stated condition (a finished completeness claim) is still unmet, though 01-06 has no technical dependency on 01-04 and touches no emulator."
 last_updated: "2026-08-02T10:04:07.553Z"
 last_activity: 2026-08-02
 last_activity_desc: Phase 01 execution started
@@ -31,9 +31,9 @@ See: .planning/PROJECT.md (updated 2026-07-31)
 
 Milestone: v1.0 — Pipeline Proven (Phases 1–4 of 7 total)
 Phase: 01 (recovery-provenance) — EXECUTING
-Plan: 1 of 6
-Status: Executing Phase 01
-Last activity: 2026-08-02 — Phase 01 execution started
+Plan: 4 of 6 complete (01-01, 01-02, 01-03, 01-05). 01-04 partially executed across FIVE attempts; 01-06 not started, held by choice.
+Status: 01-04 incomplete — both releases now at 5/7 Task 3 milestones (parity), Task 4 not reached. Unlike attempts 3 and 4, this session ended with a HEALTHY emulator instance, so a sixth attempt is possible without waiting for a fresh session.
+Last activity: 2026-08-02 — Phase 01 wave 4 re-dispatched (attempt 5); danish's Task 3 pass finally started and reached 5/7
 
 Progress (v1.0): [████░░░░░░] 40% — 8/20 plans
 Progress (overall): [██░░░░░░░░] 23% — 8/35 plans
