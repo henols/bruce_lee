@@ -1335,6 +1335,55 @@ test("maintain_spares: with a never-succeeding probe, no grant is ever issued an
   }
 });
 
+test("write_json_atomic: a --once --dry-run pass promoting a launching spare leaves no .broker.* file and no *.tmp file anywhere under the pool dir, and every protocol file it wrote is intact JSON at mode 600", async () => {
+  const dir = tmpPoolDir();
+  const probe = alwaysSucceedProbe();
+  try {
+    const port = 7730;
+    writeSpareFile(dir, port, { state: "launching" });
+
+    await runBrokerOnce(dir, { basePort: port, spares: 0, probeCmd: probe });
+
+    const allFiles = listAllFilesRecursive(dir);
+    assert.ok(
+      !allFiles.some((f) => /(^|\/)\.broker\./.test(f)),
+      `expected no .broker.* file anywhere under the pool dir, found: ${JSON.stringify(allFiles)}`
+    );
+    assert.ok(
+      !allFiles.some((f) => f.endsWith(".tmp")),
+      `expected no leftover *.tmp file anywhere under the pool dir, found: ${JSON.stringify(allFiles)}`
+    );
+
+    const brokerJsonPath = join(dir, "broker.json");
+    const brokerInstancesPath = join(dir, "broker-instances.json");
+    const sparePath = join(dir, "spares", `${port}.json`);
+
+    for (const p of [brokerJsonPath, brokerInstancesPath, sparePath]) {
+      const parsed = JSON.parse(readFileSync(p, "utf8")); // throws if not valid JSON
+      assert.ok(parsed, `${p} must parse as JSON`);
+      assert.equal(statSync(p).mode & 0o777, 0o600, `${p} must be mode 600`);
+    }
+    assert.equal(JSON.parse(readFileSync(sparePath, "utf8")).state, "ready", "the planted spare must have been promoted");
+
+    // Structural: write_json_atomic() no longer names the old random-name
+    // utility, and does contain both the ".tmp" suffix and the explicit
+    // chmod 600 -- slice starts at the definition line, deliberately AFTER
+    // the header comment, so the comment's historical discussion of the old
+    // approach cannot trip this assertion; it is about code, not prose.
+    const src = readFileSync(BROKER_SCRIPT, "utf8");
+    const defStart = src.indexOf("write_json_atomic() {");
+    const defEnd = src.indexOf("\n}\n", defStart);
+    assert.ok(defStart > 0 && defEnd > defStart, "write_json_atomic() must be found in the source");
+    const body = src.slice(defStart, defEnd);
+    assert.doesNotMatch(body, /mktemp/, "write_json_atomic() body must no longer call mktemp");
+    assert.match(body, /\.tmp/, "write_json_atomic() body must construct a .tmp sibling path");
+    assert.match(body, /chmod 600/, "write_json_atomic() body must still chmod 600 explicitly");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(dirname(probe), { recursive: true, force: true });
+  }
+});
+
 test("maintain_spares: with a probe that fails twice then succeeds, the entry transitions launching -> ready on the third pass and not before", async () => {
   const dir = tmpPoolDir();
   const probe = failNTimesThenSucceedProbe(2);
