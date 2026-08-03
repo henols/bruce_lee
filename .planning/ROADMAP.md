@@ -584,7 +584,7 @@ Plans:
 
 **Risks**: This is the bulk of the line count and the place a mechanical conversion drifts silently. `vice-proxy.mjs`'s ~2,100 lines of project-specific logic (broker leasing, epoch/liveness, recycle/diagnose, deny-list, path rewriting, incident capture) must come through untouched — 01.6.3 swaps its transport seam afterwards, and doing both at once would make a regression ambiguous.
 
-**Plans:** 7/8 plans executed
+**Plans:** 8/8 plans executed
 
 Plans:
 **Wave 1**
@@ -617,7 +617,7 @@ Plans:
 
 **Wave 8** *(blocked on Wave 7 completion)*
 
-- [ ] 01.6.1-08-PLAN.md — Slice 9b: the 4,370-line proxy test converts; phase close rolls up C3/C7/C8/C10 + A/B/C with evidence, re-proves the criterion-B guards against the final tree, and records the two unprovable claims as backstops
+- [x] 01.6.1-08-PLAN.md — Slice 9b: the 4,370-line proxy test converts; phase close rolls up C3/C7/C8/C10 + A/B/C with evidence, re-proves the criterion-B guards against the final tree, and records the two unprovable claims as backstops
 
 **Cross-cutting constraints:**
 

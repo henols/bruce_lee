@@ -6,14 +6,14 @@ current_phase: 01.6.1
 current_phase_name: container-side-conversion-to-typescript
 status: executing
 stopped_at: Phase 01.6.1 PLANNED (8 plans, 8 strictly sequential waves, checker passed first iteration). Phase 01.6 remains at Needs Review — 12/14 verified, 2 backstop truths abstained pending host-side verification. 01.3 still PAUSED at 5/6.
-last_updated: "2026-08-03T09:06:55.051Z"
+last_updated: "2026-08-03T15:17:21.626Z"
 last_activity: 2026-08-03
-last_activity_desc: Phase 01.6.1 execution started
+last_activity_desc: Phase 01.6.1 execution resumed (wave continue)
 progress:
   total_phases: 9
   completed_phases: 3
   total_plans: 33
-  completed_plans: 21
+  completed_plans: 28
   percent: 33
 ---
 
@@ -53,7 +53,7 @@ Status: Executing Phase 01.6.1
 
 **Known-failing check, carried forward for whoever resumes 01-04:** the plan's own Task 3 automated verification fails today — `saeger`'s `death` milestone is recorded `reached: true` with `cycles_advanced: null` and an explicit `evidentiary_gap` (no screen-matrix SHA-256 captured, attempt 4). Attempt 6 must re-capture that signature, not merely reach the two remaining milestones. danish's five milestones all carry full mechanical proof and pass.
 
-Last activity: 2026-08-03 — Phase 01.6.1 execution started
+Last activity: 2026-08-03 — Phase 01.6.1 execution resumed (wave continue)
 
 Progress (v1.1): [█░░░░░░░░░] 6% — 5 plans done (01.3-01…05), 1 known outstanding (01.3-06); 01.4/01.5/01.6 not yet broken into plans, so the denominator is not knowable yet.
 Progress (v1.0, paused): [████░░░░░░] 40% — 8/20 plans
