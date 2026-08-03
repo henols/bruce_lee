@@ -20,7 +20,7 @@ import { installResources } from "./install-resources.ts";
 
 const execFileP = promisify(execFile);
 const REPO_ROOT_MODULE_URL = new URL("./repo-root.ts", import.meta.url).href;
-const VICE_MODULE_URL = new URL("./vice.mjs", import.meta.url).href;
+const VICE_MODULE_URL = new URL("./vice.ts", import.meta.url).href;
 
 /** Parse `key=value` lines (one per line, as `--print-paths` emits) into a
  * plain object. */

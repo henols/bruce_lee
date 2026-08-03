@@ -319,7 +319,7 @@ test("stdout carries only valid JSON-RPC messages", async () => {
     // session -- covering initialize, tools/list, tools/call, a malformed
     // line, and an unknown method -- must have parsed cleanly as JSON and
     // carry jsonrpc: "2.0". This is what fails if ANY module in the import
-    // graph (vice.mjs and everything it transitively imports) ever leaks a
+    // graph (vice.ts and everything it transitively imports) ever leaks a
     // stray console.log onto stdout instead of stderr.
     assert.ok(proxy.messages.length >= 5, "expected at least 5 stdout messages across this session");
     for (const msg of proxy.messages) {
@@ -3432,7 +3432,7 @@ test("structural: within handleRecycle(), the record write appears before the re
 // the only-permitted-route rule (criteria 5, 8, 9 in 01.3-VALIDATION.md).
 // ---------------------------------------------------------------------------
 
-test("structural: the set of source files under .claude/mcp/vice/ containing a network-call construct is exactly vice.mjs and vice-probe.ts", () => {
+test("structural: the set of source files under .claude/mcp/vice/ containing a network-call construct is exactly vice.ts and vice-probe.ts", () => {
   // Directory-enumerating, matching skill-docs.test.mjs's own idiom -- a
   // future module joining this directory is covered the moment it lands on
   // disk, with no test file to remember to update. A "network-call
@@ -3449,6 +3449,12 @@ test("structural: the set of source files under .claude/mcp/vice/ containing a n
   // check's file-enumeration predicate is widened here, to the same
   // `[cm]?[jt]s` class used throughout this phase's other enumerators --
   // vice-proxy.mjs/vice-proxy.test.mjs are not renamed or otherwise touched.
+  //
+  // UPDATED, Phase 01.6.1 Plan 05 (the vice.mjs->vice.ts rename this fourth
+  // enumerator's own expected-offenders array was flagged, since Wave 1, as
+  // needing an update the moment this rename landed): the array entry is
+  // renamed to match, not deleted -- the check still enforces the same
+  // two-file network-call surface, it just tracks the surviving name.
   const NETWORK_CALL_PATTERN = /\bfetch\s*\(/;
   const files = readdirSync(HERE)
     .filter((f) => /\.[cm]?[jt]s$/.test(f) && !/\.test\.[cm]?[jt]s$/.test(f))
@@ -3458,8 +3464,8 @@ test("structural: the set of source files under .claude/mcp/vice/ containing a n
   const offenders = files.filter((f) => NETWORK_CALL_PATTERN.test(readFileSync(join(HERE, f), "utf8")));
   assert.deepEqual(
     offenders.sort(),
-    ["vice-probe.ts", "vice.mjs"],
-    `the network-call module set changed -- expected exactly ["vice-probe.ts", "vice.mjs"], got ${JSON.stringify(offenders)}. ` +
+    ["vice-probe.ts", "vice.ts"],
+    `the network-call module set changed -- expected exactly ["vice-probe.ts", "vice.ts"], got ${JSON.stringify(offenders)}. ` +
       "A module reaching the host outside the sanctioned transport is the violation, not merely a style break."
   );
 });
@@ -4300,10 +4306,16 @@ test("structural: every SEAM_HAZARDS entry has a detector, an annotation and a t
 
 test("structural: the refusal set and the annotation set are disjoint", () => {
   const proxySrc = readFileSync(PROXY_PATH, "utf8");
-  const viceSrc = readFileSync(join(HERE, "vice.mjs"), "utf8");
+  const viceSrc = readFileSync(join(HERE, "vice.ts"), "utf8");
 
-  const denyMatch = viceSrc.match(/export const DENY_LIST = \[([^\]]*)\]/);
-  assert.ok(denyMatch, "DENY_LIST definition not found in vice.mjs");
+  // The pattern tolerates an optional `: <type>` annotation between the name
+  // and `=` (Phase 01.6.1-05 typed DENY_LIST as `readonly string[]`) -- a
+  // bare `export const DENY_LIST = [` match would go silently vacuous the
+  // moment the declaration gained a type annotation, exactly the
+  // extension/format-hardcoded-assertion hazard this phase's own Architecture
+  // Patterns section names.
+  const denyMatch = viceSrc.match(/export const DENY_LIST(?:\s*:\s*[^=]+)?\s*=\s*\[([^\]]*)\]/);
+  assert.ok(denyMatch, "DENY_LIST definition not found in vice.ts");
   const denyList = denyMatch[1]
     .split(",")
     .map((s) => s.trim().replace(/^"|"$/g, ""))

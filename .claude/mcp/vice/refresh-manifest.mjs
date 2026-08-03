@@ -8,7 +8,7 @@
 // Sibling import: the transport module lives in this skill's own scripts/
 // directory (plan 01.1-04 relocated it from the now-retired `vice-session`
 // skill).
-import { serverInfo, activeInstance } from "./vice.mjs";
+import { serverInfo, activeInstance } from "./vice.ts";
 import { writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";

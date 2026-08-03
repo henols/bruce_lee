@@ -13,10 +13,10 @@
 //
 // Sibling import, no longer cross-skill: `vice-session` has been retired
 // (plan 01.1-04) and its transport module tree lives here now.
-import { call, activeInstance, useInstance, DENY_LIST, readEpoch, beginSession, MachineRestartedError, mcpHost } from "./vice.mjs";
+import { call, activeInstance, useInstance, DENY_LIST, readEpoch, beginSession, MachineRestartedError, mcpHost } from "./vice.ts";
 // Sibling import, same relocation as above. probeInstance() is the
 // deliberately-fragile liveness check (see that file's own header): one
-// 1500ms-budget round trip, no retry, no dependency on vice.mjs's resilient
+// 1500ms-budget round trip, no retry, no dependency on vice.ts's resilient
 // reconnect ladder.
 import { probeInstance } from "./vice-probe.ts";
 import { repoRoot } from "./repo-root.ts";
@@ -449,7 +449,7 @@ function epochDriftMessage(when, baseline, current) {
  * new value so the next call is not refused again), or `null` if the call
  * may proceed (including the "absent baseline, now present" case, which is
  * adopted silently -- a supervisor merely started, not a restart, mirroring
- * vice.mjs's own "only compare when both are present" rule).
+ * vice.ts's own "only compare when both are present" rule).
  */
 function checkEpochAndRebaseline(when) {
   const current = currentEpoch();

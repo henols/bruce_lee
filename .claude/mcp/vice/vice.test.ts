@@ -1,6 +1,6 @@
-// node:test coverage of vice.mjs's serverInfo() deny-list stripping --
+// node:test coverage of vice.ts's serverInfo() deny-list stripping --
 // rescued from vice-pool.test.mjs (quick-260730 series) before that file is
-// deleted wholesale in plan 04. vice.mjs's LIBRARY exports (call(),
+// deleted wholesale in plan 04. vice.ts's LIBRARY exports (call(),
 // useInstance(), serverInfo(), activeInstance(), DENY_LIST) survive D-02/
 // D-05 -- only the CLI subcommand surface (including formatToolsOutput(),
 // which has no caller left once the CLI is deleted) goes with the pool
@@ -9,8 +9,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 
-import { useInstance, serverInfo, activeInstance } from "./vice.mjs";
+import { useInstance, serverInfo, activeInstance } from "./vice.ts";
 
 test("serverInfo() strips DENY_LIST tools from discovery: a server that advertises vice_disk_list yields a payload with no trace of it, in the object and in a JSON dump alike", async () => {
   // A stub speaking just enough MCP to answer initialize + tools/list. The
@@ -35,8 +36,8 @@ test("serverInfo() strips DENY_LIST tools from discovery: a server that advertis
       res.end(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result }));
     });
   });
-  await new Promise((r) => srv.listen(0, "127.0.0.1", r));
-  const port = srv.address().port;
+  await new Promise<void>((r) => srv.listen(0, "127.0.0.1", () => r()));
+  const port = (srv.address() as AddressInfo).port;
 
   // Captured before mutating the seam, so it can be restored in `finally`
   // without depending on vice-pool.mjs's DEFAULT_PORT/instanceFor (both
@@ -44,8 +45,17 @@ test("serverInfo() strips DENY_LIST tools from discovery: a server that advertis
   // surviving public contract for redirecting and restoring the seam.
   const originalInstance = activeInstance();
   try {
-    useInstance({ port, url: `http://127.0.0.1:${port}/mcp` });
-    const info = await serverInfo();
+    // epochFile is required by UseInstanceOptions (Phase 01.6.1-05's
+    // cost-free strict-mode tightening, matching Plan 03/04's own
+    // resourcesStatus()/containerizeRecord() precedent): no real production
+    // caller ever omits it (vice-proxy.mjs's own useInstance() call always
+    // supplies port/url/epochFile together), so this test now passes the
+    // untouched originalInstance's epochFile through rather than letting the
+    // seam's activeEpochFile silently become undefined for the test's
+    // duration -- zero behavior change for this test's own assertions
+    // (epochFile is never read below), and the type surface stays honest.
+    useInstance({ port, url: `http://127.0.0.1:${port}/mcp`, epochFile: originalInstance.epochFile });
+    const info = (await serverInfo()) as { tools: Array<{ name: string }> };
     const names = info.tools.map((t) => t.name);
 
     assert.ok(!names.includes("vice_disk_list"), "the forbidden tool must not survive discovery");
@@ -53,7 +63,7 @@ test("serverInfo() strips DENY_LIST tools from discovery: a server that advertis
 
     // "in the JSON dump alike": plain JSON.stringify() of the SAME payload
     // serverInfo() returns, not formatToolsOutput()'s --json rendering --
-    // that CLI-only helper has no caller left once vice.mjs's CLI is deleted
+    // that CLI-only helper has no caller left once vice.ts's CLI is deleted
     // per D-05 (plan 04), so this rescue does not depend on it surviving.
     assert.ok(!JSON.stringify(info).includes("vice_disk_list"), "the forbidden tool must not survive a JSON dump of the payload either");
   } finally {

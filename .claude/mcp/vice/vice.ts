@@ -19,8 +19,8 @@ import { supervisorDir } from "./repo-root.ts";
 // Renamed from ENDPOINT to DEFAULT_ENDPOINT (D-5): a pool lease redirects
 // the seam to a DIFFERENT endpoint at runtime via useInstance() below, so
 // this is only the starting value, never assumed to be the active one.
-const DEFAULT_ENDPOINT = process.env.VICE_MCP_URL || "http://host.docker.internal:6510/mcp";
-const DEFAULT_TIMEOUT_MS = Number(process.env.VICE_MCP_TIMEOUT_MS || 30000);
+const DEFAULT_ENDPOINT: string = process.env.VICE_MCP_URL || "http://host.docker.internal:6510/mcp";
+const DEFAULT_TIMEOUT_MS: number = Number(process.env.VICE_MCP_TIMEOUT_MS || 30000);
 
 // The container-visible alias for the host machine -- the ONE definition
 // every consumer that needs to build a host-facing URL from a bare port
@@ -36,7 +36,7 @@ const DEFAULT_TIMEOUT_MS = Number(process.env.VICE_MCP_TIMEOUT_MS || 30000);
 // Leaves DEFAULT_ENDPOINT (above) untouched -- that is a full URL read once
 // at startup, a different concern from this alias, which is read fresh on
 // every call.
-export function mcpHost() {
+export function mcpHost(): string {
   return process.env.VICE_MCP_HOST || "host.docker.internal";
 }
 
@@ -48,9 +48,16 @@ export function mcpHost() {
 // non-default VICE_SUPERVISOR_DIR. Kept exactly as-is (D-5: no behaviour
 // change with no pool running) -- this remains the default that
 // activeEpochFile below starts from.
-export const EPOCH_FILE = process.env.VICE_EPOCH_FILE
+export const EPOCH_FILE: string = process.env.VICE_EPOCH_FILE
   ? resolve(process.env.VICE_EPOCH_FILE)
   : join(supervisorDir(), "epoch.json");
+
+export interface ActiveInstance {
+  port: number;
+  url: string;
+  epochFile: string;
+  pooled: boolean;
+}
 
 // -------------------------------------------------------- active instance
 //
@@ -60,8 +67,8 @@ export const EPOCH_FILE = process.env.VICE_EPOCH_FILE
 // writer; every other read goes through the functions in this file so a
 // lease redirect takes effect everywhere at once (rpc()'s POST target,
 // readEpoch()'s default path, beginSession()'s default path).
-let activeUrl = DEFAULT_ENDPOINT;
-let activeEpochFile = EPOCH_FILE;
+let activeUrl: string = DEFAULT_ENDPOINT;
+let activeEpochFile: string = EPOCH_FILE;
 // Derived from DEFAULT_ENDPOINT rather than hardcoded or left null: with no
 // lease ever taken (no pool, or a programmatic caller that never calls
 // acquire()/useInstance()), this is still a real port identity -- e.g. for
@@ -69,7 +76,7 @@ let activeEpochFile = EPOCH_FILE;
 // UNCONDITIONALLY (D-4) and must never produce a "no port" name just because
 // nothing redirected the seam. Falls back to 6510 only if the URL has no
 // parseable port at all.
-let activePort = (() => {
+let activePort: number = (() => {
   try {
     const p = Number(new URL(DEFAULT_ENDPOINT).port);
     return Number.isInteger(p) && p > 0 ? p : 6510;
@@ -87,6 +94,13 @@ let activePort = (() => {
 // false.
 let activePooled = false;
 
+export interface UseInstanceOptions {
+  port: number;
+  url: string;
+  epochFile: string;
+  pooled?: boolean;
+}
+
 /**
  * Redirect the transport seam to a specific pooled (or fallback) instance.
  * MUST reset the MCP handshake (`initialized = false`): the handshake
@@ -96,7 +110,7 @@ let activePooled = false;
  * if called while a session is already open against the previous instance,
  * since that is a real behaviour change the caller should notice.
  */
-export function useInstance({ port, url, epochFile, pooled = false } = {}) {
+export function useInstance({ port, url, epochFile, pooled = false }: UseInstanceOptions): void {
   if (initialized) {
     console.error(
       `warn: useInstance(port ${port}) called while a session was already open against ` +
@@ -111,22 +125,37 @@ export function useInstance({ port, url, epochFile, pooled = false } = {}) {
 }
 
 /** Read-only accessor: the instance the seam is currently pointed at. */
-export function activeInstance() {
+export function activeInstance(): ActiveInstance {
   return { port: activePort, url: activeUrl, epochFile: activeEpochFile, pooled: activePooled };
 }
 
 // Forbidden tool names.  Checked by exact string match before any network
 // call is made -- see call() below.  Never remove vice_disk_list from this
 // list; see the project's own hazard note (CLAUDE.md, STATE.md blockers).
-export const DENY_LIST = ["vice_disk_list"];
+export const DENY_LIST: readonly string[] = ["vice_disk_list"];
+
+export interface ViceErrorOptions {
+  code?: number | string;
+  data?: unknown;
+}
 
 export class ViceError extends Error {
-  constructor(message, { code, data } = {}) {
+  code?: number | string;
+  data?: unknown;
+
+  constructor(message: string, { code, data }: ViceErrorOptions = {}) {
     super(message);
     this.name = "ViceError";
     this.code = code;
     this.data = data;
   }
+}
+
+export interface MachineRestartedErrorOptions {
+  baselineEpoch?: number | null;
+  currentEpoch?: number | null;
+  where?: string;
+  lastToolCall?: string | null;
 }
 
 /**
@@ -138,7 +167,12 @@ export class ViceError extends Error {
  * last tool call attempted before detection (see lastToolCall() below).
  */
 export class MachineRestartedError extends ViceError {
-  constructor(message, { baselineEpoch, currentEpoch, where, lastToolCall } = {}) {
+  baselineEpoch?: number | null;
+  currentEpoch?: number | null;
+  where?: string;
+  lastToolCall?: string | null;
+
+  constructor(message: string, { baselineEpoch, currentEpoch, where, lastToolCall }: MachineRestartedErrorOptions = {}) {
     super(message);
     this.name = "MachineRestartedError";
     this.baselineEpoch = baselineEpoch;
@@ -150,16 +184,39 @@ export class MachineRestartedError extends ViceError {
 
 let reqId = 0;
 
+export interface RpcOptions {
+  timeoutMs?: number;
+}
+
+interface JsonRpcErrorPayload {
+  code?: number;
+  message?: string;
+  data?: unknown;
+}
+
+interface JsonRpcResponsePayload {
+  error?: JsonRpcErrorPayload;
+  result?: unknown;
+}
+
+/** True iff `value` is a well-formed, generic JSON object -- not null, not
+ * an array. Matches vice-broker.mts's / vice-broker-client.ts's own
+ * isPlainObject() predicate exactly -- the same narrowing discipline this
+ * module tree uses everywhere a parsed JSON value's fields are touched. */
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 /**
  * Raw JSON-RPC round trip. Wraps every call in a client-side abort timeout --
  * vice_run_until's own `cycles` timeout is documented as "not yet
  * implemented", so nothing upstream protects us from a hung request; this is
  * that protection, at the transport layer, for every call this seam makes.
  */
-async function rpc(method, params, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+async function rpc(method: string, params: unknown, { timeoutMs = DEFAULT_TIMEOUT_MS }: RpcOptions = {}): Promise<unknown> {
   const id = ++reqId;
   const body = JSON.stringify({ jsonrpc: "2.0", id, method, params });
-  let res;
+  let res: Response;
   try {
     res = await fetch(activeUrl, {
       method: "POST",
@@ -171,7 +228,8 @@ async function rpc(method, params, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
       signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (e) {
-    if (e.name === "TimeoutError" || e.name === "AbortError") {
+    const err = e as Error;
+    if (err.name === "TimeoutError" || err.name === "AbortError") {
       throw new ViceError(
         `${method} timed out after ${timeoutMs}ms -- the host VICE MCP server may be hung or unreachable. ` +
           `Recovery is a HOST-SIDE restart, which this container cannot perform. Run ` +
@@ -179,11 +237,11 @@ async function rpc(method, params, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
           `for the still-open root-cause investigation (see .planning/STATE.md).`
       );
     }
-    throw new ViceError(`transport error calling ${method}: ${e.message}`);
+    throw new ViceError(`transport error calling ${method}: ${err.message}`);
   }
   const contentType = res.headers.get("content-type") || "";
   const text = await res.text();
-  let payload;
+  let payload: JsonRpcResponsePayload;
   if (contentType.includes("text/event-stream")) {
     // SSE-framed body: parse `data:` lines, take the last JSON payload.
     const dataLines = text
@@ -194,10 +252,12 @@ async function rpc(method, params, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
     if (!dataLines.length) {
       throw new ViceError(`no data: lines in SSE response for ${method}`);
     }
-    payload = JSON.parse(dataLines[dataLines.length - 1]);
+    const parsed: unknown = JSON.parse(dataLines[dataLines.length - 1]);
+    payload = isPlainObject(parsed) ? (parsed as JsonRpcResponsePayload) : {};
   } else {
     try {
-      payload = JSON.parse(text);
+      const parsed: unknown = JSON.parse(text);
+      payload = isPlainObject(parsed) ? (parsed as JsonRpcResponsePayload) : {};
     } catch {
       throw new ViceError(`non-JSON response for ${method}: ${text.slice(0, 200)}`);
     }
@@ -212,7 +272,7 @@ async function rpc(method, params, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
 }
 
 let initialized = false;
-async function ensureInitialized() {
+async function ensureInitialized(): Promise<void> {
   if (initialized) return;
   await rpc("initialize", {
     protocolVersion: "2024-11-05",
@@ -238,7 +298,7 @@ async function ensureInitialized() {
 // mitigation in two halves, not two independent features.
 const RECONNECT_ATTEMPTS = 5;
 const RECONNECT_BACKOFF_MS = [2000, 5000, 12000, 30000, 0];
-const nap = (ms) => new Promise((r) => setTimeout(r, ms));
+const nap = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 /**
  * A single dropped connection used to be fatal: the error propagated straight
@@ -259,17 +319,18 @@ const nap = (ms) => new Promise((r) => setTimeout(r, ms));
  * the session-identity section below (readEpoch/assertSameMachine) exists to
  * catch. Do not remove one half of this pairing without the other.
  */
-async function withReconnect(toolName, args, opts) {
+async function withReconnect(toolName: string, args: Record<string, unknown>, opts: RpcOptions): Promise<unknown> {
   lastCallSummary = summarizeCall(toolName, args);
-  let lastErr;
+  let lastErr: Error | undefined;
   for (let attempt = 0; attempt < RECONNECT_ATTEMPTS; attempt++) {
     try {
       await ensureInitialized();
       return await rpc("tools/call", { name: toolName, arguments: args }, opts);
     } catch (e) {
-      const transport = /transport error|timed out|no data: lines|non-JSON response/i.test(e.message);
-      if (!transport) throw e;
-      lastErr = e;
+      const err = e as Error;
+      const transport = /transport error|timed out|no data: lines|non-JSON response/i.test(err.message);
+      if (!transport) throw err;
+      lastErr = err;
       initialized = false; // force a fresh handshake -- the old session is gone
       // Session-identity signal (D-3): this is the ONLY place that knows a
       // reconnect was forced. Bump the counter every attempt, not just on
@@ -279,7 +340,7 @@ async function withReconnect(toolName, args, opts) {
       if (attempt < RECONNECT_ATTEMPTS - 1) {
         console.error(
           `warn: ${toolName} transport failure (attempt ${attempt + 1}/${RECONNECT_ATTEMPTS}), ` +
-            `reconnecting in ${RECONNECT_BACKOFF_MS[attempt]}ms: ${e.message}`
+            `reconnecting in ${RECONNECT_BACKOFF_MS[attempt]}ms: ${err.message}`
         );
         await nap(RECONNECT_BACKOFF_MS[attempt]);
       }
@@ -287,7 +348,7 @@ async function withReconnect(toolName, args, opts) {
   }
   throw new ViceError(
     `${toolName} failed after ${RECONNECT_ATTEMPTS} transport attempts against ${activeUrl} ` +
-      `(port ${activePort}): ${lastErr.message} -- recovery is a HOST-SIDE restart, which this ` +
+      `(port ${activePort}): ${lastErr?.message} -- recovery is a HOST-SIDE restart, which this ` +
       `container cannot perform. Run tools/vice-supervisor.sh on the HOST (see its header comment) ` +
       `-- it restarts x64sc automatically and logs the crash for the still-open root-cause investigation.`
   );
@@ -307,14 +368,20 @@ async function withReconnect(toolName, args, opts) {
 // active recovery session per process (recover.mjs's CLI runs one verb at a
 // time), so beginSession()/assertSameMachine() read and reset this state
 // directly rather than threading it through every call() site.
-let currentSession = null; // set by beginSession(): { baseline, epochPath, startedAt }
+export interface SessionInfo {
+  baseline: EpochResult;
+  epochPath: string;
+  startedAt: string;
+}
+
+let currentSession: SessionInfo | null = null; // set by beginSession(): { baseline, epochPath, startedAt }
 let reconnectCount = 0; // reset by beginSession(); incremented by withReconnect(); "consumed" (reset) by assertSameMachine()
-let lastCallSummary = null; // last tool call attempted, for D-4 evidence in a void note
+let lastCallSummary: string | null = null; // last tool call attempted, for D-4 evidence in a void note
 
 /** `${toolName} ${args}`, truncated to ~120 chars -- D-4 wants the last call before a
  * detected restart, not a full transcript. */
-function summarizeCall(toolName, args) {
-  let argsStr;
+function summarizeCall(toolName: string, args: unknown): string {
+  let argsStr: string;
   try {
     argsStr = JSON.stringify(args);
   } catch {
@@ -322,6 +389,15 @@ function summarizeCall(toolName, args) {
   }
   const full = `${toolName} ${argsStr}`;
   return full.length > 120 ? `${full.slice(0, 117)}...` : full;
+}
+
+export interface EpochResult {
+  present: boolean;
+  epoch: number | null;
+  spawned_at: string | null;
+  pid: number | null;
+  path: string;
+  reason?: string;
 }
 
 /**
@@ -337,30 +413,34 @@ function summarizeCall(toolName, args) {
  * fields are ignored, and no path derived from the file's contents is ever
  * opened.
  */
-export function readEpoch(path = activeEpochFile) {
-  const absent = { present: false, epoch: null, spawned_at: null, pid: null, path };
-  let raw;
+export function readEpoch(path: string = activeEpochFile): EpochResult {
+  const absent: EpochResult = { present: false, epoch: null, spawned_at: null, pid: null, path };
+  let raw: string;
   try {
     raw = readFileSync(path, "utf8");
   } catch {
     return { ...absent, reason: "epoch file absent" };
   }
-  let parsed;
+  let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch {
     return { ...absent, reason: "epoch file present but not valid JSON" };
   }
-  if (parsed === null || typeof parsed !== "object" || !Number.isInteger(parsed.epoch)) {
-    return { ...absent, reason: "epoch file present but its \"epoch\" field is not a finite integer" };
+  if (!isPlainObject(parsed) || !Number.isInteger(parsed.epoch)) {
+    return { ...absent, reason: 'epoch file present but its "epoch" field is not a finite integer' };
   }
   return {
     present: true,
-    epoch: parsed.epoch,
+    epoch: parsed.epoch as number,
     spawned_at: typeof parsed.spawned_at === "string" ? parsed.spawned_at : null,
-    pid: Number.isFinite(parsed.pid) ? parsed.pid : null,
+    pid: typeof parsed.pid === "number" && Number.isFinite(parsed.pid) ? parsed.pid : null,
     path,
   };
+}
+
+export interface BeginSessionOptions {
+  epochPath?: string;
 }
 
 /**
@@ -369,7 +449,7 @@ export function readEpoch(path = activeEpochFile) {
  * counter so a PRIOR session's reconnects (e.g. from a previous `recover()`
  * run inside the same `reproduce()` process) don't leak into this one.
  */
-export function beginSession({ epochPath = activeEpochFile } = {}) {
+export function beginSession({ epochPath = activeEpochFile }: BeginSessionOptions = {}): SessionInfo {
   const baseline = readEpoch(epochPath);
   reconnectCount = 0;
   currentSession = { baseline, epochPath, startedAt: new Date().toISOString() };
@@ -378,14 +458,23 @@ export function beginSession({ epochPath = activeEpochFile } = {}) {
 
 /** Read-only accessor: how many transport-forced reconnects since the last
  * beginSession() (or the last assertSameMachine() consumption -- see there). */
-export function sessionReconnects() {
+export function sessionReconnects(): number {
   return reconnectCount;
 }
 
 /** Read-only accessor: the last tool call attempted (name + truncated args),
  * for D-4 evidence -- populated even for calls that ultimately failed. */
-export function lastToolCall() {
+export function lastToolCall(): string | null {
   return lastCallSummary;
+}
+
+export type CallFn = (toolName: string, args?: Record<string, unknown>, opts?: RpcOptions) => Promise<unknown>;
+
+export interface AssertSameMachineOptions {
+  where: string;
+  armedCheckpoints?: number[];
+  reconnected?: boolean;
+  call?: CallFn;
 }
 
 /**
@@ -412,12 +501,15 @@ export function lastToolCall() {
  * checkpoint has since been deleted) doesn't re-trigger a probe against
  * checkpoints that are supposed to be gone by then.
  */
-export async function assertSameMachine(session, {
-  where,
-  armedCheckpoints = [],
-  reconnected = sessionReconnects() > 0,
-  call: callFn = call,
-} = {}) {
+export async function assertSameMachine(
+  session: SessionInfo,
+  {
+    where,
+    armedCheckpoints = [],
+    reconnected = sessionReconnects() > 0,
+    call: callFn = call,
+  }: AssertSameMachineOptions
+): Promise<void> {
   // Consume the module-level reconnect signal now -- see the doc comment
   // above for why this matters for later, unrelated checks in the same
   // session.
@@ -456,17 +548,19 @@ export async function assertSameMachine(session, {
     );
   }
 
-  let listed;
+  let listed: unknown;
   try {
     listed = await callFn("vice_checkpoint_list", {});
   } catch (e) {
+    const err = e as Error;
     throw new MachineRestartedError(
-      `${where}: a reconnect happened and the checkpoint-fallback probe itself failed (${e.message}) -- ` +
+      `${where}: a reconnect happened and the checkpoint-fallback probe itself failed (${err.message}) -- ` +
         `identity could not be proven. Re-run the capture.`,
       { baselineEpoch: session.baseline.epoch, currentEpoch: currentEpoch.epoch, where, lastToolCall: lastCallSummary }
     );
   }
-  const liveIds = new Set((listed.checkpoints || []).map((c) => c.checkpoint_num));
+  const checkpoints = isPlainObject(listed) && Array.isArray(listed.checkpoints) ? listed.checkpoints : [];
+  const liveIds = new Set((checkpoints as Array<Record<string, unknown>>).map((c) => c.checkpoint_num as number));
   const stillPresent = armedCheckpoints.some((id) => liveIds.has(id));
   if (!stillPresent) {
     throw new MachineRestartedError(
@@ -486,7 +580,7 @@ export async function assertSameMachine(session, {
  * check is the first line of the function body, deliberately, so the deny
  * list is enforced even if a future edit reorders the rest of the function.
  */
-export async function call(toolName, args = {}, opts = {}) {
+export async function call(toolName: string, args: Record<string, unknown> = {}, opts: RpcOptions = {}): Promise<unknown> {
   if (DENY_LIST.includes(toolName)) {
     throw new ViceError(
       `${toolName} is permanently forbidden -- it is known to crash the shared host VICE MCP server ` +
@@ -517,19 +611,31 @@ export async function call(toolName, args = {}, opts = {}) {
       );
     }
   }
-  const content = result?.content?.[0];
+  const content = (result as { content?: Array<{ type?: string; text?: string }> } | undefined)?.content?.[0];
   if (!content || content.type !== "text") {
     throw new ViceError(`unexpected tool result shape from ${toolName}: ${JSON.stringify(result)}`);
   }
   try {
-    return JSON.parse(content.text);
+    return JSON.parse(content.text ?? "");
   } catch {
     return content.text; // a few tools may return plain text; hand it back verbatim
   }
 }
 
 // Alias -- some call sites read more naturally as callTool(...).
-export const callTool = call;
+export const callTool: typeof call = call;
+
+export interface ToolInfo {
+  name: string;
+  description?: string;
+  inputSchema?: unknown;
+  [key: string]: unknown;
+}
+
+export interface ServerInfoPayload {
+  tools?: ToolInfo[];
+  [key: string]: unknown;
+}
 
 /**
  * The server's tools/list result (name, description, inputSchema per tool),
@@ -546,10 +652,10 @@ export const callTool = call;
  * and call-time refusal are independent layers: one hides the tool, the other
  * refuses it even when the name was obtained some other way.
  */
-export async function serverInfo() {
+export async function serverInfo(): Promise<unknown> {
   await ensureInitialized();
   const payload = await rpc("tools/list", {});
-  if (!Array.isArray(payload?.tools)) return payload;
-  return { ...payload, tools: payload.tools.filter((t) => !DENY_LIST.includes(t?.name)) };
+  if (!isPlainObject(payload) || !Array.isArray(payload.tools)) return payload;
+  const tools = payload.tools as ToolInfo[];
+  return { ...payload, tools: tools.filter((t) => !DENY_LIST.includes(t?.name)) };
 }
-
