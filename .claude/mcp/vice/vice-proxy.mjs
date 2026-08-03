@@ -18,7 +18,7 @@ import { call, activeInstance, useInstance, DENY_LIST, readEpoch, beginSession, 
 // deliberately-fragile liveness check (see that file's own header): one
 // 1500ms-budget round trip, no retry, no dependency on vice.mjs's resilient
 // reconnect ladder.
-import { probeInstance } from "./vice-probe.mjs";
+import { probeInstance } from "./vice-probe.ts";
 import { repoRoot } from "./repo-root.mjs";
 import { hostPath, SET_ENV_HINT } from "./hostpath.mjs";
 // The INVERSE direction (host -> container), for inverting a broker grant's
@@ -1191,7 +1191,7 @@ async function captureSnapshotAttempt({ at, port, epoch }) {
 // Plan 01.1-03 task 2 / ROADMAP criterion 7. Blocking on withReconnect()'s
 // ~50s ladder turns a clear diagnosis into an opaque tool timeout, so every
 // forwarded tools/call gets a pre-flight `probeInstance()` check FIRST (one
-// 1500ms-budget round trip, no retry -- see vice-probe.mjs's own header for
+// 1500ms-budget round trip, no retry -- see vice-probe.ts's own header for
 // why reusing the resilient ladder here would be wrong). When the probe
 // reports the emulator unreachable, this classifies the failure into exactly
 // one of three states, each with its own message and its own fix, each
@@ -2168,7 +2168,7 @@ async function handleToolsCall(params) {
   // Pre-flight liveness probe (task 2 / criterion 7), ordered AFTER the
   // deny-list refusal and the epoch comparison above (a refused tool and a
   // restarted machine both need answering without any network activity at
-  // all) and BEFORE delegating to call() -- see vice-probe.mjs's header for
+  // all) and BEFORE delegating to call() -- see vice-probe.ts's header for
   // why this is a single 1500ms-budget round trip with no retry, never
   // wrapped in withReconnect()'s ladder. One call site, not inside a loop.
   const { url, port } = activeInstance();

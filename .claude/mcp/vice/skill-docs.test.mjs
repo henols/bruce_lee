@@ -63,11 +63,38 @@ const AGENT_DOCS = [
 ];
 const TOOL_PREFIX = "mcp__vice__";
 
+// WIDENED, Phase 01.6.1 Task 1 (T-01.6.1-04): the original `.endsWith(".mjs")`
+// filter goes silently vacuous the moment any module in this directory
+// renames to `.ts` -- the enumeration would keep returning a shrinking
+// all-.mjs list, this test would keep passing, and coverage over every
+// renamed module would vanish with no signal anywhere that it had. The
+// widened suffix class below (`[cm]?[jt]s`, matching .js/.ts/.cjs/.mjs/.cts/
+// .mts) is the same class `load-order.test.mjs`'s own `listModuleFiles()`
+// already uses -- copied here rather than invented, so both enumerators in
+// this tree agree on what counts as "a module". Test files are DELIBERATELY
+// still enumerated (not filtered out): this gate's job is "no module name
+// leaks into an agent-facing doc", and a test file's name is exactly as
+// leakable as a source file's -- dropping test files would silently lose
+// coverage that passes today.
 function scriptModules() {
   return readdirSync(MODULE_DIR)
-    .filter((f) => f.endsWith(".mjs"))
+    .filter((f) => /\.[cm]?[jt]s$/.test(f))
     .sort();
 }
+
+// Names that ARE legitimately mentioned in an agent-facing doc despite being
+// enumerated by scriptModules() above -- each entry records why, so the
+// doc-leak loop below can skip exactly these and nothing else. Exactly one
+// entry today: `.claude/CLAUDE.md`'s own Emulator Access section names
+// `resources-sync.test.ts` verbatim and deliberately, as the enforcement
+// mechanism for the generated-`resources/` rule (a maintainer instruction
+// about which file polices generated output, not a route to the emulator) --
+// widening scriptModules() to the `.ts` class above would otherwise make
+// this file itself fail the very gate it is exempt from.
+const DOC_NAMEABLE_MODULES = {
+  "resources-sync.test.ts":
+    "named verbatim in .claude/CLAUDE.md's Emulator Access section as the generated-resources/ enforcement mechanism -- a maintainer instruction, not a route to the emulator",
+};
 
 test("module directory enumeration is non-empty and anchored on vice-sync.mjs", () => {
   const modules = scriptModules();
@@ -82,6 +109,7 @@ test("no module under this directory is named in any agent-facing doc -- no exem
   for (const doc of AGENT_DOCS) {
     const text = readFileSync(doc, "utf8");
     for (const mod of scriptModules()) {
+      if (Object.prototype.hasOwnProperty.call(DOC_NAMEABLE_MODULES, mod)) continue;
       assert.ok(
         !text.includes(mod),
         `${mod} is named in ${doc} -- agent-facing docs must not leak internal module names. ` +
