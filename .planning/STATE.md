@@ -4,16 +4,16 @@ milestone: v1.1
 milestone_name: insertion note
 current_phase: 01.6.1
 current_phase_name: container-side-conversion-to-typescript
-status: executing
-stopped_at: Phase 01.6.1 PLANNED (8 plans, 8 strictly sequential waves, checker passed first iteration). Phase 01.6 remains at Needs Review — 12/14 verified, 2 backstop truths abstained pending host-side verification. 01.3 still PAUSED at 5/6.
-last_updated: "2026-08-03T15:17:21.626Z"
+status: verified_unsealed
+stopped_at: Phase 01.6.1 VERIFIED and THREAT-SECURE, but NOT sealed — the completion predicate's one remaining blocker is UAT test 3 (skipped), a Phase 01.6 host-side truth restated in 01.6.1 for bookkeeping. Phase 01.6 is unsealed on the SAME truth (12/14, 2 host-side backstops). Both clear as a side effect of 01.6.2, which replaces the bash daemon with a TypeScript broker that writes node_version from a live process. Next action is /gsd-plan-phase 01.6.2 (not yet planned — no phase dir). 01.3 still PAUSED at 5/6.
+last_updated: "2026-08-03T17:40:00.000Z"
 last_activity: 2026-08-03
-last_activity_desc: Phase 01.6.1 execution resumed (wave continue)
+last_activity_desc: Phase 01.6.1 UAT complete (3 passed, 1 skipped, 0 issues) + security verified (25 threats, 0 open)
 progress:
   total_phases: 9
   completed_phases: 3
   total_plans: 33
-  completed_plans: 28
+  completed_plans: 29
   percent: 33
 ---
 
@@ -25,15 +25,55 @@ See: .planning/PROJECT.md (updated 2026-07-31)
 
 **Core value:** An ACME source tree that rebuilds a Bruce Lee which plays identically to the original, where every gameplay system is explained well enough that someone could change it.
 **Current milestone:** v1.1 — Emulator Access Hardened (Phases 01.3–01.7, 0 requirements — tooling)
-**Current focus:** Phase 01.6.1 — container-side-conversion-to-typescript
+**Current focus:** Phase 01.6.2 — the one-process host broker (next to plan; 01.6.1 is done bar a bookkeeping blocker)
 
 ## Current Position
 
 Milestone: **v1.1 — Emulator Access Hardened** *(inserted 2026-08-02, ahead of the rest of v1.0)*
-Phase: 01.6.1 (container-side-conversion-to-typescript) — EXECUTING
+Phase: 01.6.1 (container-side-conversion-to-typescript) — **VERIFIED + THREAT-SECURE, NOT SEALED**
+Next: 01.6.2 (the one-process host broker) — **not yet planned**, no phase dir exists
 Execution order within v1.1 is **01.6 → 01.6.1 → 01.6.2 → 01.6.3 → 01.4 → 01.5 → 01.7 → 01.3**, not numeric order.
 
-**Phase 01.6 is still at Needs Review** — 12/14 truths verified, 2 backstop truths abstained pending host-side verification the container cannot perform. Planning 01.6.1 does not seal it. 01.6.1 depends on 01.6's *landed artifacts* (the build topology and the D-02 deletions), which are verified; the two abstentions are both C1, host-side, and neither lands in 01.6.1's scope.
+**Phase 01.6.1 outcome (2026-08-03, `/gsd-verify-work 01.6.1`).** UAT complete: **3 passed, 1 skipped,
+0 issues**. `01.6.1-VERIFICATION.md` is now `passed`; `01.6.1-SECURITY.md` is `verified` with
+**25 threats, 0 open** (State B, ASVS L1 short-circuit — auditor not spawned per the workflow rule).
+The phase did **not** auto-transition: the completion predicate counts `skipped` as non-passing, so
+UAT test 3 is its one remaining blocker.
+
+**Both of 01.6.1's own backstop truths were closed LIVE, not abstained** — the circumstances that
+made them unclosable changed mid-session:
+- *Fresh-session tool surface.* The verifying session was itself spawned after the conversion landed,
+  making it the NEW-session observer `01.6.1-07-BASELINE.md` §G requires. 66 tools, name-set `diff`
+  against the served surface **empty**, `vice_disk_list` absent, all 66 carrying description +
+  inputSchema, offline handshake reproducing the baseline exactly, and a live forwarded `vice_ping`
+  returning invariant producer `brokerNeverStartedMessage` verbatim.
+- *Live behavioral equivalence.* The developer started the host broker mid-session, so all four named
+  paths were driven against a real emulator (VICE 3.10 / C64SC): broker-lease, diagnose
+  (42,920-cycle bracket, left paused per contract), checkpoint-bracket (`$EA31`, hits 0 → 228,
+  11,459,448-cycle bracket), recycle (epoch 13 → 14, pre-kill incident record, run VOID, respawn).
+  Not A/B'd against the pre-conversion `.mjs` proxy, which no longer exists — that limit is stated in
+  the artifacts rather than glossed. This also closed `T-01.6.1-22`, the one threat a test suite
+  structurally cannot close ("a green suite read as behavioural proof").
+
+**Phase 01.6 and 01.6.1 are unsealed on the SAME host-side truth**, and neither needs remediation
+work. 01.6 is at 12/14 with 2 host-side backstops; 01.6.1's test 3 is one of those two, restated so it
+would not be lost. Investigated rather than waved through: with the host broker up, the live
+`.vice-supervisor/broker.json` shows `pid`/`started_at` present, `node_version` **absent**, and
+`"written_by": "vice-broker.sh"` — the 2,103-line **bash** daemon, which does not emit that field.
+Chasing it today is a dead end: `vice-broker.mts:132-140` refuses to overwrite a record naming a live
+pid **or** carrying `heartbeat_at` (both held), and `vice-broker.mts` is a **190-line tracer**, not a
+broker (no listener, no poll loop). Per its own header it "DELIBERATELY OMITS heartbeat_at" because a
+heartbeat-less record reads as `never_started` and would strand every later session. **The field
+arrives honestly in 01.6.2**, which makes both phases sealable as a side effect of normal progress.
+Full reasoning logged in `.planning/RE-FINDINGS.md` (2026-08-03).
+
+**Gate false positives seen in 01.6.1's verification, both resolved — expect the pattern again.** The
+blocking `api-coverage` verify:pre gate fired on two **negated** clauses in `01.6.1-07-PLAN.md`
+("**Do not** adopt… any MCP library", and threat `T-01.6.1-SC`'s prohibition); the detector's
+verb+noun rule cannot read negation. Resolved with `01.6.1-COVERAGE.md`, the module's documented
+`No external API integration:` human overrule, which keeps the contradiction visible rather than
+silent. Note the detector returned `detected: false` at plan time — plan 07 was authored later. The
+real `@mastra/mcp` surface, and its required COVERAGE.md matrix, belong to **01.6.3**.
 
 **Old 01.6 was split four ways on 2026-08-02, at plan time.** `gsd-planner` returned `## PHASE SPLIT RECOMMENDED` rather than plans: post-deletion the work is 13,478 lines changed plus 2,546 bash lines re-expressed, four single files each exceed one task's context budget, and honouring "keep the suite green continuously" yields 18 plans across 5 waves against a 3–5 standard. The developer chose the split over `--chunked`. Only the first group is planned; 01.6.1/01.6.2/01.6.3 are separate planning runs. All four research artifacts stay in `.planning/phases/01.6-broker-in-node-and-tcp-control-plane/` and apply to all four groups.
 
@@ -49,13 +89,27 @@ Phase 01 (recovery-provenance) — **PARKED mid-execution, not abandoned.** 4 of
 
 **Phase 01.6's host-`node` gate is CLEARED (2026-08-02).** The host has `node` on PATH — confirmed by the developer, who has host access; the container cannot verify this by construction. The TCP control plane is in scope and the bash-broker fallback is off the table. Still unknown and worth establishing in 01.6's first plan: the host's `node` **version**, and the shell→Node call boundary, since this repo has no host-side Node precedent to copy.
 
-Status: Executing Phase 01.6.1
+**Next step, and why it is the right one.** `/gsd-plan-phase 01.6.2` — no phase dir exists yet. Two
+things to carry in: (1) the decision-coverage re-surfacing rule recorded above **will** fire on 01.6.2
+for inherited `01.6-CONTEXT.md` decisions it does not own — check the ROADMAP ownership table before
+treating it as a finding; (2) 01.6.2's hardest deliverable is not a port. `vice-broker.test.mjs` is
+2,685 lines / 61 tests that verify the daemon **by spawning it and reading on-disk state**, and that
+mechanism stops existing once the daemon becomes an in-process TypeScript event loop — a redesign,
+alongside the single-`in_flight`-owner race test (the guard behind the 2026-08-01 triple-launch
+outage) and D-04's epoch file.
+
+**Outstanding on 01.6.1, neither blocking 01.6.2:** `01.6.1-VALIDATION.md` is still `status: draft` /
+`nyquist_compliant: false` (`/gsd-validate-phase 01.6.1`), and learnings have not been extracted
+(`/gsd-extract-learnings 01.6.1` — the TypeScript closure-narrowing hazard, the negated-clause gate
+false positives, and the tracer-vs-daemon distinction are all worth harvesting).
+
+Status: Phase 01.6.1 verified and threat-secure, unsealed on one carried-forward host truth; 01.6.2 next to plan
 
 **Known-failing check, carried forward for whoever resumes 01-04:** the plan's own Task 3 automated verification fails today — `saeger`'s `death` milestone is recorded `reached: true` with `cycles_advanced: null` and an explicit `evidentiary_gap` (no screen-matrix SHA-256 captured, attempt 4). Attempt 6 must re-capture that signature, not merely reach the two remaining milestones. danish's five milestones all carry full mechanical proof and pass.
 
-Last activity: 2026-08-03 — Phase 01.6.1 execution resumed (wave continue)
+Last activity: 2026-08-03 — Phase 01.6.1 UAT complete (3 passed, 1 skipped, 0 issues); `01.6.1-VERIFICATION.md` → `passed`; `01.6.1-SECURITY.md` created, 25 threats / 0 open; `01.6.1-COVERAGE.md` created to clear the api-coverage gate
 
-Progress (v1.1): [█░░░░░░░░░] 6% — 5 plans done (01.3-01…05), 1 known outstanding (01.3-06); 01.4/01.5/01.6 not yet broken into plans, so the denominator is not knowable yet.
+Progress (v1.1): 17 of 18 authored plans done — 01.6 complete (4/4), 01.6.1 complete (8/8), 01.3 paused at 5/6 (01.3-06 outstanding). **No percentage given on purpose:** 01.6.2, 01.6.3, 01.4, 01.5 and 01.7 are not yet broken into plans, so the denominator is still not knowable and any bar here would overstate progress.
 Progress (v1.0, paused): [████░░░░░░] 40% — 8/20 plans
 Progress (overall): [██░░░░░░░░] 23% — 8/35 plans
 
