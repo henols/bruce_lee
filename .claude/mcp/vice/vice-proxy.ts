@@ -13,12 +13,25 @@
 //
 // Sibling import, no longer cross-skill: `vice-session` has been retired
 // (plan 01.1-04) and its transport module tree lives here now.
-import { call, activeInstance, useInstance, DENY_LIST, readEpoch, beginSession, MachineRestartedError, mcpHost } from "./vice.ts";
+import {
+  call,
+  activeInstance,
+  useInstance,
+  DENY_LIST,
+  readEpoch,
+  beginSession,
+  MachineRestartedError,
+  mcpHost,
+  type ActiveInstance,
+  type EpochResult,
+  type SessionInfo,
+  type ToolInfo,
+} from "./vice.ts";
 // Sibling import, same relocation as above. probeInstance() is the
 // deliberately-fragile liveness check (see that file's own header): one
 // 1500ms-budget round trip, no retry, no dependency on vice.ts's resilient
 // reconnect ladder.
-import { probeInstance } from "./vice-probe.ts";
+import { probeInstance, type ProbeResult } from "./vice-probe.ts";
 import { repoRoot } from "./repo-root.ts";
 import { hostPath, SET_ENV_HINT } from "./hostpath.ts";
 // The INVERSE direction (host -> container), for inverting a broker grant's
@@ -48,6 +61,7 @@ import {
   writeRecycleRequest,
   pollRecycleAck,
   RECYCLE_ACK_TIMEOUT_MS,
+  type BrokerLivenessResult,
 } from "./vice-broker-client.ts";
 // The recycle path's own incident record (plan 01.3-01) -- written BEFORE
 // anything is killed (D-17), never through any network call of its own.
@@ -55,12 +69,70 @@ import {
 // building logic incidentRecordPath() itself uses -- imported here so the
 // evidence gatherer's screenshot and the pre-kill snapshot's name can never
 // drift onto a second, independent naming rule.
-import { writeIncidentRecord, finaliseIncidentRecord, incidentAssetPath, incidentAssetStem } from "./incident-record.ts";
+import {
+  writeIncidentRecord,
+  finaliseIncidentRecord,
+  incidentAssetPath,
+  incidentAssetStem,
+  type IncidentEvidence,
+  type IncidentAssetStemOptions,
+} from "./incident-record.ts";
 import { readFileSync, unlinkSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, relative, resolve } from "node:path";
 
 const HERE_DIR = dirname(fileURLToPath(import.meta.url));
+
+// -------------------------------------------------------------- JSON-RPC
+//
+// The boundary types every handler below reads or produces. `params` and
+// `result` are typed `unknown` at this boundary deliberately -- MCP methods
+// each carry their own shape, narrowed at the point each handler actually
+// reads a field (never cast straight to an interface without a runtime
+// check first, matching vice-broker.mts's own isPlainObject() discipline).
+interface JsonRpcRequest {
+  jsonrpc?: string;
+  id?: string | number | null;
+  method?: string;
+  params?: unknown;
+}
+
+interface JsonRpcResponse {
+  jsonrpc: "2.0";
+  id: string | number | null;
+  result: unknown;
+}
+
+interface JsonRpcErrorResponse {
+  jsonrpc: "2.0";
+  id: string | number | null;
+  error: { code: number; message: string };
+}
+
+type JsonRpcOutgoingMessage = JsonRpcResponse | JsonRpcErrorResponse;
+
+/** tools/call's own params shape -- narrowed from `unknown` before either
+ * field is read (handleToolsCall() below), never cast. */
+interface ToolCallParams {
+  name?: unknown;
+  arguments?: unknown;
+}
+
+/** A single MCP tool descriptor, as this file's own three synthetic tools
+ * and every manifest-sourced tool share the shape (name/description/
+ * inputSchema, plus whatever `_meta` handleToolsList() stamps on afterward).
+ * Deliberately the same shape as vice.ts's own `ToolInfo` (imported above for
+ * `readManifestTools()`'s return), so a manifest tool and a synthetic tool
+ * are interchangeable wherever this file combines them. */
+type ToolDefinition = ToolInfo;
+
+/** Narrows an `unknown` value to a plain, non-array, non-null object --
+ * copied verbatim in shape from vice-broker.mts's own isPlainObject(), the
+ * one narrowing idiom this whole conversion phase uses at every JSON
+ * boundary rather than casting. */
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
 // -------------------------------------------------------------- never-throw
 //
@@ -84,7 +156,8 @@ process.on("uncaughtException", (err) => {
   console.error(`vice-proxy: uncaughtException (ignored, staying alive): ${err && err.stack ? err.stack : err}`);
 });
 process.on("unhandledRejection", (reason) => {
-  console.error(`vice-proxy: unhandledRejection (ignored, staying alive): ${reason && reason.stack ? reason.stack : reason}`);
+  const stack = reason && (reason as Error).stack ? (reason as Error).stack : reason;
+  console.error(`vice-proxy: unhandledRejection (ignored, staying alive): ${stack}`);
 });
 // An EPIPE on `stdout.write()` (Claude Code closing the pipe abruptly) throws
 // SYNCHRONOUSLY with no listener attached -- this is the exact class of the
@@ -101,12 +174,12 @@ process.stdout.on("error", (err) => {
 // newline-delimited JSON-RPC, one message per line, no embedded newlines,
 // and the server MUST NOT write anything to stdout that is not a valid MCP
 // message. All logging in this file goes to stderr, never stdout.
-function writeMessage(msg) {
-  let line;
+function writeMessage(msg: JsonRpcOutgoingMessage): void {
+  let line: string;
   try {
     line = JSON.stringify(msg);
   } catch (e) {
-    console.error(`vice-proxy: failed to serialise outgoing message (ignored): ${e.message}`);
+    console.error(`vice-proxy: failed to serialise outgoing message (ignored): ${(e as Error).message}`);
     return;
   }
   try {
@@ -115,15 +188,15 @@ function writeMessage(msg) {
     // Belt-and-suspenders alongside the 'error' listener above -- some
     // failure modes throw synchronously even with a listener attached on
     // certain Node versions/streams; never let this propagate.
-    console.error(`vice-proxy: stdout write threw (ignored): ${e.message}`);
+    console.error(`vice-proxy: stdout write threw (ignored): ${(e as Error).message}`);
   }
 }
 
-function respond(id, result) {
+function respond(id: string | number | null, result: unknown): JsonRpcResponse {
   return { jsonrpc: "2.0", id, result };
 }
 
-function errorResponse(id, code, message) {
+function errorResponse(id: string | number | null, code: number, message: string): JsonRpcErrorResponse {
   return { jsonrpc: "2.0", id, error: { code, message } };
 }
 
@@ -131,7 +204,8 @@ function errorResponse(id, code, message) {
  * params) -- per RESEARCH.md Pattern 2, these are the ONLY cases that become
  * a JSON-RPC `error` object rather than an `isError:true` result. */
 class ProtocolError extends Error {
-  constructor(code, message) {
+  code: number;
+  constructor(code: number, message: string) {
     super(message);
     this.code = code;
   }
@@ -144,11 +218,17 @@ class ProtocolError extends Error {
 // version the proxy itself supports. Zero HTTP requests happen here -- the
 // whole point of criterion 4 (enumerate/initialize with no emulator
 // acquired).
-const SUPPORTED_PROTOCOL_VERSIONS = ["2025-06-18", "2024-11-05"];
+const SUPPORTED_PROTOCOL_VERSIONS: readonly string[] = ["2025-06-18", "2024-11-05"];
 const PROXY_VERSION = "0.1.0";
 
-function handleInitialize(params) {
-  const requested = params && typeof params.protocolVersion === "string" ? params.protocolVersion : null;
+interface InitializeResult {
+  protocolVersion: string;
+  capabilities: { tools: { listChanged: boolean } };
+  serverInfo: { name: string; version: string };
+}
+
+function handleInitialize(params: unknown): InitializeResult {
+  const requested = isPlainObject(params) && typeof params.protocolVersion === "string" ? params.protocolVersion : null;
   const protocolVersion = requested && SUPPORTED_PROTOCOL_VERSIONS.includes(requested)
     ? requested
     : SUPPORTED_PROTOCOL_VERSIONS[0];
@@ -172,7 +252,7 @@ function handleInitialize(params) {
 // is declared here too, on every tool entry via `_meta`, so the ceiling a
 // caller is TOLD about and the ceiling actually enforced are the same single
 // number -- see OUTPUT_CHAR_CAP below, the one definition both sites read.
-const OUTPUT_CHAR_CAP = (() => {
+const OUTPUT_CHAR_CAP: number = (() => {
   const n = Number(process.env.VICE_MAX_RESULT_CHARS);
   return Number.isFinite(n) && n > 0 ? n : 500000;
 })();
@@ -205,7 +285,7 @@ const OUTPUT_CHAR_CAP = (() => {
 const REQUIRED_MAX_MCP_OUTPUT_TOKENS = 25000;
 let outputLimitWarned = false;
 
-function warnOnceAboutOutputLimit() {
+function warnOnceAboutOutputLimit(): void {
   if (outputLimitWarned) return;
   outputLimitWarned = true;
   const raw = process.env.MAX_MCP_OUTPUT_TOKENS;
@@ -243,7 +323,7 @@ function warnOnceAboutOutputLimit() {
 // inside this proxy, NEVER forwarded to the host, and advertised in every
 // tools/list response exactly like a real tool so an agent can discover it
 // the same way it discovers everything else.
-const RESULT_CONTINUE_TOOL = {
+const RESULT_CONTINUE_TOOL: ToolDefinition = {
   name: "vice_result_continue",
   description:
     "Retrieve the next chunk of an oversized tools/call result that vice-proxy split across a " +
@@ -268,7 +348,7 @@ const RESULT_CONTINUE_TOOL = {
 // vice_diagnose (D-03): this tool NEVER gates on a verdict, so there is no
 // "confirm"/"mode" argument and no shared state between the two tools to
 // keep in sync -- the separation itself is the safety.
-const RECYCLE_TOOL = {
+const RECYCLE_TOOL: ToolDefinition = {
   name: "vice_recycle",
   description:
     "DESTRUCTIVE. Kills and respawns THIS session's own emulator in place, on the same port, via " +
@@ -294,7 +374,7 @@ const RECYCLE_TOOL = {
 // RECYCLE_TOOL above, served in the same proxy-local synthetic slot. D-03
 // keeps the two structurally unlinked -- no shared verdict/confirm state,
 // and recycle never reads a diagnose verdict.
-const DIAGNOSE_TOOL = {
+const DIAGNOSE_TOOL: ToolDefinition = {
   name: "vice_diagnose",
   description:
     "Read-mostly. Answers which of five states this session's emulator is in -- restarted, " +
@@ -310,36 +390,36 @@ const DIAGNOSE_TOOL = {
   },
 };
 
-function manifestPath() {
+function manifestPath(): string {
   return process.env.VICE_TOOLS_MANIFEST
     ? resolve(process.env.VICE_TOOLS_MANIFEST)
     : join(HERE_DIR, "tools-manifest.json");
 }
 
-function readManifestTools() {
+function readManifestTools(): ToolInfo[] {
   const path = manifestPath();
-  let raw;
+  let raw: string;
   try {
     raw = readFileSync(path, "utf8");
   } catch (e) {
     console.error(
-      `vice-proxy: tools-manifest not readable at ${path} (${e.message}) -- answering tools/list with an empty tools array`
+      `vice-proxy: tools-manifest not readable at ${path} (${(e as Error).message}) -- answering tools/list with an empty tools array`
     );
     return [];
   }
-  let parsed;
+  let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch (e) {
     console.error(
-      `vice-proxy: tools-manifest at ${path} is not valid JSON (${e.message}) -- answering tools/list with an empty tools array`
+      `vice-proxy: tools-manifest at ${path} is not valid JSON (${(e as Error).message}) -- answering tools/list with an empty tools array`
     );
     return [];
   }
   const shapeOk =
-    parsed &&
+    isPlainObject(parsed) &&
     Array.isArray(parsed.tools) &&
-    parsed.tools.every((t) => t && typeof t === "object" && typeof t.name === "string");
+    parsed.tools.every((t: unknown) => isPlainObject(t) && typeof t.name === "string");
   if (!shapeOk) {
     console.error(
       `vice-proxy: tools-manifest at ${path} has an unexpected shape ("tools" must be an array of objects ` +
@@ -347,10 +427,14 @@ function readManifestTools() {
     );
     return [];
   }
-  return parsed.tools;
+  return (parsed as { tools: ToolInfo[] }).tools;
 }
 
-function handleToolsList() {
+interface ToolsListResult {
+  tools: ToolDefinition[];
+}
+
+function handleToolsList(): ToolsListResult {
   // Two independent transforms applied at READ time, not write time, so a
   // stale or hand-edited snapshot can never leak either property:
   //   1. re-filter DENY_LIST -- refresh-manifest.mjs's serverInfo() call
@@ -362,7 +446,7 @@ function handleToolsList() {
   const manifestTools = readManifestTools().filter((t) => !DENY_LIST.includes(t.name));
   const tools = [...manifestTools, RESULT_CONTINUE_TOOL, RECYCLE_TOOL, DIAGNOSE_TOOL].map((t) => ({
     ...t,
-    _meta: { ...(t._meta || {}), "anthropic/maxResultSizeChars": OUTPUT_CHAR_CAP },
+    _meta: { ...((t._meta as Record<string, unknown> | undefined) || {}), "anthropic/maxResultSizeChars": OUTPUT_CHAR_CAP },
   }));
   return { tools };
 }
@@ -415,25 +499,25 @@ function handleToolsList() {
 // this codebase rejects elsewhere (MachineRestartedError, the epoch
 // re-check itself): the call after a human starts the broker must just
 // work, with no session restart required.
-let viceSession = null; // beginSession()'s return value, set lazily on the first forwarded call
-let epochBaseline = null; // the rolling comparison point; updated on every re-baseline
+let viceSession: SessionInfo | null = null; // beginSession()'s return value, set lazily on the first forwarded call
+let epochBaseline: EpochResult | null = null; // the rolling comparison point; updated on every re-baseline
 
-function ensureViceSession() {
+function ensureViceSession(): void {
   if (!viceSession) {
     viceSession = beginSession();
     epochBaseline = viceSession.baseline;
   }
 }
 
-function currentEpoch() {
-  return readEpoch(viceSession.epochPath);
+function currentEpoch(): EpochResult {
+  return readEpoch((viceSession as SessionInfo).epochPath);
 }
 
-function epochChanged(baseline, current) {
-  return Boolean(baseline?.present) && Boolean(current?.present) && baseline.epoch !== current.epoch;
+function epochChanged(baseline: EpochResult | null, current: EpochResult | null): boolean {
+  return Boolean(baseline?.present) && Boolean(current?.present) && baseline!.epoch !== current!.epoch;
 }
 
-function epochDriftMessage(when, baseline, current) {
+function epochDriftMessage(when: string, baseline: EpochResult, current: EpochResult): string {
   const pidNote = current && current.pid != null ? `, pid ${current.pid}` : "";
   const spawnedNote = current && current.spawned_at ? `, spawned_at ${current.spawned_at}` : "";
   return (
@@ -451,22 +535,36 @@ function epochDriftMessage(when, baseline, current) {
  * adopted silently -- a supervisor merely started, not a restart, mirroring
  * vice.ts's own "only compare when both are present" rule).
  */
-function checkEpochAndRebaseline(when) {
+function checkEpochAndRebaseline(when: string): string | null {
   const current = currentEpoch();
   if (epochChanged(epochBaseline, current)) {
-    const msg = epochDriftMessage(when, epochBaseline, current);
+    const msg = epochDriftMessage(when, epochBaseline as EpochResult, current);
     epochBaseline = current; // never cache a negative result (criterion 6)
     return msg;
   }
-  if (!epochBaseline.present && current.present) {
+  if (!(epochBaseline as EpochResult).present && current.present) {
     epochBaseline = current;
   }
   return null;
 }
 
-function isErrorText(text) {
+interface ErrorTextResult {
+  content: { type: "text"; text: string }[];
+  isError: true;
+}
+
+function isErrorText(text: string): ErrorTextResult {
   return { content: [{ type: "text", text }], isError: true };
 }
+
+/** The shape every tools/call outcome takes (Pattern 2): success or failure,
+ * never a JSON-RPC `error` object. Shared by handleRecycle(), handleDiagnose(),
+ * handleResultContinue(), wrapPossiblyChunked() and handleToolsCall() itself. */
+interface OkTextResult {
+  content: { type: "text"; text: string }[];
+  isError: false;
+}
+type ToolCallResult = ErrorTextResult | OkTextResult;
 
 // ------------------------------------------------------------ vice_recycle
 //
@@ -478,7 +576,7 @@ function isErrorText(text) {
 // stale by construction. Clearing epochBaseline too (not just viceSession)
 // means nothing in between reads the stale value before the next
 // ensureViceSession() call re-populates both from a fresh read.
-function rebaselineEpochAfterRecycle() {
+function rebaselineEpochAfterRecycle(): void {
   viceSession = null;
   epochBaseline = null;
 }
@@ -488,7 +586,7 @@ function rebaselineEpochAfterRecycle() {
  * result can tell "no grant record" from "unreadable epoch file" from "no
  * pid recorded" from "identity mismatch" without opening the broker log
  * (matches resources/vice-broker.sh's own per-outcome ack strings). */
-function recycleAckOutcomeMessage(ack) {
+function recycleAckOutcomeMessage(ack: Record<string, unknown>): string {
   const outcome = ack && typeof ack.outcome === "string" ? ack.outcome : "unknown";
   const stage = ack && typeof ack.kill_stage === "string" ? ack.kill_stage : "unknown";
   const reason = ack && typeof ack.reason === "string" && ack.reason ? ` (${ack.reason})` : "";
@@ -527,7 +625,18 @@ function recycleAckOutcomeMessage(ack) {
  * every branch is a well-formed isError result (a dead stdio proxy is
  * unrecoverable for the session).
  */
-async function handleRecycle(args) {
+// Declared as `const ... = async function handleRecycle(args) { ... }` (a
+// contextually-typed function EXPRESSION), not `async function
+// handleRecycle(args: ...) { ... }` (a typed declaration): the latter's
+// exact param-list text would drift from vice-proxy.test.mjs's own
+// structural oracle (`indexOf("async function handleRecycle(args)")`),
+// which is off-limits to edit in this plan. The variable's own type
+// annotation gives `args` a real, checked type via TS's ordinary contextual
+// typing for a function expression assigned to a typed const -- verified
+// live this session against a scratch file (see RE-FINDINGS.md) -- so this
+// is real typing, not a suppression: every field read below still narrows
+// `args` the same way every other handler in this file does.
+const handleRecycle: (args: Record<string, unknown>) => Promise<ToolCallResult> = async function handleRecycle(args) {
   const rawReason = args && typeof args.reason === "string" ? args.reason : "";
   const reason = rawReason.trim();
   if (!reason) {
@@ -611,7 +720,7 @@ async function handleRecycle(args) {
   const epochDeadline = Date.now() + RECYCLE_ACK_TIMEOUT_MS;
   let afterEpoch = readEpoch();
   const epochMoved = () =>
-    afterEpoch.present && (!preKillEpoch.present || afterEpoch.epoch > preKillEpoch.epoch);
+    afterEpoch.present && (!preKillEpoch.present || (afterEpoch.epoch as number) > (preKillEpoch.epoch as number));
   while (Date.now() < epochDeadline && !epochMoved()) {
     await new Promise((r) => setTimeout(r, 250));
     afterEpoch = readEpoch();
@@ -633,7 +742,7 @@ async function handleRecycle(args) {
 
   const snapshotNote =
     evidence.snapshot && evidence.snapshot.available
-      ? `accepted (name: ${evidence.snapshot.value.name})`
+      ? `accepted (name: ${(evidence.snapshot.value as { name: string }).name})`
       : `unavailable (${evidence.snapshot && evidence.snapshot.reason ? evidence.snapshot.reason : "no reason recorded"})`;
 
   return {
@@ -671,7 +780,7 @@ const DIAGNOSE_VERDICTS = Object.freeze(["restarted", "checkpoint_trap", "wedged
  * hex), never decimal. Returns null, never throws, on anything unresolvable
  * (T-01.3-06: an untrusted payload degrades to "unknown", never a thrown
  * exception). */
-function toAddressNumber(value) {
+function toAddressNumber(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value === "string") {
     const s = value.trim().replace(/^\$/, "").replace(/^0x/i, "");
@@ -681,11 +790,11 @@ function toAddressNumber(value) {
   return null;
 }
 
-function formatAddress(n) {
+function formatAddress(n: number | null | undefined): string {
   return n === null || n === undefined ? "unknown" : `$${n.toString(16).toUpperCase().padStart(4, "0")}`;
 }
 
-function formatByte(n) {
+function formatByte(n: number | null | undefined): string {
   return n === null || n === undefined ? "unknown" : `$${n.toString(16).toUpperCase().padStart(2, "0")}`;
 }
 
@@ -693,22 +802,22 @@ function formatByte(n) {
  * either the compact "hex" string encoding (requested below) or the legacy
  * per-byte "bytes" array shape -- an untrusted payload degrades to an empty
  * array, never a thrown exception (T-01.3-06). */
-function bytesFromMemoryReadResult(result) {
-  if (result && typeof result.hex === "string") {
+function bytesFromMemoryReadResult(result: unknown): number[] {
+  if (isPlainObject(result) && typeof result.hex === "string") {
     const clean = result.hex.replace(/[^0-9a-fA-F]/g, "");
-    const bytes = [];
+    const bytes: number[] = [];
     for (let i = 0; i + 1 < clean.length; i += 2) bytes.push(parseInt(clean.slice(i, i + 2), 16));
     return bytes;
   }
-  if (result && Array.isArray(result.bytes)) {
-    return result.bytes
+  if (isPlainObject(result) && Array.isArray(result.bytes)) {
+    return (result.bytes as unknown[])
       .map((b) => (typeof b === "string" ? parseInt(b.replace(/^\$/, ""), 16) : Number(b)))
       .filter((n) => Number.isFinite(n));
   }
   return [];
 }
 
-function wordFromBytes(bytes) {
+function wordFromBytes(bytes: number[]): number | null {
   return bytes.length >= 2 ? bytes[0] | (bytes[1] << 8) : null;
 }
 
@@ -719,6 +828,15 @@ function wordFromBytes(bytes) {
 // IRQ/BRK vector pair ($FFFE/$FFFF) directly, with no ROM indirection.
 const HIRAM_MASK = 0x02;
 
+/** The live-IRQ-handler lookup's own return shape -- shared by
+ * gatherCheckpointTrapEvidence() below and by plan 01.3-03's evidence
+ * gatherer (gatherWedgeEvidence()). */
+interface IrqHandlerResolution {
+  target: number | null;
+  pairLabel: string;
+  explanation: string;
+}
+
 /**
  * The single definition of the live-IRQ-handler lookup (Key Finding 6):
  * three forwarded reads through the normal call() path -- $01, the RAM
@@ -728,7 +846,7 @@ const HIRAM_MASK = 0x02;
  * NOTHING: a disk swap, a reset or a different game retargets the handler,
  * so a cached address would silently resolve the wrong pair.
  */
-async function resolveLiveIrqHandler() {
+async function resolveLiveIrqHandler(): Promise<IrqHandlerResolution> {
   const portResult = await call("vice_memory_read", { address: "$01", size: 1, encoding: "hex" });
   const portBytes = bytesFromMemoryReadResult(portResult);
   const port01 = portBytes.length > 0 ? portBytes[0] : null;
@@ -768,12 +886,38 @@ async function resolveLiveIrqHandler() {
  * fired). Makes NO resume and NO stopwatch call -- the whole point of
  * checking this before any cycle bracket (D-14, T-01.3-08).
  */
-async function gatherCheckpointTrapEvidence() {
+/** A single vice_checkpoint_list entry, typed loosely (matching this
+ * codebase's own precedent for a host-written record this proxy never
+ * asserts a closed shape on) -- every field is read defensively below,
+ * never assumed present. */
+interface CheckpointInfo {
+  checkpoint_num?: unknown;
+  start?: unknown;
+  stop?: unknown;
+  exec?: unknown;
+  enabled?: unknown;
+  hit_count?: unknown;
+  [key: string]: unknown;
+}
+
+interface CheckpointTrapEvidence {
+  isTrap: boolean;
+  checkpoints: CheckpointInfo[];
+  pc: number | null;
+  handler: IrqHandlerResolution;
+  trapCheckpoint: CheckpointInfo | null;
+  trapReason: "pc" | "handler" | null;
+}
+
+async function gatherCheckpointTrapEvidence(): Promise<CheckpointTrapEvidence> {
   const checkpointsResult = await call("vice_checkpoint_list", {});
-  const checkpoints = Array.isArray(checkpointsResult && checkpointsResult.checkpoints) ? checkpointsResult.checkpoints : [];
+  const checkpoints: CheckpointInfo[] =
+    isPlainObject(checkpointsResult) && Array.isArray(checkpointsResult.checkpoints)
+      ? (checkpointsResult.checkpoints as CheckpointInfo[])
+      : [];
 
   const regs = await call("vice_registers_get", {});
-  const pc = regs && typeof regs.PC === "number" ? regs.PC : null;
+  const pc = isPlainObject(regs) && typeof regs.PC === "number" ? regs.PC : null;
 
   const handler = await resolveLiveIrqHandler();
 
@@ -808,7 +952,7 @@ const CHECKPOINT_TRAP_INCIDENT_REF =
  * PC's relation to the trap, states plainly this is self-inflicted and not a
  * wedge, names the agent's own next moves without performing any of them,
  * and closes with the not-guaranteed paragraph. */
-function renderCheckpointTrapReport(evidence) {
+function renderCheckpointTrapReport(evidence: CheckpointTrapEvidence): string {
   const { checkpoints, pc, handler, trapCheckpoint, trapReason } = evidence;
   const checkpointList =
     checkpoints.length === 0
@@ -825,9 +969,9 @@ function renderCheckpointTrapReport(evidence) {
 
   const pcRelation =
     trapReason === "pc"
-      ? `exactly at armed checkpoint #${trapCheckpoint.checkpoint_num} -- that is why the machine is stopped here`
+      ? `exactly at armed checkpoint #${trapCheckpoint!.checkpoint_num} -- that is why the machine is stopped here`
       : trapReason === "handler"
-        ? `not at the armed checkpoint's own address, but checkpoint #${trapCheckpoint.checkpoint_num} sits at ` +
+        ? `not at the armed checkpoint's own address, but checkpoint #${trapCheckpoint!.checkpoint_num} sits at ` +
           "the resolved live IRQ handler entry with hit_count 0 -- the corroborating tell that this checkpoint " +
           "has never actually fired, not merely that it fired between reads"
         : "no relation established";
@@ -858,7 +1002,7 @@ function renderCheckpointTrapReport(evidence) {
 /** Renders the restarted verdict's report -- reached from a plain epoch-file
  * comparison alone, at zero emulator calls (D-14's ordering: this check
  * costs nothing and runs first). */
-function renderRestartedReport(beforeEpoch, afterEpoch) {
+function renderRestartedReport(beforeEpoch: number | null | undefined, afterEpoch: number | null | undefined): string {
   return (
     "vice_diagnose verdict: restarted\n\n" +
     `The host VICE MCP server's epoch changed from ${beforeEpoch} to ${afterEpoch} -- the emulator ` +
@@ -889,10 +1033,15 @@ const CYCLE_BRACKET_MAX = 2;
 // become one by accident.
 const BASELINE_CYCLES_PER_SECOND = 991000;
 
-function cyclesFromStopwatchResult(result) {
-  if (result && typeof result.cycles === "number") return result.cycles;
-  if (result && typeof result.previous_cycles === "number") return result.previous_cycles;
+function cyclesFromStopwatchResult(result: unknown): number {
+  if (isPlainObject(result) && typeof result.cycles === "number") return result.cycles;
+  if (isPlainObject(result) && typeof result.previous_cycles === "number") return result.previous_cycles;
   return 0;
+}
+
+interface CycleBracketResult {
+  cycles: number;
+  elapsedMs: number;
 }
 
 /**
@@ -919,12 +1068,20 @@ async function runCycleBracket() {
   return { cycles, elapsedMs };
 }
 
-function registersByteIdentical(a, b) {
+function registersByteIdentical(a: unknown, b: unknown): boolean {
   try {
     return JSON.stringify(a) === JSON.stringify(b);
   } catch {
     return false;
   }
+}
+
+interface BracketEvidence {
+  regsBefore: unknown;
+  regsAfter: unknown;
+  bracket1: CycleBracketResult;
+  bracket2: CycleBracketResult | null;
+  finalBracket: CycleBracketResult;
 }
 
 /**
@@ -933,10 +1090,10 @@ function registersByteIdentical(a, b) {
  * two. A non-zero first bracket short-circuits (D-04): the answer is already
  * not wedged, and a second resume buys nothing.
  */
-async function gatherBracketEvidence() {
+async function gatherBracketEvidence(): Promise<BracketEvidence> {
   const regsBefore = await call("vice_registers_get", {});
   const bracket1 = await runCycleBracket();
-  let bracket2 = null;
+  let bracket2: CycleBracketResult | null = null;
   let finalBracket = bracket1;
   if (bracket1.cycles === 0) {
     bracket2 = await runCycleBracket();
@@ -946,6 +1103,8 @@ async function gatherBracketEvidence() {
   return { regsBefore, regsAfter, bracket1, bracket2, finalBracket };
 }
 
+type LivenessVerdict = "wedged" | "stale_read_path" | "live";
+
 /**
  * Produces the post-bracket verdict (criterion 2/3). Two consecutive zeros
  * is wedged and nothing else is. On any non-zero result (whichever bracket
@@ -953,7 +1112,7 @@ async function gatherBracketEvidence() {
  * bracket is stale_read_path -- one read path is stale while the machine is
  * demonstrably not frozen; anything else is live.
  */
-function classifyLiveness(evidence) {
+function classifyLiveness(evidence: BracketEvidence): LivenessVerdict {
   const { bracket1, bracket2, regsBefore, regsAfter } = evidence;
   if (bracket1.cycles === 0 && (!bracket2 || bracket2.cycles === 0)) {
     return "wedged";
@@ -970,7 +1129,7 @@ function classifyLiveness(evidence) {
  * running is compatible with every one of these verdicts and is therefore
  * evidence for none of them.
  */
-function renderDiagnoseReport(evidence, verdict) {
+function renderDiagnoseReport(evidence: BracketEvidence, verdict: LivenessVerdict): string {
   const { bracket1, bracket2, finalBracket } = evidence;
   const bracketsRun = bracket2 ? 2 : 1;
   const ratePerSecond =
@@ -1018,7 +1177,7 @@ function renderDiagnoseReport(evidence, verdict) {
  * checkpoint-trap check (no resume at all). Never throws past this point --
  * every branch is a well-formed isError:false or isError:true result.
  */
-async function handleDiagnose(_args) {
+async function handleDiagnose(_args: Record<string, unknown>): Promise<ToolCallResult> {
   try {
     const leaseResult = await ensureBrokerLease();
     if (!leaseResult.ok) {
@@ -1028,11 +1187,11 @@ async function handleDiagnose(_args) {
 
     const epochNow = currentEpoch();
     if (epochChanged(epochBaseline, epochNow)) {
-      const before = epochBaseline.epoch;
+      const before = (epochBaseline as EpochResult).epoch;
       epochBaseline = epochNow; // never cache a negative result (criterion 6)
       return { content: [{ type: "text", text: renderRestartedReport(before, epochNow.epoch) }], isError: false };
     }
-    if (!epochBaseline.present && epochNow.present) {
+    if (!(epochBaseline as EpochResult).present && epochNow.present) {
       epochBaseline = epochNow;
     }
 
@@ -1053,7 +1212,7 @@ async function handleDiagnose(_args) {
       return { content: [{ type: "text", text: renderRestartedReport(e.baselineEpoch, e.currentEpoch) }], isError: false };
     }
     return isErrorText(
-      `vice_diagnose: an unexpected error occurred while gathering evidence: ${e && e.message ? e.message : e}`
+      `vice_diagnose: an unexpected error occurred while gathering evidence: ${e && (e as Error).message ? (e as Error).message : e}`
     );
   }
 }
@@ -1089,6 +1248,11 @@ async function handleDiagnose(_args) {
  */
 const CAPTURE_STEP_TIMEOUT_MS = Number(process.env.VICE_RECYCLE_CAPTURE_TIMEOUT_MS || 8000);
 
+/** captureStep()'s own result shape -- structurally an EvidenceItem
+ * (incident-record.ts), just narrowed to a discriminated union here so a
+ * caller can branch on `available` without an optional-field guess. */
+type CaptureStepResult<T> = { available: true; value: T } | { available: false; reason: string };
+
 /**
  * Runs one evidence-gathering step, turning any rejection, transport
  * failure or capture-step deadline into an explicit `{ available: false,
@@ -1096,12 +1260,12 @@ const CAPTURE_STEP_TIMEOUT_MS = Number(process.env.VICE_RECYCLE_CAPTURE_TIMEOUT_
  * whole point (D-17, D-19) is that a wedged machine will fail SOME of these
  * and the record must still exist. Never throws.
  */
-async function captureStep(fn) {
-  let timer;
+async function captureStep<T>(fn: () => Promise<T>): Promise<CaptureStepResult<T>> {
+  let timer: NodeJS.Timeout | undefined;
   try {
     const value = await Promise.race([
       fn(),
-      new Promise((_, reject) => {
+      new Promise<never>((_, reject) => {
         timer = setTimeout(
           () => reject(new Error(`capture step deadline of ${CAPTURE_STEP_TIMEOUT_MS}ms exceeded`)),
           CAPTURE_STEP_TIMEOUT_MS
@@ -1110,7 +1274,7 @@ async function captureStep(fn) {
     ]);
     return { available: true, value };
   } catch (e) {
-    return { available: false, reason: e && e.message ? e.message : String(e) };
+    return { available: false, reason: e && (e as Error).message ? (e as Error).message : String(e) };
   } finally {
     clearTimeout(timer);
   }
@@ -1133,12 +1297,13 @@ async function captureStep(fn) {
  * the actual .md file is not reflected here, since this path is computed
  * BEFORE that write happens).
  */
-async function gatherWedgeEvidence({ at, port, epoch }) {
+async function gatherWedgeEvidence({ at, port, epoch }: IncidentAssetStemOptions): Promise<IncidentEvidence> {
   const bracket = await captureStep(() => runCycleBracket());
   const registers = await captureStep(() => call("vice_registers_get", {}));
   const checkpoints = await captureStep(async () => {
     const result = await call("vice_checkpoint_list", {});
-    const list = Array.isArray(result && result.checkpoints) ? result.checkpoints : [];
+    const list: CheckpointInfo[] =
+      isPlainObject(result) && Array.isArray(result.checkpoints) ? (result.checkpoints as CheckpointInfo[]) : [];
     return list.map((c) => ({
       checkpoint_num: c && c.checkpoint_num,
       address: formatAddress(toAddressNumber(c && c.start)),
@@ -1178,7 +1343,11 @@ async function gatherWedgeEvidence({ at, port, epoch }) {
  * record's own stem uses, so the two artifacts are trivially correlated
  * later.
  */
-async function captureSnapshotAttempt({ at, port, epoch }) {
+async function captureSnapshotAttempt({
+  at,
+  port,
+  epoch,
+}: IncidentAssetStemOptions): Promise<CaptureStepResult<{ name: string }>> {
   const name = incidentAssetStem({ at, port, epoch });
   return captureStep(async () => {
     await call("vice_snapshot_save", { name, description: "vice_recycle pre-kill evidence capture" });
@@ -1213,7 +1382,7 @@ const ONLY_ROUTE_NOTE =
  * translation failure still yields something to act on rather than an empty
  * message. Recomputed fresh every call -- never cached (see the
  * never-cache-a-negative-result invariant above ensureViceSession()). */
-function supervisorHostPath() {
+function supervisorHostPath(): string {
   const root = repoRoot();
   const target = join(root, "tools", "vice-supervisor.sh");
   try {
@@ -1225,7 +1394,7 @@ function supervisorHostPath() {
 
 /** Same shape as supervisorHostPath(), for the broker launcher instead of
  * the supervisor. Recomputed fresh every call -- never cached. */
-function brokerHostPath() {
+function brokerHostPath(): string {
   const root = repoRoot();
   const target = join(root, "tools", "vice-broker.sh");
   try {
@@ -1251,7 +1420,7 @@ function brokerHostPath() {
 /** State: readBrokerLiveness() found no broker.json at all -- the broker has
  * never been started on this host. Nothing on the other side would ever
  * read a request, so ensureBrokerLease() returns this BEFORE writing one. */
-function brokerNeverStartedMessage() {
+function brokerNeverStartedMessage(): string {
   return (
     `vice-proxy: the on-demand VICE broker has never been started on this host -- no broker.json ` +
     `record exists at all. Start it on the host with:\n` +
@@ -1264,7 +1433,7 @@ function brokerNeverStartedMessage() {
  * threshold -- the broker process is dead or hung. Quotes the recorded pid
  * (readBrokerLiveness()'s own field), since checking that pid is the first
  * thing a human does on the host, mirroring deadOrHungMessage() above. */
-function brokerDeadOrHungMessage(liveness) {
+function brokerDeadOrHungMessage(liveness: BrokerLivenessResult): string {
   const pidNote = liveness && liveness.pid != null ? ` (pid ${liveness.pid})` : "";
   return (
     `vice-proxy: the on-demand VICE broker appears to be dead or hung${pidNote} -- its last recorded ` +
@@ -1283,7 +1452,7 @@ function brokerDeadOrHungMessage(liveness) {
  * as a reference, mirroring aliveButFailedMessage()'s `hostRef` note) and
  * the only-route sentence, both required of every broker-absent-adjacent
  * message this proxy emits. */
-function brokerLaunchFailedMessage(reason) {
+function brokerLaunchFailedMessage(reason: string): string {
   const hostRef = brokerHostPath().split("\n")[0];
   return (
     `vice-proxy: the on-demand VICE broker (running via the host-side launcher at ${hostRef}) declined ` +
@@ -1298,7 +1467,7 @@ function brokerLaunchFailedMessage(reason) {
  * skill), well inside the client's own per-server timeout (.mcp.json's
  * `timeout` field, task 2), so the correct next action is simply to retry
  * the SAME call, not to treat this as a failure requiring a different fix. */
-function brokerWarmingMessage(elapsedMs) {
+function brokerWarmingMessage(elapsedMs: number): string {
   return (
     `vice-proxy: the on-demand VICE broker is still warming up an instance for this session -- no ` +
     `grant or denial appeared within ${elapsedMs}ms. This is expected for a cold start; retry the same ` +
@@ -1314,7 +1483,7 @@ function brokerWarmingMessage(elapsedMs) {
  * (already exported by vice-broker-client.ts) rather than adding a new
  * export there, so this task's file-ownership boundary (vice-proxy.mjs /
  * vice-proxy.test.mjs only) stays intact. */
-function removeRequestFile(id) {
+function removeRequestFile(id: string): void {
   try {
     unlinkSync(join(requestsDir(), `${id}.json`));
   } catch {
@@ -1329,11 +1498,11 @@ function removeRequestFile(id) {
 // status, or "didn't decode to a recognisable ping" all produce prose
 // instead, never a bare all-caps E-code, which is what keeps this predicate
 // precise rather than a loose substring guess.
-function isConnectionRefusedReason(reason) {
+function isConnectionRefusedReason(reason: unknown): boolean {
   return typeof reason === "string" && /^E[A-Z]+$/.test(reason);
 }
 
-function neverStartedMessage(probe) {
+function neverStartedMessage(probe: ProbeResult): string {
   return (
     `vice-proxy: the host VICE MCP server has never been started at this configured path -- no ` +
     `restart-epoch record exists, and the connection was refused (${probe.reason}). Start it on the host with:\n` +
@@ -1342,7 +1511,7 @@ function neverStartedMessage(probe) {
   );
 }
 
-function deadOrHungMessage(probe, epoch) {
+function deadOrHungMessage(probe: ProbeResult, epoch: EpochResult): string {
   const pidNote =
     epoch && epoch.present && epoch.pid != null
       ? ` (pid ${epoch.pid}${epoch.spawned_at ? `, spawned_at ${epoch.spawned_at}` : ""})`
@@ -1363,7 +1532,7 @@ function deadOrHungMessage(probe, epoch) {
  * rejected tool call. Still names an absolute path and the only-route note
  * (both required of every unreachable-adjacent message this proxy emits),
  * worded so as never to suggest the action a restart message would. */
-function aliveButFailedMessage(errMessage) {
+function aliveButFailedMessage(errMessage: string): string {
   const hostRef = supervisorHostPath().split("\n")[0];
   return (
     `vice-proxy: the host VICE MCP server (reachable via the host-side launcher at ${hostRef}) rejected ` +
@@ -1402,7 +1571,7 @@ function aliveButFailedMessage(errMessage) {
 // port and url (activeInstance()), the held lease id, the probe's own
 // reason verbatim, and whether an epoch record was found for this instance;
 // ends with the shared only-route note, never a second copy of it.
-function brokerGrantedUnreachableMessage(probe, epoch) {
+function brokerGrantedUnreachableMessage(probe: ProbeResult, epoch: EpochResult): string {
   const { port, url } = activeInstance();
   const epochNote = epoch && epoch.present
     ? `an epoch record is on file for it (epoch ${epoch.epoch}${epoch.pid != null ? `, pid ${epoch.pid}` : ""})`
@@ -1490,7 +1659,7 @@ class PathTranslationError extends Error {}
 // the write-side tools (snapshot_save and friends name a path that does not
 // exist yet). Lexical normalization is the part that can be enforced for both
 // directions without breaking writes.
-function isInsideWorkspace(absPath, root) {
+function isInsideWorkspace(absPath: string, root: string): boolean {
   return absPath === root || absPath.startsWith(root.endsWith("/") ? root : root + "/");
 }
 
@@ -1503,7 +1672,7 @@ function isInsideWorkspace(absPath, root) {
  * used in a refusal message so the caller can find exactly which argument
  * was the problem.
  */
-function rewritePathsIn(value, argPath, root, depth, asWritten) {
+function rewritePathsIn(value: unknown, argPath: string, root: string, depth: number, asWritten?: string): unknown {
   if (depth > PATH_REWRITE_MAX_DEPTH) return value;
   if (typeof value === "string") {
     if (!value.startsWith("/")) return value; // the stated residual: undeclared relative strings untouched
@@ -1537,7 +1706,7 @@ function rewritePathsIn(value, argPath, root, depth, asWritten) {
       throw new PathTranslationError(
         `vice-proxy: ${argPath} ` +
           (escapedRelative ? `("${asWritten}", which resolves to ${normalized})` : `(${value})`) +
-          ` could not be translated to a host path: ${e.message}\n  ${SET_ENV_HINT}`
+          ` could not be translated to a host path: ${(e as Error).message}\n  ${SET_ENV_HINT}`
       );
     }
   }
@@ -1545,7 +1714,7 @@ function rewritePathsIn(value, argPath, root, depth, asWritten) {
     return value.map((v, i) => rewritePathsIn(v, `${argPath}[${i}]`, root, depth + 1));
   }
   if (value && typeof value === "object") {
-    const out = {};
+    const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value)) {
       out[k] = rewritePathsIn(v, `${argPath}.${k}`, root, depth + 1);
     }
@@ -1554,8 +1723,8 @@ function rewritePathsIn(value, argPath, root, depth, asWritten) {
   return value; // numbers, booleans, null -- byte-identical, never touched
 }
 
-const NO_PATH_ARGS = new Set();
-let PATH_ARGS_BY_TOOL = null; // built once per process, from the manifest
+const NO_PATH_ARGS: Set<string> = new Set();
+let PATH_ARGS_BY_TOOL: Map<string, Set<string>> | null = null; // built once per process, from the manifest
 
 /**
  * The set of argument names `toolName` declares to be filesystem paths,
@@ -1571,21 +1740,30 @@ let PATH_ARGS_BY_TOOL = null; // built once per process, from the manifest
  * a manifest refresh that adds a path-taking tool gets the behaviour for
  * free, which a literal list here would silently miss.
  */
-function pathArgsFor(toolName) {
+function pathArgsFor(toolName: string): Set<string> {
   if (!PATH_ARGS_BY_TOOL) {
     PATH_ARGS_BY_TOOL = new Map();
     for (const t of readManifestTools()) {
-      const props = t.inputSchema && t.inputSchema.properties;
+      const props = isPlainObject(t.inputSchema) ? (t.inputSchema.properties as unknown) : undefined;
       if (!props || typeof props !== "object") continue;
-      const names = new Set();
-      for (const [k, v] of Object.entries(props)) {
-        if (!v || v.type !== "string") continue;
-        if (k === "path" || /^(path|file path)\b/i.test(v.description || "")) names.add(k);
+      const names = new Set<string>();
+      for (const [k, v] of Object.entries(props as Record<string, unknown>)) {
+        if (!isPlainObject(v) || v.type !== "string") continue;
+        if (k === "path" || /^(path|file path)\b/i.test((v.description as string) || "")) names.add(k);
       }
       if (names.size) PATH_ARGS_BY_TOOL.set(t.name, names);
     }
   }
   return PATH_ARGS_BY_TOOL.get(toolName) || NO_PATH_ARGS;
+}
+
+/** One `arguments.<key>` resolved from a relative, manifest-declared path
+ * argument to its absolute container form, before hostPath() translation --
+ * the record resolutionNote() below renders for the agent. */
+interface PathResolution {
+  arg: string;
+  asWritten: string;
+  container: string;
 }
 
 /** Rewrite every in-workspace path inside `args` to its host form. A relative
@@ -1594,11 +1772,14 @@ function pathArgsFor(toolName) {
  * pass-through. Throws PathOutOfWorkspaceError / PathTranslationError on the
  * two refusal cases above; the caller (handleToolsCall) converts either into
  * an isError:true result rather than letting it escape. */
-function rewriteArguments(args, toolName) {
+function rewriteArguments(
+  args: Record<string, unknown> | undefined,
+  toolName: string
+): { args: Record<string, unknown>; resolutions: PathResolution[] } {
   const root = repoRoot();
   const pathArgs = pathArgsFor(toolName);
-  const out = {};
-  const resolutions = [];
+  const out: Record<string, unknown> = {};
+  const resolutions: PathResolution[] = [];
   for (const [k, v] of Object.entries(args || {})) {
     // Only a top-level, declared-path, non-empty relative string is resolved.
     // Empty stays empty (resolve() would silently turn "" into the workspace
@@ -1623,7 +1804,7 @@ function rewriteArguments(args, toolName) {
  * before the resolution existed at all. Empty string when nothing was resolved,
  * so a call that passed absolute paths reads exactly as it always did.
  */
-function resolutionNote(resolutions) {
+function resolutionNote(resolutions: PathResolution[] | undefined): string {
   if (!resolutions || !resolutions.length) return "";
   const parts = resolutions.map((r) => `${r.arg}: "${r.asWritten}" -> ${r.container}`);
   return `vice-proxy: resolved relative path${resolutions.length > 1 ? "s" : ""} against the workspace root -- ${parts.join("; ")}`;
@@ -1645,16 +1826,30 @@ function resolutionNote(resolutions) {
 // `Map` preserves insertion order, so its first key is always the oldest).
 // An evicted or exhausted token fails loudly with advice to narrow the
 // original call rather than resume it -- there is nothing left to resume.
-const CONTINUATION_STORE = new Map(); // token -> { chunks: string[], nextIndex: number, totalChunks: number, totalChars: number }
+interface ContinuationEntry {
+  chunks: string[];
+  nextIndex: number;
+  totalChunks: number;
+  totalChars: number;
+}
+
+const CONTINUATION_STORE: Map<string, ContinuationEntry> = new Map(); // token -> { chunks: string[], nextIndex: number, totalChunks: number, totalChars: number }
 const MAX_CONTINUATIONS = 5;
 let continuationCounter = 0;
 
-function nextContinuationToken() {
+function nextContinuationToken(): string {
   continuationCounter += 1;
   return `cont-${process.pid}-${Date.now()}-${continuationCounter}`;
 }
 
-function chunkMarkerText({ chunkIndex, totalChunks, totalChars, token }) {
+interface ChunkMarkerArgs {
+  chunkIndex: number;
+  totalChunks: number;
+  totalChars: number;
+  token: string;
+}
+
+function chunkMarkerText({ chunkIndex, totalChunks, totalChars, token }: ChunkMarkerArgs): string {
   if (chunkIndex >= totalChunks) {
     return (
       `vice-proxy: chunk ${chunkIndex} of ${totalChunks} (last chunk) -- ${totalChars} total characters ` +
@@ -1676,13 +1871,13 @@ function chunkMarkerText({ chunkIndex, totalChunks, totalChars, token }) {
  * so reassembly is a plain concatenation -- and a SECOND content item
  * carries the marker, naming the exact next call to make.
  */
-function wrapPossiblyChunked(text) {
+function wrapPossiblyChunked(text: string): OkTextResult {
   if (text.length <= OUTPUT_CHAR_CAP) {
     return { content: [{ type: "text", text }], isError: false };
   }
 
   const totalChars = text.length;
-  const pieces = [];
+  const pieces: string[] = [];
   for (let i = 0; i < text.length; i += OUTPUT_CHAR_CAP) {
     pieces.push(text.slice(i, i + OUTPUT_CHAR_CAP));
   }
@@ -1691,7 +1886,7 @@ function wrapPossiblyChunked(text) {
 
   const token = nextContinuationToken();
   while (CONTINUATION_STORE.size >= MAX_CONTINUATIONS) {
-    const oldestToken = CONTINUATION_STORE.keys().next().value;
+    const oldestToken = CONTINUATION_STORE.keys().next().value as string;
     CONTINUATION_STORE.delete(oldestToken);
   }
   CONTINUATION_STORE.set(token, { chunks: remaining, nextIndex: 2, totalChunks, totalChars });
@@ -1707,7 +1902,7 @@ function wrapPossiblyChunked(text) {
 
 /** Handles `vice_result_continue` -- served entirely inside this proxy;
  * NEVER reaches `call()` or the network. */
-function handleResultContinue(args) {
+function handleResultContinue(args: Record<string, unknown>): ToolCallResult {
   const token = args && typeof args.token === "string" ? args.token : null;
   if (!token || !CONTINUATION_STORE.has(token)) {
     return isErrorText(
@@ -1715,8 +1910,8 @@ function handleResultContinue(args) {
         `original tools/call with a narrower range instead of resuming.`
     );
   }
-  const entry = CONTINUATION_STORE.get(token);
-  const chunk = entry.chunks.shift();
+  const entry = CONTINUATION_STORE.get(token) as ContinuationEntry;
+  const chunk = entry.chunks.shift() as string;
   const chunkIndex = entry.nextIndex;
   entry.nextIndex += 1;
   const isLast = entry.chunks.length === 0;
@@ -1748,8 +1943,8 @@ function handleResultContinue(args) {
 // promoted from port to request id, since ports are recycled across
 // sessions under on-demand launch). null means either no lease has been
 // acquired yet, or VICE_MCP_URL overrides the broker entirely.
-let brokerLeaseId = null;
-let brokerHeartbeatTimer = null;
+let brokerLeaseId: string | null = null;
+let brokerHeartbeatTimer: NodeJS.Timeout | null = null;
 
 // ----------------------------------------------------- grant containerization
 //
@@ -1765,7 +1960,7 @@ let brokerHeartbeatTimer = null;
 // ensureBrokerLease() below between pollGrant() returning a grant and
 // useInstance() adopting it, since that is the LAST point before the
 // coordinates become the session's identity (D-1).
-function containerizeGrant(grant) {
+function containerizeGrant(grant: Record<string, unknown>): Record<string, unknown> {
   const grantId = grant && typeof grant.id === "string" ? grant.id : "(no id)";
   const port = Number(grant && grant.port);
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
@@ -1803,7 +1998,7 @@ function containerizeGrant(grant) {
   const fallbackEpochFile = join(fallbackDir, "epoch.json");
   const fallbackUrl = `http://${alias}:${port}/mcp`;
   const changedFields = new Set(changes.map((c) => c.field));
-  const substituted = { url: false, epoch_file: false, supervisor_dir: false };
+  const substituted: Record<string, boolean> = { url: false, epoch_file: false, supervisor_dir: false };
 
   // T-ccn-01: only a field that was ACTUALLY TRANSLATED (its host root
   // matched) is re-checked for workspace containment -- an already
@@ -1812,11 +2007,11 @@ function containerizeGrant(grant) {
   // on. A translated path escaping the workspace (a lexical ".." sequence
   // in the grant's own host-rooted field) is exactly what this check
   // catches.
-  if (changedFields.has("epoch_file") && !isInsideWorkspace(resolve(record.epoch_file), root)) {
+  if (changedFields.has("epoch_file") && !isInsideWorkspace(resolve(record.epoch_file as string), root)) {
     record.epoch_file = fallbackEpochFile;
     substituted.epoch_file = true;
   }
-  if (changedFields.has("supervisor_dir") && !isInsideWorkspace(resolve(record.supervisor_dir), root)) {
+  if (changedFields.has("supervisor_dir") && !isInsideWorkspace(resolve(record.supervisor_dir as string), root)) {
     record.supervisor_dir = fallbackDir;
     substituted.supervisor_dir = true;
   }
@@ -1872,7 +2067,9 @@ function containerizeGrant(grant) {
  * landing in that narrow window would see a grant with no lease yet and
  * tear it down out from under this very acquisition.
  */
-async function ensureBrokerLease() {
+type BrokerLeaseResult = { ok: true } | { ok: false; message: string };
+
+async function ensureBrokerLease(): Promise<BrokerLeaseResult> {
   if (brokerLeaseId) return { ok: true };
   if (process.env.VICE_MCP_URL) return { ok: true }; // explicit override -- broker never contacted
 
@@ -1926,7 +2123,12 @@ async function ensureBrokerLease() {
   // become the session's identity: the endpoint every later tool call is
   // sent to, and the path the epoch guard opens.
   const containerized = containerizeGrant(result.grant);
-  useInstance({ port: containerized.port, url: containerized.url, epochFile: containerized.epoch_file, pooled: true });
+  useInstance({
+    port: containerized.port as number,
+    url: containerized.url as string,
+    epochFile: containerized.epoch_file as string,
+    pooled: true,
+  });
   viceSession = null; // re-baseline: the next ensureViceSession() reads the GRANTED instance's own epoch file
   // startHeartbeat() (vice-broker-client.ts) returns an unref'd interval
   // timer -- unref'd so the TIMER never holds this process alive past its
@@ -1968,16 +2170,23 @@ const CHECKPOINT_ARMING_TOOLS = new Set(["vice_checkpoint_add"]);
 // synchronous LOCAL file read (see its own definition above), never a
 // forwarded call, so consulting it here does not violate the "makes no
 // forwarded call of its own" requirement below.
-let seamHazardSeen = new Set();
-let seamHazardEpochKey = null;
+let seamHazardSeen: Set<string> = new Set();
+let seamHazardEpochKey: number | null = null;
 
-function seamHazardObserveEpoch() {
+function seamHazardObserveEpoch(): void {
   const epoch = currentEpoch();
   const key = epoch && epoch.present ? epoch.epoch : null;
   if (seamHazardEpochKey !== null && key !== seamHazardEpochKey) {
     seamHazardSeen = new Set(); // a new machine has seen none of these
   }
   seamHazardEpochKey = key;
+}
+
+/** detectCheckpointArmingHazard()'s own return shape -- consumed only by
+ * renderCheckpointArmingHazard() below. */
+interface CheckpointArmingHazardDetection {
+  addrLabel: string;
+  repeat: boolean;
 }
 
 /**
@@ -1992,7 +2201,10 @@ function seamHazardObserveEpoch() {
  * rather than silently skipping: an unparseable address is not evidence of
  * safety.
  */
-function detectCheckpointArmingHazard(name, args) {
+function detectCheckpointArmingHazard(
+  name: string,
+  args: Record<string, unknown>
+): CheckpointArmingHazardDetection | undefined {
   if (!CHECKPOINT_ARMING_TOOLS.has(name)) return undefined;
   // vice_checkpoint_add's own schema: `stop` defaults true, `exec` defaults
   // true -- an ABSENT field is armed, not merely "true when written out".
@@ -2012,7 +2224,7 @@ function detectCheckpointArmingHazard(name, args) {
   return { addrLabel, repeat };
 }
 
-function renderCheckpointArmingHazard(detection) {
+function renderCheckpointArmingHazard(detection: CheckpointArmingHazardDetection): string {
   const { addrLabel, repeat } = detection;
   if (repeat) {
     return (
@@ -2066,13 +2278,32 @@ function renderCheckpointArmingHazard(detection) {
  * Plan 01.3-05 is this table's expected next writer, adding the bounded
  * hunt's own confirmed trigger as one more entry here -- not new plumbing.
  */
+// Method-shorthand syntax deliberately (not `detect: (...) => ...`): TS's
+// bivariant method-parameter check is what lets each entry's own narrower
+// detect()/render() pair (e.g. CheckpointArmingHazardDetection, not
+// `unknown`) slot into this shared, heterogeneous table -- exactly the
+// polymorphism the table's own doc comment above describes ("the next
+// confirmed trigger is a single entry"). The production entry below is cast
+// `as SeamHazardEntry` (not the whole SEAM_HAZARDS declaration -- that
+// exact line is vice-proxy.test.mjs's own oracle anchor, `indexOf("const
+// SEAM_HAZARDS = [")`, and must stay byte-identical) so the array's own
+// inferred element type is this interface, which is what lets the
+// TEST-ONLY .push() below (a structurally different detect/render pair)
+// type-check without a second cast at that call site.
+interface SeamHazardEntry {
+  id: string;
+  capabilities: Set<string>;
+  detect(name: string, args: Record<string, unknown>, payload?: unknown): unknown;
+  render(detection: unknown): string;
+}
+
 const SEAM_HAZARDS = [
   {
     id: "checkpoint-arming",
     capabilities: CHECKPOINT_ARMING_TOOLS,
     detect: detectCheckpointArmingHazard,
     render: renderCheckpointArmingHazard,
-  },
+  } as SeamHazardEntry,
 ];
 
 // TEST-ONLY escape hatch (plan 01.3-04 task 2's data-driven proof): proves
@@ -2086,7 +2317,7 @@ if (process.env.VICE_SEAM_HAZARDS_TEST_FIXTURE === "1") {
   SEAM_HAZARDS.push({
     id: "test-fixture-synthetic-entry",
     capabilities: new Set(["vice_ping"]),
-    detect: (name) => (name === "vice_ping" ? { fixture: true } : undefined),
+    detect: (name: string) => (name === "vice_ping" ? { fixture: true } : undefined),
     render: () => "vice-proxy hazard (TEST FIXTURE): synthetic second SEAM_HAZARDS entry, detected and annotated through the same walk.",
   });
 }
@@ -2097,8 +2328,8 @@ if (process.env.VICE_SEAM_HAZARDS_TEST_FIXTURE === "1") {
  * no entry costs one array pass and returns undefined, leaving the payload
  * untouched.
  */
-function renderSeamHazardAnnotations(name, args, payload) {
-  const notes = [];
+function renderSeamHazardAnnotations(name: string, args: Record<string, unknown>, payload: unknown): string | undefined {
+  const notes: string[] = [];
   for (const entry of SEAM_HAZARDS) {
     const detection = entry.detect(name, args, payload);
     if (detection) {
@@ -2108,12 +2339,15 @@ function renderSeamHazardAnnotations(name, args, payload) {
   return notes.length ? notes.join("\n\n") : undefined;
 }
 
-async function handleToolsCall(params) {
-  const name = params && params.name;
+async function handleToolsCall(params: unknown): Promise<ToolCallResult> {
+  const name = isPlainObject(params) ? params.name : undefined;
   if (!name || typeof name !== "string") {
     throw new ProtocolError(-32602, "tools/call requires params.name to be a non-empty string");
   }
-  const args = params && typeof params.arguments === "object" && params.arguments !== null ? params.arguments : {};
+  const args: Record<string, unknown> =
+    isPlainObject(params) && typeof params.arguments === "object" && params.arguments !== null
+      ? (params.arguments as Record<string, unknown>)
+      : {};
 
   // The synthetic continuation tool: entirely a proxy-local concern, served
   // before any deny-list or epoch logic and NEVER forwarded to the host.
@@ -2202,7 +2436,7 @@ async function handleToolsCall(params) {
   // (out-of-workspace absolute path, or a translation failure) is returned
   // exactly like every other tools/call outcome: a well-formed isError:true
   // result, never a throw.
-  let translatedArgs;
+  let translatedArgs: Record<string, unknown>;
   let pathNote = "";
   try {
     const rewritten = rewriteArguments(args, name);
@@ -2215,7 +2449,7 @@ async function handleToolsCall(params) {
     throw e; // unexpected -- let the never-throw dispatch one layer up handle it
   }
 
-  let payload;
+  let payload: unknown;
   try {
     payload = await call(name, translatedArgs);
   } catch (e) {
@@ -2241,7 +2475,7 @@ async function handleToolsCall(params) {
     // about which file was attempted, so naming the resolved absolute path
     // here is the difference between a one-line fix and an hour spent
     // suspecting the emulator.
-    const failure = aliveButFailedMessage(e && e.message ? e.message : String(e));
+    const failure = aliveButFailedMessage(e && (e as Error).message ? (e as Error).message : String(e));
     return isErrorText(pathNote ? `${failure}\n${pathNote}` : failure);
   }
 
@@ -2288,12 +2522,12 @@ async function handleToolsCall(params) {
 // if it carries none / isn't even an object). Silently dropping it as if it
 // were a "notification we don't understand" would hide a caller bug behind
 // the never-throw discipline instead of surfacing it.
-async function handleMessage(msg) {
-  if (msg === null || typeof msg !== "object" || Array.isArray(msg)) {
+async function handleMessage(msg: unknown): Promise<JsonRpcOutgoingMessage | null> {
+  if (!isPlainObject(msg)) {
     return errorResponse(null, -32600, "Invalid Request: message is not a JSON object");
   }
   const hasId = Object.prototype.hasOwnProperty.call(msg, "id");
-  const id = hasId ? msg.id : null;
+  const id = (hasId ? msg.id : null) as string | number | null;
   const method = msg.method;
   if (typeof method !== "string" || method.length === 0) {
     return errorResponse(id, -32600, 'Invalid Request: missing or non-string "method"');
@@ -2330,7 +2564,7 @@ async function handleMessage(msg) {
     // Never-throw discipline extends even to bugs in this dispatcher itself:
     // an unexpected internal error becomes a JSON-RPC error response (never
     // an uncaught throw), keyed to whatever id the request carried.
-    return hasId ? errorResponse(id, -32603, `internal error: ${e && e.message ? e.message : String(e)}`) : null;
+    return hasId ? errorResponse(id, -32603, `internal error: ${e && (e as Error).message ? (e as Error).message : String(e)}`) : null;
   }
 }
 
@@ -2344,15 +2578,15 @@ async function handleMessage(msg) {
 // crash.
 let buffer = "";
 
-function handleLine(line) {
+function handleLine(line: string): void {
   const trimmed = line.trim();
   if (trimmed.length === 0) return;
 
-  let msg;
+  let msg: unknown;
   try {
     msg = JSON.parse(trimmed);
   } catch (e) {
-    writeMessage({ jsonrpc: "2.0", id: null, error: { code: -32700, message: `Parse error: ${e.message}` } });
+    writeMessage({ jsonrpc: "2.0", id: null, error: { code: -32700, message: `Parse error: ${(e as Error).message}` } });
     return;
   }
 
@@ -2365,14 +2599,14 @@ function handleLine(line) {
       // but this is the never-throw discipline applied one more layer out,
       // matching the module-level uncaughtException/unhandledRejection
       // handlers above.
-      console.error(`vice-proxy: handleMessage rejected unexpectedly (ignored): ${e && e.message ? e.message : e}`);
+      console.error(`vice-proxy: handleMessage rejected unexpectedly (ignored): ${e && (e as Error).message ? (e as Error).message : e}`);
     });
 }
 
 process.stdin.setEncoding("utf8");
-process.stdin.on("data", (chunk) => {
+process.stdin.on("data", (chunk: Buffer | string) => {
   buffer += chunk;
-  let idx;
+  let idx: number;
   while ((idx = buffer.indexOf("\n")) !== -1) {
     const line = buffer.slice(0, idx);
     buffer = buffer.slice(idx + 1);
@@ -2411,16 +2645,16 @@ process.stdin.on("data", (chunk) => {
 // marker away from the code each one bounds.
 let teardownRan = false;
 
-function releaseLeaseNow(trigger) {
+function releaseLeaseNow(trigger: string): void {
   if (!brokerLeaseId) return;
   try {
     releaseLease(brokerLeaseId);
   } catch (err) {
-    console.error(`vice-proxy: lease_unlink_failed trigger=${trigger}: ${err && err.message ? err.message : err}`);
+    console.error(`vice-proxy: lease_unlink_failed trigger=${trigger}: ${err && (err as Error).message ? (err as Error).message : err}`);
   }
 }
 
-function onTeardown(trigger) {
+function onTeardown(trigger: string): void {
   if (teardownRan) return; // idempotent -- SIGINT then SIGTERM ~100ms later both call in
   teardownRan = true;
   releaseLeaseNow(trigger);

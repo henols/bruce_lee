@@ -35,7 +35,7 @@ import { REQUEST_ID_PATTERN, isValidRequestId } from "./vice-broker-client.ts";
 
 const execFileP = promisify(execFile);
 const HERE = dirname(fileURLToPath(import.meta.url));
-const PROXY_PATH = join(HERE, "vice-proxy.mjs");
+const PROXY_PATH = join(HERE, "vice-proxy.ts");
 const BROKER_SCRIPT = join(HERE, "resources", "vice-broker.sh");
 
 const tmpPoolDir = () => mkdtempSync(join(tmpdir(), "vice-broker-test-"));

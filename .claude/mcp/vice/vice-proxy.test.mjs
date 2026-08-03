@@ -46,7 +46,7 @@ import { repoRoot } from "./repo-root.ts";
 import { GRANT_POLL_TIMEOUT_MS } from "./vice-broker-client.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const PROXY_PATH = join(HERE, "vice-proxy.mjs");
+const PROXY_PATH = join(HERE, "vice-proxy.ts");
 const BROKER_SCRIPT = join(HERE, "resources", "vice-broker.sh");
 const execFileP = promisify(execFile);
 
