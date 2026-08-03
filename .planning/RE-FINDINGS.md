@@ -1780,3 +1780,42 @@ grep for a known pattern shape finds instances of that shape, not instances of a
 a future phase performing a similar mechanical rename across a test suite should budget for "run
 the rename and watch the full suite" as a real discovery step, not only "grep for `.mjs` literals
 first."
+
+### 2026-08-03 — a static guard proven to discriminate: both `load-order.test.mjs` halves observed FAILING against a live-injected regression, and the underlying TDZ crash reproduced a second time against the landed fix
+
+**Type:** confirmation (a static check's discriminating power, not just its existence, verified live)
+**Evidence:** live, during Phase 01.6.1 Plan 02 Task 3, against a scratch copy of the flat module
+tree (never the tracked tree -- `git status --porcelain` confirmed clean before, during and after).
+Three regressions, each independently applied and restored:
+1. **Graph half.** Scratch `hostpath.mjs` had `import { repoRoot } from "./repo-root.mjs"` and
+   `const REGRESSION_WORKSPACE_ROOT = repoRoot({ from: HERE })` restored (the exact shape Plan 02
+   Task 1 removed). Running `load-order.test.mjs` against the scratch tree failed the cycle
+   assertion exactly as expected: `AssertionError [ERR_ASSERTION]: the set of cycles through
+   repo-root.mjs changed -- expected exactly [], got
+   [["hostpath.mjs","install-resources.mjs","repo-root.mjs"]]`.
+2. **Call-site half.** Scratch `hostpath.mjs` restored to healthy; scratch `containerpath.mjs`'s
+   own module-scope call had its `from:` override dropped (`repoRoot({ from: HERE })` ->
+   `repoRoot()`). Running the guard failed the call-site assertion, naming the file:
+   `AssertionError [ERR_ASSERTION]: containerpath.mjs: module-scope call \`const WORKSPACE_ROOT =
+   repoRoot();\` does not pass an explicit \`from:\` override.`
+3. **The crash itself.** Scratch `containerpath.mjs` restored to healthy; scratch `hostpath.mjs`
+   regressed a second time, this time with the call UNGUARDED (`const
+   REGRESSION_WORKSPACE_ROOT = repoRoot();`, no `from:`) -- reproducing both the cycle and the
+   unguarded call-site simultaneously. Dynamically importing the scratch `repo-root.mjs` in a
+   fresh Node process crashed with exactly `ReferenceError: Cannot access 'HERE' before
+   initialization` -- the same text 01.6-RESEARCH.md §E and 01.6.1-RESEARCH.md §3.2 both
+   reproduced against the pre-Plan-02 tree, confirming the guards defend against a real crash
+   and not a stylistic preference.
+After all three, the real (tracked) `load-order.test.mjs` still reported 6/6 against the real
+tree, and the scratch directory was deleted.
+**Confidence:** HIGH -- both assertion failures and the crash text are engine/assertion-emitted
+strings captured verbatim from a live run, not paraphrased, and the tracked tree's own clean
+`git status --porcelain` before/after brackets the whole experiment.
+**Saves / costs:** this is the general lesson RESEARCH's own Manual-Only Verifications table
+already named: a check that has only ever been observed passing is not evidence a check
+*discriminates* at all -- the real `load-order.test.mjs` was 4/4 green against the genuinely
+broken pre-Plan-02 tree, which is why "the test passes" was never sufficient proof on its own.
+The saved cost for a future maintainer: this entry is the concrete recipe (copy the flat tree to
+a scratch dir outside the repo, apply one regression at a time, restore between each, delete the
+scratch dir after) for re-proving any future static guard in this tree actually fires, rather than
+re-deriving the scratch-copy methodology from scratch each time.
