@@ -55,7 +55,7 @@ import {
 // building logic incidentRecordPath() itself uses -- imported here so the
 // evidence gatherer's screenshot and the pre-kill snapshot's name can never
 // drift onto a second, independent naming rule.
-import { writeIncidentRecord, finaliseIncidentRecord, incidentAssetPath, incidentAssetStem } from "./incident-record.mjs";
+import { writeIncidentRecord, finaliseIncidentRecord, incidentAssetPath, incidentAssetStem } from "./incident-record.ts";
 import { readFileSync, unlinkSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, relative, resolve } from "node:path";

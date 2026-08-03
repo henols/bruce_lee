@@ -1,4 +1,4 @@
-// node:test coverage of incident-record.mjs (plan 01.3-01 task 2) --
+// node:test coverage of incident-record.ts (plan 01.3-01 task 2) --
 // exercised entirely in-process, with NO proxy and NO broker involved:
 // this module makes no network call and no host-side round trip, so its
 // own test suite doesn't need either. Every test redirects incidentsDir()
@@ -7,7 +7,7 @@
 // here ever touches the real, permanent .planning/incidents/.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -18,9 +18,10 @@ import {
   renderIncidentRecord,
   writeIncidentRecord,
   finaliseIncidentRecord,
-} from "./incident-record.mjs";
+  type IncidentEvidence,
+} from "./incident-record.ts";
 
-function withTempIncidentsDir(fn) {
+function withTempIncidentsDir<T>(fn: (dir: string) => T): T {
   const dir = mkdtempSync(join(tmpdir(), "vice-incidents-test-"));
   const prev = process.env.VICE_INCIDENTS_DIR;
   process.env.VICE_INCIDENTS_DIR = dir;
@@ -132,6 +133,19 @@ test("no temporary file is left behind in the incidents directory after a write"
   });
 });
 
+// T-01.6.1-08 (this plan's own threat register entry): the atomic-write
+// choke point must leave the record not group- or world-readable. Asserted
+// directly against the file mode rather than merely trusted from reading the
+// source, since a mode regression would otherwise be invisible to every
+// other test in this file (none of them inspect permissions).
+test("T-01.6.1-08: the written record's mode is not group- or world-readable", () => {
+  withTempIncidentsDir(() => {
+    const path = writeIncidentRecord({ port: 6510, epoch_before: 9, reason: "mode check" });
+    const mode = statSync(path).mode & 0o777;
+    assert.equal(mode & 0o077, 0, `expected no group/world bits set, got mode ${mode.toString(8)}`);
+  });
+});
+
 test("finaliseIncidentRecord() updates the outcome fields and leaves the frontmatter parseable", () => {
   withTempIncidentsDir(() => {
     const path = writeIncidentRecord({ port: 6510, epoch_before: 5, reason: "will be finalised" });
@@ -162,6 +176,15 @@ test("finaliseIncidentRecord() on a record with no prior outcome fields still pr
   });
 });
 
+test("finaliseIncidentRecord() preserves the written record's restricted mode across the re-render", () => {
+  withTempIncidentsDir(() => {
+    const path = writeIncidentRecord({ port: 6512, epoch_before: 2, reason: "mode survives finalise" });
+    finaliseIncidentRecord(path, { outcome: "ok", kill_stage: "sigterm", epoch_after: 3 });
+    const mode = statSync(path).mode & 0o777;
+    assert.equal(mode & 0o077, 0, `expected no group/world bits set after finalise, got mode ${mode.toString(8)}`);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Plan 01.3-03 task 1: renderIncidentRecord()'s expanded evidence section --
 // the full criterion-4 evidence set, one fixed-order item per line, with an
@@ -169,7 +192,7 @@ test("finaliseIncidentRecord() on a record with no prior outcome fields still pr
 // silently omitted (must_have 3).
 // ---------------------------------------------------------------------------
 
-function fullEvidenceFixture() {
+function fullEvidenceFixture(): IncidentEvidence {
   return {
     bracket: { available: true, value: { cycles: 991234, elapsedMs: 1001 } },
     registers: { available: true, value: { PC: 0x1103, A: 1, X: 2, Y: 3, SP: 0xf0 } },
@@ -275,5 +298,33 @@ test("finaliseIncidentRecord() preserves the ALREADY-RENDERED evidence section v
     assert.match(after, /evidence_complete: true/, "evidence_complete must survive the finalise re-render");
     assert.match(after, /cycle bracket: 991234 cycles retired/, "the evidence section itself must survive the finalise re-render verbatim");
     assert.match(after, /screenshot: saved to \.planning\/incidents\/20260802143000123-port6510-epoch7\.png/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Never-throw discipline (T-01.6.1-01): finaliseIncidentRecord() must degrade
+// on a missing/corrupt existing file rather than propagate a read failure --
+// it is called while a real vice_recycle is already mid-kill, and a thrown
+// error here would lose the evidence captured so far as well as the process.
+// ---------------------------------------------------------------------------
+
+test("T-01.6.1-01: finaliseIncidentRecord() never throws, even against a path that does not exist", () => {
+  withTempIncidentsDir((dir) => {
+    const missingPath = join(dir, "does-not-exist.md");
+    assert.doesNotThrow(() => finaliseIncidentRecord(missingPath, { outcome: "ok" }));
+    const content = readFileSync(missingPath, "utf8");
+    assert.match(content, /outcome: 'ok'/, "a well-formed record must still be produced from nothing");
+  });
+});
+
+test("T-01.6.1-01: finaliseIncidentRecord() never throws against a truncated, non-frontmatter file, and still produces a well-formed record", () => {
+  withTempIncidentsDir((dir) => {
+    const path = writeIncidentRecord({ port: 6513, epoch_before: 4, reason: "will be corrupted" });
+    // Overwrite with garbage that has no parseable frontmatter at all.
+    writeFileSync(path, "not even close to yaml frontmatter, just garbage bytes\x00\xff");
+    assert.doesNotThrow(() => finaliseIncidentRecord(path, { outcome: "ok", kill_stage: "sigkill" }));
+    const content = readFileSync(path, "utf8");
+    assert.match(content, /outcome: 'ok'/);
+    assert.match(content, /^---\n[\s\S]*?\n---\n/, "must still produce parseable frontmatter from garbage input");
   });
 });
