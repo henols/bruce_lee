@@ -2,17 +2,17 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: insertion note
-current_phase: 01.6
-current_phase_name: Conversion Foundation and Scope Reduction
-status: verifying
-stopped_at: Phase 01.6 PLANNED (4 plans, 4 waves, checker passed first iteration). Old 01.6 split four ways at plan time on context-budget grounds — 01.6 / 01.6.1 / 01.6.2 / 01.6.3. 01.3 still PAUSED at 5/6.
-last_updated: "2026-08-03T07:19:20.633Z"
+current_phase: 01.6.1
+current_phase_name: Container-Side Conversion to TypeScript
+status: Ready to execute
+stopped_at: Phase 01.6.1 PLANNED (8 plans, 8 strictly sequential waves, checker passed first iteration). Phase 01.6 remains at Needs Review — 12/14 verified, 2 backstop truths abstained pending host-side verification. 01.3 still PAUSED at 5/6.
+last_updated: "2026-08-03T00:00:00.000Z"
 last_activity: 2026-08-03
-last_activity_desc: "Completed quick task 260803-9hi + follow-on: five Bruce Lee source documents archived in `docs/`; C64-Wiki resolved the two-player question (three modes; `FEATURES.md:202` vindicated) and pointed the lives counter at `$1560`"
+last_activity_desc: "Planned Phase 01.6.1 (8 plans, 8 waves). Delta research corrected the ROADMAP's stale split-time inventory: 11 test files / 6,680 lines, not 5 / 5,518; baseline 247 tests, not 268. Criterion B resolved as BOTH (break the cycle, then guard it)."
 progress:
   total_phases: 8
   completed_phases: 2
-  total_plans: 25
+  total_plans: 33
   completed_plans: 17
   percent: 25
 ---
@@ -30,8 +30,10 @@ See: .planning/PROJECT.md (updated 2026-07-31)
 ## Current Position
 
 Milestone: **v1.1 — Emulator Access Hardened** *(inserted 2026-08-02, ahead of the rest of v1.0)*
-Phase: 01.6 (Conversion Foundation and Scope Reduction) — EXECUTING
+Phase: 01.6.1 (Container-Side Conversion to TypeScript) — **PLANNED, ready to execute** (8 plans, 8 strictly sequential waves)
 Execution order within v1.1 is **01.6 → 01.6.1 → 01.6.2 → 01.6.3 → 01.4 → 01.5 → 01.7 → 01.3**, not numeric order.
+
+**Phase 01.6 is still at Needs Review** — 12/14 truths verified, 2 backstop truths abstained pending host-side verification the container cannot perform. Planning 01.6.1 does not seal it. 01.6.1 depends on 01.6's *landed artifacts* (the build topology and the D-02 deletions), which are verified; the two abstentions are both C1, host-side, and neither lands in 01.6.1's scope.
 
 **Old 01.6 was split four ways on 2026-08-02, at plan time.** `gsd-planner` returned `## PHASE SPLIT RECOMMENDED` rather than plans: post-deletion the work is 13,478 lines changed plus 2,546 bash lines re-expressed, four single files each exceed one task's context budget, and honouring "keep the suite green continuously" yields 18 plans across 5 waves against a 3–5 standard. The developer chose the split over `--chunked`. Only the first group is planned; 01.6.1/01.6.2/01.6.3 are separate planning runs. All four research artifacts stay in `.planning/phases/01.6-broker-in-node-and-tcp-control-plane/` and apply to all four groups.
 
@@ -42,6 +44,8 @@ Execution order within v1.1 is **01.6 → 01.6.1 → 01.6.2 → 01.6.3 → 01.4 
 Phase 01 (recovery-provenance) — **PARKED mid-execution, not abandoned.** 4 of 6 plans complete (01-01, 01-02, 01-03, 01-05). 01-04 partially executed across FIVE attempts; 01-06 not started, held by choice.
 
 **Phase 01.3 is PAUSED at 5/6 plans**, with only 01.3-06 outstanding. Two blockers it does not own: `vice_recycle` is a control-plane command living on the file protocol that Phase 01.6 replaces, so finishing now means building it twice; and both of this phase's tools (`vice_diagnose`, `vice_recycle`) are unreachable from an agent session until 01.4 lands, so 01.3-06's blocking human-verify checkpoint cannot run. Plan 01.3-05's bounded trigger hunt recorded its own blocked outcome honestly — no trigger found to close at the seam — and criterion 9 carries forward into the resumed plan.
+
+**GATE OVERRIDE — decision-coverage, Phase 01.6.1, 2026-08-03 (developer-approved).** The blocking decision-coverage gate flagged `D-03` (the `D-1.2-B` override record) as uncovered by 01.6.1's plans, and the developer chose *Proceed anyway* over re-planning or amending the inherited CONTEXT. **This is a gate artefact, not a real gap.** 01.6.1 inherits `01.6-CONTEXT.md` whole — the ROADMAP records it applies to all four split groups unchanged — but the ROADMAP's own ownership table assigns `D-03` to Phase **01.6**, and gives 01.6.1 no decisions at all (`Adds:` column is `—`). D-03 is already done and independently verified: `01.6-VERIFICATION.md` row 7 marks it `✓ VERIFIED`, confirmed by direct read in all three required locations (`notes/one-process-broker-in-typescript.md` §`D-1.2-B override, 2026-08-02`; `ROADMAP.md:253`'s inline `[OVERRIDDEN …]` annotation; this file's `[SUPERSEDED 2026-08-02]` pool-workflow sentence), landed in commit `9dd3780`. **Re-surfacing rule for verify-phase:** the same flag will fire on 01.6.2 and 01.6.3 for whichever inherited decisions they do not own. Check the ROADMAP ownership table before treating it as a finding.
 
 **Phase 01.6's host-`node` gate is CLEARED (2026-08-02).** The host has `node` on PATH — confirmed by the developer, who has host access; the container cannot verify this by construction. The TCP control plane is in scope and the bash-broker fallback is off the table. Still unknown and worth establishing in 01.6's first plan: the host's `node` **version**, and the shell→Node call boundary, since this repo has no host-side Node precedent to copy.
 

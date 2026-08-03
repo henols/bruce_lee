@@ -587,14 +587,41 @@ Plans:
 **Plans:** 8 plans
 
 Plans:
+**Wave 1**
+
 - [ ] 01.6.1-01-PLAN.md — **Tracer.** The whole per-slice loop on one real module (`vice-probe` source + test), with all three extension-hardcoded module enumerators widened in the same commit; then Slice 0's two doc-shape tests, `host-scripts.test` (PTD-2) and the stale `workflow.test_command`
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 01.6.1-02-PLAN.md — Criterion B, both halves (PTD-1): break the `repo-root`/`install-resources`/`hostpath` cycle structurally, empty the allowlist, add a module-scope `repoRoot` call-site guard, and **prove both guards fail against an injected regression**. No renames
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
 - [ ] 01.6.1-03-PLAN.md — Slice 2: the three ex-cycle modules and their three test files convert; the last hardcoded-extension read becomes a by-stem resolution; ~15 consumer specifiers repointed
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
 - [ ] 01.6.1-04-PLAN.md — Slices 3–4: `containerpath` and `incident-record`, each with its own test; atomic-write ordering and both never-throw layers demonstrated intact
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
 - [ ] 01.6.1-05-PLAN.md — Slices 5–6: `vice-broker-client` (C7 — the request-id pattern survives as a typed export; the out-of-scope parity test touched in exactly one line) and `vice`, with its export surface asserted unchanged
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
 - [ ] 01.6.1-06-PLAN.md — Slices 7–8: `refresh-manifest` and `vice-sync` convert **and get their first-ever coverage**; the emulator-dependent checkpoint primitives recorded as machine-visible todos, never faked with a stub
+
+**Wave 7** *(blocked on Wave 6 completion)*
+
 - [ ] 01.6.1-07-PLAN.md — Slice 9a: the 2,441-line hub converts and `.mcp.json` is rewired in the same commit, audited against a pre-captured invariant baseline and a real offline MCP handshake over stdio; its 4,370-line test file stays `.mjs` as an unchanged oracle
+
+**Wave 8** *(blocked on Wave 7 completion)*
+
 - [ ] 01.6.1-08-PLAN.md — Slice 9b: the 4,370-line proxy test converts; phase close rolls up C3/C7/C8/C10 + A/B/C with evidence, re-proves the criterion-B guards against the final tree, and records the two unprovable claims as backstops
+
+**Cross-cutting constraints:**
+
+- The typecheck exits 0 and the suite is green with no test lost
 
 **Waves:** strictly sequential, 1 → 8. **Deliberately no parallelism.** Criterion A requires the suite green *continuously*; two plans landing in separate worktrees would each verify their own tree and neither would verify the merge. Independently, nearly every slice touches the hub's import block, so `files_modified` overlap forces the same ordering.
 
