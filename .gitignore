@@ -106,6 +106,16 @@ recovery/*/dumps/probe-*.png
 # deployment target for both, same as every other entry in this block.
 /tools/vice-broker.mjs
 /tools/vice-launcher.sh
+# Six new host-bound artifacts (Phase 01.6.2 plan 01) join them -- the
+# tracer's build pipeline (tsc-emitted, generated-but-committed under
+# resources/) now covers all seven .mts sources, and tools/ stays the same
+# disposable deployment target for every one of them.
+/tools/container-guard.mjs
+/tools/broker-state.mjs
+/tools/broker-launch.mjs
+/tools/broker-kill.mjs
+/tools/broker-epoch.mjs
+/tools/broker-control.mjs
 # The deploy manifest (Phase 01.6 plan 03) -- install-resources.mjs's own
 # record of what it has placed under tools/, and the ONLY input its prune
 # step ever consults (never a directory walk -- tools/ is mixed, and also

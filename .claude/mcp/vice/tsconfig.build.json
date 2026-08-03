@@ -6,5 +6,13 @@
     "outDir": "resources",
     "allowImportingTsExtensions": false
   },
-  "include": ["vice-broker.mts"]
+  "include": [
+    "vice-broker.mts",
+    "container-guard.mts",
+    "broker-state.mts",
+    "broker-launch.mts",
+    "broker-kill.mts",
+    "broker-epoch.mts",
+    "broker-control.mts"
+  ]
 }

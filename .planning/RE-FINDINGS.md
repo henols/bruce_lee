@@ -2188,3 +2188,50 @@ repo does it," which is absence-of-evidence, not a live check.
 **Saves/costs:** saves a confusing container-side failure for whoever next adds a Node entry point to the
 host plumbing, and records *why* the TypeScript port was chosen over the cheaper bash inline — so a later
 reviewer does not "simplify" the guard back into the launcher and silently reopen the hole.
+
+### 2026-08-03 — Phase 01.6.2 plan 01 control-plane wire format: `as-specified` confirmed, unix-domain socket auth is a recorded dead end
+
+**Type:** confirmation + dead end
+**Evidence:** developer decision at the plan's blocking `checkpoint:decision` gate (Phase 01.6.2
+plan 01, task 2), during `/gsd-execute-phase 01.6.2`. Not a live measurement — a one-way design
+choice made explicitly to avoid re-litigation, since every later plan and both container-side
+modules are written against it.
+**Confidence:** HIGH that the decision itself was made and is final (developer's own words, "No
+amendments. Do not re-open this decision in later tasks."). The two residual risks named below
+keep their own, lower confidence — see below.
+
+**Confirmed as specified, no amendments:**
+- **Auth** — per-boot capability token in `broker.json` (mode `0600`, uid-parity precondition
+  `D-1.2-D`), required on every control request, checked before any state read or write.
+- **Bind** — `0.0.0.0` explicitly, never `127.0.0.1` (the container reaches the host at
+  `host.docker.internal`, the bridge address, not loopback).
+- **Port** — `19510` default, overridable via `VICE_BROKER_CONTROL_PORT`.
+- **Framing** — newline-delimited JSON, one object per line; connection open = claim, close =
+  release. Requests `acquire`, `release`, `recycle` (`target_id`), `status`, `host_state`; an
+  `acquire` grant carries exactly the five fields `containerizeGrant()` already reads (`id`,
+  `port`, `url`, `epoch_file`, `supervisor_dir`).
+
+**Residual risks, recorded as accepted rather than verified:**
+- The `19510` port default's placement (above the registered range, below this container's
+  measured ephemeral range start of `32768`) is reasoned from *this container's*
+  `/proc/sys/net/ipv4/ip_local_port_range`. The **host's** own ephemeral range is unverifiable
+  from inside this container. Confidence: MEDIUM — doc/measurement-derived for the container side
+  only, not exercised against the real host.
+- The capability token's strength is bounded by the `D-1.2-D` uid-parity precondition on
+  `broker.json`'s mode-`0600` file permission — if that precondition ever fails to hold, the token
+  is only as strong as the file permission enforcing it, not an independent secret channel.
+  Confidence: MEDIUM — the precondition is already relied upon elsewhere (same file, same read),
+  not newly introduced, but its continued truth is not re-verified by this decision.
+
+**Dead end, named so it is not re-litigated:** a host unix-domain socket (filesystem-permission
+auth, no token needed) was considered and rejected as a *design dead end*, not merely a worse
+option — a unix socket on the host is not reachable from the container across the Docker bridge,
+which is the entire reason this listener is TCP in the first place. Confidence: HIGH (structural;
+the container-to-host reachability constraint that rules it out is the same one that makes `0.0.0.0`
+mandatory above, already established in Phase 01.1/01.2).
+
+**Saves/costs:** saves a later plan from re-opening a one-way door — the file protocol this
+control plane replaces is deleted, not disabled, so a change of mind after Task 3 lands would mean
+rewriting the client, the listener, the discovery record and every test that drives them. Recording
+the two residual risks as accepted-not-verified, rather than silently treating them as closed,
+keeps `01.6.2-VALIDATION.md`'s backstop-truth bookkeeping honest.
