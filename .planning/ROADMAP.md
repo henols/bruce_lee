@@ -584,12 +584,12 @@ Plans:
 
 **Risks**: This is the bulk of the line count and the place a mechanical conversion drifts silently. `vice-proxy.mjs`'s ~2,100 lines of project-specific logic (broker leasing, epoch/liveness, recycle/diagnose, deny-list, path rewriting, incident capture) must come through untouched — 01.6.3 swaps its transport seam afterwards, and doing both at once would make a regression ambiguous.
 
-**Plans:** 8 plans
+**Plans:** 1/8 plans executed
 
 Plans:
 **Wave 1**
 
-- [ ] 01.6.1-01-PLAN.md — **Tracer.** The whole per-slice loop on one real module (`vice-probe` source + test), with all three extension-hardcoded module enumerators widened in the same commit; then Slice 0's two doc-shape tests, `host-scripts.test` (PTD-2) and the stale `workflow.test_command`
+- [x] 01.6.1-01-PLAN.md — **Tracer.** The whole per-slice loop on one real module (`vice-probe` source + test), with all three extension-hardcoded module enumerators widened in the same commit; then Slice 0's two doc-shape tests, `host-scripts.test` (PTD-2) and the stale `workflow.test_command`
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
