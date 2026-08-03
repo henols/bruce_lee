@@ -110,7 +110,7 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-24 pending — see `.planning/todos/pending/`. The only **blocker** is **a supervisor
+25 pending — see `.planning/todos/pending/`. The only **blocker** is **a supervisor
 skill/tool to detect and recover a wedged (not crashed) VICE**
 (`2026-08-02-supervisor-skill-to-detect-and-recover-a-wedged-vice.md`) — the existing supervisor
 respawns x64sc only when the *process exits*, so a live-but-frozen emulator (0 cycles retired while
