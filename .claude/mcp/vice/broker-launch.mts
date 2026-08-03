@@ -7,8 +7,18 @@
 // violate), PLUS the readiness probe's full three-way branch, serialised
 // warm-floor maintenance (one launch per pass, never more), and the
 // fixed-order evaluation pass both surviving concerns run through.
+//
+// Plan 03, Task 2 grows this module into a real per-child supervisor
+// (C2/D-23), absorbing resources/vice-supervisor.sh wholesale: superviseChild()
+// launches an instance through tryLaunchOne() (the SAME single guarded
+// primitive above) and installs an exit handler on the spawned child that
+// respawns on crash (doubling backoff, clamped at a ceiling), gives up
+// cleanly after too many crashes inside a window, never respawns a
+// deliberately-killed instance, and writes the per-instance boot/crash log
+// D-23 preserves at the exact path shape the retiring bash supervisor used.
 import { spawn as nodeSpawn, execFile, type ChildProcess } from "node:child_process";
-import { join } from "node:path";
+import { mkdirSync, openSync, closeSync, existsSync } from "node:fs";
+import { join, basename } from "node:path";
 import { promisify } from "node:util";
 // TYPE-ONLY import, deliberately -- this module must be importable and
 // runnable directly (native Node type-stripping, no build step) by its own
@@ -25,6 +35,15 @@ import { promisify } from "node:util";
 // broker-state.mjs's real values for its own wiring) supplies the real
 // ones; tests inject their own.
 import type { BrokerState, InstanceRecord, PortAllocationResult } from "./broker-state.mjs";
+// SAME type-only reasoning applies to broker-epoch.mts's own exports --
+// superviseChild() below never imports epochPathFor/instanceLogDirFor/
+// nextEpochFor/writeEpochRecord as VALUES (that would break this module's
+// own unbuilt unit test the identical way a broker-state.mjs value import
+// would); they are required, injected fields on SuperviseChildDeps
+// (EpochWriterDeps) instead. Tests inject the REAL functions via a direct
+// "./broker-epoch.mts" source import (safe -- test files reference the
+// literal .mts extension, never the post-build .mjs specifier).
+import type { EpochRecord } from "./broker-epoch.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -66,6 +85,12 @@ export interface TryLaunchDeps {
   now?: () => number;
   viceBin?: string;
   mcpHost?: string;
+  /** Overrides the resolved-command-line log line's destination -- default
+   * writes to stderr exactly like before this field existed. Added (plan
+   * 03) so superviseChild()'s own tests can capture "the resolved spawn
+   * command line is logged before every spawn, including every respawn"
+   * (T-jty-02's mitigation) without scraping process.stderr. */
+  log?: (line: string) => void;
 }
 
 /** The unguarded spawn+record primitive -- no in_flight check here at all.
@@ -86,8 +111,9 @@ function spawnAndRecordInstance(reason: string, port: number, deps: TryLaunchDep
   const now = deps.now ?? ((): number => Date.now());
   const viceBin = deps.viceBin ?? process.env.VICE_BIN ?? "x64sc";
   const viceArgs = buildViceArgs(port, { mcpHost: deps.mcpHost });
+  const log = deps.log ?? defaultLog;
 
-  process.stderr.write(`vice-broker: launching ${viceBin} ${viceArgs.join(" ")}\n`);
+  log(`vice-broker: launching ${viceBin} ${viceArgs.join(" ")}`);
 
   const child = spawnFn(viceBin, viceArgs);
   const record: InstanceRecord = {
@@ -550,4 +576,248 @@ export interface BrokerPassDeps {
 export async function runBrokerPass(deps: BrokerPassDeps): Promise<void> {
   await deps.serveAcquires();
   await deps.maintainWarmFloor();
+}
+
+// ===========================================================================
+// Per-child supervision (Plan 03, Task 2 -- C2/D-23): absorbs
+// resources/vice-supervisor.sh WHOLESALE. The respawn loop becomes an
+// exit-event handler installed on the spawned child; the backoff shape
+// (initial delay, doubling, ceiling), the crash-loop give-up (too many
+// crashes inside a window), and the per-instance boot/crash log are ported
+// exactly, per D-1's own configuration knobs -- VICE_RESTART_BACKOFF_S,
+// VICE_RESTART_BACKOFF_MAX_S, VICE_MAX_RESTARTS, VICE_CRASH_WINDOW_S all
+// keep their exact names and semantics.
+// ===========================================================================
+
+function resolveMs(envVar: string, defaultSeconds: number, override?: number): number {
+  if (typeof override === "number") return override;
+  const raw = process.env[envVar];
+  const n = raw === undefined || raw === "" ? NaN : Number(raw);
+  return (Number.isFinite(n) ? n : defaultSeconds) * 1000;
+}
+
+function resolveCount(envVar: string, defaultValue: number, override?: number): number {
+  if (typeof override === "number") return override;
+  const raw = process.env[envVar];
+  const n = raw === undefined || raw === "" ? NaN : Number(raw);
+  return Number.isFinite(n) ? n : defaultValue;
+}
+
+/** The four-value outcome vocabulary a single exit event resolves to --
+ * exported so a caller (this module's own tests, and any future real-broker
+ * wiring) can assert which branch a given crash took without inspecting
+ * private state. */
+export type RespawnOutcome = "respawned" | "deliberate_teardown" | "given_up";
+
+/** broker-epoch.mts's own exports, injected rather than value-imported --
+ * see this file's own header comment for why (the same unbuilt-test-import
+ * constraint plan 02 already solved for broker-state.mts's exports). The
+ * real broker wires broker-epoch.mjs's actual functions here; tests inject
+ * broker-epoch.mts's REAL functions via a direct source import (safe for a
+ * test file) or their own stubs. */
+export interface EpochWriterDeps {
+  epochPathFor: (stateDir: string, port: number) => string;
+  instanceLogDirFor: (stateDir: string, port: number) => string;
+  nextEpochFor: (supervisorDir: string) => number;
+  writeEpochRecord: (opts: { supervisorDir: string; record: EpochRecord }) => string;
+}
+
+export interface SuperviseChildDeps {
+  state: BrokerState;
+  /** Root state directory -- per-port supervisorDir/epochFile/logDir are
+   * all derived from this, exactly like every other launch path. */
+  stateDir: string;
+  epoch: EpochWriterDeps;
+  spawn?: (command: string, args: string[]) => ChildProcess;
+  spawnFactory?: (port: number) => (command: string, args: string[]) => ChildProcess;
+  now?: () => number;
+  /** Injected delay for the respawn backoff wait -- tests supply an
+   * immediately-resolving stub so the backoff VALUES can be asserted
+   * against the injected clock, never real wall time (this project's own
+   * stack pattern: synchronise on injected time, never sleep()). */
+  sleepMs?: (ms: number) => Promise<void>;
+  viceBin?: string;
+  mcpHost?: string;
+  /** VICE_RESTART_BACKOFF_S override, in MILLISECONDS (the env var itself
+   * stays seconds, matching the retiring supervisor exactly). */
+  initialBackoffMs?: number;
+  /** VICE_RESTART_BACKOFF_MAX_S override, in milliseconds. */
+  maxBackoffMs?: number;
+  /** VICE_MAX_RESTARTS override. */
+  maxRestarts?: number;
+  /** VICE_CRASH_WINDOW_S override, in milliseconds. */
+  crashWindowMs?: number;
+  log?: (line: string) => void;
+  /** Test/observability hook -- fired once per exit event, after this
+   * module has fully resolved the outcome (state already updated). Never
+   * consulted for behaviour by this module itself. */
+  onOutcome?: (outcome: RespawnOutcome, port: number) => void;
+}
+
+/** The exit-driven respawn step. Reads the JUST-crashed record (still in
+ * state.instances -- nothing here deletes it before this runs), decides
+ * among the three outcomes, and acts:
+ *
+ * - deliberateKill set -> "deliberate_teardown": drop the instance, no
+ *   respawn. This is T-01.6.2-21's whole point -- without reading this
+ *   flag, every deliberate teardown would respawn exactly what it just
+ *   killed, silently breaking kill-never-recycle (a released instance must
+ *   be killed and stay gone).
+ * - crash count (this instance's crash timestamps still inside the window,
+ *   INCLUDING this one) at or above the configured maximum ->
+ *   "given_up": drop the instance, log a line naming it and the count.
+ *   Mirrors vice-supervisor.sh's own `>= VICE_MAX_RESTARTS` check exactly
+ *   (T-01.6.2-20).
+ * - otherwise -> "respawned": wait the CURRENT backoff (from the crashed
+ *   record, so the doubling carries forward across respawns), then relaunch
+ *   through launchSupervised() below -- the SAME tryLaunchOne() primitive
+ *   plan 02 established, with the crash history and the NEXT (doubled,
+ *   clamped) backoff threaded into the new record. */
+async function handleExit(reason: string, port: number, deps: SuperviseChildDeps): Promise<void> {
+  const record = deps.state.instances.get(port);
+  if (!record) {
+    // Already gone by some other path (e.g. a release that removed the
+    // instance outright rather than merely marking it) -- nothing to do.
+    return;
+  }
+
+  const log = deps.log ?? defaultLog;
+
+  if (record.deliberateKill) {
+    deps.state.instances.delete(port);
+    deps.onOutcome?.("deliberate_teardown", port);
+    return;
+  }
+
+  const now = deps.now ?? ((): number => Date.now());
+  const nowMs = now();
+  const crashWindowMs = resolveMs("VICE_CRASH_WINDOW_S", 120, deps.crashWindowMs);
+  const crashTimes = [...(record.crashTimes ?? []), nowMs].filter((t) => nowMs - t <= crashWindowMs);
+
+  const maxRestarts = resolveCount("VICE_MAX_RESTARTS", 5, deps.maxRestarts);
+  if (crashTimes.length >= maxRestarts) {
+    log(
+      `vice-broker: giving up on port ${port} after ${crashTimes.length} crashes within ${crashWindowMs}ms -- ` +
+        `this is not a transient crash; check VICE_ARGS and whether the port is already bound`,
+    );
+    deps.state.instances.delete(port);
+    deps.onOutcome?.("given_up", port);
+    return;
+  }
+
+  const sleepMs = deps.sleepMs ?? ((ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms)));
+  const currentBackoffMs = record.backoffMs ?? resolveMs("VICE_RESTART_BACKOFF_S", 3, deps.initialBackoffMs);
+  await sleepMs(currentBackoffMs);
+
+  const maxBackoffMs = resolveMs("VICE_RESTART_BACKOFF_MAX_S", 30, deps.maxBackoffMs);
+  const nextBackoffMs = Math.min(currentBackoffMs * 2, maxBackoffMs);
+
+  const respawned = launchSupervised(reason, port, deps, crashTimes, nextBackoffMs);
+  deps.onOutcome?.(respawned ? "respawned" : "given_up", port);
+}
+
+/** Launches (or relaunches) a supervised instance: spawns through
+ * tryLaunchOne() (the SAME single guarded primitive plan 02 established --
+ * "spawn again through the SAME single guarded launch function", never a
+ * second, parallel spawn path), writes the per-instance boot/crash log at
+ * the path shape the retiring supervisor used (a `logs/` directory under
+ * the instance directory, named for the binary and a timestamp -- derived
+ * from broker-epoch.mts's instanceLogDirFor so this file and the epoch
+ * record's own `log` field can never disagree), bumps the epoch through
+ * the epoch writer (broker-epoch.mts's nextEpochFor + writeEpochRecord),
+ * and installs the exit handler that drives the NEXT crash's outcome.
+ *
+ * crashTimes/backoffMs are threaded through explicitly (not reset to
+ * defaults) so a respawn's crash history and doubling backoff survive the
+ * fact that spawnAndRecordInstance() creates a BRAND NEW InstanceRecord
+ * object on every launch, replacing the old one at the same port key. */
+function launchSupervised(
+  reason: string,
+  port: number,
+  deps: SuperviseChildDeps,
+  crashTimes: number[],
+  backoffMs: number,
+): InstanceRecord | null {
+  const supervisorDir = join(deps.stateDir, String(port));
+  const epochFile = deps.epoch.epochPathFor(deps.stateDir, port);
+  const logDir = deps.epoch.instanceLogDirFor(deps.stateDir, port);
+  mkdirSync(logDir, { recursive: true });
+
+  const epoch = deps.epoch.nextEpochFor(supervisorDir);
+  const viceBin = deps.viceBin ?? process.env.VICE_BIN ?? "x64sc";
+  // Timestamp PLUS the epoch number: Date.now() alone can collide across
+  // two respawns inside the same millisecond when the injected sleepMs
+  // resolves immediately (exactly what this module's own tests do to stay
+  // fast and deterministic) -- the epoch, guaranteed strictly increasing
+  // per instance, makes every respawn's log filename distinct regardless
+  // of wall-clock resolution.
+  const logFileName = `${basename(viceBin)}-${Date.now()}-e${epoch}.log`;
+  const logPath = join(logDir, logFileName);
+  const logRelPath = `logs/${logFileName}`;
+
+  const defaultRealSpawn = (cmd: string, args: string[]): ChildProcess => {
+    const fd = openSync(logPath, "a");
+    return nodeSpawn(cmd, args, { stdio: ["ignore", fd, fd] });
+  };
+  const baseSpawn = deps.spawnFactory ? deps.spawnFactory(port) : (deps.spawn ?? defaultRealSpawn);
+  const wrappedSpawn = (cmd: string, args: string[]): ChildProcess => {
+    const child = baseSpawn(cmd, args);
+    child.once("exit", () => {
+      void handleExit(reason, port, deps);
+    });
+    return child;
+  };
+
+  const record = tryLaunchOne(reason, port, {
+    state: deps.state,
+    supervisorDir,
+    epochFile,
+    spawn: wrappedSpawn,
+    now: deps.now,
+    viceBin: deps.viceBin,
+    mcpHost: deps.mcpHost,
+    log: deps.log,
+  });
+  if (!record) return null;
+
+  // The log file's EXISTENCE and the epoch record's `log` field naming it
+  // must never disagree, regardless of which spawn implementation actually
+  // produced output -- a test-injected stub child never writes through
+  // defaultRealSpawn's own fd, so this touches the file into existence
+  // when nothing else has.
+  if (!existsSync(logPath)) {
+    closeSync(openSync(logPath, "a"));
+  }
+
+  record.epoch = epoch;
+  record.deliberateKill = false;
+  record.crashTimes = crashTimes;
+  record.backoffMs = backoffMs;
+  record.logPath = logPath;
+
+  deps.epoch.writeEpochRecord({
+    supervisorDir,
+    record: {
+      epoch,
+      spawned_at: new Date(record.launchedAt).toISOString(),
+      pid: record.pid as number,
+      supervisor_pid: process.pid,
+      vice_bin: record.viceBin,
+      vice_args: record.viceArgs,
+      log: logRelPath,
+      dry_run: false,
+    },
+  });
+
+  return record;
+}
+
+/** The public entry point: launches a NEW instance under full supervision
+ * (crash respawn with backoff, crash-loop give-up, kill-never-recycle via
+ * the deliberate-kill marker, and the per-instance boot/crash log), exactly
+ * mirroring resources/vice-supervisor.sh's own respawn loop but expressed
+ * as an event-loop exit handler instead of a `while true` poll. */
+export function superviseChild(reason: string, port: number, deps: SuperviseChildDeps): InstanceRecord | null {
+  const initialBackoffMs = resolveMs("VICE_RESTART_BACKOFF_S", 3, deps.initialBackoffMs);
+  return launchSupervised(reason, port, deps, [], initialBackoffMs);
 }
