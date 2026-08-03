@@ -30,7 +30,7 @@ import { fileURLToPath } from "node:url";
 import { spawn as nodeSpawn } from "node:child_process";
 import { containerGuardReport, containerGuardEnforce } from "./container-guard.mjs";
 import { createBrokerState, nextFreePort, countReady, countTotal, countLaunching } from "./broker-state.mjs";
-import { tryLaunchOne, maintainWarmFloor, probeReady, runBrokerPass } from "./broker-launch.mjs";
+import { acquirePortAndLaunch, maintainWarmFloor, probeReady, runBrokerPass } from "./broker-launch.mjs";
 import { verifiedKill } from "./broker-kill.mjs";
 import { writeEpochRecord } from "./broker-epoch.mjs";
 import { startControlListener, newControlToken } from "./broker-control.mjs";
@@ -168,27 +168,34 @@ function writeEpochForLaunch(record, logRelPath) {
  * a launch failure -- the caller reports that as an `internal` control
  * error; the full denied/no_free_port/at_capacity vocabulary is plan 05's. */
 async function handleAcquire(requestId, stateDir, state) {
-    const portResult = await nextFreePort(state);
-    if (!portResult.ok) {
-        return null;
-    }
-    const port = portResult.port;
-    const supervisorDir = join(stateDir, String(port));
-    const epochFile = join(supervisorDir, "epoch.json");
-    const { spawn, logRelPath } = makeLoggingSpawn(join(supervisorDir, "logs"));
-    const record = tryLaunchOne("acquire", port, {
+    // acquirePortAndLaunch() holds the single in_flight owner across its own
+    // async port allocation (not merely tryLaunchOne()'s synchronous spawn
+    // instant) -- see that function's own header comment for the race this
+    // closes between a cold acquire and a concurrent warm-floor pass. This
+    // is also what restores vice-broker.sh's own process_requests() throttle:
+    // a cold acquire that arrives while ANY launch (cold or warm) is already
+    // under way is refused here, matching the bash original's declined-to-
+    // change behaviour, rather than racing a second instance into existence.
+    let lastLogRelPath = "";
+    const result = await acquirePortAndLaunch("acquire", {
         state,
-        supervisorDir,
-        epochFile,
-        spawn,
+        stateDir,
+        allocatePort: nextFreePort,
+        spawnFactory: (port) => {
+            const supervisorDir = join(stateDir, String(port));
+            const { spawn, logRelPath } = makeLoggingSpawn(join(supervisorDir, "logs"));
+            lastLogRelPath = logRelPath;
+            return spawn;
+        },
     });
-    if (!record || record.pid === null) {
+    if (!result.ok || result.record.pid === null) {
         return null;
     }
-    writeEpochForLaunch(record, logRelPath);
-    state.grants.set(requestId, { id: requestId, port, grantedAt: Date.now() });
+    const record = result.record;
+    writeEpochForLaunch(record, lastLogRelPath);
+    state.grants.set(requestId, { id: requestId, port: record.port, grantedAt: Date.now() });
     record.state = "granted";
-    return { port, url: record.url, epochFile, supervisorDir };
+    return { port: record.port, url: record.url, epochFile: record.epochFile, supervisorDir: record.supervisorDir };
 }
 /** The warm-floor concern of the fixed-order evaluation pass (D-24 drops
  * the projection write; the grant sweep does not appear -- D-12's

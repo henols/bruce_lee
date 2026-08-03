@@ -26,7 +26,7 @@ import {
   type InstanceRecord,
   type PortAllocationResult,
 } from "./broker-state.mts";
-import { tryLaunchOne, isLaunchInFlight, probeReady, maintainWarmFloor, runBrokerPass } from "./broker-launch.mts";
+import { tryLaunchOne, isLaunchInFlight, probeReady, maintainWarmFloor, runBrokerPass, acquirePortAndLaunch } from "./broker-launch.mts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -344,3 +344,167 @@ test("runBrokerPass: awaits an async serveAcquires before starting maintainWarmF
   });
   assert.deepEqual(order, ["serveAcquires", "maintainWarmFloor"]);
 });
+
+// ===========================================================================
+// Task 3: criterion C's required deliverable -- the 2026-08-01 triple-launch
+// regression, reproduced live rather than hypothesised (RESEARCH.md §C: the
+// bash outage was three simultaneous x64sc launches racing the SAME
+// count_launching() check -- one SEGV, one exit 1, one exit 0 at the
+// identical spawn second).
+//
+// These tests target acquirePortAndLaunch(), not tryLaunchOne() directly.
+// tryLaunchOne() is fully synchronous (no `await` between its own guard
+// check and set), which means two SEPARATE calls to it can never actually
+// overlap in JS's single-threaded, run-to-completion model, REGARDLESS of
+// how they are scheduled -- proven empirically while writing this test:
+// two tryLaunchOne() calls racing on DIFFERENT ports via a shared deferred
+// gate always produced two spawns, correctly, because launching two
+// different instances for two different requests is not a bug. The REAL
+// race this criterion must guard is nextFreePort()'s own asynchronous
+// port-in-use probe (plan 02, C4): two overlapping callers could otherwise
+// both be told the SAME candidate port is free before either commits it,
+// which is exactly what acquirePortAndLaunch() closes by holding the
+// SAME single in_flight owner across the ENTIRE allocate-then-launch
+// sequence, not merely the synchronous spawn instant.
+//
+// CROSS-PHASE DEPENDENCY, stated explicitly rather than left as an
+// assumption: this test's own GREEN state is Phase 01.6.2.1's stated
+// prerequisite for D-07 (non-preemptive launch priority layered on top of
+// this exact lock). When D-07's priority layer is added in that phase and
+// something goes red, this file is the first place to look -- if THIS test
+// is also red, the priority layer broke the lock; if this test is still
+// green, the regression is somewhere in the new priority logic instead.
+// Named as a dependency this phase's own work satisfies, never as an
+// assumption that this phase "sealed" concurrency safety for all time.
+// ===========================================================================
+
+test("criterion C: two concurrent launch requests against a stubbed, deferred port allocator produce exactly one spawn (2026-08-01 triple-launch regression)", async () => {
+  const state = createBrokerState();
+  let spawnCallCount = 0;
+  let allocatePortCallCount = 0;
+  const stubSpawn = (_cmd: string, _args: string[]) => {
+    spawnCallCount++;
+    return stubChild(5000 + spawnCallCount);
+  };
+  // Both requests' allocator would return the SAME port 6600 if either
+  // ever reached it -- the realistic shape of the race: two overlapping
+  // callers, both told the identical candidate is free.
+  const stubAllocatePort = async (): Promise<PortAllocationResult> => {
+    allocatePortCallCount++;
+    return { ok: true, port: 6600 };
+  };
+
+  // A SHARED, test-controlled deferred resolution: both launch requests are
+  // constructed as `.then()` continuations off the SAME pending promise, so
+  // neither request "starts" (i.e. reaches its own call into
+  // acquirePortAndLaunch()) before the other -- releasing the gate
+  // schedules BOTH continuations as separate microtasks from the identical
+  // resolved promise. This is what makes the concurrency real rather than
+  // nominal: a test that simply called the function twice in a row, with
+  // no scheduling gap at all, would pass even against a genuinely broken
+  // guard, for the boring reason that two back-to-back synchronous calls
+  // in the same tick can never interleave regardless of correctness.
+  let releaseGate: () => void;
+  const gate = new Promise<void>((resolve) => {
+    releaseGate = resolve;
+  });
+
+  const request1 = gate.then(() =>
+    acquirePortAndLaunch("acquire", {
+      state,
+      stateDir: "/tmp/race-cold",
+      allocatePort: stubAllocatePort,
+      spawn: stubSpawn,
+    })
+  );
+  const request2 = gate.then(() =>
+    acquirePortAndLaunch("spare", {
+      state,
+      stateDir: "/tmp/race-warm",
+      allocatePort: stubAllocatePort,
+      spawn: stubSpawn,
+    })
+  );
+
+  // Both continuations are already queued before either has run -- NOW
+  // release them together.
+  releaseGate!();
+  const [result1, result2] = await Promise.all([request1, request2]);
+
+  assert.equal(spawnCallCount, 1, `exactly one spawn must occur for two concurrent launch requests; got ${spawnCallCount}`);
+  const successes = [result1, result2].filter((r) => r.ok);
+  assert.equal(successes.length, 1, "exactly one of the two concurrent requests must succeed");
+  const refused = [result1, result2].filter((r) => !r.ok) as Array<{ ok: false; reason: string }>;
+  assert.equal(refused.length, 1);
+  assert.equal(refused[0].reason, "launch_in_flight", "the losing request must be refused as launch_in_flight, not silently dropped or errored");
+  assert.equal(isLaunchInFlight(), false, "the guard must be clear once both requests have settled");
+});
+
+test("criterion C: a warming pass overlapping a cold acquire's still-in-flight launch produces no second spawn; the next pass, once promoted, produces one", async () => {
+  const state = createBrokerState();
+
+  // A real cold acquire launch, via acquirePortAndLaunch() itself (not a
+  // seeded fixture) -- it lands in state.instances as "launching"
+  // synchronously once its (immediately-resolving) allocatePort settles,
+  // exactly as vice-broker.mts's handleAcquire would leave it mid-boot.
+  const coldResult = await acquirePortAndLaunch("acquire", {
+    state,
+    stateDir: "/tmp/race-cold-6600",
+    allocatePort: async () => ({ ok: true, port: 6600 }),
+    spawn: () => stubChild(9001),
+  });
+  assert.ok(coldResult.ok, "the cold acquire launch itself must succeed to set up this scenario");
+  assert.equal(state.instances.get(6600)!.state, "launching");
+
+  const { deps, spawnCalls } = makeWarmFloorDeps(state, {
+    warmFloor: 3,
+    probe: () => Promise.resolve({ ready: false, mechanism: "http" as const }), // still not ready
+  });
+  await maintainWarmFloor(deps);
+  assert.equal(spawnCalls.length, 0, "no second spawn while the cold acquire's launch is still in flight");
+  assert.equal(state.instances.get(6600)!.state, "launching", "the cold instance must still be launching, untouched by this pass");
+
+  // The SAME instance's probe now succeeds -- the next pass promotes it to
+  // ready, sees countLaunching()===0, and warming may proceed.
+  const { deps: deps2, spawnCalls: spawnCalls2 } = makeWarmFloorDeps(state, {
+    warmFloor: 3,
+    probe: () => Promise.resolve({ ready: true, mechanism: "http" as const }),
+  });
+  await maintainWarmFloor(deps2);
+  assert.equal(state.instances.get(6600)!.state, "ready", "the earlier cold instance must now be promoted");
+  assert.equal(spawnCalls2.length, 1, "warming proceeds on the pass after the earlier launch is no longer in flight");
+});
+
+// Task 3's third required assertion -- "an injected spawn rejection leaves
+// the guard clear, and the next launch request spawns" -- is ALREADY
+// covered above by Task 2's own "tryLaunchOne: a launch that rejects still
+// clears the in-flight owner so a following launch succeeds" test, and
+// holds identically for acquirePortAndLaunch() since it shares the exact
+// same module-level guard and the exact same try/finally release
+// discipline; it is not duplicated here.
+//
+// DISCRIMINATING-POWER CHECK (performed during Task 3's execution, recorded
+// here and in the plan's own SUMMARY rather than left implicit): the guard's
+// `if (inFlight) return ...` check and `inFlight = true;` set were
+// temporarily moved to AFTER `await deps.allocatePort(...)` instead of
+// before it (the realistic shape of this exact mistake: "let me just
+// allocate the port first, then check if something else is already
+// launching"). The FIRST "criterion C" test above -- the two-concurrent-
+// requests test -- FAILED against that regressed version (spawnCallCount
+// observed as 2, both requests succeeding instead of one being refused as
+// launch_in_flight), proving it has real discriminating power against the
+// exact regression it exists to catch, rather than passing vacuously
+// regardless of the guard's correctness. The SECOND test (the cross-pass
+// overlap) did NOT fail against this same regression -- correctly so, and
+// recorded here rather than silently: that test's own "no second spawn"
+// property is enforced by maintainWarmFloor()'s independent
+// countLaunching()>0 pre-check (a RECORDED-STATE throttle, checked before
+// acquirePortAndLaunch() is ever reached), not by the in_flight guard this
+// specific regression broke -- the cold instance was already fully
+// launched and recorded before the warm pass ever ran, so there was no
+// overlap window for this particular mistake to exploit. The two tests
+// therefore discriminate two DIFFERENT invariants, both real. The
+// regression was reverted immediately after this check; no trace of it
+// remains in the committed source. This mirrors Phase 01.6.1's own
+// practice of proving a guard's tests against an injected regression
+// before trusting them.
