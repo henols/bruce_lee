@@ -4,6 +4,7 @@
 // deployed to the host on their own -- install-resources.mjs copies THIS file's on-disk contents
 // verbatim to tools/, so an edit made only here reaches the host but is lost on the very next
 // rebuild.
+import { createServer } from "node:net";
 export function createBrokerState() {
     return { instances: new Map(), grants: new Map(), blockedPorts: new Set() };
 }
@@ -19,8 +20,14 @@ export function _snapshotState(state) {
     };
 }
 /** VICE_BROKER_BASE_PORT's default (D-18): the broker's port band moves
- * from 6510 to 6600 in this phase. */
+ * from 6510 to 6600 in this phase -- 6510-6599 stays reserved by convention
+ * for an x64sc a human launches for their own work. */
 export const DEFAULT_BASE_PORT = 6600;
+/** Scan ceiling matching vice-broker.sh's own next_free_port(): exactly one
+ * hundred candidates starting at (and including) the base port. Bounded so
+ * an exhausted host produces one explicit `no_free_port` result rather than
+ * an unbounded scan. */
+const PORT_SCAN_CEILING = 100;
 function resolveBasePort() {
     const raw = process.env.VICE_BROKER_BASE_PORT;
     if (raw === undefined || raw === "")
@@ -28,14 +35,93 @@ function resolveBasePort() {
     const n = Number(raw);
     return Number.isFinite(n) ? n : DEFAULT_BASE_PORT;
 }
-/** Allocates the lowest free port at or above the base port, skipping ports
- * already present in the instance map or the blocked set. This is the
- * MINIMUM the single tracer path needs -- the full scan, the running
- * counts and the real port-in-use check are plan 02's. */
-export function nextFreePort(state, { basePort = resolveBasePort() } = {}) {
-    let port = basePort;
-    while (state.instances.has(port) || state.blockedPorts.has(port)) {
-        port++;
+/** Real default: attempts to bind the candidate port on 127.0.0.1 and
+ * immediately releases it. Answers ONLY "is a TCP listener already bound
+ * here" -- the exact question vice-broker.sh's own /dev/tcp-based
+ * port_in_use() asked, and deliberately never reused as a readiness check
+ * (see broker-launch.mts's probeReady() header comment for why those two
+ * questions are never conflated: a C64 can accept a connection before it
+ * has finished booting). EADDRINUSE means genuinely in use; any other
+ * listen error is treated as "not in use" -- cheaper and clearer than
+ * letting a launch fail later for an unrelated reason. */
+export function defaultPortInUse(port) {
+    return new Promise((resolve) => {
+        const server = createServer();
+        server.once("error", (err) => {
+            resolve(err.code === "EADDRINUSE");
+        });
+        server.once("listening", () => {
+            server.close(() => resolve(false));
+        });
+        server.listen(port, "127.0.0.1");
+    });
+}
+export function isPortBlocked(state, port) {
+    return state.blockedPorts.has(port);
+}
+/** Remembers a refused port for the lifetime of THIS broker process only --
+ * never persisted. A port refused now may be free after the next reboot;
+ * persisting the refusal would silently shrink the allocation band
+ * forever. Idempotent: blocking an already-blocked port is a no-op. */
+export function blockPort(state, port) {
+    state.blockedPorts.add(port);
+}
+/** Allocates the lowest free port at or above the base port (default 6600
+ * per D-18, overridable via VICE_BROKER_BASE_PORT -- the same env var name
+ * the bash daemon used), scanning up to PORT_SCAN_CEILING candidates.
+ * "Free" means: not already recorded in the instance map (granted,
+ * launching or ready all occupy their port), not already in the
+ * process-scoped blocked set, and not reported in use by the injectable
+ * port-in-use probe (defaulting to defaultPortInUse's real bind-and-release
+ * check). A candidate the probe reports as in use is added to the blocked
+ * set before scanning continues, so it is never re-offered or re-probed by
+ * this process again. Never throws -- returns a typed failure naming
+ * exhaustion when every candidate in the window is taken. */
+export async function nextFreePort(state, opts = {}) {
+    const basePort = opts.basePort ?? resolveBasePort();
+    const portInUse = opts.portInUse ?? defaultPortInUse;
+    const limit = basePort + PORT_SCAN_CEILING;
+    for (let port = basePort; port < limit; port++) {
+        if (state.instances.has(port))
+            continue;
+        if (isPortBlocked(state, port))
+            continue;
+        if (await portInUse(port)) {
+            blockPort(state, port);
+            continue;
+        }
+        return { ok: true, port };
     }
-    return port;
+    return { ok: false, reason: "no_free_port" };
+}
+/** Counts ready, unclaimed instances -- filters the SAME in-memory map every
+ * other count reads, no filesystem access anywhere in this expression. */
+export function countReady(state) {
+    let n = 0;
+    for (const record of state.instances.values()) {
+        if (record.state === "ready")
+            n++;
+    }
+    return n;
+}
+/** Counts every launched instance regardless of state (launching, ready or
+ * granted) -- the denominator of the total <= VICE_BROKER_MAX ceiling. */
+export function countTotal(state) {
+    return state.instances.size;
+}
+/** Counts instances currently "launching" -- THE single counter both launch
+ * paths (a cold acquire, via handleAcquire in vice-broker.mts, and warm
+ * floor maintenance, via maintainWarmFloor in broker-launch.mts) consult
+ * before starting a new launch. Two counters that could ever disagree about
+ * whether a boot is already under way is exactly how the two bash launch
+ * paths raced each other into the 2026-08-01 outage (three simultaneous
+ * x64sc launches: one SEGV, one exit 1, one exit 0 at the identical spawn
+ * second) -- there is now exactly one, read here and nowhere else. */
+export function countLaunching(state) {
+    let n = 0;
+    for (const record of state.instances.values()) {
+        if (record.state === "launching")
+            n++;
+    }
+    return n;
 }

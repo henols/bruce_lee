@@ -147,7 +147,11 @@ function writeBrokerRecordFile(stateDir: string, record: BrokerRecord): string {
  * a launch failure -- the caller reports that as an `internal` control
  * error; the full denied/no_free_port/at_capacity vocabulary is plan 05's. */
 async function handleAcquire(requestId: string, stateDir: string, state: BrokerState): Promise<AcquireGrant | null> {
-  const port = nextFreePort(state);
+  const portResult = await nextFreePort(state);
+  if (!portResult.ok) {
+    return null;
+  }
+  const port = portResult.port;
   const supervisorDir = join(stateDir, String(port));
   const epochFile = join(supervisorDir, "epoch.json");
   const logDir = join(supervisorDir, "logs");
