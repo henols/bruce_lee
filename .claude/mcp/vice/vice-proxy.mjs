@@ -1214,9 +1214,10 @@ const ONLY_ROUTE_NOTE =
  * message. Recomputed fresh every call -- never cached (see the
  * never-cache-a-negative-result invariant above ensureViceSession()). */
 function supervisorHostPath() {
-  const target = join(repoRoot(), "tools", "vice-supervisor.sh");
+  const root = repoRoot();
+  const target = join(root, "tools", "vice-supervisor.sh");
   try {
-    return hostPath(target);
+    return hostPath(target, { workspaceRoot: root });
   } catch {
     return `${target}\n  (host path could not be determined -- ${SET_ENV_HINT})`;
   }
@@ -1225,9 +1226,10 @@ function supervisorHostPath() {
 /** Same shape as supervisorHostPath(), for the broker launcher instead of
  * the supervisor. Recomputed fresh every call -- never cached. */
 function brokerHostPath() {
-  const target = join(repoRoot(), "tools", "vice-broker.sh");
+  const root = repoRoot();
+  const target = join(root, "tools", "vice-broker.sh");
   try {
-    return hostPath(target);
+    return hostPath(target, { workspaceRoot: root });
   } catch {
     return `${target}\n  (host path could not be determined -- ${SET_ENV_HINT})`;
   }
@@ -1526,7 +1528,7 @@ function rewritePathsIn(value, argPath, root, depth, asWritten) {
       );
     }
     try {
-      return hostPath(normalized);
+      return hostPath(normalized, { workspaceRoot: root });
     } catch (e) {
       // Name what the CALLER wrote first, and the container path it became --
       // never lead with the host path. The caller reasons in container terms

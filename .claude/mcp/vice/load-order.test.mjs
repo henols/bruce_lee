@@ -254,13 +254,18 @@ function canonicalCycles(cycles) {
   return out;
 }
 
-// The recorded allowlist. Exactly one member today: the live cycle
-// documented in install-resources.mjs's own header, repo-root.mjs's own
-// header, and 01.6-RESEARCH.md §E. Widening this to TypeScript sources
-// (.ts/.mts specifiers) and deciding whether to break the cycle outright are
-// Phase 01.6.1 criterion B's job, not this scaffold's -- this file only
-// records what is true of the FLAT .mjs graph as it stands today.
-const ALLOWED_CYCLES_THROUGH_REPO_ROOT = [["hostpath.mjs", "install-resources.mjs", "repo-root.mjs"]];
+// The recorded allowlist. EMPTY as of 01.6.1-02 (PTD-1, locked by the
+// developer; RESEARCH §3.4 Option B): the three-module cycle this array
+// used to record (hostpath.mjs -> install-resources.mjs -> repo-root.mjs ->
+// hostpath.mjs) was retired STRUCTURALLY -- hostpath.mjs no longer imports
+// repo-root.mjs at all; it takes the workspace root as an optional argument
+// instead. This array does not record that there is no cycle "for now"; it
+// records that a new one is not allowed through silently. A future cycle
+// through repo-root.mjs must be justified by amending this array in this
+// same test, not discovered by accident. See 01.6.1-RESEARCH.md §3.4 for
+// the retirement, and Part 3 below for the complementary call-site guard
+// that survives the cycle's removal.
+const ALLOWED_CYCLES_THROUGH_REPO_ROOT = [];
 
 test("cycle allowlist: module enumeration under .claude/mcp/vice/ returns a non-empty flat set", () => {
   const moduleNames = listModuleFiles();
@@ -285,4 +290,123 @@ test("cycle allowlist: exactly the recorded three-module cycle passes through re
       "Widening this allowlist to TypeScript sources, and deciding whether to break the cycle outright, " +
       "belong to Phase 01.6.1 criterion B and are not settled here."
   );
+});
+
+// ============================================================================
+// Part 3: the module-scope call-site guard (01.6.1-02, RESEARCH §3.3/§3.5).
+// Emptying the allowlist above retires the ONE cycle it recorded, but not
+// the hazard CLASS: an unguarded module-scope repoRoot() call falls through
+// to repo-root.mjs's own possibly-still-TDZ'd `HERE` regardless of whether
+// an import cycle exists at all. This is why the guard is scoped to MODULE
+// SCOPE, not "any call inside a listed cycle member" -- with the allowlist
+// empty there is no cycle membership left to scope by, so a member-scoped
+// guard would be vacuous the day it lands. A module-scope guard has a real
+// subject today (containerpath.mjs's own top-level repoRoot() call) and
+// gains a fresh at-risk subject the instant a future edit adds an unguarded
+// module-scope repoRoot() call anywhere in this flat tree -- including
+// inside vice-sync.mjs, which this same plan gave a repo-root import it did
+// not have before (see that file's own header comment).
+//
+// moduleScopeRepoRootCalls() was written and exercised by its own
+// regression corpus BEFORE it was implemented (RED, matching this file's
+// own Part 1 red-then-green shape) -- confirmed live: both new tests failed
+// with `ReferenceError: moduleScopeRepoRootCalls is not defined` before this
+// function existed.
+// ============================================================================
+
+/** Every module-scope repoRoot(...) call found in `text`, as `{ line,
+ * guarded }` objects. Anchored on the ABSENCE of leading whitespace: a
+ * module-scope statement starts at column zero, a call inside any function
+ * body is indented -- this matters because five of the seven real
+ * repoRoot() call sites in this tree today are exactly that indented, lazy,
+ * safe shape (01.6.1-RESEARCH.md's own measured table). Three column-zero
+ * shapes are excluded, none of them calls: a line whose first non-whitespace
+ * characters open a comment (`//` or `/*`), a continuation line of an
+ * already-open block comment, and the repo-root module's own
+ * `function repoRoot(` declaration line -- a declaration, not a call. */
+function moduleScopeRepoRootCalls(text) {
+  const results = [];
+  let inBlockComment = false;
+  for (const line of text.split("\n")) {
+    if (inBlockComment) {
+      if (line.includes("*/")) inBlockComment = false;
+      continue;
+    }
+    const trimmed = line.replace(/^[ \t]+/, "");
+    if (trimmed !== line) continue; // indented -- function-body scope, not module scope
+    if (trimmed.startsWith("//")) continue; // line comment
+    if (trimmed.startsWith("/*")) {
+      if (!trimmed.includes("*/")) inBlockComment = true;
+      continue; // block-comment opener (single- or multi-line)
+    }
+    if (/^(?:export\s+)?(?:async\s+)?function\s+repoRoot\s*\(/.test(trimmed)) continue; // the declaration itself
+    if (!/\brepoRoot\(/.test(trimmed)) continue;
+    const guarded = /\brepoRoot\(\s*\{[^)]*?\bfrom\s*:/.test(trimmed);
+    results.push({ line: trimmed, guarded });
+  }
+  return results;
+}
+
+test("moduleScopeRepoRootCalls(): regression corpus -- guarded vs. unguarded module-scope calls, indented calls ignored, the declaration itself and prose comments not classified as calls", () => {
+  assert.deepEqual(
+    moduleScopeRepoRootCalls('const WORKSPACE_ROOT = repoRoot({ from: HERE });'),
+    [{ line: 'const WORKSPACE_ROOT = repoRoot({ from: HERE });', guarded: true }],
+    "a module-scope declaration calling repoRoot() with an explicit `from:` key must be classified guarded"
+  );
+  assert.deepEqual(
+    moduleScopeRepoRootCalls('const WORKSPACE_ROOT = repoRoot();'),
+    [{ line: 'const WORKSPACE_ROOT = repoRoot();', guarded: false }],
+    "a module-scope declaration calling repoRoot() with no arguments must be classified unguarded -- this " +
+      "is exactly the regression 01.6.1-RESEARCH.md §3.2 reproduced live, crashing with " +
+      '"Cannot access \'HERE\' before initialization"'
+  );
+  assert.deepEqual(
+    moduleScopeRepoRootCalls('  const x = repoRoot();'),
+    [],
+    "an INDENTED (function-body) bare repoRoot() call is not module scope and must be ignored -- five of " +
+      "the seven real call sites in this tree are exactly this shape and are safe (lazy, called well " +
+      "after every module has finished evaluating)"
+  );
+  assert.deepEqual(
+    moduleScopeRepoRootCalls('export function repoRoot({ from = HERE, env = process.env } = {}) {'),
+    [],
+    "the repo-root module's own exported function DECLARATION line -- column zero, contains the " +
+      "identifier followed by an open parenthesis -- must not be classified as a call"
+  );
+  assert.deepEqual(
+    moduleScopeRepoRootCalls('// import repoRoot()/supervisorDir()), among other modules in this tree,'),
+    [],
+    "a column-zero COMMENT line that merely mentions repoRoot() in prose must not be classified as a " +
+      "call -- repo-root.mjs has exactly this line today (its own line 142), and an unanchored pattern " +
+      "fires on it"
+  );
+});
+
+/** Every module-scope repoRoot(...) call site, source-text only, across every
+ * production module this phase converts. Iterates listModuleFiles()'s own
+ * enumeration (not a hand-maintained list) so a future rename in this phase
+ * needs no edit here, and asserts every module-scope call found is guarded --
+ * naming the file and line on failure. */
+function assertAllModuleScopeCallsGuarded() {
+  const moduleNames = listModuleFiles();
+  assert.ok(moduleNames.length > 0, "module enumeration returned nothing -- the guard cannot police an empty set");
+  for (const name of moduleNames) {
+    const text = readFileSync(join(HERE, name), "utf8");
+    for (const { line, guarded } of moduleScopeRepoRootCalls(text)) {
+      assert.ok(
+        guarded,
+        `${name}: module-scope call \`${line.trim()}\` does not pass an explicit \`from:\` override. ` +
+          "An unguarded module-scope repoRoot() call falls through to repo-root.mjs's own " +
+          "still-possibly-uninitialised `HERE` binding -- 01.6.1-RESEARCH.md §3.2 reproduced this LIVE, " +
+          'crashing with exactly "Cannot access \'HERE\' before initialization". The cycle allowlist ' +
+          "above being empty does not make this check redundant: 01.6.1-02's own cycle-break (Task 1) " +
+          "gave vice-sync.mjs a repo-root import it did not have before, which is a fresh route to the " +
+          "same hazard this guard exists to police."
+      );
+    }
+  }
+}
+
+test("call-site guard: every module-scope repoRoot() call in the real production tree passes an explicit `from:`", () => {
+  assertAllModuleScopeCallsGuarded();
 });

@@ -40,11 +40,24 @@
 // edge on every entry into this tree. screenshot() is simply its second
 // consumer. A future maintainer should neither believe this module introduced
 // that edge nor "fix" it by hand-rolling a second path translator.
+//
+// This module's OWN `repo-root.mjs` import (below) is new as of 01.6.1-02
+// (RESEARCH §3.4 Option B): hostpath.mjs no longer resolves the workspace
+// root itself, so every caller of tryHostPaths()/hostPath() now threads it
+// through explicitly. vice-sync.mjs is NOT a member of the repo-root cycle
+// (repo-root.mjs -> install-resources.mjs -> hostpath.mjs -> repo-root.mjs)
+// -- it only calls repoRoot() lazily, inside screenshot(), well after every
+// cycle member has already finished evaluating -- but this import is exactly
+// the kind of fresh route load-order.test.mjs's module-scope call-site guard
+// (Part 3, added in this same plan) exists to police: a future top-level,
+// unguarded `repoRoot()` call added here would rebuild the TDZ hazard by a
+// new path even though the three-module cycle itself is gone.
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 
 import { call } from "./vice.mjs";
 import { tryHostPaths } from "./hostpath.mjs";
+import { repoRoot } from "./repo-root.mjs";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -254,8 +267,10 @@ export async function reset() {
  */
 export async function screenshot(containerPath) {
   mkdirSync(dirname(containerPath), { recursive: true });
-  const { hostPath } = await tryHostPaths(containerPath, (p) =>
-    call("vice_display_screenshot", { path: p })
+  const { hostPath } = await tryHostPaths(
+    containerPath,
+    (p) => call("vice_display_screenshot", { path: p }),
+    { workspaceRoot: repoRoot() }
   );
   return hostPath;
 }

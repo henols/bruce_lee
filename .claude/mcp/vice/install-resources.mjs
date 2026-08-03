@@ -111,14 +111,14 @@ export function hostLaunchInstructions(root) {
   const target = join(installTargetDir(root), "vice-supervisor.sh");
   let displayPath;
   try {
-    displayPath = hostPath(target);
+    displayPath = hostPath(target, { workspaceRoot: root });
   } catch {
     displayPath = `${target}\n  (host path could not be determined -- ${SET_ENV_HINT})`;
   }
   const brokerTarget = join(installTargetDir(root), "vice-broker.sh");
   let brokerDisplayPath;
   try {
-    brokerDisplayPath = hostPath(brokerTarget);
+    brokerDisplayPath = hostPath(brokerTarget, { workspaceRoot: root });
   } catch {
     brokerDisplayPath = `${brokerTarget}\n  (host path could not be determined -- ${SET_ENV_HINT})`;
   }
