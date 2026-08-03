@@ -17,7 +17,7 @@
 // "reason" -- ever reaches a path. A non-integer port or epoch is coerced
 // to the literal "unknown" rather than passed through, so a malformed
 // caller value degrades the filename's specificity, never its safety.
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
 
@@ -31,12 +31,12 @@ export const INCIDENT_RECORD_VERSION = 1;
  * module's own test suite uses to write against a disposable temp
  * directory instead of the real, permanent `.planning/incidents/` every
  * production caller resolves to. */
-export function incidentsDir() {
+export function incidentsDir(): string {
   if (process.env.VICE_INCIDENTS_DIR) return resolve(process.env.VICE_INCIDENTS_DIR);
   return join(repoRoot(), ".planning", "incidents");
 }
 
-function sanitiseUtcTimestamp(at) {
+function sanitiseUtcTimestamp(at: Date | string | number): string {
   const d = at instanceof Date ? at : new Date(at);
   const base = Number.isNaN(d.getTime()) ? new Date() : d;
   // Strip every non-digit from the ISO string ("2026-08-02T14:30:00.123Z" ->
@@ -45,7 +45,7 @@ function sanitiseUtcTimestamp(at) {
   return base.toISOString().replace(/[^0-9]/g, "");
 }
 
-function sanitiseInt(value) {
+function sanitiseInt(value: unknown): number | "unknown" {
   // null/undefined/"" all coerce to 0 (or NaN) under a bare Number(), which
   // would silently misreport "no port/epoch known" as the real port 0 --
   // excluded FIRST, before the coercion, rather than trusting Number()'s
@@ -55,6 +55,21 @@ function sanitiseInt(value) {
   return Number.isInteger(n) ? n : "unknown";
 }
 
+/** Options shared by incidentAssetStem()/incidentAssetPath()/
+ * incidentRecordPath() below: `port`/`epoch` are typed `unknown` rather
+ * than `number` because they arrive as whatever the recycle protocol
+ * happened to capture -- sanitiseInt() above is what turns a malformed or
+ * missing value into the literal "unknown" rather than a bad path. */
+export interface IncidentAssetStemOptions {
+  at?: Date | string | number;
+  port?: unknown;
+  epoch?: unknown;
+}
+
+export interface IncidentAssetPathOptions extends IncidentAssetStemOptions {
+  ext?: string;
+}
+
 /** The `<UTC compact timestamp>-port<port>-epoch<epoch>` stem shared by an
  * incident record and every sibling asset (the screenshot, plan 01.3-03) --
  * the ONLY three inputs that ever reach it, each coerced independently and
@@ -62,7 +77,7 @@ function sanitiseInt(value) {
  * (T-01.3-07). Single source of truth for `incidentAssetPath()` and
  * `incidentRecordPath()` below, so a screenshot and its record can never
  * drift onto two different naming rules. */
-export function incidentAssetStem({ at = new Date(), port, epoch } = {}) {
+export function incidentAssetStem({ at = new Date(), port, epoch }: IncidentAssetStemOptions = {}): string {
   const ts = sanitiseUtcTimestamp(at);
   const p = sanitiseInt(port);
   const e = sanitiseInt(epoch);
@@ -73,16 +88,16 @@ export function incidentAssetStem({ at = new Date(), port, epoch } = {}) {
  * specialises to `.md`. Plan 01.3-03's `gatherWedgeEvidence()` calls this
  * directly with `ext: "png"` so the screenshot lands beside the record it
  * will be named from, sharing the identical stem. */
-export function incidentAssetPath({ at = new Date(), port, epoch, ext = "md" } = {}) {
+export function incidentAssetPath({ at = new Date(), port, epoch, ext = "md" }: IncidentAssetPathOptions = {}): string {
   return join(incidentsDir(), `${incidentAssetStem({ at, port, epoch })}.${ext}`);
 }
 
 /** Builds `<UTC compact timestamp>-port<port>-epoch<epoch>.md`. */
-export function incidentRecordPath({ at = new Date(), port, epoch } = {}) {
+export function incidentRecordPath({ at = new Date(), port, epoch }: IncidentAssetStemOptions = {}): string {
   return incidentAssetPath({ at, port, epoch, ext: "md" });
 }
 
-function yamlScalar(value) {
+function yamlScalar(value: unknown): string {
   if (value === null || value === undefined) return "null";
   if (typeof value === "number" || typeof value === "boolean") return String(value);
   // A conservative single-quoted YAML scalar: doubling an embedded single
@@ -103,7 +118,27 @@ function yamlScalar(value) {
 // look the same in the file. "snapshot" (task 2) is simply absent from
 // `evidence` on a record written before that capture existed; absence is
 // treated as "not this record's concern", not as a failure of its own.
-const EVIDENCE_ITEM_ORDER = [
+
+/** One evidence item, as captureStep() (vice-proxy.mjs) produces it. */
+export interface EvidenceItem {
+  available: boolean;
+  value?: unknown;
+  reason?: string;
+}
+
+/** The full, fixed-order evidence set a record MAY carry -- every key is
+ * optional because a record written before a given capture existed simply
+ * omits it (see renderEvidenceSection()'s own `undefined` skip below). */
+export interface IncidentEvidence {
+  bracket?: EvidenceItem;
+  registers?: EvidenceItem;
+  checkpoints?: EvidenceItem;
+  irqHandler?: EvidenceItem;
+  screenshot?: EvidenceItem;
+  snapshot?: EvidenceItem;
+}
+
+const EVIDENCE_ITEM_ORDER: { key: keyof IncidentEvidence; label: string }[] = [
   { key: "bracket", label: "cycle bracket" },
   { key: "registers", label: "program counter / register snapshot" },
   { key: "checkpoints", label: "armed checkpoints" },
@@ -112,40 +147,49 @@ const EVIDENCE_ITEM_ORDER = [
   { key: "snapshot", label: "pre-kill snapshot attempt" },
 ];
 
-function formatEvidenceValue(key, value) {
+function formatEvidenceValue(key: keyof IncidentEvidence, value: unknown): string {
   switch (key) {
-    case "bracket":
-      return `${value && value.cycles} cycles retired in ~${value && value.elapsedMs}ms`;
+    case "bracket": {
+      const v = value as { cycles?: unknown; elapsedMs?: unknown } | undefined;
+      return `${v && v.cycles} cycles retired in ~${v && v.elapsedMs}ms`;
+    }
     case "registers": {
+      const v = value as { PC?: unknown } | undefined;
       const pc =
-        value && typeof value.PC === "number" ? `$${value.PC.toString(16).toUpperCase().padStart(4, "0")}` : "unknown";
+        v && typeof v.PC === "number" ? `$${v.PC.toString(16).toUpperCase().padStart(4, "0")}` : "unknown";
       return `PC ${pc} (full snapshot: ${JSON.stringify(value)})`;
     }
     case "checkpoints": {
-      const list = Array.isArray(value) ? value : [];
+      const list = Array.isArray(value)
+        ? (value as { checkpoint_num: unknown; address: unknown; flag: unknown; enabled: unknown }[])
+        : [];
       if (list.length === 0) return "none armed";
       return list
         .map((c) => `#${c.checkpoint_num} ${c.address} (${c.flag}, ${c.enabled ? "enabled" : "disabled"})`)
         .join("; ");
     }
-    case "irqHandler":
-      return value && value.explanation ? value.explanation : JSON.stringify(value);
+    case "irqHandler": {
+      const v = value as { explanation?: unknown } | undefined;
+      return v && v.explanation ? String(v.explanation) : JSON.stringify(value);
+    }
     case "screenshot":
       return `saved to ${value}`;
     // Deliberately NEVER "verified" or "saved" wording (T-01.3-11): the
     // snapshot capability takes a NAME resolved inside the host emulator's
     // own directory, so nothing container-side can confirm a file actually
     // landed -- the record can only say the ATTEMPT was accepted.
-    case "snapshot":
-      return `accepted (name: ${value && value.name}) -- a name resolved host-side, never independently verified as written`;
+    case "snapshot": {
+      const v = value as { name?: unknown } | undefined;
+      return `accepted (name: ${v && v.name}) -- a name resolved host-side, never independently verified as written`;
+    }
     default:
       return JSON.stringify(value);
   }
 }
 
-function renderEvidenceSection(evidence) {
+function renderEvidenceSection(evidence: IncidentEvidence | null | undefined): string {
   if (!evidence) return "(no evidence captured)";
-  const lines = [];
+  const lines: string[] = [];
   for (const { key, label } of EVIDENCE_ITEM_ORDER) {
     const item = evidence[key];
     if (item === undefined) continue; // this record's own plan/task never wires this item in -- not a gap
@@ -165,7 +209,7 @@ function renderEvidenceSection(evidence) {
  * item this record's own plan/task never wires in (undefined) does not
  * count against completeness; at least one real item must be present for
  * "complete" to mean anything. */
-function isEvidenceComplete(evidence) {
+function isEvidenceComplete(evidence: IncidentEvidence | null | undefined): boolean {
   if (!evidence) return false;
   let sawAny = false;
   for (const { key } of EVIDENCE_ITEM_ORDER) {
@@ -175,6 +219,28 @@ function isEvidenceComplete(evidence) {
     if (item.available !== true) return false;
   }
   return sawAny;
+}
+
+/** The full set of fields renderIncidentRecord()/writeIncidentRecord()/
+ * finaliseIncidentRecord() pass around. Most fields are typed `unknown`
+ * rather than a narrower scalar type because this module's own contract is
+ * to render WHATEVER it is handed via yamlScalar()/template-literal
+ * stringification, never to validate it -- narrowing these to `string` or
+ * `number` would be a type claim this module's own runtime behaviour does
+ * not make good on. */
+export interface IncidentRecordInput {
+  version?: unknown;
+  at?: unknown;
+  port?: unknown;
+  epoch_before?: unknown;
+  epoch_after?: unknown;
+  outcome?: unknown;
+  kill_stage?: unknown;
+  session_id?: unknown;
+  reason?: unknown;
+  evidence?: IncidentEvidence | null;
+  evidence_section?: string | null;
+  evidence_complete?: unknown;
 }
 
 /** Renders the incident record as markdown: a parseable YAML frontmatter
@@ -190,7 +256,7 @@ function isEvidenceComplete(evidence) {
  * verbatim, so finalising a record (outcome/kill_stage/epoch_after only)
  * can never silently drop the evidence captured before the kill.
  */
-export function renderIncidentRecord(record = {}) {
+export function renderIncidentRecord(record: IncidentRecordInput = {}): string {
   const {
     version = INCIDENT_RECORD_VERSION,
     at = new Date().toISOString(),
@@ -251,14 +317,24 @@ export function renderIncidentRecord(record = {}) {
   return `${frontmatter}\n${body}`;
 }
 
-// Single tmp-in-the-same-directory then rename choke point -- the same
-// atomicity shape write_json_atomic() (resources/vice-broker.sh) and
-// writeJsonAtomic() (vice-broker-client.mjs) already use, so a crash
-// between write and rename leaves at most one stray, uniquely-named temp
-// file, never a half-written record observed mid-write.
-function writeAtomic(path, content) {
+// Tmp sibling created empty -> mode tightened to owner-read-write BEFORE any
+// content lands -> content written -> renamed over the destination, the
+// same shape vice-broker.mts's writeBrokerRecord() and install-resources.ts's
+// manifest writer use (01.6.1-PATTERNS.md's "Atomic write" pattern). Ported
+// here rather than left at the plain tmp-then-rename shape write_json_atomic()
+// (resources/vice-broker.sh) and writeJsonAtomic() (vice-broker-client.mjs)
+// use: this module's own threat register entry (T-01.6.1-08) requires the
+// mode-restriction step specifically, since a record can carry register/
+// screenshot-path evidence and briefly sat world-readable at the default
+// umask between write and rename otherwise. The rename itself is still what
+// makes the write atomic (a crash between write and rename leaves at most
+// one stray, uniquely-named temp file, never a half-written record observed
+// mid-write); the chmod is what stops that same window being world-readable.
+function writeAtomic(path: string, content: string): string {
   mkdirSync(incidentsDir(), { recursive: true });
   const tmp = join(incidentsDir(), `.tmp-${process.pid}-${randomUUID()}`);
+  writeFileSync(tmp, "");
+  chmodSync(tmp, 0o600);
   writeFileSync(tmp, content);
   renameSync(tmp, path);
   return path;
@@ -268,9 +344,13 @@ function writeAtomic(path, content) {
  * same computed path: a second recycle in the same second, on the same
  * port and epoch, appends "-2", "-3", ... rather than overwriting the
  * first record. Returns the absolute path actually written. */
-export function writeIncidentRecord(record = {}) {
+export function writeIncidentRecord(record: IncidentRecordInput = {}): string {
   mkdirSync(incidentsDir(), { recursive: true });
-  const at = record.at || new Date().toISOString();
+  // `record.at`, when supplied, is always an ISO timestamp string in every
+  // caller across this tree (this module's own contract; see the default
+  // above) -- narrowed here rather than left `unknown`, the same scoped-cast
+  // idiom this codebase uses at `(e as Error).message`.
+  const at = (record.at as string | undefined) || new Date().toISOString();
   const basePath = incidentRecordPath({ at, port: record.port, epoch: record.epoch_before });
   let path = basePath;
   let suffix = 2;
@@ -283,23 +363,33 @@ export function writeIncidentRecord(record = {}) {
   return path;
 }
 
-// A DELIBERATELY minimal frontmatter reader -- this module never depends on
-// a YAML parser; it only needs to read back the handful of scalar fields it
-// itself wrote, in the exact single-quoted shape yamlScalar() emits above.
-function parseFrontmatterLoose(text) {
-  const out = { reason: "" };
+/** A DELIBERATELY minimal frontmatter reader -- this module never depends on
+ * a YAML parser; it only needs to read back the handful of scalar fields it
+ * itself wrote, in the exact single-quoted shape yamlScalar() emits above.
+ * `reason`/`evidence_section` are typed explicitly since every code path
+ * below either sets or leaves them at their initial value; every other
+ * frontmatter key is read back dynamically by name and so falls to the
+ * index signature. */
+interface ParsedFrontmatter {
+  reason: string;
+  evidence_section?: string;
+  [key: string]: unknown;
+}
+
+function parseFrontmatterLoose(text: string): ParsedFrontmatter {
+  const out: ParsedFrontmatter = { reason: "" };
   const fmMatch = text.match(/^---\n([\s\S]*?)\n---/);
   if (fmMatch) {
     for (const line of fmMatch[1].split("\n")) {
       const m = line.match(/^([a-z_]+):\s*(.*)$/);
       if (!m) continue;
       const [, key, rawValue] = m;
-      let value = rawValue;
+      let value: unknown = rawValue;
       if (value === "null") value = null;
       else if (value === "true") value = true;
       else if (value === "false") value = false;
-      else if (/^-?\d+$/.test(value)) value = Number(value);
-      else if (value.startsWith("'") && value.endsWith("'")) value = value.slice(1, -1).replace(/''/g, "'");
+      else if (/^-?\d+$/.test(rawValue)) value = Number(rawValue);
+      else if (rawValue.startsWith("'") && rawValue.endsWith("'")) value = rawValue.slice(1, -1).replace(/''/g, "'");
       out[key] = value;
     }
   }
@@ -317,10 +407,19 @@ function parseFrontmatterLoose(text) {
   return out;
 }
 
+export interface FinaliseIncidentRecordOptions {
+  outcome?: unknown;
+  kill_stage?: unknown;
+  epoch_after?: unknown;
+}
+
 /** Re-renders an already-written record with its outcome fields filled in,
  * through the same atomic write shape -- the record is never left saying
  * an outcome is still pending once a caller knows better. */
-export function finaliseIncidentRecord(path, { outcome, kill_stage, epoch_after } = {}) {
+export function finaliseIncidentRecord(
+  path: string,
+  { outcome, kill_stage, epoch_after }: FinaliseIncidentRecordOptions = {}
+): string {
   let existing = "";
   try {
     existing = readFileSync(path, "utf8");
@@ -328,7 +427,7 @@ export function finaliseIncidentRecord(path, { outcome, kill_stage, epoch_after 
     existing = "";
   }
   const parsed = parseFrontmatterLoose(existing);
-  const merged = {
+  const merged: IncidentRecordInput = {
     ...parsed,
     outcome: outcome !== undefined ? outcome : parsed.outcome,
     kill_stage: kill_stage !== undefined ? kill_stage : parsed.kill_stage,

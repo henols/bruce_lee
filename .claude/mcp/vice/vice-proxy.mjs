@@ -26,9 +26,9 @@ import { hostPath, SET_ENV_HINT } from "./hostpath.ts";
 // task, quick-260801-ccn). Consuming this from the proxy -- rather than
 // hand-translating a host path here -- is what keeps the host-path consumer
 // set closed to a fixed, traced list (vice-mcp-selector-docs.test.mjs's
-// assertion 4, amended by this task to include containerpath.mjs itself as
+// assertion 4, amended by this task to include containerpath.ts itself as
 // a fifth, sibling consumer of hostpath.mjs's own knowledge).
-import { containerizeRecord } from "./containerpath.mjs";
+import { containerizeRecord } from "./containerpath.ts";
 // The container-side half of the on-demand broker protocol (Phase 01.2).
 // This module deliberately does NOT import hostpath.mjs itself -- the
 // host-path consumer set stays closed to four production modules
@@ -55,7 +55,7 @@ import {
 // building logic incidentRecordPath() itself uses -- imported here so the
 // evidence gatherer's screenshot and the pre-kill snapshot's name can never
 // drift onto a second, independent naming rule.
-import { writeIncidentRecord, finaliseIncidentRecord, incidentAssetPath, incidentAssetStem } from "./incident-record.mjs";
+import { writeIncidentRecord, finaliseIncidentRecord, incidentAssetPath, incidentAssetStem } from "./incident-record.ts";
 import { readFileSync, unlinkSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, relative, resolve } from "node:path";
@@ -1781,7 +1781,7 @@ function containerizeGrant(grant) {
   }
 
   const alias = mcpHost();
-  // containerizeRecord() (containerpath.mjs) does the translation itself:
+  // containerizeRecord() (containerpath.ts) does the translation itself:
   // `url` through the loopback-rewrite (D-4), `epoch_file`/`supervisor_dir`
   // through the host->container path inverse (D-2 -- all three fields). An
   // already container-shaped record (every pre-existing broker test's
