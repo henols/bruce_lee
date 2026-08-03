@@ -584,7 +584,7 @@ Plans:
 
 **Risks**: This is the bulk of the line count and the place a mechanical conversion drifts silently. `vice-proxy.mjs`'s ~2,100 lines of project-specific logic (broker leasing, epoch/liveness, recycle/diagnose, deny-list, path rewriting, incident capture) must come through untouched — 01.6.3 swaps its transport seam afterwards, and doing both at once would make a regression ambiguous.
 
-**Plans:** 2/8 plans executed
+**Plans:** 3/8 plans executed
 
 Plans:
 **Wave 1**
@@ -597,7 +597,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 01.6.1-03-PLAN.md — Slice 2: the three ex-cycle modules and their three test files convert; the last hardcoded-extension read becomes a by-stem resolution; ~15 consumer specifiers repointed
+- [x] 01.6.1-03-PLAN.md — Slice 2: the three ex-cycle modules and their three test files convert; the last hardcoded-extension read becomes a by-stem resolution; ~15 consumer specifiers repointed
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
