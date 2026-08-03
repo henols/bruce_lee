@@ -1819,3 +1819,39 @@ The saved cost for a future maintainer: this entry is the concrete recipe (copy 
 a scratch dir outside the repo, apply one regression at a time, restore between each, delete the
 scratch dir after) for re-proving any future static guard in this tree actually fires, rather than
 re-deriving the scratch-copy methodology from scratch each time.
+
+### 2026-08-03 — incident-record.mjs's atomic write never actually restricted the record's file mode, despite the plan text and PATTERNS.md's own framing assuming it already did
+
+**Type:** hazard (a plan/reality mismatch caught before it silently ported forward) plus a
+Rule 2 fix (missing critical functionality per this plan's own threat register)
+**Evidence:** live, during Phase 01.6.1 Plan 04 Task 2. `01.6.1-04-PLAN.md`'s task text says the
+atomic-write discipline ("create an empty tmp sibling, restrict its mode before any content
+lands, write the content, then rename") "must come through unchanged," and
+`01.6.1-PATTERNS.md`'s "Atomic write (tmp -> chmod 600 -> content -> rename)" section lists
+`incident-record.ts`'s `writeIncidentRecord` under "Apply to," alongside
+`install-resources.ts`'s manifest writer. Reading the actual pre-conversion
+`incident-record.mjs`'s `writeAtomic()` showed only `writeFileSync(tmp, content)` then
+`renameSync(tmp, path)` -- no `chmodSync` step at all, and no empty-write-first step either.
+Checked whether this pattern existed at least somewhere else in the tree that this file was
+supposed to already match: `vice-broker-client.mjs`'s `writeJsonAtomic()` and
+`resources/vice-broker.sh`'s `write_json_atomic()` (the two siblings `incident-record.mjs`'s own
+header comment claims parity with) were read directly and ALSO lack the chmod step -- only the
+newer `vice-broker.mts` (Phase 01.6's TS tracer) and `install-resources.ts` (Plan 03) actually do
+`writeFileSync(tmp, "")` -> `chmodSync(tmp, 0o600)` -> `writeFileSync(tmp, content)` ->
+`renameSync`. So the "already has this" framing in both PLAN.md and PATTERNS.md was simply wrong
+about this one file's actual pre-conversion state; the described discipline is a newer, tighter
+pattern than the codebase's own older writers use, not a status quo being preserved.
+**Confidence:** HIGH -- read directly, both the file being converted and both siblings it claims
+parity with, before writing a single line of the port.
+**Saves / costs:** costs nothing to catch early (a `grep -n chmodSync` across the three named
+"parity" files before starting the port would have surfaced this in seconds); costs real
+correctness if missed, since this plan's own threat register (T-01.6.1-08, Information
+Disclosure, medium severity, disposition "mitigate") explicitly requires the produced record's
+mode to be checked as an acceptance criterion -- a silent verbatim port would have left an
+untested claim in the SUMMARY ("the discipline survived unchanged") that was never true to begin
+with. Fixed by adding the `chmodSync(tmp, 0o600)` step (matching `vice-broker.mts`/
+`install-resources.ts`'s idiom exactly) and a direct test asserting the written file's mode has
+no group/world bits set, both before and after `finaliseIncidentRecord()`'s re-render. The general
+lesson: when a plan or pattern doc says a discipline "already exists" in a specific file, read
+that file's actual current bytes before trusting the claim -- a plan authored from a broader
+pattern survey can generalize a NEIGHBORING file's property onto the one actually being converted.
