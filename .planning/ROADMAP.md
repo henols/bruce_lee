@@ -572,7 +572,7 @@ Plans:
 
 **Owns from Phase 01.6's criteria register**: C3 (the TypeScript half — authored TS, host receives only JS), C7 (the duplicated request-id regex is deleted, not synced), C8 (the existing suite passes across the move; `--once` and `VICE_BROKER_PROBE_CMD` stay real seams), C10 (the load-order hazard is preserved, not tidied).
 
-**Scope**: 11 surviving `.mjs` source files (5,316 lines) and 5 surviving test files (5,518 lines) after D-02's deletions. `vice-proxy.mjs` (2,441) and `vice-proxy.test.mjs` (4,370) each need their own plan — they exceed one task's context budget alone.
+**Scope**: ~~11 surviving `.mjs` source files (5,316 lines) and 5 surviving test files (5,518 lines) after D-02's deletions.~~ **[RE-MEASURED 2026-08-03 — the figures above were written at split time, before Phase 01.6's four plans executed, and are stale.]** Live inventory: **11 source files (5,237 lines)** and **11 owned test files (6,680 lines)**, plus `host-scripts.test.mjs` (280). Six of those test files did not exist at split time — plans 01.6-02 and 01.6-03 created them — which is ~1,200 lines of test conversion the old figure did not account for. Baseline suite: **247 tests, 247 pass, ~35 s**. Full table in `01.6.1-RESEARCH.md §1`; size plans off that, not off this line. `vice-proxy.mjs` (2,441) and `vice-proxy.test.mjs` (4,370) each need their own plan — they exceed one task's context budget alone. `vice-broker.test.mjs` (2,685) is **explicitly excluded** — it is redesigned, not ported, by 01.6.2 (C4).
 
 **This group's own success criteria**:
 
@@ -583,6 +583,22 @@ Plans:
   C. **`enum`, `namespace` and constructor parameter properties never enter the codebase.** Container Node v24.18.1 strips types natively and unflagged (verified live) but rejects all three; a file using them passes `tsc` and fails at `node --test`. Enforce mechanically via `erasableSyntaxOnly` from the first converted file, not by convention.
 
 **Risks**: This is the bulk of the line count and the place a mechanical conversion drifts silently. `vice-proxy.mjs`'s ~2,100 lines of project-specific logic (broker leasing, epoch/liveness, recycle/diagnose, deny-list, path rewriting, incident capture) must come through untouched — 01.6.3 swaps its transport seam afterwards, and doing both at once would make a regression ambiguous.
+
+**Plans:** 8 plans
+
+Plans:
+- [ ] 01.6.1-01-PLAN.md — **Tracer.** The whole per-slice loop on one real module (`vice-probe` source + test), with all three extension-hardcoded module enumerators widened in the same commit; then Slice 0's two doc-shape tests, `host-scripts.test` (PTD-2) and the stale `workflow.test_command`
+- [ ] 01.6.1-02-PLAN.md — Criterion B, both halves (PTD-1): break the `repo-root`/`install-resources`/`hostpath` cycle structurally, empty the allowlist, add a module-scope `repoRoot` call-site guard, and **prove both guards fail against an injected regression**. No renames
+- [ ] 01.6.1-03-PLAN.md — Slice 2: the three ex-cycle modules and their three test files convert; the last hardcoded-extension read becomes a by-stem resolution; ~15 consumer specifiers repointed
+- [ ] 01.6.1-04-PLAN.md — Slices 3–4: `containerpath` and `incident-record`, each with its own test; atomic-write ordering and both never-throw layers demonstrated intact
+- [ ] 01.6.1-05-PLAN.md — Slices 5–6: `vice-broker-client` (C7 — the request-id pattern survives as a typed export; the out-of-scope parity test touched in exactly one line) and `vice`, with its export surface asserted unchanged
+- [ ] 01.6.1-06-PLAN.md — Slices 7–8: `refresh-manifest` and `vice-sync` convert **and get their first-ever coverage**; the emulator-dependent checkpoint primitives recorded as machine-visible todos, never faked with a stub
+- [ ] 01.6.1-07-PLAN.md — Slice 9a: the 2,441-line hub converts and `.mcp.json` is rewired in the same commit, audited against a pre-captured invariant baseline and a real offline MCP handshake over stdio; its 4,370-line test file stays `.mjs` as an unchanged oracle
+- [ ] 01.6.1-08-PLAN.md — Slice 9b: the 4,370-line proxy test converts; phase close rolls up C3/C7/C8/C10 + A/B/C with evidence, re-proves the criterion-B guards against the final tree, and records the two unprovable claims as backstops
+
+**Waves:** strictly sequential, 1 → 8. **Deliberately no parallelism.** Criterion A requires the suite green *continuously*; two plans landing in separate worktrees would each verify their own tree and neither would verify the merge. Independently, nearly every slice touches the hub's import block, so `files_modified` overlap forces the same ordering.
+
+**Planning note (2026-08-03, `/gsd-plan-phase 01.6.1`):** tracer-first; plan 01 task 1 is a `type="tracer"` slice proving the complete per-slice loop before any of the ~12,200 lines ride on it. Two developer decisions were taken at plan time: **PTD-1** — criterion B resolves as *both* the cycle break and the guard, in that order, with the guard's discriminating power proven against a live-injected regression; **PTD-2** — `host-scripts.test` converts its file type now and its content is rewritten in 01.6.2, keeping the phase goal literally true with no carve-out. Four corrections to RESEARCH.md were found live at plan time and are recorded in plan 01: `vice-probe` is **not** a leaf (it has a bare side-effect import of `repo-root`); `skill-docs.test`'s `scriptModules()` is a **third** extension-hardcoded enumerator RESEARCH did not name; widening `enumerateModules()` without a `node_modules` exclusion would enumerate 335 third-party declaration files; and widening `scriptModules()` collides with `./.claude/CLAUDE.md:209`, which names `resources-sync.test.ts` deliberately. One measurement de-risks the cycle break: `CONTAINER_WORKSPACE_PATH` is exported by `devcontainer.json`, so the env-first fallback preserves every existing bare call site and RESEARCH's assumption A2 (nine test call sites needing a threaded parameter) does **not** bite. Reversibility: no `one-way` ratings, so no `checkpoint:decision`; the cycle break and the `.mcp.json` rewiring are rated `costly` and flagged. No package installs, so no legitimacy gate. `api-coverage` and `assumption-delta` detectors both returned `detected: false`. Spec-less probe fallback skipped, visibly: no SPEC.md and no requirement IDs to probe.
 
 ---
 
