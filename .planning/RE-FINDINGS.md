@@ -1920,3 +1920,101 @@ tell: if a "cleanup" `finally` block ever runs suspiciously fast relative to the
 supposed to bracket, suspect an unawaited promise escaping the `try`, not a race in the code under
 test. Worth checking on any future test helper in this codebase that wraps an async callback in a
 try/finally for env-var or global-state save/restore.
+
+### 2026-08-03 — verifying a rewired `.mcp.json` entry point requires driving a REAL stdio MCP handshake against it; the executor's own session cannot detect a broken rewire
+
+**Type:** trick, plus the hazard it exists to catch
+**Evidence:** live, this session (01.6.1-07). `.mcp.json`'s `args[0]` was repointed from
+`vice-proxy.mjs` to `vice-proxy.ts` in the same commit as the file's rename. Piping
+`{"jsonrpc":"2.0","id":1,"method":"initialize",...}` followed by a `tools/list` request into
+`timeout 10 node .claude/mcp/vice/vice-proxy.ts` over stdin, and reading stdout, is what proved
+the rewire actually works: exit 0, `protocolVersion: "2025-06-18"`, `serverInfo: {name:"vice",
+version:"0.1.0"}`, 66 tools, `vice_disk_list` absent, and no network call attempted for either
+request (confirmed via stderr, which carried only the two expected startup lines, nothing
+naming a host connection attempt).
+**Confidence:** HIGH -- measured directly, and reproduced identically against the same file
+twice (once as Task 1's pre-rename baseline against `vice-proxy.mjs`, once as Task 3's
+post-rename check against `vice-proxy.ts`).
+**Saves/costs:** per this project's own per-session tool-schema snapshot mechanism (this file's
+own earlier "CONFIRMED LIVE" entry, 2026-08-02), the client's callable-tool surface is captured
+ONCE at MCP initialization, and Claude Code spawns the proxy once per session -- so a session
+already running when `.mcp.json` is rewired keeps working, correctly or not, using its own
+already-loaded snapshot. This means "it still works for me, in this same session" is worthless
+evidence for a rewire's correctness; only a FRESH process start against the exact path the
+config now names, verified by a real protocol exchange over stdio, tells you anything. Reusable
+recipe for any future `.mcp.json`/entry-point rewire in this project: `printf` two
+newline-delimited JSON-RPC lines (`initialize`, then `tools/list`) into `node <path>` under
+`timeout`, capture stdout/stderr/exit-code separately, and diff the parsed result against a
+captured pre-change baseline rather than trusting the process merely exited 0.
+
+### 2026-08-03 — a function/const whose EXACT untyped declaration text is scanned by a structural test cannot be given an inline type annotation; contextual typing on a `const = function expr` (or a per-entry cast, for a const) types it without touching that text
+
+**Type:** hazard, plus the tested fix
+**Evidence:** live, this session (01.6.1-07), `.claude/mcp/vice/vice-proxy.test.mjs`.
+Typing `handleRecycle`'s parameter (`async function handleRecycle(args: Record<string,
+unknown>): Promise<ToolCallResult> {`) made `node --test vice-proxy.test.mjs` fail LOUDLY:
+`src.indexOf("async function handleRecycle(args)")` returned -1, because that test's own
+structural check greps the SOURCE FILE for that literal, untyped substring. The same class of
+failure hit `runCycleBracket` (`^async function runCycleBracket\(\)\s*\{` requires no return
+type between `()` and `{`), `DIAGNOSE_VERDICTS` and `CHECKPOINT_ARMING_TOOLS` (both scanned via
+a regex requiring `const NAME = Object.freeze([...])` / `new Set([...])` with NO `: type`
+between the name and `=`), and `SEAM_HAZARDS` (`indexOf("const SEAM_HAZARDS = [")`, plus a
+second `indexOf("\n];", startIdx)` search for the array's own closing line -- confirmed by
+direct experiment that appending ` as Type[]` to that closing line breaks the SECOND search too,
+since the text after the array's own `]` is no longer bare `;`).
+**What does NOT work (tested, rejected):** a function-declaration overload pair
+(`async function f(args: T): R; async function f(args) {...}`) -- TypeScript's
+`noImplicitAny` still fires on the untyped IMPLEMENTATION signature's bare parameter, even with
+a fully-typed overload declared immediately above it (`error TS7006`, reproduced live in a
+scratch file). A leading `/** @param {T} args */` JSDoc comment on a plain `.ts` file's
+function declaration does NOT suppress `noImplicitAny` either (also reproduced live) --
+JSDoc-driven parameter inference is a `checkJs`/`allowJs` behavior, not a general `.ts` one.
+**What DOES work (tested, kept):** for a `function` whose param needs a real type,
+convert the DECLARATION to a `const`-bound function EXPRESSION with an explicit function-type
+annotation on the `const` itself: `const f: (args: T) => R = async function f(args) { ... }`
+(no trailing semicolon after the closing brace, to preserve a `\n}\n` ending the oracle
+also scans for). TypeScript's ordinary contextual typing for a function expression assigned to
+a typed variable gives `args` a real, checked type with ZERO characters changed inside
+`f(args)` itself -- verified live: `tsc --noEmit --strict` exits 0, and `node` runs the file
+natively via strip-only mode. For a `const` whose VALUE (not a function parameter) needs typing
+without touching its own declaration line, either drop the annotation entirely and let
+inference from the initializer do the work (`DIAGNOSE_VERDICTS`, `CHECKPOINT_ARMING_TOOLS` --
+`Object.freeze([...])`/`new Set([...])` already infer a concrete type), or cast the array's
+individual ELEMENT (`{ ... } as SeamHazardEntry`), never the array/const declaration itself, so
+the array's own element type is inferred as the target interface without changing the `const
+NAME = [` prefix or the closing `];` suffix the oracle anchors to.
+**Confidence:** HIGH -- every claim above (`TS7006` on the overload attempt, `TS7006` on the
+JSDoc attempt, exit 0 on the `const = function expr` pattern, native `node` execution of the
+same file) was reproduced live this session in throwaway scratch files, not reasoned about.
+**Saves/costs:** this is the sixth instance this phase has caught of an
+extension/format-hardcoded structural check reacting to a legitimate source change -- but the
+FIRST one that fails LOUDLY (every prior instance in this phase went silently vacuous instead).
+Recognise the symptom fast: a `node --test` run against an untouched oracle test file that
+worked before a type-annotation-only source edit and now reports "X's own definition must be
+found in the source" or "expected exactly one X() definition, found 0" -- the fix is almost
+never to touch the test (often explicitly forbidden by the plan, as it was here); it is to find
+a way to give the same value a real type without changing the exact substring the oracle scans
+for, using one of the two patterns above.
+
+### 2026-08-03 — `vice-broker.test.mjs`'s "warns on stderr naming Ctrl-C... --detach" test is flaky under full-suite load, unrelated to any source change
+
+**Type:** dead end (ruled out as a regression) / hazard (a flaky assertion worth knowing about)
+**Evidence:** live, this session. One full-suite run (`node --test '.claude/mcp/vice/'*.test.*`)
+reported this single test failing with the captured stderr missing the `--detach` substring the
+assertion expects, immediately after this plan's `vice-broker.test.mjs` one-line
+`PROXY_PATH` fix (unrelated file, unrelated code path -- this test spawns the real bash
+`resources/vice-broker.sh`, never touches `vice-proxy.ts`/`vice.ts`). Re-running the SAME test
+in isolation (`node --test --test-name-pattern="warns on stderr naming Ctrl-C" vice-broker.test.mjs`)
+passed in 46ms, and a subsequent full-suite re-run reproduced the clean 275/270/5/0 result with
+no failures at all.
+**Confidence:** HIGH for "not caused by this plan's changes" (isolated re-run + clean full-suite
+re-run both confirm it); LOW for the actual root cause (never investigated further -- plausibly
+a stderr-buffering/timing race when many other tests are spawning real subprocesses
+concurrently ahead of it in the same suite run).
+**Saves/costs:** a future session hitting a single, non-reproducing failure in this specific
+test (or any other test that asserts on a real spawned bash process's stderr content within a
+tight time window) should re-run it in isolation before treating it as a regression -- this
+project's own full-suite run time (~45-50s) is long enough that resource contention across ~300
+tests, several of which spawn real subprocesses, is a plausible source of one-off timing
+flakes, distinct from the genuine, reproducible module-cycle/liveness hazards logged elsewhere
+in this file.
