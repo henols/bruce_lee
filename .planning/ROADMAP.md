@@ -60,8 +60,18 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 ### Milestone v1.1 — Emulator Access Hardened *(active, inserted 2026-08-02)*
 
-Execution order is **01.6 → 01.6.1 → 01.6.2 → 01.6.3 → 01.4 → 01.3**, not numeric order.
+Execution order is **01.6 → 01.6.1 → 01.6.2 → 01.6.2.1 → 01.6.3 → 01.4 → 01.3**, not numeric order.
 
+> **SPLIT AGAIN 2026-08-03 (developer, via `/gsd-plan-phase 01.6.2`, at plan time).** Was
+> `01.6 → 01.6.1 → 01.6.2 → 01.6.3 → 01.4 → 01.3`. `gsd-planner` returned
+> `## PHASE SPLIT RECOMMENDED` — ~13 plans across 11 near-sequential waves against a `standard`
+> granularity of 3–5 — and the developer took the split. **Phase 01.6.2.1 (Broker Lifecycle Policy)**
+> is inserted directly after 01.6.2 and takes its criteria **E, L and M**. This does **not** undo the
+> absorption below: 01.7 still lands whole inside 01.6.2, and 01.5 stays an `ABSORBED` stub that
+> never returns — only its *defect fixes* move into the sub-phase. The split axis is the seal
+> boundary, not the *conversion | defects | transport* axis the developer rejected earlier the same
+> day. See § Phase 01.6.2 for the quantified basis and § Phase 01.6.2.1 for what it owns.
+>
 > **RE-SEQUENCED AGAIN 2026-08-03 (developer, via `/gsd-discuss-phase 01.6.2`).** Was
 > `01.6 → 01.6.1 → 01.6.2 → 01.6.3 → 01.4 → 01.5 → 01.7 → 01.3`. **Phases 01.5 and 01.7 are
 > absorbed into 01.6.2** and no longer run — their sections are retained as `ABSORBED` stubs with
@@ -93,6 +103,7 @@ Execution order is **01.6 → 01.6.1 → 01.6.2 → 01.6.3 → 01.4 → 01.3**, 
 - [ ] **Phase 01.6: Conversion Foundation and Scope Reduction** *(INSERTED — **split four ways 2026-08-02 at plan time**; runs **first**)* - Prove the whole TypeScript build topology end-to-end on one real module before 16,000 lines ride on it, and reduce the scope: delete the `vice-pool` subsystem and `vice.mjs`'s CLI behind a confirmation gate, record the locked decision that reverses, and fix the `.gitignore` / `.mcp.json` landmines that a file move would otherwise trip. Holds the shared C1–C10 criteria register for all four groups. ~~Gated on whether the host has a usable `node`~~ **gate cleared 2026-08-02 — the host has `node` on PATH**
 - [ ] **Phase 01.6.1: Container-Side Conversion to TypeScript** *(INSERTED 2026-08-02 — split out of 01.6)* - Convert the 11 surviving `.mjs` modules (5,316 lines) and 5 surviving test files (5,518 lines) to TypeScript with the suite green **continuously**, not green at the end. Widen the TDZ static check to the transitive `repo-root → install-resources → hostpath → repo-root` cycle the planner found, and bar `enum`/`namespace`/parameter-properties mechanically from the first file
 - [ ] **Phase 01.6.2: The One-Process Host Broker** *(INSERTED 2026-08-02 — split out of 01.6)* - 2,546 lines of host-side bash become one TypeScript process owning coordination, per-instance supervision and the warm-spare pool. Includes the `vice-broker.test.mjs` **redesign** (2,685 lines / 61 tests — it verifies the daemon by spawning it and reading on-disk state, which stops existing), the single-`in_flight`-owner race test, and D-04: the epoch file survives as a second on-disk exception, written by the broker
+- [ ] **Phase 01.6.2.1: Broker Lifecycle Policy** *(INSERTED 2026-08-03 — split out of 01.6.2 at plan time)* - Fix the broker's five lifecycle-policy defects rather than translate them — five labelled tasks, five tests, separate commits — disposition Phase 01.5's seven absorbed criteria one by one against real work (criterion M is where absorbing 01.5 actually seals), and itemise every claim neither 01.6.2 nor this phase could verify live into the carry-forward list **Phase 01.4** must discharge. Shares 01.6.2's four artifacts unchanged; has none of its own. **D-07's launch-priority change is blocked on 01.6.2 criterion C's race test being green**, so a failure has one candidate cause
 - [ ] **Phase 01.6.3: `@mastra/mcp` Adoption** *(INSERTED 2026-08-02 — split out of 01.6, deliberately last)* - Swap the ~164-line generic JSON-RPC seam in the proxy for `@mastra/mcp` (developer decision D-01, taken against research's HIGH-confidence advice), with the ~88–94% of project-specific logic working unchanged, a decided `COVERAGE.md` capability matrix, a blocking package-legitimacy checkpoint, and D-06: whether to bundle to preserve the container's zero-dependency-clone property
 - [~] **Phase 01.7: The TCP Control Plane** — **ABSORBED INTO 01.6.2 (2026-08-03), does not run** - Replace the file-messaging protocol with one TCP control connection per proxy whose lifetime *is* the lease, so connection close — including on SIGKILL — is the release, enforced by the kernel. Bootstrap stays a file for discovery; the emulator data plane is untouched; broker restart reaps unconditionally and voids via the existing epoch mechanism; CR-01's singleton guard closes here. All eight criteria are dispositioned in its retained section — **criterion 7 (cross-project brokering) is dropped entirely, and criterion 8's live verification is unavailable because 01.4 has not landed**
 
@@ -482,7 +493,9 @@ and the phase record needs the hunt's denominator. Waves are 1 through 6, one pl
 > the risk actually lives.
 >
 > **Groups, run serially:** `01.6` (foundation, topology, scope reduction) → `01.6.1` (container-side
-> conversion) → `01.6.2` (the one-process host broker) → `01.6.3` (`@mastra/mcp` adoption).
+> conversion) → `01.6.2` (the one-process host broker) → `01.6.2.1` (broker lifecycle policy —
+> **inserted 2026-08-03 at plan time**, when `gsd-planner` returned `## PHASE SPLIT RECOMMENDED`
+> against 01.6.2's enlarged scope) → `01.6.3` (`@mastra/mcp` adoption).
 > Serial, not parallel: 01.6.2 writes TypeScript against conventions and types 01.6.1 establishes, so
 > concurrent runs would make a suite regression ambiguous in attribution — the same discipline D-2d
 > preserved by keeping 01.5 before 01.7. **01.6.3 runs last on PATTERNS.md's explicit recommendation:**
@@ -506,6 +519,7 @@ sub-phase names the register items it must satisfy; read this section for their 
 | **01.6** — foundation, topology, scope reduction | C1 (mechanism), C3 (mechanism), C9, C6+C10 scaffolds | **D-02** deletion + confirmation gate, **D-03** override record |
 | **01.6.1** — container-side conversion | C3 (TS half), C7, C8, C10 | — |
 | **01.6.2** — the one-process host broker | C2, C4, C5, C6, C1 (recorded), C7 | **D-04** epoch file |
+| **01.6.2.1** — broker lifecycle policy *(split out of 01.6.2, 2026-08-03)* | — (register fully discharged by its siblings) | 01.6.2's criteria **E, L, M**; `01.6.2-CONTEXT.md` **D-02, D-05…D-08, D-10, D-11, D-19…D-22** |
 | **01.6.3** — `@mastra/mcp` adoption | C3 (host clause) | **D-01**, `COVERAGE.md`, **D-06** bundling decision |
 
 **This group's own success criteria** (in addition to the register items it owns):
@@ -687,18 +701,44 @@ Plans:
 > **All decisions live in `.planning/phases/01.6.2-the-one-process-host-broker/01.6.2-CONTEXT.md`
 > (D-01…D-27). Read it before planning — it governs where this section and the design notes
 > disagree.**
+>
+> **SPLIT 2026-08-03 (later the same day), at plan time, via `/gsd-plan-phase 01.6.2`.**
+> `gsd-planner` returned `## PHASE SPLIT RECOMMENDED` rather than plans — the outcome this section's
+> own risk paragraph anticipated — and the developer chose the split. **Phase 01.6.2.1 (Broker
+> Lifecycle Policy)** now owns criteria **E, L and M** and CONTEXT decisions **D-02, D-05, D-06,
+> D-07, D-08, D-10, D-11, D-19, D-20, D-21, D-22**. Everything else stays here.
+>
+> **This is the second recorded reversal in two days and is logged as one, per the same D-03
+> precedent.** The scope enlargement above is *not* undone: Phase 01.7 stays absorbed and lands
+> whole inside this phase (D-01 is honoured in one move — `requests/`, `grants/`, `denials/`,
+> `leases/`, `recycle-acks/` and `broker-instances.json` all cease to exist here), and Phase 01.5
+> stays an `ABSORBED` stub that never returns to the roadmap. What changed is only where 01.5's
+> *defect fixes* land: in a sub-phase of this one, still in TypeScript, still after the new machine
+> exists. **The split axis is deliberately not the one the developer rejected on 2026-08-03**
+> (*conversion | defects | transport*); it is the seal boundary — *"the new machine exists and the
+> file protocol is dead"* | *"its lifecycle policy is corrected."*
+>
+> **Quantified basis, measured live at plan time** (the artifacts undercounted three of these):
+> ~13 plans across 11 near-strictly-sequential waves against a `standard` granularity of 3–5 and a
+> largest in-repo precedent of 8 (01.6.1). Retiring-script references across tracked TypeScript:
+> **~37 hits in 12 files**, not RESEARCH §A6's "5 call sites + 9 test hits". `6510` references
+> needing re-banding per D-18: **~34 hits in 5 files**, never counted anywhere. And
+> `vice-broker-client.test.ts` (240 lines) is a **second** test-file redesign no artifact counted —
+> it tests only functions that retire under D-12. Waves are sequential rather than parallel because
+> every plan after the tracer writes into the same three modules, so `files_modified` overlap forces
+> ordering; there is essentially no parallelism to buy.
 
-**Goal**: 2,546 lines of host-side bash become one TypeScript process that owns coordination, per-instance supervision and the warm pool, holding its state in memory and speaking to the container over one TCP control connection per session whose lifetime *is* the lease — with exactly one shell script left in the repo, the file-messaging protocol retired, and five lifecycle-policy defects fixed rather than translated
+**Goal**: 2,546 lines of host-side bash become one TypeScript process that owns coordination, per-instance supervision and the warm pool, holding its state in memory and speaking to the container over one TCP control connection per session whose lifetime *is* the lease — with exactly one shell script left in the repo and the file-messaging protocol retired. ~~and five lifecycle-policy defects fixed rather than translated~~ — **the five lifecycle-policy changes moved to Phase 01.6.2.1 on 2026-08-03 (criterion L); this phase builds the machine they are policy for.**
 
 **Depends on**: Phase 01.6.1 (this group writes TypeScript against the conventions, types and build settings that group establishes; running them concurrently would make a suite regression ambiguous in attribution)
 
 **Owns from Phase 01.6's criteria register**: C2 (all three host-side shell scripts retire into one application, nothing shell-shaped carved out to stay behind), C4 (state in one place, in process), C5 (catchable shutdown kills every child, identity-verified; SIGKILL orphans accepted), C6 (exactly one shell script survives, container guard survives with it), C1 (the host's actual `node --version` recorded), C7 (the bash half of the request-id regex).
 
-**Scope**: `vice-broker.sh` (2,103) + `vice-supervisor.sh` (443) re-expressed as one process; the file-messaging protocol replaced by a TCP control plane (absorbed 01.7); the five lifecycle-policy changes of `.planning/notes/vice-broker-lifecycle-decisions.md`; Phase 01.5's defect scope (absorbed); the `vice-broker.test.mjs` **redesign** (2,685 lines / 61 tests, now substantially larger than that because the protocol tests go too); and the surviving launcher.
+**Scope**: `vice-broker.sh` (2,103) + `vice-supervisor.sh` (443) re-expressed as one process; `lib/container-guard.sh` (184) + `lib/repo-root.sh` (103) dispositioned with them (PD-03/PD-04); the file-messaging protocol replaced by a TCP control plane (absorbed 01.7); the `vice-broker.test.mjs` **redesign** (2,685 lines / 61 tests) **plus `vice-broker-client.test.ts` (240 lines)**, which tests only functions retiring under D-12 and is a second redesign no source artifact counted; the ~37 retiring-script references across 12 tracked TypeScript files and the ~34 `6510` references across 5; and the surviving launcher. ~~the five lifecycle-policy changes of `.planning/notes/vice-broker-lifecycle-decisions.md`; Phase 01.5's defect scope (absorbed)~~ — **moved to Phase 01.6.2.1, 2026-08-03.**
 
 **This group's own success criteria**:
 
-  A. **`vice-broker.test.mjs` is redesigned, not ported.** It verifies the bash daemon by spawning it as a real subprocess and inspecting on-disk `grants/`/`spares/` files. Once state moves in-process per C4 **and the file protocol is gone entirely**, that verification mechanism stops existing. It is the single largest item in the conversion and must be sized as its own work, never folded into a generic "convert `vice-broker.sh`" line item. RESEARCH §F's per-function quantification is a floor, not the estimate.
+  A. **`vice-broker.test.mjs` is redesigned, not ported.** It verifies the bash daemon by spawning it as a real subprocess and inspecting on-disk `grants/`/`spares/` files. Once state moves in-process per C4 **and the file protocol is gone entirely**, that verification mechanism stops existing. It is the single largest item in the conversion and must be sized as its own work, never folded into a generic "convert `vice-broker.sh`" line item. RESEARCH §F's per-function quantification is a floor, not the estimate. **Split 2026-08-03: this phase owns the 61-test disposition ledger and the replacement suite for everything *this phase* builds; the tests for the five policy changes are criterion L's, in Phase 01.6.2.1, one per change. `vice-broker-client.test.ts` is in this phase's half.**
 
   B. **D-04 — the per-instance restart-epoch file survives as one of exactly two on-disk exceptions, written by the broker, contract unchanged.** `readEpoch()`'s entire value is a liveness check that costs zero MCP traffic, which requires *some* on-disk record; today `vice-supervisor.sh`'s `write_epoch()` writes it and D-1 folds that process away. The file's format, location and semantics do not change — only its writer. **The two survivors are `broker.json` (discovery, now carrying the control port) and the per-instance `epoch.json`. Everything else under `.vice-supervisor/` goes, except per-instance boot/crash logs, which stay because a human reads them (CONTEXT D-23).**
 
@@ -706,7 +746,7 @@ Plans:
 
   D. **Identity-verified kill is reused, not re-derived.** Phase 01.3 criterion 6 already established the discipline. **The expected-identity substring needs correcting, not copying** — the broker now spawns `x64sc` directly rather than through an intermediate supervisor script, and a wrong-but-compiling identity string is a real new risk this phase introduces (RESEARCH Pitfall 2).
 
-  E. **Correctness is claimed against specification, not against the bash — and the unverified set is itemised and owned.** With the protocol replaced there is no old behaviour for most of this deliverable to be equivalent to, so "a green suite proves language and structural equivalence" is retired as the frame. The genuinely-unchanged set is named separately and held to real equivalence: the emulator data plane, the `epoch.json` contract, the agent-facing tool surface. **No live-session verification exists until Phase 01.4**, so every host-side and session-shaped claim is itemised in `01.6.2-VALIDATION.md` as a carry-forward list that **Phase 01.4 owns and must discharge**.
+  E. **→ MOVED to Phase 01.6.2.1 on 2026-08-03.** *Correctness is claimed against specification, not against the bash — and the unverified set is itemised and owned.* The criterion's **framing binds this phase too** and is restated here so a reader of this section alone is not misled: with the protocol replaced there is no old behaviour for most of this deliverable to be equivalent to, so "a green suite proves language and structural equivalence" is retired as the frame; the genuinely-unchanged set (the emulator data plane, the `epoch.json` contract, the agent-facing tool surface) is named separately and held to real equivalence. What moved is the **deliverable** — authoring the itemised carry-forward list into `01.6.2-VALIDATION.md` that **Phase 01.4 owns and must discharge**. It lands last, in 01.6.2.1, because it must cover both phases' unverified claims and cannot be written before the second one exists. **No live-session verification exists until Phase 01.4 for either phase.**
 
   F. **The lease is the connection.** Connection open is the claim; connection close — including on SIGKILL and including container death — is the release, enforced by the kernel. `startHeartbeat()`, the mtime-as-heartbeat convention, `file_mtime_epoch()`, `lease_is_stale()`, `sweep_grants()` and the 180 s TTL **all retire together**; keeping any one of them leaves two competing authorities on whether a lease is alive.
 
@@ -720,13 +760,56 @@ Plans:
 
   K. **Two brokers cannot run at once — CR-01 closes here.** `01.2-REVIEW.md`'s CR-01 is an independently-verified blocker carried since Phase 01.2: `cmd_start()` has no singleton guard, so two concurrent brokers race in a read-then-remove that is not atomic across processes and can hand the same ready spare to two sessions. A TCP listener on a well-known port cannot be bound twice, so `EADDRINUSE` is a kernel-enforced singleton — **verify it actually holds rather than assuming it.** On `EADDRINUSE`, `broker.json` arbitrates and there are **two distinct outcomes**: a live broker → exit quietly as a second instance; `stale`/`never_started` → the port is held by something that is not a broker → fail loudly. The guarantee holds only while the control port keeps its default; say so rather than implying it is unconditional.
 
-  L. **The five lifecycle-policy changes land as five explicitly-labeled tasks, each with its own test.** Never blended into a generic "convert `vice-broker.sh`" line item. Warm floor defaults to 1 with the knob still honouring N; the floor is evaluated over probe-live instances with a failed probe both dropping the record and identity-verified-killing the pid; launch priority is non-preemptive on top of the unweakened `in_flight` lock; request ordering is arrival order on the control connection; `spares` becomes `warm floor` throughout, with `VICE_BROKER_SPARES` breaking cleanly. Rationale and per-change proofs: `01.6.2-CONTEXT.md` D-05…D-11.
+  L. **→ MOVED to Phase 01.6.2.1 on 2026-08-03.** *The five lifecycle-policy changes land as five explicitly-labeled tasks, each with its own test.* Full text in that phase's section. **This phase must not implement any of the five** — but criterion C's race test is 01.6.2.1's stated prerequisite for the launch-priority change (D-07), so it is a real cross-phase dependency, not a note.
 
-  M. **Phase 01.5's seven criteria are discharged or explicitly carried — and the plan shows which, per criterion.** This is the gate on absorbing 01.5, not a formality: deleting a phase without it is how a defect gets silently lost. **`GRANT_POLL_TIMEOUT_MS` headroom (01.5 criterion 6) and the lazy-replenishment R1/R2 cap semantics (01.5 criterion 4) are the two not settled by this phase's discussion** — the first may dissolve entirely once grant-polling becomes a request/response on the connection; the second needs a decision. Name both outcomes rather than letting them lapse.
+  M. **→ MOVED to Phase 01.6.2.1 on 2026-08-03.** *Phase 01.5's seven criteria are discharged or explicitly carried — and the plan shows which, per criterion.* Full text, and the two items the discussion left unsettled, in that phase's section. **This phase does not discharge 01.5's defects**, so absorbing 01.5 is not sealed until 01.6.2.1 verifies — say so rather than letting this phase's seal imply it.
 
-**Risks**: **This phase now carries roughly three phases of content** — the consolidation, the language change, five behaviour changes and the transport — which is the shape the 2026-08-02 split existed to prevent. A further split recommendation from `gsd-planner` is an anticipated and legitimate outcome, and the developer decides; the planner must not silently shrink scope instead. **Every failure mode changes shape at once** when a lease stops being a file: anything that quietly depended on one of criterion F's six mechanisms fails in a new way. **Nothing here is live-verifiable** until Phase 01.4, so criterion E's carry-forward list is load-bearing rather than a caveat. Collapsing the per-instance supervisor inward also removes an independent channel — `vice-supervisor.sh` currently outlives broker restarts, which is what made the epoch file trustworthy on its own; D-04 keeps the file but not that independence, and criterion I's unconditional reap is what pays for it.
+  N. **The control listener is reachable from the container and is not open to everything that can reach the host bridge.** *(Added 2026-08-03 at plan time; not in the original register.)* This is the subsystem's **first network listener** — the bash daemon had none, so no inherited threat register covers it, and with no live verification until Phase 01.4 nothing in this phase would catch a wrong choice. Two parts, both load-bearing: **(a)** it must **not** bind `127.0.0.1`. The container reaches the host at `host.docker.internal`, which is the bridge address and not host loopback, and `VICE_BROKER_MCP_HOST` already defaults to `0.0.0.0` for exactly this reason — a loopback-only control listener is *structurally unreachable* from the container. State the bind address explicitly rather than inheriting a default. **(b)** Bound across the bridge, an unauthenticated control plane lets any process that can reach the host bridge acquire, release, recycle or — via reap — kill emulators. **Developer decision, 2026-08-03: `broker.json` carries a per-boot capability token.** It is already mode `0600` under the uid-parity precondition (`D-1.2-D`) and is already read once at bootstrap, so this is the same file on the same read — no new channel, no new failure mode. The token is required on every control request; a request without it is refused before any state is touched. **This earns a `checkpoint:decision` before the listener is written** — it is a one-way door on the wire format.
+
+**Risks**: **Even after the 2026-08-03 split this phase carries two of three phases' content** — the consolidation, the language change and the transport, with only the five behaviour changes moved out. **Every failure mode changes shape at once** when a lease stops being a file: anything that quietly depended on one of criterion F's six mechanisms fails in a new way. **Nothing here is live-verifiable** until Phase 01.4, and criterion E's carry-forward list — the thing that makes that survivable — is now authored in **01.6.2.1**, so this phase seals with its unverified set itemised but not yet consolidated. Collapsing the per-instance supervisor inward also removes an independent channel — `vice-supervisor.sh` currently outlives broker restarts, which is what made the epoch file trustworthy on its own; D-04 keeps the file but not that independence, and criterion I's unconditional reap is what pays for it. **Criterion I's reap has a derivation problem the seed already flagged and no plan may hand-wave:** in-process state means a restarted broker has *no* registry, so the reap must be derived from the port band plus process identity (`ps`-verified `x64sc` on 6600+), not from a file. That is the one place where deleting the on-disk registry costs something real. **Five agent-facing strings become instructions to run a file that will not exist** — `supervisorHostPath()` at `vice-proxy.ts:1387` feeds `neverStartedMessage()`/`deadOrHungMessage()`/`aliveButFailedMessage()`, and `vice.ts:236,352,546` plus `vice-sync.ts:254` each tell the agent to run `tools/vice-supervisor.sh` on the host. RESEARCH §A6 names only `brokerHostPath()`. That is Phase 01.4 criterion 5's exact failure shape arriving as a side effect of this phase. **`install-resources.ts`'s `hostLaunchInstructions()` needs a paragraph deleted, not a path swapped** — it advertises the standalone non-MCP recovery pipeline, whose scripts D-23 confirms are already gone; swapping the path would keep advertising a dead capability. **The live epoch fixture must be captured before anything is deleted** — `01.6.2-VALIDATION.md` flags the capture as order-dependent and irreversible if missed, and a bash-written broker with four recorded instances exists *now*.
 
 ---
+
+### Phase 01.6.2.1: Broker Lifecycle Policy
+
+> **Split out of Phase 01.6.2 on 2026-08-03, at plan time, via `/gsd-plan-phase 01.6.2`.**
+> `gsd-planner` returned `## PHASE SPLIT RECOMMENDED` (~13 plans / 11 near-sequential waves against a
+> `standard` granularity of 3–5) and the developer chose the split. Read **Phase 01.6.2's section
+> first** — the reversal record, the quantified basis and the shared criteria are there, and Phase
+> 01.6's section above that for the C1–C10 register.
+>
+> **This is a sub-phase, not a restored Phase 01.5.** Phase 01.5's own entry stays an `ABSORBED` stub
+> and never returns to the roadmap; this phase is where its *defect fixes* land — still in
+> TypeScript, still after the new machine exists, per **D-02**.
+>
+> **No artifacts of its own.** It shares Phase 01.6.2's `CONTEXT.md`, `RESEARCH.md`, `PATTERNS.md`
+> and `VALIDATION.md` unchanged, exactly as Phase 01.6's four artifacts serve all four of its split
+> groups. Read them from
+> `.planning/phases/01.6.2-the-one-process-host-broker/`. **`01.6.2-CONTEXT.md` governs where it and
+> this section disagree.**
+
+**Goal**: The broker's five lifecycle-policy defects are fixed rather than translated — each as its own labelled task with its own test — Phase 01.5's seven criteria are dispositioned one by one against real work rather than deleted, and the phase closes by itemising every claim neither 01.6.2 nor this phase could verify live into the carry-forward list Phase 01.4 must discharge
+
+**Depends on**: Phase 01.6.2 (it builds the machine these are policy for; five behaviour changes against a process that does not exist yet is not a plannable phase). **One hard task-level dependency inside that**: criterion L's non-preemptive launch-priority change (D-07) must not be written until 01.6.2 criterion C's concurrency race test is green, so a failure has one candidate cause.
+
+**Owns from Phase 01.6's criteria register**: nothing — the register items are all discharged by 01.6.2 and its siblings. This phase's bar is criteria E, L and M, inherited from 01.6.2 on the split.
+
+**Scope**: the five lifecycle-policy changes of `.planning/notes/vice-broker-lifecycle-decisions.md` (CONTEXT D-05…D-11); Phase 01.5's absorbed defect scope and its seven-criteria disposition (D-02); and criterion E's Phase 01.4 carry-forward list into `01.6.2-VALIDATION.md` (D-19…D-22). **Nothing in the transport, the state design or the test-suite redesign** — those sealed with 01.6.2.
+
+**This group's own success criteria** (criteria E, L and M, inherited from Phase 01.6.2 on the 2026-08-03 split — lettering preserved deliberately so every existing cross-reference to "01.6.2 criterion L" still resolves):
+
+  E. **Correctness is claimed against specification, not against the bash — and the unverified set is itemised and owned.** With the protocol replaced there is no old behaviour for most of the 01.6.2/01.6.2.1 deliverable to be equivalent to, so "a green suite proves language and structural equivalence" is retired as the frame. The genuinely-unchanged set is named separately and held to real equivalence: the emulator data plane, the `epoch.json` contract, the agent-facing tool surface. **No live-session verification exists until Phase 01.4**, so every host-side and session-shaped claim **from both phases** is itemised in `01.6.2-VALIDATION.md` as a carry-forward list that **Phase 01.4 owns and must discharge**. This lands last and covers both phases; that is why it moved here rather than sealing with 01.6.2.
+
+  L. **The five lifecycle-policy changes land as five explicitly-labeled tasks, each with its own test.** Never blended into a generic "convert `vice-broker.sh`" line item — and now never blended into 01.6.2 either, which is what the split bought. Warm floor defaults to 1 with the knob still honouring N; the floor is evaluated over probe-live instances with a failed probe both dropping the record and identity-verified-killing the pid; launch priority is non-preemptive on top of the unweakened `in_flight` lock; request ordering is arrival order on the control connection; `spares` becomes `warm floor` throughout, with `VICE_BROKER_SPARES` breaking cleanly. Rationale and per-change proofs: `01.6.2-CONTEXT.md` D-05…D-11. **D-11 requires separate commits per change**, and **D-10's rename is its own commit** — a squashed landing defeats the point of five labelled tasks.
+
+  M. **Phase 01.5's seven criteria are discharged or explicitly carried — and the plan shows which, per criterion.** This is the gate on absorbing 01.5, not a formality: deleting a phase without it is how a defect gets silently lost. **Phase 01.6.2 does not discharge them, so this phase's verification is where absorbing 01.5 actually seals.** D-02's four-defect mapping must also be shown explicitly: Defect 1 (parallel warming kills `x64sc`) is *preserved*, not re-fixed; Defect 2 (stale `usage()` text) is dissolved by the rewrite in 01.6.2; Defect 3 (grants outlive their process) is D-05; Defect 4 (proxy caches a dead grant for the session's life) is D-13, which landed in 01.6.2.
+
+  **The two items the 2026-08-03 discussion left unsettled — both now have a proposed disposition from plan-time analysis, and this phase must either adopt or overrule each in writing:**
+
+  - **01.5 criterion 4 (lazy-replenishment R1/R2 cap semantics) — proposed: *dissolved by D-06*, not deferred.** At `warm floor = 1` with kill-never-recycle, R1 (*"launch a replacement only if zero ready remain"*) and R2 (*"only if `total < N`"*) collapse into the single predicate the floor evaluation already computes — `probe-live ready < floor` — so there is no separate replenish policy left to specify, and the `N + outstanding_leases` overshoot is structurally impossible. The cap becomes `floor + outstanding_grants`, bounded by `VICE_BROKER_MAX` (untouched, D-06). Record it as dissolved-by-D-06 with that reasoning, or overrule it.
+  - **01.5 criterion 6 (`GRANT_POLL_TIMEOUT_MS` headroom) — proposed: the constant *ceases to exist*.** Under D-01 acquire is a request/response on an already-open connection, so there is no grant to poll for; `GRANT_POLL_TIMEOUT_MS` and `GRANT_POLL_INTERVAL_MS` die with `pollGrant()` in 01.6.2. What replaces it is a **connection-level acquire deadline**, which must be set with spike-003's ≥150 s tool-call budget in view and the measured ~0.65 s boot as the expected case. If adopted, **close the standalone todo `2026-08-01-raise-grant-poll-timeout-to-match-measured-tool-call-budget.md` as dissolved** rather than leaving it pending against a deleted constant.
+
+**Risks**: **The split's whole value is the seal boundary, and it is only real if this phase actually verifies** — a phase that seals on "the five tasks exist" rather than "each has a passing test" gives back exactly what the split bought. **Nothing here is live-verifiable either**, so criterion E's carry-forward list is this phase's most load-bearing deliverable, not its cleanup step. **The cross-phase ordering constraint is easy to lose across a phase boundary**: D-07 depends on a test that lives in 01.6.2's plans, so it must be a stated prerequisite in this phase's plan text and not an assumption that 01.6.2 sealed green. **Criterion M is where a defect gets silently lost if the disposition is treated as paperwork** — the two unsettled items above are the specific place that happens, and both arrive with a proposed answer precisely so "not settled" cannot quietly become "not addressed".
 
 ### Phase 01.6.3: `@mastra/mcp` Adoption
 

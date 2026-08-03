@@ -31,15 +31,50 @@ See: .planning/PROJECT.md (updated 2026-07-31)
 
 Milestone: **v1.1 — Emulator Access Hardened** *(inserted 2026-08-02, ahead of the rest of v1.0)*
 Phase: 01.6.1 (container-side-conversion-to-typescript) — **VERIFIED + THREAT-SECURE, NOT SEALED**
-Next: 01.6.2 (the one-process host broker) — **discussed, not yet planned**; CONTEXT.md, RESEARCH.md, PATTERNS.md and VALIDATION.md exist
-Execution order within v1.1 is **01.6 → 01.6.1 → 01.6.2 → 01.6.3 → 01.4 → 01.3**, not numeric order.
+Next: 01.6.2 (the one-process host broker) — **discussed, split at plan time, being planned now**; CONTEXT.md, RESEARCH.md, PATTERNS.md and VALIDATION.md exist
+Execution order within v1.1 is **01.6 → 01.6.1 → 01.6.2 → 01.6.2.1 → 01.6.3 → 01.4 → 01.3**, not numeric order.
 
 **Phases 01.5 and 01.7 are ABSORBED into 01.6.2 (2026-08-03) and no longer run.** Their ROADMAP
 sections are retained as stubs with per-criterion disposition tables rather than deleted, so every
-existing cross-reference still resolves. 01.6.2 therefore now carries the conversion, five
-lifecycle-policy behaviour changes and the TCP transport change together, with **no live-session
-verification available until 01.4** — an itemised carry-forward list that 01.4 must discharge is
-required in `01.6.2-VALIDATION.md`. Decisions: `01.6.2-CONTEXT.md` D-01…D-03.
+existing cross-reference still resolves. Decisions: `01.6.2-CONTEXT.md` D-01…D-03.
+
+**Phase 01.6.2 was then SPLIT at plan time, 2026-08-03, later the same day** (`/gsd-plan-phase
+01.6.2`). `gsd-planner` returned `## PHASE SPLIT RECOMMENDED` rather than plans — ~13 plans across 11
+near-strictly-sequential waves against a `standard` granularity of 3–5 and a largest in-repo
+precedent of 8 — and the developer took the split, which 01.6.2's own risk paragraph had named as an
+anticipated and legitimate outcome. **Phase 01.6.2.1 (Broker Lifecycle Policy) is inserted after
+01.6.2** and owns 01.6.2's criteria **E, L and M** plus `01.6.2-CONTEXT.md` **D-02, D-05…D-08, D-10,
+D-11, D-19…D-22**. It has **no artifacts of its own** — it shares 01.6.2's four unchanged, the same
+way 01.6's four serve all its split groups.
+
+**This is the second recorded reversal in two days and is logged as one, per the D-03 precedent.**
+The absorption is *not* undone: 01.7 still lands whole inside 01.6.2, and 01.5 stays an `ABSORBED`
+stub that never returns to the roadmap. Only 01.5's *defect fixes* moved — still in TypeScript, still
+after the new machine exists (D-02). The split axis is the **seal boundary** (*"the new machine exists
+and the file protocol is dead"* | *"its lifecycle policy is corrected"*), deliberately **not** the
+*conversion | defects | transport* axis the developer rejected earlier the same day.
+
+**Two consequences to carry forward.** First, **absorbing 01.5 does not seal with 01.6.2** — criterion
+M moved, so 01.6.2's verification must not be read as discharging 01.5's defects; 01.6.2.1's is where
+that closes. Second, **criterion E's carry-forward list is now authored in 01.6.2.1**, covering both
+phases, because it cannot be written before the second one exists — so 01.6.2 seals with its
+unverified set itemised but not consolidated. **No live-session verification exists until 01.4 for
+either phase.**
+
+**One hard cross-phase task dependency:** 01.6.2.1's non-preemptive launch-priority change (D-07) is
+blocked on 01.6.2 criterion C's concurrency race test being green, so a failure has one candidate
+cause. It must appear as a stated prerequisite in 01.6.2.1's plan text, not as an assumption that
+01.6.2 sealed green.
+
+**`gsd-tools phase insert` could not perform the insertion** — it cannot resolve *any* phase in this
+ROADMAP because `extractCurrentMilestone` returns only the file's preamble (this roadmap nests
+milestones as `### ` under `## Phases`, and the `### Phase N:` detail sections live under a separate
+`## Phase Details` heading). Nothing was written before it errored, so the tree stayed clean; the
+ROADMAP amendment was hand-authored instead. Filed:
+`.planning/todos/pending/2026-08-03-gsd-phase-insert-cannot-resolve-any-phase-extractcurrentmilestone-returns-preamble.md`,
+which shares a likely root cause with the existing `phase remove` todo's `roadmap analyze` note.
+**Only the CRUD write path is affected** — `query roadmap.get-phase`, `query init.plan-phase` and
+`query phase next-decimal` all resolve three- and four-level phase numbers correctly.
 
 **Phase 01.6.1 outcome (2026-08-03, `/gsd-verify-work 01.6.1`).** UAT complete: **3 passed, 1 skipped,
 0 issues**. `01.6.1-VERIFICATION.md` is now `passed`; `01.6.1-SECURITY.md` is `verified` with
