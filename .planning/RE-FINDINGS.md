@@ -1887,3 +1887,36 @@ check when a fresh worktree's baseline suite run shows an unexpected failure is 
 `node_modules/.bin/<tool>` exists at all -- and if a `package-lock.json` is already committed,
 `npm ci` there is a mechanical materialization step, not a new dependency decision requiring a
 package-legitimacy checkpoint.
+
+### 2026-08-03 — a synchronous wrapper `return`ing an unawaited async callback's Promise runs its own `finally` before the callback's real work finishes
+
+**Type:** hazard, caught live while writing `refresh-manifest.test.ts` (Phase 01.6.1 Plan 06,
+Task 1) -- it briefly clobbered the real, tracked `tools-manifest.json`
+**Evidence:** live, in this worktree. The first version of the test file's
+`withTempManifestPath()` helper was written as a plain (non-`async`) function:
+`function withTempManifestPath(fn) { ...; try { return fn(path); } finally { restore env var } }`,
+called as `await withTempManifestPath(async (path) => { ...; await main(); ... })`. Every
+write-triggering test failed with `ENOENT` reading the tmpdir path, and the console showed
+`main()` writing to the REAL `tools-manifest.json` (the default, non-redirected path) instead --
+confirmed by `git diff` afterward showing the tracked file's content replaced with test fixture
+data. Root cause: `fn(path)` returns a Promise immediately (it is an async arrow function), and a
+**non-async** outer function's `try { return fn(path); } finally { ...restore... }` runs the
+`finally` block the instant `fn(path)` returns *the Promise object*, not once that promise
+settles -- so `VICE_TOOLS_MANIFEST` was already deleted/restored before `main()`'s `await
+serverInfo()` had even resolved, and `main()`'s own `manifestPath()` read the env var late and
+found it already gone, falling through to the real default path. Fixed by making the outer helper
+`async` and writing `try { return await fn(path); } finally { ... }` -- the `await` is what makes
+the `finally` wait for the real work. The real manifest was restored via `git checkout --
+.claude/mcp/vice/tools-manifest.json` before any commit.
+**Confidence:** HIGH -- reproduced live (six tests failed with a consistent, explained ENOENT/
+wrong-path signature before the fix, zero failures after), and the real file's clobbering and
+restoration were both directly observed via `git diff`/`git checkout --`.
+**Saves / costs:** this is a general JavaScript hazard, not specific to this project, but it is
+sharp-edged here because the corrupted target was a *tracked, committed* file rather than a
+throwaway fixture -- a test helper that redirects a real module's env-var-driven output path MUST
+either be declared `async` with an `await` on the inner call, or take an explicit callback-style
+`done()` signal, never a bare `return fn(...)` when `fn` is (or might be) async. The general
+tell: if a "cleanup" `finally` block ever runs suspiciously fast relative to the async work it is
+supposed to bracket, suspect an unawaited promise escaping the `try`, not a race in the code under
+test. Worth checking on any future test helper in this codebase that wraps an async callback in a
+try/finally for env-var or global-state save/restore.
