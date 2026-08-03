@@ -29,7 +29,7 @@ import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
-function findRepoRoot(from) {
+function findRepoRoot(from: string): string {
   let dir = from;
   while (true) {
     if (existsSync(join(dir, ".git"))) return dir;
@@ -44,7 +44,14 @@ function findRepoRoot(from) {
 const REPO_ROOT = findRepoRoot(HERE);
 const THIS_FILE = fileURLToPath(import.meta.url);
 
-function isDir(p) {
+/** True iff `value` is a well-formed, generic JSON object -- not null, not
+ * an array. Used to narrow JSON.parse()'s `unknown` result before reading
+ * its fields, in the same style as vice-broker.mts's isPlainObject(). */
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isDir(p: string): boolean {
   try {
     return statSync(p).isDirectory();
   } catch {
@@ -52,7 +59,7 @@ function isDir(p) {
   }
 }
 
-function isFile(p) {
+function isFile(p: string): boolean {
   try {
     return statSync(p).isFile();
   } catch {
@@ -76,9 +83,9 @@ function isFile(p) {
  * acceptance criterion bounds its run time at 10s, which a node_modules
  * descent would blow through). The exclusion is structural, not predicate-
  * based, so no widening of the file-extension test can ever reintroduce it. */
-function walkFiles(dir, predicate) {
+function walkFiles(dir: string, predicate: (path: string) => boolean): string[] {
   if (!isDir(dir)) return [];
-  const out = [];
+  const out: string[] = [];
   for (const dirent of readdirSync(dir, { withFileTypes: true })) {
     if (dirent.isDirectory() && dirent.name === "node_modules") continue;
     const abs = join(dir, dirent.name);
@@ -98,21 +105,36 @@ function walkFiles(dir, predicate) {
 test("criterion 2: .mcp.json registers exactly one static, url-less stdio entry named vice", () => {
   const mcpJsonPath = join(REPO_ROOT, ".mcp.json");
   assert.ok(existsSync(mcpJsonPath), `${mcpJsonPath} must exist`);
-  const parsed = JSON.parse(readFileSync(mcpJsonPath, "utf8"));
+  const parsed: unknown = JSON.parse(readFileSync(mcpJsonPath, "utf8"));
 
-  assert.ok(parsed && typeof parsed === "object" && parsed.mcpServers && typeof parsed.mcpServers === "object");
-  const keys = Object.keys(parsed.mcpServers);
+  assert.ok(isPlainObject(parsed) && isPlainObject(parsed.mcpServers));
+  if (!isPlainObject(parsed) || !isPlainObject(parsed.mcpServers)) {
+    throw new Error("unreachable -- narrowed by the assertion above");
+  }
+  const mcpServers = parsed.mcpServers;
+  const keys = Object.keys(mcpServers);
   assert.deepEqual(keys, ["vice"], `expected exactly one mcpServers key named "vice", got ${JSON.stringify(keys)}`);
 
-  const entry = parsed.mcpServers.vice;
+  const entry = mcpServers.vice;
+  assert.ok(isPlainObject(entry), "the vice entry must be a plain JSON object");
+  if (!isPlainObject(entry)) {
+    throw new Error("unreachable -- narrowed by the assertion above");
+  }
   assert.ok(
     !Object.prototype.hasOwnProperty.call(entry, "url"),
     "the vice entry must carry no url property -- a url changing invalidates prior project-scope approval; a stdio entry has none to change"
   );
   assert.equal(entry.command, "node", `expected command "node", got ${JSON.stringify(entry.command)}`);
   assert.ok(Array.isArray(entry.args) && entry.args.length === 1, `expected args to be a one-element array, got ${JSON.stringify(entry.args)}`);
-  const scriptPath = join(REPO_ROOT, entry.args[0]);
-  assert.ok(existsSync(scriptPath), `the vice entry's args[0] (${entry.args[0]}) must resolve to an existing file at ${scriptPath}`);
+  const args = entry.args;
+  if (!Array.isArray(args)) {
+    throw new Error("unreachable -- narrowed by the assertion above");
+  }
+  const firstArg = args[0];
+  assert.equal(typeof firstArg, "string", `expected args[0] to be a string, got ${JSON.stringify(firstArg)}`);
+  const argPath = firstArg as string;
+  const scriptPath = join(REPO_ROOT, argPath);
+  assert.ok(existsSync(scriptPath), `the vice entry's args[0] (${argPath}) must resolve to an existing file at ${scriptPath}`);
 
   // Plan 03 (Criterion 10 scaffold, T-01.6-14): the resolvability check above
   // proves SOME file exists at args[0] -- it does not prove that file is
@@ -123,7 +145,7 @@ test("criterion 2: .mcp.json registers exactly one static, url-less stdio entry 
   // or .mts if the conversion lets Node's native TypeScript stripping run the
   // proxy directly rather than emitting to resources/ first) -- this is not
   // yet decided, so all three are accepted without picking a winner early.
-  const basename = entry.args[0].split("/").pop();
+  const basename = argPath.split("/").pop() ?? "";
   assert.match(
     basename,
     /^vice-proxy\.(mjs|mts|ts)$/,
@@ -206,7 +228,7 @@ test("criterion 8: no enumerated document instructs an agent to invoke the trans
 // enumerators in this tree agree on what counts as "a module".
 const MODULE_FILE_PATTERN = /\.[cm]?[jt]s$/;
 
-function isModuleFile(path) {
+function isModuleFile(path: string): boolean {
   return MODULE_FILE_PATTERN.test(path);
 }
 
@@ -293,7 +315,7 @@ const HOSTPATH_ALLOW_LIST = {
  * throughout this file) from a basename, so a consumer's on-disk extension
  * (`.mjs` today, `.ts` after its own conversion slice) never has to be
  * tracked in HOSTPATH_ALLOW_LIST's keys. */
-function stripModuleExtension(basename) {
+function stripModuleExtension(basename: string): string {
   return basename.replace(/\.[cm]?[jt]s$/, "");
 }
 
@@ -330,7 +352,7 @@ const importSpecifierPattern = /from\s+["']([^"']+)["']/g;
 const HOSTPATH_SAME_DIR_SPECIFIER_PATTERN = /^\.\/hostpath\.[cm]?[jt]s$/;
 const HOSTPATH_TRAILING_SPECIFIER_PATTERN = /\/hostpath\.[cm]?[jt]s$/;
 
-function importsHostpath(text) {
+function importsHostpath(text: string): boolean {
   for (const match of text.matchAll(importSpecifierPattern)) {
     const specifier = match[1];
     if (specifier.includes("devcontainer-host-path/scripts/hostpath.mjs")) return true;
@@ -370,7 +392,7 @@ test("criterion 9 (caller-side): exactly the traced four production modules impo
   // the closure assertion below.
   const modules = enumerateModules().filter((p) => !/\.test\.[cm]?[jt]s$/.test(p));
   const importers = modules.filter((p) => importsHostpath(readFileSync(p, "utf8")));
-  const basenames = importers.map((p) => stripModuleExtension(p.split(sep).pop())).sort();
+  const basenames = importers.map((p) => stripModuleExtension(p.split(sep).pop() ?? "")).sort();
   const expected = Object.keys(HOSTPATH_ALLOW_LIST).sort();
   assert.deepEqual(
     basenames,
