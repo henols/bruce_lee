@@ -29,23 +29,51 @@
 //
 // Node >= 18. No dependencies, no network, nothing machine-specific: copy this
 // file into any devcontainer-based project's .claude/mcp/vice/ and it works.
+//
+// HOSTING CHOICE (01.6.1-02, Criterion B / RESEARCH §3.4 Option B): this
+// module takes the workspace root as an ARGUMENT (an optional `workspaceRoot`
+// on every exported function's options object) and imports NOTHING from
+// repo-root.mjs. It used to import { repoRoot } and call it at its own top
+// level -- exactly the shape repo-root.mjs's own header (and
+// install-resources.mjs's) warns against: repo-root.mjs imports
+// install-resources.mjs, which imports this module, which imported
+// repo-root.mjs back -- a three-module cycle. This module evaluating that
+// top-level call while repo-root.mjs's own `HERE` is still in its temporal
+// dead zone is exactly the "Cannot access 'HERE' before initialization"
+// crash 01.6-RESEARCH.md §E and 01.6.1-RESEARCH.md §3.2 both reproduced live.
+//
+// THE CYCLE IS AVOIDED STRUCTURALLY: do not "clean this up" by re-adding
+// `import { repoRoot } from "./repo-root.mjs"` here -- that importable
+// convenience is exactly the cycle described above. Every caller that has a
+// root in scope threads it through the `workspaceRoot` option instead; when
+// none is supplied this module falls back to `CONTAINER_WORKSPACE_PATH`
+// alone and throws a named error if even that is absent -- loud failure over
+// a silently wrong host path (see resolveWorkspaceRoot() below).
 
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve, relative, isAbsolute } from "node:path";
-import { repoRoot } from "./repo-root.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-// Resolved by repo-root.mjs's ladder rather than by a fixed hop count. This
-// file used to live four levels deep (.claude/skills/devcontainer-host-path/
-// scripts/) and hard-coded a matching `resolve(HERE, "..", "..", "..", "..")`;
-// moving it here made that arithmetic silently wrong by one level, which is
-// precisely the quiet-wrong-answer failure repo-root.mjs's own header
-// describes -- nothing throws, the workspace root just points somewhere
-// nothing else writes to. Deriving it removes the hop count from the file
-// entirely, so the next relocation cannot reintroduce the bug.
-const WORKSPACE_ROOT = repoRoot({ from: HERE });
-const CONTAINER_WS = process.env.CONTAINER_WORKSPACE_PATH || WORKSPACE_ROOT;
+
+/** Resolve the workspace root for a single call: the caller-supplied
+ * `workspaceRoot`, else `CONTAINER_WORKSPACE_PATH`, else a loud, named
+ * throw -- never a silent guess. Called LAZILY, only from inside the one
+ * branch that actually needs the value (the HOST_WORKSPACE_PATH-relative
+ * branch of hostPathCandidates(), and describe()'s own `if (explicit)`
+ * branch) so an environment with neither input, where the mountinfo
+ * fallback works fine today, keeps working fine -- calling this eagerly at
+ * function entry would turn that today-safe path into a throw, a behaviour
+ * regression disguised as a tightening. */
+function resolveWorkspaceRoot(workspaceRoot) {
+  if (workspaceRoot) return workspaceRoot;
+  const cwp = process.env.CONTAINER_WORKSPACE_PATH;
+  if (cwp) return cwp;
+  throw new Error(
+    "hostpath: cannot resolve the workspace root -- no `workspaceRoot` option was supplied and " +
+      "CONTAINER_WORKSPACE_PATH is not set in the environment. Supply one of the two."
+  );
+}
 
 // Where a bind-mount source device is *itself* mounted on the host. Ordered by
 // how often each turns out to be right; "" covers a source path that is already
@@ -101,14 +129,20 @@ export function mountFor(containerPath) {
  * Deliberately not tied to any repo, workspace layout or file type: translation
  * is driven by whichever bind mount happens to back the path, so any shared
  * location works.
+ *
+ * `opts.workspaceRoot`, if supplied, is used ahead of CONTAINER_WORKSPACE_PATH
+ * -- see resolveWorkspaceRoot() above. Resolved lazily, only inside this
+ * branch: the mountinfo fallback below needs no workspace root at all and
+ * must keep working when neither input is available.
  */
-export function hostPathCandidates(containerPath) {
+export function hostPathCandidates(containerPath, { workspaceRoot } = {}) {
   const abs = isAbsolute(containerPath) ? containerPath : resolve(process.cwd(), containerPath);
 
   // 1. Explicit workspace mapping, when the path falls inside the workspace.
   const hostWs = process.env.HOST_WORKSPACE_PATH;
   if (hostWs) {
-    const rel = relative(CONTAINER_WS, abs);
+    const containerWs = resolveWorkspaceRoot(workspaceRoot);
+    const rel = relative(containerWs, abs);
     if (!rel.startsWith("..")) {
       return { abs, candidates: [`${hostWs.replace(/\/$/, "")}/${rel}`], exact: true };
     }
@@ -139,8 +173,8 @@ export function hostPathCandidates(containerPath) {
 }
 
 /** The single best host path, or throw with the reason it cannot be built. */
-export function hostPath(containerPath) {
-  const { abs, candidates, reason } = hostPathCandidates(containerPath);
+export function hostPath(containerPath, opts = {}) {
+  const { abs, candidates, reason } = hostPathCandidates(containerPath, opts);
   if (!candidates.length) {
     throw new Error(`${reason || `cannot determine a host path for ${abs}`}\n  Or ${SET_ENV_HINT}`);
   }
@@ -164,9 +198,11 @@ export function guessNote() {
  *
  * `fatal(err)` marks an error as "not a wrong-path signal" (a connection
  * failure, say), so probing stops instead of retrying five more times.
+ * `workspaceRoot`, alongside `fatal`, threads straight through to
+ * hostPathCandidates() -- see resolveWorkspaceRoot() above.
  */
-export async function tryHostPaths(containerPath, fn, { fatal } = {}) {
-  const { abs, candidates, reason, exact } = hostPathCandidates(containerPath);
+export async function tryHostPaths(containerPath, fn, { fatal, workspaceRoot } = {}) {
+  const { abs, candidates, reason, exact } = hostPathCandidates(containerPath, { workspaceRoot });
   if (!candidates.length) {
     throw new Error(`${reason || `cannot determine a host path for ${abs}`}\n  Or ${SET_ENV_HINT}`);
   }
@@ -185,13 +221,16 @@ export async function tryHostPaths(containerPath, fn, { fatal } = {}) {
   );
 }
 
-/** Human-readable report: the mapping, and how it was arrived at. */
-export function describe(paths, log = console.log) {
+/** Human-readable report: the mapping, and how it was arrived at.
+ * `opts.workspaceRoot`, resolved lazily inside the `if (explicit)` branch
+ * below (same laziness rule as hostPathCandidates() itself), threads through
+ * to that same call. */
+export function describe(paths, log = console.log, { workspaceRoot } = {}) {
   const explicit = process.env.HOST_WORKSPACE_PATH;
   log(`HOST_WORKSPACE_PATH: ${explicit || "(unset — falling back to /proc/self/mountinfo)"}`);
-  if (explicit) log(`maps container path: ${CONTAINER_WS}`);
+  if (explicit) log(`maps container path: ${resolveWorkspaceRoot(workspaceRoot)}`);
   for (const p of paths.length ? paths : [process.cwd()]) {
-    const { abs, candidates, reason, mount, exact } = hostPathCandidates(p);
+    const { abs, candidates, reason, mount, exact } = hostPathCandidates(p, { workspaceRoot });
     log(`\n${abs}`);
     if (mount) log(`  backed by: ${mount.fstype} mount at ${mount.mountPoint} (source ${mount.root})`);
     if (reason) log(`  UNRESOLVABLE: ${reason}`);
@@ -217,7 +256,7 @@ running outside the container.
   --plain     print candidate host paths only, best first, one per line
 
 env: HOST_WORKSPACE_PATH   host location of the workspace (exact mapping)
-     CONTAINER_WORKSPACE_PATH   container location it maps to (default ${CONTAINER_WS})`);
+     CONTAINER_WORKSPACE_PATH   container location it maps to (read at call time; no default is computed here)`);
     process.exit(0);
   }
   try {

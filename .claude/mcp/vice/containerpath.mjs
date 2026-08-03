@@ -77,7 +77,7 @@ function isLoopbackHostname(hostname) {
  * matching a host path below.
  */
 export function hostRootCandidates() {
-  const { candidates, exact } = hostPathCandidates(CONTAINER_WS);
+  const { candidates, exact } = hostPathCandidates(CONTAINER_WS, { workspaceRoot: WORKSPACE_ROOT });
   const cleaned = [...new Set(candidates.map((c) => c.replace(/\/+$/, "")).filter((c) => c.length > 0))];
   cleaned.sort((a, b) => b.length - a.length);
   return { roots: cleaned, exact: Boolean(exact) };
