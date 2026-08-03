@@ -4,11 +4,11 @@ milestone: v1.1
 milestone_name: insertion note
 current_phase: 01.6
 current_phase_name: Conversion Foundation and Scope Reduction
-status: executing
+status: verifying
 stopped_at: Phase 01.6 PLANNED (4 plans, 4 waves, checker passed first iteration). Old 01.6 split four ways at plan time on context-budget grounds — 01.6 / 01.6.1 / 01.6.2 / 01.6.3. 01.3 still PAUSED at 5/6.
-last_updated: "2026-08-02T21:43:57.131Z"
-last_activity: 2026-08-02
-last_activity_desc: Phase 01.6 execution started
+last_updated: "2026-08-03T07:19:20.633Z"
+last_activity: 2026-08-03
+last_activity_desc: "Completed quick task 260803-9hi + follow-on: five Bruce Lee source documents archived in `docs/`; C64-Wiki resolved the two-player question (three modes; `FEATURES.md:202` vindicated) and pointed the lives counter at `$1560`"
 progress:
   total_phases: 8
   completed_phases: 2
@@ -45,7 +45,7 @@ Phase 01 (recovery-provenance) — **PARKED mid-execution, not abandoned.** 4 of
 
 **Phase 01.6's host-`node` gate is CLEARED (2026-08-02).** The host has `node` on PATH — confirmed by the developer, who has host access; the container cannot verify this by construction. The TCP control plane is in scope and the bash-broker fallback is off the table. Still unknown and worth establishing in 01.6's first plan: the host's `node` **version**, and the shell→Node call boundary, since this repo has no host-side Node precedent to copy.
 
-Status: Executing Phase 01.6
+Status: Needs Review — host-side verification pending
 
 **Known-failing check, carried forward for whoever resumes 01-04:** the plan's own Task 3 automated verification fails today — `saeger`'s `death` milestone is recorded `reached: true` with `cycles_advanced: null` and an explicit `evidentiary_gap` (no screen-matrix SHA-256 captured, attempt 4). Attempt 6 must re-capture that signature, not merely reach the two remaining milestones. danish's five milestones all carry full mechanical proof and pass.
 
