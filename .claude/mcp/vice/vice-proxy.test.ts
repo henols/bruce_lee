@@ -3504,7 +3504,7 @@ test("structural: within handleRecycle(), the record write appears before the re
 // the only-permitted-route rule (criteria 5, 8, 9 in 01.3-VALIDATION.md).
 // ---------------------------------------------------------------------------
 
-test("structural: the set of source files under .claude/mcp/vice/ containing a network-call construct is exactly vice.ts and vice-probe.ts", () => {
+test("structural: the set of source files under .claude/mcp/vice/ containing a network-call construct is exactly broker-launch.mts, vice-probe.ts and vice.ts", () => {
   // Directory-enumerating, matching skill-docs.test.mjs's own idiom -- a
   // future module joining this directory is covered the moment it lands on
   // disk, with no test file to remember to update. A "network-call
@@ -3527,6 +3527,17 @@ test("structural: the set of source files under .claude/mcp/vice/ containing a n
   // needing an update the moment this rename landed): the array entry is
   // renamed to match, not deleted -- the check still enforces the same
   // two-file network-call surface, it just tracks the surviving name.
+  //
+  // WIDENED, Phase 01.6.2 plan 02: broker-launch.mts's probeReady() gained
+  // an HTTP readiness POST (the fetch()-based branch of its three-way
+  // probe, D-05's permitted-route note) against the emulator instance it
+  // ITSELF spawned and owns the lifecycle of -- host-side broker code, not
+  // container-side code reaching the emulator outside mcp__vice__*. This
+  // guard's original scope (this file's own header comment, Plan 01.3-01)
+  // predates the host-side broker's existence entirely; vice-broker-launch
+  // .test.ts's own JUSTIFIED_NETWORK_CALLERS carries the full justification
+  // for every host-bound module's network construct -- this array is
+  // widened to match rather than re-litigated here.
   const NETWORK_CALL_PATTERN = /\bfetch\s*\(/;
   const files = readdirSync(HERE)
     .filter((f) => /\.[cm]?[jt]s$/.test(f) && !/\.test\.[cm]?[jt]s$/.test(f))
@@ -3536,8 +3547,8 @@ test("structural: the set of source files under .claude/mcp/vice/ containing a n
   const offenders = files.filter((f) => NETWORK_CALL_PATTERN.test(readFileSync(join(HERE, f), "utf8")));
   assert.deepEqual(
     offenders.sort(),
-    ["vice-probe.ts", "vice.ts"],
-    `the network-call module set changed -- expected exactly ["vice-probe.ts", "vice.ts"], got ${JSON.stringify(offenders)}. ` +
+    ["broker-launch.mts", "vice-probe.ts", "vice.ts"],
+    `the network-call module set changed -- expected exactly ["broker-launch.mts", "vice-probe.ts", "vice.ts"], got ${JSON.stringify(offenders)}. ` +
       "A module reaching the host outside the sanctioned transport is the violation, not merely a style break."
   );
 });
