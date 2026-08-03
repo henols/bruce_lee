@@ -28,6 +28,17 @@ What the user stated (2026-08-03):
 - **The green AI opponent is Yamo** — visually a sumo wrestler.
 - **The black AI opponent is a ninja, and he has a specific name** — the user is certain a
   proper name exists but did not recall it. This is the one genuinely open item here.
+- **Both opponents are AI-driven** (user, restated 2026-08-03) — the Ninja is not a scripted
+  hazard or a patrol pattern; he runs his own state machine, distinct from Yamo's. Already
+  reflected in DOCS-05 and plan 05-04, and in the two separate `ai/yamo.a` / `ai/ninja.a`
+  source files.
+
+  The asymmetry that follows, and which the glossary should state outright: per
+  `FEATURES.md:202` **Yamo can be driven by a second human player** in one of the two-player
+  modes, while nothing in the research set says the Ninja ever can. So "AI opponent" is an
+  unconditional description of the Ninja and a mode-dependent one of Yamo. Confirm the Ninja
+  is never player-controllable in either two-player mode before writing it down as fact —
+  `FEATURES.md:202`'s silence on the point is not evidence.
 
 Current state of the repo: `Yamo` and `the Ninja` are already the names in use across the
 planning set — `REQUIREMENTS.md` DOCS-04/DOCS-05, `ROADMAP.md` Phase 5 and plans 05-03/05-04,
