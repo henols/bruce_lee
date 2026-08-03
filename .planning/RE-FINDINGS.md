@@ -1620,3 +1620,26 @@ Atari/C64 programmer, which this document does not confirm or deny for that plat
 **Saves / costs:** `.claude/CLAUDE.md` frames this project as "Datasoft / Ron J. Fortier" and is
 **not** to be edited on the strength of this Apple II manual alone — noted here so the nuance is on
 record without triggering an unwarranted edit to the project's own framing document.
+
+### 2026-08-03 — hazard: this container's `python3` is `python3-minimal` — the stdlib is partial, and `python3 --version` does not reveal it
+
+**Type:** hazard
+**Evidence:** live, in-container, this session. `python3 -c "import html"` fails with
+`ModuleNotFoundError` — first hit while extracting text from an archived HTML page during quick
+task `260803-9hi`, and initially misread as a cwd/shadowing problem, which it is not. A sweep over
+26 common stdlib modules returns **12 missing**: `html`, `shutil`, `tempfile`, `ctypes`, `venv`,
+`ensurepip`, `sqlite3`, `http`, `xml`, `unittest`, `lzma`, `bz2`. `ls /usr/lib/python3.13/` shows
+only 95 entries. `dpkg -l` confirms the cause: `python3-minimal`, `python3.13-minimal` and
+`libpython3.13-minimal` are installed, while `python3` and `libpython3.13-stdlib` are **not**
+(`apt-cache policy` → both `Installed: (none)`, candidate `3.13.5-2+deb13u4`).
+**Confidence:** HIGH — verified directly by import probe, filesystem listing, and package state.
+**Saves / costs:** this **contradicts `.planning/research/STACK.md` / `.claude/CLAUDE.md`**, which
+record "Python 3.13.5 — **Verified present** (`python3 --version`) … Confidence: HIGH". The binary
+is present; the language's standard library largely is not, and `--version` cannot tell the two
+apart. That matters because Python is the designated host for `.d64` packaging, Pillow-based
+graphics extraction, and the `pytest` verification harness — and `venv` + `ensurepip` being absent
+means the documented `pip install d64` / `pip install Pillow` route does not work as written.
+Fix before relying on any of it: `apt-get install -y python3 libpython3.13-stdlib` (plus
+`python3-pip` / `python3-venv` as STACK.md already notes). Cheap check that would have caught it
+earlier, and is worth preferring to `--version` for any interpreter in any container:
+`python3 -c "import shutil, tempfile, ctypes"`.
