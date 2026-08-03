@@ -1745,3 +1745,38 @@ is why `docs/Bruce_Lee_C64wiki_2026-08-03.txt` carries a note that its table is 
 general lesson for this project: any table lifted from a web source should be cross-checked against
 a second source before it is written down, because a single-source table has no way to announce
 that it has been mangled.
+
+### 2026-08-03 — a fourth extension-hardcoded static check existed that RESEARCH §2 and PATTERNS.md did not name, and it failed loudly rather than silently
+
+**Type:** hazard (a gap in the phase's own pre-execution inventory), plus a confirmation that
+the loud-failure mode this project prefers actually held
+**Evidence:** live, during Phase 01.6.1 Plan 01 Task 1 (the tracer). `01.6.1-RESEARCH.md` §2 and
+`01.6.1-PATTERNS.md` named exactly three extension-hardcoded static checks needing widening in
+the same commit as any rename: `skill-docs.test.mjs`'s `scriptModules()`, and
+`vice-mcp-selector-docs.test.mjs`'s `enumerateModules()`/`importsHostpath()`. Renaming
+`vice-probe.mjs` -> `vice-probe.ts` (the tracer's own conversion target) dropped the full suite
+from 247/247 to 246/247. The failure was `vice-proxy.test.mjs:3435`'s
+`"structural: the set of .mjs files under .claude/mcp/vice/ containing a network-call
+construct is exactly vice.mjs and vice-probe.mjs"` -- a fourth enumerator, inside a file that is
+itself explicitly out of this phase's scope (`vice-proxy.mjs`/`vice-proxy.test.mjs` are deferred
+to their own later plan, RESEARCH §2 Slice 9), hardcoded to `.endsWith(".mjs")` and to the literal
+name `vice-probe.mjs` in its expected-offenders array.
+**Confidence:** HIGH -- directly reproduced (the rename dropped the live suite from 247/247 to
+246/247, naming the exact failing assertion in its own error text) and then fixed (widening the
+one check's file-enumeration predicate to the same `[cm]?[jt]s` class used elsewhere, and updating
+its expected array to `["vice-probe.ts", "vice.mjs"]`, restored 247/247), all inside this same
+task.
+**Saves / costs:** costs nothing this time -- the check is a `deepEqual` assertion against an
+explicit array, not a `.length > 0` sanity check, so a shrinking module set failed LOUDLY rather
+than silently passing vacuously. Had it been written the way `importsHostpath()`'s pre-widening
+form was (a closure check that would report "zero consumers" and pass), this would have been the
+exact silent-failure class RESEARCH's Pitfall section already warns about, just in a fourth
+location nobody had inventoried. The general lesson: an inventory of extension-hardcoded static
+checks built by *reading* the source (as RESEARCH and PATTERNS both did, carefully) can still be
+one short of the inventory built by *actually performing a rename* and watching what breaks --
+grep for a known pattern shape finds instances of that shape, not instances of a check's
+*consequence*. Later plans in this phase (03, 05, 07, 08) rename files this same check enumerates
+(`vice.mjs`, when Slice 6 converts it) -- the check is now widened and this should not recur, but
+a future phase performing a similar mechanical rename across a test suite should budget for "run
+the rename and watch the full suite" as a real discovery step, not only "grep for `.mjs` literals
+first."

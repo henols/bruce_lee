@@ -15,10 +15,23 @@ import assert from "node:assert/strict";
 import { mkdtempSync, existsSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
-import { execFile, spawn } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 
+// install-resources.mjs stays .mjs this wave (Plan 03 converts it and this
+// import specifier together) -- it is not part of the tsc project
+// (tsconfig's include is `**/*.ts`/`**/*.mts` only, `allowJs: false`), so
+// tsc has no declaration to check this import against yet. A `declare
+// module` shim was tried first and rejected by tsc itself (TS2665: "cannot
+// be augmented" -- a relative specifier that resolves to a REAL file is not
+// eligible for a shorthand ambient module declaration, only a genuinely
+// missing one is). `@ts-expect-error` is the correct tool here instead: it
+// documents the gap at the exact line that causes it, and the moment Plan 03
+// lands a typed install-resources.ts this directive itself becomes an error
+// (TS2578, "unused '@ts-expect-error' directive") -- a loud, self-cancelling
+// signal to remove it, not a silent suppression that outlives its cause.
+// @ts-expect-error TS7016 -- untyped .mjs sibling, not converted this wave (see comment above)
 import { DEPLOY_MANIFEST_NAME, resourceEntries } from "./install-resources.mjs";
 
 const execFileP = promisify(execFile);
@@ -37,7 +50,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 // rationale). `findRepoRoot()` is the plain `.git`-marker walk ONLY (no
 // env-var short-circuit), so this gate always inspects the tree it is
 // actually running from, worktree or not.
-function findRepoRoot(from) {
+function findRepoRoot(from: string): string {
   let dir = from;
   while (true) {
     if (existsSync(join(dir, ".git"))) return dir;
@@ -55,7 +68,10 @@ const REPO_ROOT = findRepoRoot(HERE);
  * bounded deadline rather than sleeping a fixed duration -- checkpoint/frame
  * synchronisation, never wall-clock delay (this project's own stack
  * pattern). Returns the predicate's own truthy result, or null on timeout. */
-async function waitFor(predicate, { timeoutMs = 8000, pollMs = 20 } = {}) {
+async function waitFor<T>(
+  predicate: () => T | null | undefined,
+  { timeoutMs = 8000, pollMs = 20 }: { timeoutMs?: number; pollMs?: number } = {}
+): Promise<T | null> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const result = predicate();
@@ -83,7 +99,7 @@ test("vice-supervisor.sh: a SIGHUP terminates the running child before the super
   const supervisorScript = join(HERE, "resources", "vice-supervisor.sh");
   const supervisorDir = mkdtempSync(join(tmpdir(), "vice-supervisor-sighup-"));
   const epochFile = join(supervisorDir, "epoch.json");
-  let child;
+  let child: ChildProcess | undefined;
   try {
     child = spawn("bash", [supervisorScript], {
       env: {
@@ -130,7 +146,7 @@ test("vice-supervisor.sh: a SIGHUP terminates the running child before the super
     });
     assert.ok(childGone, "SIGHUP must terminate the running child before the supervisor exits");
 
-    const supervisorExited = await waitFor(() => child.exitCode !== null);
+    const supervisorExited = await waitFor(() => child!.exitCode !== null);
     assert.ok(supervisorExited, "the supervisor itself must exit after handling SIGHUP");
     assert.equal(child.exitCode, 0, "a signal-triggered shutdown is a clean, deliberate exit -- status 0");
   } finally {
@@ -184,7 +200,7 @@ test("structural: bash -n exits 0 for every surviving tracked host script", asyn
  * Filtering on that prefix (rather than reading the whole file) keeps this
  * gate from tripping on unrelated entries elsewhere in .gitignore
  * (.vice-supervisor/, node_modules/, ...). */
-function deployedIgnoreLines(gitignoreText) {
+function deployedIgnoreLines(gitignoreText: string): string[] {
   return gitignoreText
     .split("\n")
     .map((line) => line.trim())
@@ -197,7 +213,7 @@ test("`.gitignore` and install-resources.mjs's deployed set (resourceEntries() +
   const ignoreSet = new Set(ignoreLines);
 
   const expectedLines = new Set([
-    ...resourceEntries().map((entry) => `/tools/${entry}`),
+    ...resourceEntries().map((entry: string) => `/tools/${entry}`),
     `/tools/${DEPLOY_MANIFEST_NAME}`,
   ]);
 

@@ -13,35 +13,42 @@
 // vice-session.mjs.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createServer } from "node:http";
+import { createServer, type IncomingMessage, type ServerResponse, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
 
-import { probeInstance, probeAll, PROBE_TOOL, DEFAULT_PROBE_TIMEOUT_MS } from "./vice-probe.mjs";
+import { probeInstance, probeAll, PROBE_TOOL, DEFAULT_PROBE_TIMEOUT_MS } from "./vice-probe.ts";
+
+type StubHandler = (req: IncomingMessage, res: ServerResponse) => void;
 
 /** Start a stub http server driven by `handler(req, res)`, run `fn(port)`
  * against it, then shut down -- closeAllConnections() BEFORE close() so a
  * hanging-response test (a handler that never calls res.end()) cannot wedge
  * the suite waiting for a socket that will never close on its own. */
-async function withStubServer(handler, fn) {
+async function withStubServer<T>(handler: StubHandler, fn: (port: number) => Promise<T>): Promise<T> {
   const server = createServer(handler);
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const port = server.address().port;
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+  const port = (server.address() as AddressInfo).port;
   try {
     return await fn(port);
   } finally {
     server.closeAllConnections();
-    await new Promise((resolve) => server.close(resolve));
+    await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 }
 
 /** A well-formed MCP handler: answers `initialize` with an empty result and
  * `tools/call` of vice_ping with `pingResult` (default a plausible ping
  * payload), wrapped in the same content-array shape the real seam expects. */
-function mcpHandler({ pingResult = { version: "3.10", machine: "C64SC", execution: "running" } } = {}) {
+interface MakeMcpHandlerOptions {
+  pingResult?: Record<string, unknown>;
+}
+
+function mcpHandler({ pingResult = { version: "3.10", machine: "C64SC", execution: "running" } }: MakeMcpHandlerOptions = {}): StubHandler {
   return (req, res) => {
     let body = "";
     req.on("data", (c) => (body += c));
     req.on("end", () => {
-      let parsed;
+      let parsed: Record<string, unknown>;
       try {
         parsed = JSON.parse(body);
       } catch {
@@ -69,11 +76,11 @@ function mcpHandler({ pingResult = { version: "3.10", machine: "C64SC", executio
 
 /** An ephemeral port that is bound and immediately released -- nothing is
  * listening there for the probe to reach, giving a real ECONNREFUSED. */
-async function freeEphemeralPort() {
+async function freeEphemeralPort(): Promise<number> {
   return new Promise((resolve) => {
     const s = createServer();
     s.listen(0, "127.0.0.1", () => {
-      const p = s.address().port;
+      const p = (s.address() as AddressInfo).port;
       s.close(() => resolve(p));
     });
   });
@@ -89,7 +96,7 @@ test("probeInstance: a stub server answering a well-formed vice_ping payload rep
     assert.equal(verdict.alive, true);
     assert.equal(verdict.port, port);
     assert.equal(verdict.reason, null);
-    assert.equal(verdict.ping.version, "3.10");
+    assert.equal((verdict.ping as Record<string, unknown>).version, "3.10");
     assert.ok(Number.isFinite(verdict.ms) && verdict.ms >= 0);
   });
 });
@@ -100,7 +107,7 @@ test("probeInstance: nothing listening on the port reports alive:false fast, wit
   const verdict = await probeInstance({ url: `http://127.0.0.1:${freePort}/mcp`, port: freePort, timeoutMs: 1500 });
   const elapsedMs = Date.now() - start;
   assert.equal(verdict.alive, false);
-  assert.match(verdict.reason, /ECONNREFUSED/);
+  assert.match(verdict.reason!, /ECONNREFUSED/);
   assert.ok(elapsedMs < 1500, `expected a fast refusal, took ${elapsedMs}ms`);
 });
 
@@ -115,7 +122,7 @@ test("probeInstance: a stub that accepts the connection and never responds repor
       const verdict = await probeInstance({ url: `http://127.0.0.1:${port}/mcp`, port, timeoutMs: 300 });
       const elapsedMs = Date.now() - start;
       assert.equal(verdict.alive, false);
-      assert.match(verdict.reason, /timeout|300/i);
+      assert.match(verdict.reason!, /timeout|300/i);
       assert.ok(
         elapsedMs < 3000,
         `expected elapsed time bounded by timeoutMs plus slack, took ${elapsedMs}ms -- never the ~50s a retry ladder would cost`
@@ -136,7 +143,7 @@ test("probeInstance: a stub answering HTTP 500 reports alive:false with a reason
     async (port) => {
       const verdict = await probeInstance({ url: `http://127.0.0.1:${port}/mcp`, port });
       assert.equal(verdict.alive, false);
-      assert.match(verdict.reason, /500/);
+      assert.match(verdict.reason!, /500/);
     }
   );
 });
@@ -172,7 +179,7 @@ test("probeInstance: a stub answering HTTP 200 with something that is not a ping
     async (port) => {
       const verdict = await probeInstance({ url: `http://127.0.0.1:${port}/mcp`, port });
       assert.equal(verdict.alive, false);
-      assert.match(verdict.reason, /version/);
+      assert.match(verdict.reason!, /version/);
     }
   );
 });
@@ -183,7 +190,7 @@ test("probeAll: four hanging stub endpoints probed together finish in about one 
   };
   const servers = await Promise.all(
     Array.from({ length: 4 }, () => {
-      return new Promise((resolve) => {
+      return new Promise<Server>((resolve) => {
         const s = createServer(hangingHandler);
         s.listen(0, "127.0.0.1", () => resolve(s));
       });
@@ -191,8 +198,8 @@ test("probeAll: four hanging stub endpoints probed together finish in about one 
   );
   try {
     const instances = servers.map((s) => ({
-      port: s.address().port,
-      url: `http://127.0.0.1:${s.address().port}/mcp`,
+      port: (s.address() as AddressInfo).port,
+      url: `http://127.0.0.1:${(s.address() as AddressInfo).port}/mcp`,
     }));
     const start = Date.now();
     const { results, byPort } = await probeAll(instances, { timeoutMs: 300 });

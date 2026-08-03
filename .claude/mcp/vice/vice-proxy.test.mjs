@@ -3432,23 +3432,34 @@ test("structural: within handleRecycle(), the record write appears before the re
 // the only-permitted-route rule (criteria 5, 8, 9 in 01.3-VALIDATION.md).
 // ---------------------------------------------------------------------------
 
-test("structural: the set of .mjs files under .claude/mcp/vice/ containing a network-call construct is exactly vice.mjs and vice-probe.mjs", () => {
+test("structural: the set of source files under .claude/mcp/vice/ containing a network-call construct is exactly vice.mjs and vice-probe.ts", () => {
   // Directory-enumerating, matching skill-docs.test.mjs's own idiom -- a
   // future module joining this directory is covered the moment it lands on
   // disk, with no test file to remember to update. A "network-call
   // construct" here means an actual outbound call site (`fetch(`), not
   // merely the word "fetch" appearing in prose or a variable name.
+  //
+  // WIDENED, Phase 01.6.1 Task 1 (a fourth extension-hardcoded static check,
+  // not named by this phase's own RESEARCH/PATTERNS documents): the original
+  // `.endsWith(".mjs")` predicate went silently -- in this case actually
+  // LOUDLY, this file's own assertion caught it live -- vacuous the moment
+  // vice-probe.mjs (this test's own named example) renamed to vice-probe.ts
+  // in the same task. vice-proxy.mjs and this test file are themselves
+  // deferred to their own later plan (RESEARCH §2 Slice 9); only this one
+  // check's file-enumeration predicate is widened here, to the same
+  // `[cm]?[jt]s` class used throughout this phase's other enumerators --
+  // vice-proxy.mjs/vice-proxy.test.mjs are not renamed or otherwise touched.
   const NETWORK_CALL_PATTERN = /\bfetch\s*\(/;
   const files = readdirSync(HERE)
-    .filter((f) => f.endsWith(".mjs") && !f.endsWith(".test.mjs"))
+    .filter((f) => /\.[cm]?[jt]s$/.test(f) && !/\.test\.[cm]?[jt]s$/.test(f))
     .sort();
   assert.ok(files.length > 0, "module directory enumerated as empty -- glob or path resolution is broken");
 
   const offenders = files.filter((f) => NETWORK_CALL_PATTERN.test(readFileSync(join(HERE, f), "utf8")));
   assert.deepEqual(
     offenders.sort(),
-    ["vice-probe.mjs", "vice.mjs"],
-    `the network-call module set changed -- expected exactly ["vice-probe.mjs", "vice.mjs"], got ${JSON.stringify(offenders)}. ` +
+    ["vice-probe.ts", "vice.mjs"],
+    `the network-call module set changed -- expected exactly ["vice-probe.ts", "vice.mjs"], got ${JSON.stringify(offenders)}. ` +
       "A module reaching the host outside the sanctioned transport is the violation, not merely a style break."
   );
 });
