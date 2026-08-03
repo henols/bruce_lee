@@ -31,7 +31,7 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
-import { REQUEST_ID_PATTERN, isValidRequestId } from "./vice-broker-client.mjs";
+import { REQUEST_ID_PATTERN, isValidRequestId } from "./vice-broker-client.ts";
 
 const execFileP = promisify(execFile);
 const HERE = dirname(fileURLToPath(import.meta.url));

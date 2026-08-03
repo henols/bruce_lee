@@ -55,7 +55,7 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 
-import { call } from "./vice.mjs";
+import { call } from "./vice.ts";
 import { tryHostPaths } from "./hostpath.ts";
 import { repoRoot } from "./repo-root.ts";
 
