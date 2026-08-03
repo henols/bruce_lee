@@ -584,7 +584,7 @@ Plans:
 
 **Risks**: This is the bulk of the line count and the place a mechanical conversion drifts silently. `vice-proxy.mjs`'s ~2,100 lines of project-specific logic (broker leasing, epoch/liveness, recycle/diagnose, deny-list, path rewriting, incident capture) must come through untouched — 01.6.3 swaps its transport seam afterwards, and doing both at once would make a regression ambiguous.
 
-**Plans:** 4/8 plans executed
+**Plans:** 5/8 plans executed
 
 Plans:
 **Wave 1**
@@ -605,7 +605,7 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [ ] 01.6.1-05-PLAN.md — Slices 5–6: `vice-broker-client` (C7 — the request-id pattern survives as a typed export; the out-of-scope parity test touched in exactly one line) and `vice`, with its export surface asserted unchanged
+- [x] 01.6.1-05-PLAN.md — Slices 5–6: `vice-broker-client` (C7 — the request-id pattern survives as a typed export; the out-of-scope parity test touched in exactly one line) and `vice`, with its export surface asserted unchanged
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
