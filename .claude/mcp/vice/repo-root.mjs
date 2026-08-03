@@ -1,7 +1,8 @@
 // The ONE shared place every module in this directory resolves the repo
 // root through (D-2). Everything else in this module tree -- vice.mjs's
-// EPOCH_FILE, vice-pool.mjs's poolDir(), vice-session.mjs's
-// sessionFilePath() -- derives its `.vice-supervisor` path through
+// EPOCH_FILE, vice-broker-client.mjs's brokerRootDir() (and, before their
+// 2026-08-02 deletion, vice-pool.mjs's poolDir() and vice-session.mjs's
+// sessionFilePath()) -- derives its `.vice-supervisor` path through
 // supervisorDir() below, so there is exactly one definition of both "where
 // is the repo root" and "what is the shared state directory called".
 //
@@ -84,7 +85,7 @@ function isInside(child, parent) {
  *      Last resort only -- three levels is what `<root>/.claude/mcp/<server>/`
  *      implies. In this repo branch 4 never actually runs (there is always a
  *      `.git` ancestor), which is exactly why the paired synthetic test in
- *      vice-pool.test.mjs is the only thing that would catch a wrong hop
+ *      repo-root.test.mjs is the only thing that would catch a wrong hop
  *      count here.
  */
 export function repoRoot({ from = HERE, env = process.env } = {}) {
@@ -137,9 +138,10 @@ export function supervisorDir(opts = {}) {
 }
 
 // Fires once per process, on whatever entry point happens to import THIS
-// module -- which is vice.mjs, vice-pool.mjs and vice-session.mjs already
-// (all three import repoRoot()/supervisorDir()), plus vice-probe.mjs's own
-// side-effect-only import (see that file). This one call is what makes the
+// module -- which is vice.mjs and vice-broker-client.mjs already (both
+// import repoRoot()/supervisorDir()), among other modules in this tree,
+// plus vice-probe.mjs's own side-effect-only import (see that file). This
+// one call is what makes the
 // deploy-on-first-use check (quick-260730-q4b, D-3) fire for every skill
 // .mjs entry point without any of them referencing install-resources.mjs
 // directly.

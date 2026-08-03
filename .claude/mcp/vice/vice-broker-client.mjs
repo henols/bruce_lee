@@ -3,14 +3,16 @@
 // host-side half is resources/vice-broker.sh; this module writes the
 // request/lease files that script reads and reads the grant/denial/broker
 // files that script writes, all on the SAME .vice-supervisor/ bind mount
-// tools/vice-supervisor.sh's epoch.json and tools/vice-pool.sh's
-// registry.json already use -- deliberately not a new channel.
+// tools/vice-supervisor.sh's epoch.json already uses (and, before its
+// 2026-08-02 deletion, tools/vice-pool.sh's registry.json did too) --
+// deliberately not a new channel.
 //
 // Every read of a broker-written file is untrusted input, exactly like
-// vice-pool.mjs's readRegistry()/isReclaimable() treat registry.json and
-// lease files: parse in try/catch, a malformed or half-written file is
-// "not there yet" or "absent", never a thrown exception. See
-// 01.2-PATTERNS.md's "Never-throw / never-cache-a-negative-result" section.
+// vice-pool.mjs's readRegistry()/isReclaimable() treated registry.json and
+// lease files before that module's 2026-08-02 deletion: parse in try/catch,
+// a malformed or half-written file is "not there yet" or "absent", never a
+// thrown exception. See 01.2-PATTERNS.md's "Never-throw /
+// never-cache-a-negative-result" section.
 //
 // MUST NOT import hostpath.mjs: the host-path consumer set is closed to
 // four production modules by vice-mcp-selector-docs.test.mjs's assertion 4,
@@ -86,8 +88,9 @@ export function leasePathFor(id, dir = brokerRootDir()) {
 
 // ---------------------------------------------------------- atomic write
 //
-// Shared tmp-then-rename helper (mirrors vice-pool.mjs's refreshLease()):
-// every protocol file this module writes goes through here, so there is
+// Shared tmp-then-rename helper (the same shape vice-pool.mjs's
+// refreshLease() used before that module's 2026-08-02 deletion): every
+// protocol file this module writes goes through here, so there is
 // exactly one place the atomicity rule lives on the container side, matching
 // resources/vice-broker.sh's own single write_json_atomic() choke point on
 // the host side.
@@ -100,7 +103,8 @@ function writeJsonAtomic(targetPath, tmpDir, data) {
 
 /** Read and JSON.parse `path`, treating any failure (missing file, partial
  * write, malformed JSON, non-object shape) as "not there yet" rather than
- * throwing -- matches vice-pool.mjs's readRegistry() posture exactly. */
+ * throwing -- matches the posture vice-pool.mjs's readRegistry() used
+ * before its 2026-08-02 deletion. */
 function readJsonMaybe(path) {
   let raw;
   try {
@@ -231,7 +235,8 @@ export function touchLease(id) {
 // a silent no-op, never a throw -- "release something that's already
 // released" is the expected shape of both a double-teardown (SIGINT then
 // SIGTERM ~100ms later, both calling in) and a post-sweep release, matching
-// vice-pool.mjs's own releaseLeaseByToken()'s idempotent posture. The
+// the idempotent posture vice-pool.mjs's own releaseLeaseByToken() used
+// before its 2026-08-02 deletion. The
 // caller (vice-proxy.mjs's releaseLeaseNow()) still wraps this in its own
 // try/catch that logs to stderr, as a second layer for anything this
 // swallow does not anticipate (e.g. a permissions error).
@@ -247,7 +252,8 @@ export function releaseLease(id) {
 //
 // Polls to a deadline for grants/<id>.json or denials/<id>.json, never
 // throwing on a malformed or half-read file -- a parse failure is treated
-// as "not there yet", matching vice-pool.mjs's readRegistry() posture.
+// as "not there yet", matching the posture vice-pool.mjs's readRegistry()
+// used before its 2026-08-02 deletion.
 export const GRANT_POLL_TIMEOUT_MS = Number(process.env.VICE_BROKER_GRANT_TIMEOUT_MS || 25000);
 export const GRANT_POLL_INTERVAL_MS = 500;
 

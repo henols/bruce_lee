@@ -97,7 +97,6 @@ recovery/*/dumps/probe-*.png
 # working exactly as before because they still land at these same paths.
 # vice-broker.sh (Phase 01.2) joins the supervisor and pool scripts here.
 /tools/vice-supervisor.sh
-/tools/vice-pool.sh
 /tools/vice-broker.sh
 /tools/lib/container-guard.sh
 /tools/lib/repo-root.sh
