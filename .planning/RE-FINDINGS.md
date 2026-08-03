@@ -2154,3 +2154,37 @@ next session's proxy. The field arrives honestly in **Phase 01.6.2**, which repl
 daemon with a TypeScript process that genuinely *is* the broker — at which point `node_version` is
 written by a live process with a heartbeat, and the truth becomes verifiable without stopping
 anything. Do not chase this field before then.
+
+### 2026-08-03 — the container guard protects only the *launcher* path: running the compiled broker directly inside this container is unguarded, and always has been
+
+**Type:** hazard (a real hole that nothing currently exercises, so nothing currently reports it)
+**Evidence:** doc/source-derived, this session (`/gsd-plan-phase 01.6.2` research pass, `gsd-phase-researcher`
+reading `.claude/mcp/vice/resources/lib/container-guard.sh` — 184 lines — in full, plus every script that
+sources it). `container-guard.sh` is sourced by `vice-broker.sh`, `vice-supervisor.sh` and
+`vice-launcher.sh`. Its five detection signals (`fs.existsSync`-shaped file checks, one `process.env`
+read, `systemd-detect-virt`, `/proc/1/cgroup`) fire **only when one of those shell entry points runs**.
+Invoking the Node broker directly — `node resources/vice-broker.mjs`, bypassing the shell wrapper — is
+therefore completely unguarded. Nothing does this today, which is exactly why the hole has never
+surfaced: it is untested rather than known-safe.
+
+**Why this matters beyond the one phase that fixes it:** the guard exists because host-side broker code
+run inside the devcontainer would try to spawn `x64sc` in a container with no display and no host state
+directory — the failure is confusing rather than loud. Anyone adding a new Node entry point to the
+host-side plumbing inherits the hole silently, since the guard is not in the code path they are writing.
+The structural fix is to make the guard a property of the *process*, not of the *wrapper that started it*.
+
+**Resolution in flight:** Phase 01.6.2 decision PD-03 (developer, 2026-08-03) ports the guard to
+TypeScript, checked at broker process startup before any state read/write or spawn — chosen over
+inlining the bash into the surviving launcher precisely because it closes this hole rather than
+relocating it. All five signals are directly Node-portable, and the ported guard becomes unit-testable
+with mocked `/proc/1/cgroup` content and env vars instead of only being reachable via a bash subprocess
+spawn. Recorded in `.planning/phases/01.6.2-the-one-process-host-broker/01.6.2-DISCUSSION-AGENDA.md`.
+
+**Confidence:** HIGH that the hole exists as described (every sourcing script read directly; the guard's
+own `_container_guard_record_signal`/`container_guard_evaluate` structure confirms it is invocation-scoped).
+MEDIUM that the direct-invocation path is genuinely never used today — established by "nothing in the
+repo does it," which is absence-of-evidence, not a live check.
+
+**Saves/costs:** saves a confusing container-side failure for whoever next adds a Node entry point to the
+host plumbing, and records *why* the TypeScript port was chosen over the cheaper bash inline — so a later
+reviewer does not "simplify" the guard back into the launcher and silently reopen the hole.
