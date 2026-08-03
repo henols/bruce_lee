@@ -60,7 +60,20 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 ### Milestone v1.1 — Emulator Access Hardened *(active, inserted 2026-08-02)*
 
-Execution order is **01.6 → 01.6.1 → 01.6.2 → 01.6.3 → 01.4 → 01.5 → 01.7 → 01.3**, not numeric order.
+Execution order is **01.6 → 01.6.1 → 01.6.2 → 01.6.3 → 01.4 → 01.3**, not numeric order.
+
+> **RE-SEQUENCED AGAIN 2026-08-03 (developer, via `/gsd-discuss-phase 01.6.2`).** Was
+> `01.6 → 01.6.1 → 01.6.2 → 01.6.3 → 01.4 → 01.5 → 01.7 → 01.3`. **Phases 01.5 and 01.7 are
+> absorbed into 01.6.2** and no longer run — their sections are retained as `ABSORBED` stubs with
+> full criteria disposition tables, not deleted, so existing cross-references keep resolving.
+> This reverses the 2026-08-02 split for two of its four members; see each stub for what was given
+> up. **01.6.2 now lands the conversion, five behaviour changes and the transport together, with no
+> live verification available until 01.4.** Decisions: `01.6.2-CONTEXT.md` D-01…D-03.
+>
+> **Neither phase was renumbered, deliberately.** `gsd-tools phase remove` renumbers sibling
+> decimals but silently skips three-level children (`01.6.1`/`01.6.2`/`01.6.3` do not match its
+> pattern), so removing `01.5` would have renamed the *completed* `01.6` directory to `01.5` and
+> orphaned its three children. Filed as a pending todo.
 
 > **RE-SEQUENCED 2026-08-02 (developer).** Was `01.4 → 01.5 → 01.6 → 01.3`. The developer chose to
 > land the TypeScript conversion **before** any further work on the files it rewrites, which forced
@@ -74,14 +87,14 @@ Execution order is **01.6 → 01.6.1 → 01.6.2 → 01.6.3 → 01.4 → 01.5 →
 > triple-launch outage was exactly that class of bug. Decision record:
 > `.planning/notes/one-process-broker-in-typescript.md`.
 
-- [ ] **Phase 01.3: Wedge Detection and Recovery** *(INSERTED — **PAUSED at 5/6 plans**, resumes LAST)* - Close the gap the broker cannot see: `x64sc` alive and answering, but the emulated CPU retiring zero cycles. Paused 2026-08-02 with only 01.3-06 outstanding: `vice_recycle` is a control-plane command living on the file protocol that Phase **01.7** replaces, and both of this phase's tools are unreachable from an agent session until Phase 01.4 lands, so its final plan cannot be verified live. Resumes once 01.4 and 01.7 have closed. Note its recovery path was designed against a *separate* supervisor process holding the respawn loop; Phase 01.6 collapses that inward, so re-read before resuming
+- [ ] **Phase 01.3: Wedge Detection and Recovery** *(INSERTED — **PAUSED at 5/6 plans**, resumes LAST)* - Close the gap the broker cannot see: `x64sc` alive and answering, but the emulated CPU retiring zero cycles. Paused 2026-08-02 with only 01.3-06 outstanding: `vice_recycle` is a control-plane command living on the file protocol that **Phase 01.6.2** replaces (~~01.7~~ — absorbed 2026-08-03), and both of this phase's tools are unreachable from an agent session until Phase 01.4 lands, so its final plan cannot be verified live. **Resumes once 01.6.2 and 01.4 have closed.** Note its recovery path was designed against a *separate* supervisor process holding the respawn loop; Phase 01.6 collapses that inward, so re-read before resuming
 - [ ] **Phase 01.4: Tool Surface Reachability** *(INSERTED — now runs **second**, in TypeScript)* - Make every tool the proxy implements reach the agent that needs it, in every session shape the project uses including subagents, and close the deny-list hole the generic call path opens. `vice_diagnose` and `vice_recycle` are written, 268/268 green and invisible; `mcp__vice__*` was structurally absent from an executor subagent's schema; `vice_disk_list` was observed in a `tools_list` response
-- [ ] **Phase 01.5: Session and Broker Survivability** *(INSERTED — now runs **third**, in TypeScript)* - A dead instance costs one acquisition, not the session, and the broker never warms, grants or retains an instance that is not real. Four recorded defects, one of which is the root cause of the 2026-08-01 outage, plus the spawn-policy redefinition and the port-band and timeout corrections
+- [~] **Phase 01.5: Session and Broker Survivability** — **ABSORBED INTO 01.6.2 (2026-08-03), does not run** - A dead instance costs one acquisition, not the session, and the broker never warms, grants or retains an instance that is not real. Its seven criteria are dispositioned one by one in its retained section; 01.6.2 criterion M is the gate that requires the plan to show where each lands. Criteria 4 (replenish cap semantics) and 6 (`GRANT_POLL_TIMEOUT_MS` headroom) are flagged there as **not settled**
 - [ ] **Phase 01.6: Conversion Foundation and Scope Reduction** *(INSERTED — **split four ways 2026-08-02 at plan time**; runs **first**)* - Prove the whole TypeScript build topology end-to-end on one real module before 16,000 lines ride on it, and reduce the scope: delete the `vice-pool` subsystem and `vice.mjs`'s CLI behind a confirmation gate, record the locked decision that reverses, and fix the `.gitignore` / `.mcp.json` landmines that a file move would otherwise trip. Holds the shared C1–C10 criteria register for all four groups. ~~Gated on whether the host has a usable `node`~~ **gate cleared 2026-08-02 — the host has `node` on PATH**
 - [ ] **Phase 01.6.1: Container-Side Conversion to TypeScript** *(INSERTED 2026-08-02 — split out of 01.6)* - Convert the 11 surviving `.mjs` modules (5,316 lines) and 5 surviving test files (5,518 lines) to TypeScript with the suite green **continuously**, not green at the end. Widen the TDZ static check to the transitive `repo-root → install-resources → hostpath → repo-root` cycle the planner found, and bar `enum`/`namespace`/parameter-properties mechanically from the first file
 - [ ] **Phase 01.6.2: The One-Process Host Broker** *(INSERTED 2026-08-02 — split out of 01.6)* - 2,546 lines of host-side bash become one TypeScript process owning coordination, per-instance supervision and the warm-spare pool. Includes the `vice-broker.test.mjs` **redesign** (2,685 lines / 61 tests — it verifies the daemon by spawning it and reading on-disk state, which stops existing), the single-`in_flight`-owner race test, and D-04: the epoch file survives as a second on-disk exception, written by the broker
 - [ ] **Phase 01.6.3: `@mastra/mcp` Adoption** *(INSERTED 2026-08-02 — split out of 01.6, deliberately last)* - Swap the ~164-line generic JSON-RPC seam in the proxy for `@mastra/mcp` (developer decision D-01, taken against research's HIGH-confidence advice), with the ~88–94% of project-specific logic working unchanged, a decided `COVERAGE.md` capability matrix, a blocking package-legitimacy checkpoint, and D-06: whether to bundle to preserve the container's zero-dependency-clone property
-- [ ] **Phase 01.7: The TCP Control Plane** *(INSERTED 2026-08-02 — split out of old 01.6)* - Replace the file-messaging protocol with one TCP control connection per proxy whose lifetime *is* the lease, so connection close — including on SIGKILL — is the release, enforced by the kernel. Bootstrap stays a file for discovery; the emulator data plane is untouched; broker restart reaps unconditionally and voids via the existing epoch mechanism; CR-01's singleton guard closes here
+- [~] **Phase 01.7: The TCP Control Plane** — **ABSORBED INTO 01.6.2 (2026-08-03), does not run** - Replace the file-messaging protocol with one TCP control connection per proxy whose lifetime *is* the lease, so connection close — including on SIGKILL — is the release, enforced by the kernel. Bootstrap stays a file for discovery; the emulator data plane is untouched; broker restart reaps unconditionally and voids via the existing epoch mechanism; CR-01's singleton guard closes here. All eight criteria are dispositioned in its retained section — **criterion 7 (cross-project brokering) is dropped entirely, and criterion 8's live verification is unavailable because 01.4 has not landed**
 
 ### Milestone v1.0 — Pipeline Proven *(paused behind v1.1)*
 
@@ -273,8 +286,9 @@ Also recorded: this phase has **no requirement IDs and no `-SPEC.md`**, so the s
 
 ### Phase 01.3: Wedge Detection and Recovery
 
-> **PAUSED 2026-08-02 at 5/6 plans — resumes LAST in milestone v1.1, after 01.4 and 01.7.**
+> **PAUSED 2026-08-02 at 5/6 plans — resumes LAST in milestone v1.1, after 01.6.2 and 01.4.**
 > *(Re-sequenced 2026-08-02: the protocol replacement moved from 01.6 to the new 01.7, and 01.6 — now the TypeScript conversion — runs first. Additionally: this phase's recovery path was designed against a **separate supervisor process** holding the respawn loop, which 01.6 collapses into the broker. Re-read the design before resuming; it may no longer describe the machine.)*
+> *(**Amended 2026-08-03:** Phase 01.7 was absorbed into 01.6.2 and no longer runs, so the resume gate now reads **01.6.2 and 01.4**. `vice_recycle`'s move off the file protocol happens inside 01.6.2. The "re-read the design before resuming" warning is now stronger, not weaker: 01.6.2 both collapses the supervisor inward **and** replaces the transport, so two of this phase's assumptions change at once.)*
 >
 > Plans 01.3-01 through 01.3-05 are executed and committed. Only **01.3-06** is outstanding, and it is blocked on two things this phase does not own:
 >
@@ -387,15 +401,38 @@ and the phase record needs the hunt's denominator. Waves are 1 through 6, one pl
 
 ---
 
-### Phase 01.5: Session and Broker Survivability
+### Phase 01.5: Session and Broker Survivability — **ABSORBED INTO PHASE 01.6.2**
 
-**Goal**: A dead or wedged instance costs one acquisition rather than the whole session, and the broker never warms, grants or retains an instance that does not exist
+> **ABSORBED 2026-08-03, via `/gsd-discuss-phase 01.6.2`.** This phase no longer runs. Its goal —
+> *"A dead or wedged instance costs one acquisition rather than the whole session, and the broker
+> never warms, grants or retains an instance that does not exist"* — turned out to be substantially
+> the work that discussion had already folded into 01.6.2 as the five lifecycle-policy changes.
+>
+> **The section is kept, not deleted**, so that every reference to Phase 01.5 in commits, SUMMARYs,
+> design notes and prior CONTEXT files still resolves, and so a reader meeting the old plan here
+> learns why it stopped. Decisions: `01.6.2-CONTEXT.md` D-02.
+>
+> **Absorbing this phase is gated.** Phase 01.6.2 criterion M requires its plan to show, *per
+> criterion below*, where each lands — deleting a phase without that is how a defect gets silently
+> lost. Disposition at absorption time:
+>
+> | 01.5 criterion | Where it lands in 01.6.2 |
+> |---|---|
+> | 1 — a session whose instance dies recovers by re-requesting | Criterion J / CONTEXT D-13. The triggering call fails loudly with the fresh-machine signal; the replacement is already in place. |
+> | 2 — spare warming is serialised, never two `x64sc` in the same instant | Criterion C / CONTEXT D-07. Already the current behaviour; this phase must preserve it, not re-fix it, and must not "improve" the serialised-warming break into concurrent spawns. |
+> | 3 — a grant is proven live before it is honoured, and cannot outlive its process | Criterion L / CONTEXT D-05. The floor is evaluated over probe-live instances; a failed probe drops the record *and* identity-verified-kills the pid. |
+> | 4 — lazy replenishment, pool capped at ~`N + 1` | **NOT fully settled.** The floor moves to 1 (CONTEXT D-06) and kill-never-recycle stands, but R1/R2's exact replenish semantics were not decided. Criterion M requires a decision rather than a lapse. |
+> | 5 — the default port band is clear of ports other software holds | Criterion G / CONTEXT D-18. Broker allocation moves to 6600+, which retires the VS Code `127.0.0.1:6511` collision this criterion recorded. |
+> | 6 — `GRANT_POLL_TIMEOUT_MS` has headroom over the measured tool-call budget | **NOT settled, and may dissolve.** Under a TCP control plane, grant-polling becomes a request/response on the connection and the constant may cease to exist. Criterion M requires the outcome be named either way. Its standalone todo stays in the backlog meanwhile. |
+> | 7 — operator-facing text matches the code | Dissolved. The stale `usage()` prose goes with the bash file that carries it. |
 
-**Depends on**: Phase 01.6 (the TypeScript application these defects now live in) and Phase 01.4 (for live verification of anything). ~~Runs **before** 01.6 deliberately~~ — **re-sequenced 2026-08-02: it now runs AFTER 01.6.** The developer chose conversion-first, so there is no bash left to fix in place and these four defects are fixed in TypeScript instead. The discipline the old ordering protected is preserved by this phase still running **before Phase 01.7**, so a transport regression still has one candidate cause; and fixing a stringly-typed state machine with types on it is a better outcome than fixing it in bash, given the 2026-08-01 outage was exactly that class of bug. Historical rationale, no longer operative: the shrink-broker todo's own sequencing note is that fixing known defects and relocating the code holding them in one move makes it impossible to tell which change caused a regression. These defects are fixed in bash, in place, and 01.6 then moves working code.
+**Original goal (historical)**: A dead or wedged instance costs one acquisition rather than the whole session, and the broker never warms, grants or retains an instance that does not exist
+
+**Depends on (historical)**: Phase 01.6 (the TypeScript application these defects now live in) and Phase 01.4 (for live verification of anything). ~~Runs **before** 01.6 deliberately~~ — **re-sequenced 2026-08-02: it now runs AFTER 01.6.** The developer chose conversion-first, so there is no bash left to fix in place and these four defects are fixed in TypeScript instead. The discipline the old ordering protected is preserved by this phase still running **before Phase 01.7**, so a transport regression still has one candidate cause; and fixing a stringly-typed state machine with types on it is a better outcome than fixing it in bash, given the 2026-08-01 outage was exactly that class of bug. Historical rationale, no longer operative: the shrink-broker todo's own sequencing note is that fixing known defects and relocating the code holding them in one move makes it impossible to tell which change caused a regression. These defects are fixed in bash, in place, and 01.6 then moves working code. **Superseded 2026-08-03: the "before Phase 01.7" discipline this paragraph relies on is exactly what the absorption gives up — defects and protocol now change together. That cost was stated and accepted.**
 
 **Requirement mapping**: none — tooling phase.
 
-**Success Criteria** (what must be TRUE):
+**Success Criteria (historical — retained as the evidence record behind 01.6.2's criteria L and M)**:
 
   1. **A session whose granted instance dies recovers by re-requesting, instead of being permanently dead.** Today the proxy caches its grant for the session's lifetime: after a host was *fully repaired* — broker healthy, one live `x64sc`, zero stale grant records — every subsequent `vice_ping` from the original session still returned the old `req-832` / port 6512 `ECONNREFUSED`. The consequence is that losing an instance means losing an executor's accumulated context mid-plan, which has already halted plan 01-04 twice. On `ECONNREFUSED` against a held grant, the lease is dropped and re-requested once before any error surfaces.
 
@@ -633,28 +670,61 @@ Plans:
 
 > **Split out of Phase 01.6 on 2026-08-02.** Read Phase 01.6's section first — shared criteria
 > register, scope amendment, verification hazard and risks are there.
+>
+> **SCOPE ENLARGED 2026-08-03, via `/gsd-discuss-phase 01.6.2`.** The developer merged **Phase 01.7
+> (The TCP Control Plane)** into this phase and folded **Phase 01.5 (Session and Broker
+> Survivability)** into it. Both are now `ABSORBED` stubs pointing here; neither was deleted, so
+> every existing cross-reference still resolves.
+>
+> **This reverses the 2026-08-02 four-way split for two of its members**, and is recorded as a
+> reversal per the D-03 precedent — *a locked decision reversed without a record is the failure mode
+> this project already names for confidence grades*. The split existed because *"old 01.6 carried
+> four changes at once — consolidate three programs into one, change language, centralise state,
+> change transport. Its own criterion 15 flagged that as one too many."* That rationale, and the
+> cost of landing the transport change ahead of 01.4 (no live verification) and ahead of 01.5
+> (defects and protocol changing together), were put in front of the developer before the decision.
+>
+> **All decisions live in `.planning/phases/01.6.2-the-one-process-host-broker/01.6.2-CONTEXT.md`
+> (D-01…D-27). Read it before planning — it governs where this section and the design notes
+> disagree.**
 
-**Goal**: 2,546 lines of host-side bash become one TypeScript process that owns coordination, per-instance supervision and the warm-spare pool, holding all its state in one place — with exactly one shell script left in the repo and no protocol change
+**Goal**: 2,546 lines of host-side bash become one TypeScript process that owns coordination, per-instance supervision and the warm pool, holding its state in memory and speaking to the container over one TCP control connection per session whose lifetime *is* the lease — with exactly one shell script left in the repo, the file-messaging protocol retired, and five lifecycle-policy defects fixed rather than translated
 
 **Depends on**: Phase 01.6.1 (this group writes TypeScript against the conventions, types and build settings that group establishes; running them concurrently would make a suite regression ambiguous in attribution)
 
 **Owns from Phase 01.6's criteria register**: C2 (all three host-side shell scripts retire into one application, nothing shell-shaped carved out to stay behind), C4 (state in one place, in process), C5 (catchable shutdown kills every child, identity-verified; SIGKILL orphans accepted), C6 (exactly one shell script survives, container guard survives with it), C1 (the host's actual `node --version` recorded), C7 (the bash half of the request-id regex).
 
-**Scope**: `vice-broker.sh` (2,103) + `vice-supervisor.sh` (443) re-expressed as one process, plus the `vice-broker.test.mjs` **redesign** (2,685 lines / 61 tests) and the surviving launcher.
+**Scope**: `vice-broker.sh` (2,103) + `vice-supervisor.sh` (443) re-expressed as one process; the file-messaging protocol replaced by a TCP control plane (absorbed 01.7); the five lifecycle-policy changes of `.planning/notes/vice-broker-lifecycle-decisions.md`; Phase 01.5's defect scope (absorbed); the `vice-broker.test.mjs` **redesign** (2,685 lines / 61 tests, now substantially larger than that because the protocol tests go too); and the surviving launcher.
 
 **This group's own success criteria**:
 
-  A. **`vice-broker.test.mjs` is redesigned, not ported.** It verifies the bash daemon by spawning it as a real subprocess and inspecting on-disk `grants/`/`spares/` files. Once state moves in-process per C4, that verification mechanism mostly stops existing. It is the single largest item in the conversion and must be sized as its own work, never folded into a generic "convert `vice-broker.sh`" line item.
+  A. **`vice-broker.test.mjs` is redesigned, not ported.** It verifies the bash daemon by spawning it as a real subprocess and inspecting on-disk `grants/`/`spares/` files. Once state moves in-process per C4 **and the file protocol is gone entirely**, that verification mechanism stops existing. It is the single largest item in the conversion and must be sized as its own work, never folded into a generic "convert `vice-broker.sh`" line item. RESEARCH §F's per-function quantification is a floor, not the estimate.
 
-  B. **D-04 — the per-instance restart-epoch file survives as a second on-disk exception, written by the broker, contract unchanged.** *(Decided by the developer 2026-08-02 at plan time; RESEARCH.md §D3 raised it and neither the design note nor this roadmap had named it.)* `readEpoch()`'s entire value is a liveness check that costs zero MCP traffic, which requires *some* on-disk record; today `vice-supervisor.sh`'s `write_epoch()` writes it and D-1 folds that process away. So C4's "one place" has **two** file exceptions, not one: `broker.json` for discovery and the epoch file for zero-traffic liveness. The file's format, location and semantics do not change — only its writer. Redesigning the epoch check is transport-shaped work and stays in 01.7.
+  B. **D-04 — the per-instance restart-epoch file survives as one of exactly two on-disk exceptions, written by the broker, contract unchanged.** `readEpoch()`'s entire value is a liveness check that costs zero MCP traffic, which requires *some* on-disk record; today `vice-supervisor.sh`'s `write_epoch()` writes it and D-1 folds that process away. The file's format, location and semantics do not change — only its writer. **The two survivors are `broker.json` (discovery, now carrying the control port) and the per-instance `epoch.json`. Everything else under `.vice-supervisor/` goes, except per-instance boot/crash logs, which stay because a human reads them (CONTEXT D-23).**
 
-  C. **The single `in_flight` owner survives the move from a poll loop to an event loop.** The 2026-08-01 outage launched three `x64sc` processes simultaneously; that guard is why. A concurrency race test — two concurrent launch requests against a **stubbed** spawn, asserting exactly one spawn — is a required deliverable. **No real emulator: `mcp__vice__*` is the only route to VICE and tests must not open their own.**
+  C. **The single `in_flight` owner survives the move from a poll loop to an event loop.** The 2026-08-01 outage launched three `x64sc` processes simultaneously; that guard is why. A concurrency race test — two concurrent launch requests against a **stubbed** spawn, asserting exactly one spawn — is a required deliverable, and **must be green before the launch-priority layer (criterion L) is written**, so a failure has one candidate cause. **No real emulator: `mcp__vice__*` is the only route to VICE and tests must not open their own.**
 
-  D. **Identity-verified kill is reused, not re-derived.** Phase 01.3 criterion 6 already established the discipline.
+  D. **Identity-verified kill is reused, not re-derived.** Phase 01.3 criterion 6 already established the discipline. **The expected-identity substring needs correcting, not copying** — the broker now spawns `x64sc` directly rather than through an intermediate supervisor script, and a wrong-but-compiling identity string is a real new risk this phase introduces (RESEARCH Pitfall 2).
 
-  E. **The tool-surface claim is carried forward as explicitly unverified.** This is the group where the host broker changes shape, and no live-session verification exists until 01.4. A green suite proves language and structural equivalence only.
+  E. **Correctness is claimed against specification, not against the bash — and the unverified set is itemised and owned.** With the protocol replaced there is no old behaviour for most of this deliverable to be equivalent to, so "a green suite proves language and structural equivalence" is retired as the frame. The genuinely-unchanged set is named separately and held to real equivalence: the emulator data plane, the `epoch.json` contract, the agent-facing tool surface. **No live-session verification exists until Phase 01.4**, so every host-side and session-shaped claim is itemised in `01.6.2-VALIDATION.md` as a carry-forward list that **Phase 01.4 owns and must discharge**.
 
-**Risks**: Collapsing the per-instance supervisor inward removes an independent channel — `vice-supervisor.sh` currently outlives broker restarts, which is what makes the epoch file trustworthy on its own. D-04 keeps the file but not that independence; 01.7's unconditional reap-on-startup is what pays for it.
+  F. **The lease is the connection.** Connection open is the claim; connection close — including on SIGKILL and including container death — is the release, enforced by the kernel. `startHeartbeat()`, the mtime-as-heartbeat convention, `file_mtime_epoch()`, `lease_is_stale()`, `sweep_grants()` and the 180 s TTL **all retire together**; keeping any one of them leaves two competing authorities on whether a lease is alive.
+
+  G. **Bootstrap stays a file, and the port bands are separated.** `broker.json` gains the control port and becomes the discovery record, read once, so `ECONNREFUSED` is never ambiguous; `readBrokerLiveness()` keeps distinguishing `never_started` / `stale` / `alive`. **Three bands: the control plane on a fixed default clear of both others; 6510–6599 reserved by convention for an `x64sc` a human launches for their own work; broker-allocated instances from 6600 up.** This is what stops the broker squatting a port an operator wants, and it retires the VS Code `127.0.0.1:6511` collision that Phase 01.5 criterion 5 recorded.
+
+  H. **The emulator data plane is unchanged.** The proxy still dials the granted port directly. The broker carries control traffic only — acquire, release, recycle, status, host-state questions — and is never in the emulator path. This is what keeps the change off the hot path.
+
+  I. **Broker restart reaps every instance unconditionally, and the void rides the existing epoch mechanism.** With the lease in a connection, a restarted broker would otherwise see zero connections, conclude every emulator is free, and hand a live one to a second proxy. Reaping bumps every epoch, which `assertSameMachine()` already turns into `MachineRestartedError` — no second notion of "recoverable". **Unconditional**, because a SIGKILLed broker never runs a shutdown path, so "was the last shutdown clean" is unanswerable and a marker file would itself be the class of liveness claim criterion F retires.
+
+  J. **A lost machine costs one acquisition, not the session — and the agent is told plainly.** When a proxy's granted emulator stops answering, the proxy acquires a replacement immediately, but **the call that hit the dead emulator returns an explicit error** naming that the machine was replaced and prior state is gone; the next call succeeds on the new instance. Serving that call silently against a blank machine would return zeroed RAM as a valid read, which is exactly what the epoch check exists to prevent. **Broker death gets the same discipline and the same vocabulary** — an accepted, knowing regression against today, where broker death is survivable.
+
+  K. **Two brokers cannot run at once — CR-01 closes here.** `01.2-REVIEW.md`'s CR-01 is an independently-verified blocker carried since Phase 01.2: `cmd_start()` has no singleton guard, so two concurrent brokers race in a read-then-remove that is not atomic across processes and can hand the same ready spare to two sessions. A TCP listener on a well-known port cannot be bound twice, so `EADDRINUSE` is a kernel-enforced singleton — **verify it actually holds rather than assuming it.** On `EADDRINUSE`, `broker.json` arbitrates and there are **two distinct outcomes**: a live broker → exit quietly as a second instance; `stale`/`never_started` → the port is held by something that is not a broker → fail loudly. The guarantee holds only while the control port keeps its default; say so rather than implying it is unconditional.
+
+  L. **The five lifecycle-policy changes land as five explicitly-labeled tasks, each with its own test.** Never blended into a generic "convert `vice-broker.sh`" line item. Warm floor defaults to 1 with the knob still honouring N; the floor is evaluated over probe-live instances with a failed probe both dropping the record and identity-verified-killing the pid; launch priority is non-preemptive on top of the unweakened `in_flight` lock; request ordering is arrival order on the control connection; `spares` becomes `warm floor` throughout, with `VICE_BROKER_SPARES` breaking cleanly. Rationale and per-change proofs: `01.6.2-CONTEXT.md` D-05…D-11.
+
+  M. **Phase 01.5's seven criteria are discharged or explicitly carried — and the plan shows which, per criterion.** This is the gate on absorbing 01.5, not a formality: deleting a phase without it is how a defect gets silently lost. **`GRANT_POLL_TIMEOUT_MS` headroom (01.5 criterion 6) and the lazy-replenishment R1/R2 cap semantics (01.5 criterion 4) are the two not settled by this phase's discussion** — the first may dissolve entirely once grant-polling becomes a request/response on the connection; the second needs a decision. Name both outcomes rather than letting them lapse.
+
+**Risks**: **This phase now carries roughly three phases of content** — the consolidation, the language change, five behaviour changes and the transport — which is the shape the 2026-08-02 split existed to prevent. A further split recommendation from `gsd-planner` is an anticipated and legitimate outcome, and the developer decides; the planner must not silently shrink scope instead. **Every failure mode changes shape at once** when a lease stops being a file: anything that quietly depended on one of criterion F's six mechanisms fails in a new way. **Nothing here is live-verifiable** until Phase 01.4, so criterion E's carry-forward list is load-bearing rather than a caveat. Collapsing the per-instance supervisor inward also removes an independent channel — `vice-supervisor.sh` currently outlives broker restarts, which is what made the epoch file trustworthy on its own; D-04 keeps the file but not that independence, and criterion I's unconditional reap is what pays for it.
 
 ---
 
@@ -686,7 +756,36 @@ Plans:
 
 ---
 
-### Phase 01.7: The TCP Control Plane
+### Phase 01.7: The TCP Control Plane — **ABSORBED INTO PHASE 01.6.2**
+
+> **ABSORBED 2026-08-03, via `/gsd-discuss-phase 01.6.2`.** This phase no longer runs. The developer
+> stated the requirement directly during that discussion — *"requests//leases//denials//recycle-acks/
+> non of them shall exist, all … shall go over tcp to the broker"* — which is this phase's specified
+> content, and chose to land it inside 01.6.2 rather than after it.
+>
+> **The section is kept, not deleted**, so every reference to Phase 01.7 in commits, design notes and
+> prior CONTEXT files still resolves — including `01.6-CONTEXT.md`'s deferred list and the
+> `01.6.2` criterion B text that pointed here. Decisions: `01.6.2-CONTEXT.md` D-01, D-12…D-18.
+>
+> **This reverses the 2026-08-02 split that created this phase**, whose own rationale is preserved
+> verbatim below. That rationale — *"convert first only means something if the conversion is
+> separable from the protocol change"* — and the loss of both ordering dependencies were put in front
+> of the developer before the decision was taken. Recorded as a reversal per the D-03 precedent.
+>
+> **Criteria disposition — all eight, so none is lost:**
+>
+> | 01.7 criterion | Where it lands in 01.6.2 |
+> |---|---|
+> | 1 — the lease is the connection; six file mechanisms retire together | Criterion F / CONTEXT D-12 |
+> | 2 — bootstrap stays a file, liveness answerable without a connection | Criterion G / CONTEXT D-27 |
+> | 3 — the emulator data plane is unchanged | Criterion H |
+> | 4 — broker restart reaps unconditionally; the void rides the epoch mechanism | Criterion I / CONTEXT D-15 |
+> | 5 — broker death takes the session with it, and says so | Criterion J / CONTEXT D-14 |
+> | 6 — two brokers cannot run at once; CR-01 closes | Criterion K / CONTEXT D-17 |
+> | 7 — cross-project brokering checked, droppable if not free | **DROPPED ENTIRELY** (CONTEXT D-16). It was explicitly optional as of 2026-08-02; on 2026-08-03 the developer took it out of scope and out of checking. Its standalone todo stays in the backlog. |
+> | 8 — the suite passes across the transport change, using live verification | **Folded into criterion E, but weakened and the weakening is the point.** This criterion assumed 01.4 and 01.5 had landed. They have not, so **live-session verification is unavailable** and criterion 8's own instruction — *"do not fall back to treating a green suite as sufficient"* — cannot be satisfied here. 01.6.2 criterion E answers with an itemised carry-forward list that **Phase 01.4 owns and must discharge**. |
+
+**Original split rationale (historical, and the record of what the absorption reverses)**
 
 > **SPLIT OUT OF PHASE 01.6 on 2026-08-02.** Old 01.6 carried four changes at once —
 > consolidate three programs into one, change language, centralise state, change transport.
@@ -695,15 +794,15 @@ Plans:
 > mandatory rather than advisable: "convert first" only means something if the conversion is
 > separable from the protocol change. Phase 01.6 is the conversion; this is the protocol.
 
-**Goal**: proxy↔broker coordination is one TCP control connection per session whose lifetime *is* the lease, so connection close — including on SIGKILL and including container death — is the release, enforced by the kernel
+**Original goal (historical)**: proxy↔broker coordination is one TCP control connection per session whose lifetime *is* the lease, so connection close — including on SIGKILL and including container death — is the release, enforced by the kernel
 
-**Depends on**: Phase 01.6 (the application this changes the transport of must exist first) and Phase 01.5 (**the load-bearing ordering rule**: defects are fixed before the protocol changes, so a transport regression has one candidate cause. This is what survives of 01.5's original "fix it in bash first" rationale — the bash is gone, the discipline is not). Phase 01.4 has also landed by now, so live-session verification is available here.
+**Depends on (historical, both dependencies given up by the absorption)**: Phase 01.6 (the application this changes the transport of must exist first) and Phase 01.5 (**the load-bearing ordering rule**: defects are fixed before the protocol changes, so a transport regression has one candidate cause. This is what survives of 01.5's original "fix it in bash first" rationale — the bash is gone, the discipline is not). Phase 01.4 has also landed by now, so live-session verification is available here. **Superseded 2026-08-03: 01.5 is itself absorbed into 01.6.2, so defects and protocol now change together; and 01.4 has NOT landed, so live-session verification is not available. Both costs were stated and accepted.**
 
 **Requirement mapping**: none — tooling phase.
 
-**Design source**: `.planning/notes/broker-control-plane-over-tcp.md` and `.planning/seeds/broker-restart-reaps-and-voids.md`.
+**Design source**: `.planning/notes/broker-control-plane-over-tcp.md` and `.planning/seeds/broker-restart-reaps-and-voids.md`. **Both are promoted from boundary-reading to active design sources for Phase 01.6.2 by the absorption.**
 
-**Success Criteria** (what must be TRUE):
+**Success Criteria (historical — retained as the specification 01.6.2's criteria F–K are built from)**:
 
   1. **The lease is the connection.** Connection open is the claim; connection close — including on SIGKILL and including container death — is the release, enforced by the kernel. `startHeartbeat()`, the mtime-as-heartbeat convention, `file_mtime_epoch()`, `lease_is_stale()`, `sweep_grants()` and the 180 s TTL all retire together. Today's release is one attempted `unlinkSync` inside a measured ~490 ms shutdown window, so a hard kill strands an instance for the full TTL.
 

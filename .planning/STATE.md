@@ -6,7 +6,7 @@ current_phase: 01.6.1
 current_phase_name: container-side-conversion-to-typescript
 status: verified_unsealed
 stopped_at: "Phase 01.6.2 context gathered — scope changed: Phase 01.7 merged in, Phase 01.5 folded in. ROADMAP amendments required BEFORE /gsd-plan-phase 01.6.2 (see CONTEXT.md § ROADMAP amendments required)."
-last_updated: "2026-08-03T19:54:06.628Z"
+last_updated: "2026-08-03T20:28:31.384Z"
 last_activity: 2026-08-03
 last_activity_desc: Phase 01.6.1 UAT complete (3 passed, 1 skipped, 0 issues); `01.6.1-VERIFICATION.md` → `passed`; `01.6.1-SECURITY.md` created, 25 threats / 0 open; `01.6.1-COVERAGE.md` created to clear the api-coverage gate
 progress:
@@ -31,8 +31,15 @@ See: .planning/PROJECT.md (updated 2026-07-31)
 
 Milestone: **v1.1 — Emulator Access Hardened** *(inserted 2026-08-02, ahead of the rest of v1.0)*
 Phase: 01.6.1 (container-side-conversion-to-typescript) — **VERIFIED + THREAT-SECURE, NOT SEALED**
-Next: 01.6.2 (the one-process host broker) — **not yet planned**, no phase dir exists
-Execution order within v1.1 is **01.6 → 01.6.1 → 01.6.2 → 01.6.3 → 01.4 → 01.5 → 01.7 → 01.3**, not numeric order.
+Next: 01.6.2 (the one-process host broker) — **discussed, not yet planned**; CONTEXT.md, RESEARCH.md, PATTERNS.md and VALIDATION.md exist
+Execution order within v1.1 is **01.6 → 01.6.1 → 01.6.2 → 01.6.3 → 01.4 → 01.3**, not numeric order.
+
+**Phases 01.5 and 01.7 are ABSORBED into 01.6.2 (2026-08-03) and no longer run.** Their ROADMAP
+sections are retained as stubs with per-criterion disposition tables rather than deleted, so every
+existing cross-reference still resolves. 01.6.2 therefore now carries the conversion, five
+lifecycle-policy behaviour changes and the TCP transport change together, with **no live-session
+verification available until 01.4** — an itemised carry-forward list that 01.4 must discharge is
+required in `01.6.2-VALIDATION.md`. Decisions: `01.6.2-CONTEXT.md` D-01…D-03.
 
 **Phase 01.6.1 outcome (2026-08-03, `/gsd-verify-work 01.6.1`).** UAT complete: **3 passed, 1 skipped,
 0 issues**. `01.6.1-VERIFICATION.md` is now `passed`; `01.6.1-SECURITY.md` is `verified` with
@@ -342,6 +349,9 @@ drifting implementations, while sharing code without sharing state means N broke
 ### Roadmap Evolution
 
 - Phase 01.3 inserted after Phase 1: Wedge Detection and Recovery — detect and recover a live-but-frozen x64sc; the supervisor only respawns on process exit (URGENT)
+- Phase 01.6.2 edited: scope enlarged: Phase 01.7 (TCP control plane) merged in, Phase 01.5 (survivability defects) folded in; both retained as ABSORBED stubs, not deleted. Reverses the 2026-08-02 split for two of four members. Decisions in 01.6.2-CONTEXT.md D-01..D-27.
+- Phase 01.5 edited: ABSORBED into 01.6.2 (does not run). Section retained with a per-criterion disposition table; criteria 4 and 6 flagged as not settled.
+- Phase 01.7 edited: ABSORBED into 01.6.2 (does not run). Section retained with a per-criterion disposition table; criterion 7 dropped entirely, criterion 8 weakened because 01.4 has not landed.
 
 ## Deferred Items
 
