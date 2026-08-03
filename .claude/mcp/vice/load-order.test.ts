@@ -72,7 +72,7 @@ const IMPORT_REPO_ROOT_PATTERN =
 
 /** Wraps IMPORT_REPO_ROOT_PATTERN as a named predicate so both the real-file
  * assertion and the regression tests below read the same way. */
-function importsRepoRoot(text) {
+function importsRepoRoot(text: string): boolean {
   return IMPORT_REPO_ROOT_PATTERN.test(text);
 }
 
@@ -120,8 +120,75 @@ test("importsRepoRoot(): regression corpus -- catches every import shape, includ
   );
 });
 
+/** Filters `moduleNames` to entries whose basename minus its extension
+ * equals `stem`, and requires exactly one match -- throwing a message
+ * naming the stem and what it found otherwise. Split from
+ * resolveModuleByStem() below (which supplies the real flat directory via
+ * listModuleFiles()) so the zero/one/two-match cases can be exercised
+ * directly against a synthetic corpus, the same directly-testable-pure-
+ * function pattern this file already uses for importsRepoRoot() and
+ * moduleScopeRepoRootCalls() above.
+ *
+ * Zero matches means the subject this file names by stem has renamed away
+ * from every enumerated file -- a loud, survivable failure. Two matches
+ * means both the old and new extension transiently coexist on disk (a
+ * rename mid-flight); picking one silently would check the stale copy
+ * while the real file goes unpoliced, which is the specific failure this
+ * task exists to prevent -- so this throws in that case too, never picks. */
+function resolveStemAgainst(moduleNames: string[], stem: string): string {
+  const matches = moduleNames.filter((name) => {
+    const dot = name.lastIndexOf(".");
+    return (dot === -1 ? name : name.slice(0, dot)) === stem;
+  });
+  if (matches.length !== 1) {
+    throw new Error(
+      `resolveModuleByStem(${JSON.stringify(stem)}): expected exactly one match, found ` +
+        `${matches.length}${matches.length > 0 ? `: ${JSON.stringify(matches)}` : ""} in ` +
+        `${JSON.stringify(moduleNames)}. Picking the stale copy while the real one goes unpoliced is ` +
+        "exactly the failure this resolver exists to prevent."
+    );
+  }
+  return matches[0];
+}
+
+/** Resolves a module file by STEM against the real flat directory this file
+ * itself polices (listModuleFiles()'s own enumeration) -- so a rename of
+ * this test's own subject needs no edit here, ever. See
+ * resolveStemAgainst() above for the resolution and throw behaviour. */
+function resolveModuleByStem(stem: string): string {
+  return resolveStemAgainst(listModuleFiles(), stem);
+}
+
+test("resolveStemAgainst(): regression corpus -- exactly one match resolves by stem regardless of extension, zero matches throws naming the stem, two matches throws rather than silently picking one", () => {
+  assert.equal(
+    resolveStemAgainst(["install-resources.mjs", "hostpath.mjs"], "install-resources"),
+    "install-resources.mjs",
+    "exactly one match for the stem must resolve to that file, whatever its extension"
+  );
+  assert.equal(
+    resolveStemAgainst(["install-resources.ts", "hostpath.mjs"], "install-resources"),
+    "install-resources.ts",
+    "the resolver must be extension-agnostic -- a renamed subject resolves identically, which is the " +
+      "whole point: no future rename of this file's own subject requires an edit here"
+  );
+  assert.throws(
+    () => resolveStemAgainst(["hostpath.mjs", "containerpath.mjs"], "install-resources"),
+    /expected exactly one match, found 0/,
+    "zero matches must throw loudly, naming the stem and the count -- a skipped assertion here (the " +
+      "subject silently going unpoliced after a rename) is the failure this task exists to prevent"
+  );
+  assert.throws(
+    () => resolveStemAgainst(["install-resources.mjs", "install-resources.ts"], "install-resources"),
+    /expected exactly one match, found 2/,
+    "two matches -- both the old and new extension transiently coexisting on disk mid-rename -- must " +
+      "throw rather than silently picking one; picking the stale copy while the real file goes " +
+      "unpoliced is the specific failure named in this task's own <behavior>"
+  );
+});
+
 test("Criterion 10: install-resources.mjs never imports from repo-root.mjs, in any form", () => {
-  const src = readFileSync(join(HERE, "install-resources.mjs"), "utf8");
+  const subject = resolveModuleByStem("install-resources");
+  const src = readFileSync(join(HERE, subject), "utf8");
   assert.ok(
     !importsRepoRoot(src),
     "install-resources.mjs must not import from repo-root.mjs -- this reintroduces the module cycle " +
@@ -149,7 +216,7 @@ test("Criterion 10: install-resources.mjs never imports from repo-root.mjs, in a
  * module tree's own flattened layout) -- test files excluded, since a test
  * importing its subject is not part of the PRODUCTION import graph this
  * check polices. */
-function listModuleFiles() {
+function listModuleFiles(): string[] {
   return readdirSync(HERE, { withFileTypes: true })
     .filter((dirent) => dirent.isFile())
     .map((dirent) => dirent.name)
@@ -175,8 +242,8 @@ function listModuleFiles() {
  * "module enumeration" sanity test failing in an unexpected shape --
  * anchoring to a real statement start (optional whitespace, then `import`/
  * `export`, never `//`) removes the phantom edge structurally. */
-function extractRelativeImportSpecifiers(text) {
-  const specifiers = new Set();
+function extractRelativeImportSpecifiers(text: string): Set<string> {
+  const specifiers = new Set<string>();
   for (const m of text.matchAll(/^[ \t]*(?:import|export)(?:\s+type)?\s+[^;]*?from\s+["'](\.[^"']+)["']/gm)) {
     specifiers.add(m[1]);
   }
@@ -190,14 +257,14 @@ function extractRelativeImportSpecifiers(text) {
  * restricted to edges landing on another file in `moduleNames` (a specifier
  * resolving outside this flat set, e.g. into resources/ or a test file, is
  * simply not an edge in this graph). */
-function buildImportGraph(moduleNames) {
+function buildImportGraph(moduleNames: string[]): Map<string, string[]> {
   const moduleSet = new Set(moduleNames);
-  const graph = new Map();
+  const graph = new Map<string, string[]>();
   for (const name of moduleNames) {
     const text = readFileSync(join(HERE, name), "utf8");
-    const edges = [];
+    const edges: string[] = [];
     for (const specifier of extractRelativeImportSpecifiers(text)) {
-      const basename = specifier.split("/").pop();
+      const basename = specifier.split("/").pop()!;
       if (moduleSet.has(basename) && basename !== name) edges.push(basename);
     }
     graph.set(name, edges);
@@ -213,12 +280,12 @@ function buildImportGraph(moduleNames) {
  * `startNode` is abandoned (not a cycle through startNode at this
  * traversal), matching this test's only concern: cycles that pass through
  * repo-root.mjs specifically. */
-function findCyclesThroughNode(graph, startNode) {
-  const cycles = [];
+function findCyclesThroughNode(graph: Map<string, string[]>, startNode: string): string[][] {
+  const cycles: string[][] = [];
   const stack = [startNode];
   const onStack = new Set([startNode]);
 
-  function dfs(node) {
+  function dfs(node: string): void {
     for (const next of graph.get(node) || []) {
       if (next === startNode) {
         cycles.push([...stack]);
@@ -239,9 +306,9 @@ function findCyclesThroughNode(graph, startNode) {
  * reported as the SET of modules participating in it, not as one specific
  * traversal order) and dedupes, so two different corners of a DFS finding
  * "the same" cycle collapse to one entry. */
-function canonicalCycles(cycles) {
-  const seen = new Set();
-  const out = [];
+function canonicalCycles(cycles: string[][]): string[][] {
+  const seen = new Set<string>();
+  const out: string[][] = [];
   for (const cycle of cycles) {
     const sorted = [...cycle].sort();
     const key = sorted.join(",");
@@ -265,14 +332,18 @@ function canonicalCycles(cycles) {
 // same test, not discovered by accident. See 01.6.1-RESEARCH.md §3.4 for
 // the retirement, and Part 3 below for the complementary call-site guard
 // that survives the cycle's removal.
-const ALLOWED_CYCLES_THROUGH_REPO_ROOT = [];
+const ALLOWED_CYCLES_THROUGH_REPO_ROOT: string[][] = [];
 
 test("cycle allowlist: module enumeration under .claude/mcp/vice/ returns a non-empty flat set", () => {
   const moduleNames = listModuleFiles();
   assert.ok(moduleNames.length > 0, "module enumeration returned nothing -- path resolution is broken, not a real pass");
-  assert.ok(moduleNames.includes("repo-root.mjs"), "expected repo-root.mjs to be part of the enumerated module set");
-  assert.ok(moduleNames.includes("install-resources.mjs"));
-  assert.ok(moduleNames.includes("hostpath.mjs"));
+  // Resolved by STEM (Task 1's own resolveModuleByStem(), reused here) rather
+  // than a hardcoded extension -- so THIS sanity check does not go stale the
+  // next time one of these three renames, exactly the failure mode Task 1
+  // fixed for Part 1's real-file guard above.
+  assert.ok(resolveModuleByStem("repo-root"), "expected a repo-root module to be part of the enumerated module set");
+  assert.ok(resolveModuleByStem("install-resources"), "expected an install-resources module to be part of the enumerated module set");
+  assert.ok(resolveModuleByStem("hostpath"), "expected a hostpath module to be part of the enumerated module set");
 });
 
 test("cycle allowlist: exactly the recorded three-module cycle passes through repo-root.mjs", () => {
@@ -324,8 +395,13 @@ test("cycle allowlist: exactly the recorded three-module cycle passes through re
  * characters open a comment (`//` or `/*`), a continuation line of an
  * already-open block comment, and the repo-root module's own
  * `function repoRoot(` declaration line -- a declaration, not a call. */
-function moduleScopeRepoRootCalls(text) {
-  const results = [];
+interface ModuleScopeCall {
+  line: string;
+  guarded: boolean;
+}
+
+function moduleScopeRepoRootCalls(text: string): ModuleScopeCall[] {
+  const results: ModuleScopeCall[] = [];
   let inBlockComment = false;
   for (const line of text.split("\n")) {
     if (inBlockComment) {

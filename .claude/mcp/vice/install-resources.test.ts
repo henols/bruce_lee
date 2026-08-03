@@ -1,10 +1,10 @@
-// node:test coverage of install-resources.mjs's deploy-on-first-use
+// node:test coverage of install-resources.ts's deploy-on-first-use
 // installer -- rescued from vice-pool.test.mjs (quick-260730-q4b Task 2,
 // quick-260731-p8a) before that file is deleted wholesale in plan 04.
-// install-resources.mjs SURVIVES D-02/D-05, and this is the ONLY test file
+// install-resources.ts SURVIVES D-02/D-05, and this is the ONLY test file
 // its guarantees have ever had -- criterion 9 rests on it, and plan 03
-// modifies install-resources.mjs and needs this file's red/green signal to
-// do so safely.
+// converted install-resources.mjs to TypeScript and needed this file's
+// red/green signal to do so safely.
 //
 // Every test here drives installResources()/ensureResourcesInstalled()
 // against a SYNTHETIC temp root (mkdtempSync) so no test ever writes into
@@ -30,7 +30,9 @@ import {
   readDeployManifest,
   writeDeployManifest,
   pruneResources,
-} from "./install-resources.mjs";
+  type InstallResourcesResult,
+  type PruneResourcesResult,
+} from "./install-resources.ts";
 
 const execFileP = promisify(execFile);
 
@@ -138,7 +140,7 @@ test("installResources(): a real install writes its host-launch instructions to 
   // process that's doing the writing.
   const root = mkdtempSync(join(tmpdir(), "vice-install-stderr-"));
   const src = `
-    import { installResources } from ${JSON.stringify(new URL("./install-resources.mjs", import.meta.url).href)};
+    import { installResources } from ${JSON.stringify(new URL("./install-resources.ts", import.meta.url).href)};
     installResources({ root: ${JSON.stringify(root)} });
   `;
   const { stdout, stderr } = await execFileP(process.execPath, ["--input-type=module", "-e", src]);
@@ -151,7 +153,7 @@ test("installResources(): a real install writes its host-launch instructions to 
 test("ensureResourcesInstalled(): fire-once-per-process -- calling it twice in one process with the target deleted in between does NOT recreate it", async () => {
   const root = mkdtempSync(join(tmpdir(), "vice-install-fireonce-"));
   const src = `
-    import { ensureResourcesInstalled } from ${JSON.stringify(new URL("./install-resources.mjs", import.meta.url).href)};
+    import { ensureResourcesInstalled } from ${JSON.stringify(new URL("./install-resources.ts", import.meta.url).href)};
     import { existsSync, rmSync } from "node:fs";
     import { join } from "node:path";
     const root = ${JSON.stringify(root)};
@@ -172,7 +174,7 @@ test("ensureResourcesInstalled(): fire-once-per-process -- calling it twice in o
 test("ensureResourcesInstalled(): env opt-out -- VICE_SKIP_RESOURCE_INSTALL=1 makes it do nothing at all", async () => {
   const root = mkdtempSync(join(tmpdir(), "vice-install-skipenv-"));
   const src = `
-    import { ensureResourcesInstalled } from ${JSON.stringify(new URL("./install-resources.mjs", import.meta.url).href)};
+    import { ensureResourcesInstalled } from ${JSON.stringify(new URL("./install-resources.ts", import.meta.url).href)};
     import { existsSync } from "node:fs";
     import { join } from "node:path";
     ensureResourcesInstalled({ root: ${JSON.stringify(root)} });
@@ -186,13 +188,13 @@ test("ensureResourcesInstalled(): env opt-out -- VICE_SKIP_RESOURCE_INSTALL=1 ma
 test("installResources(): never throws when the target root is unwritable -- it warns per entry through `log` instead (D-3)", () => {
   const root = mkdtempSync(join(tmpdir(), "vice-install-unwritable-"));
   chmodSync(root, 0o500); // read+execute, no write -- mkdirSync/copyFileSync must fail for every entry
-  const warnings = [];
+  const warnings: string[] = [];
   try {
-    let result;
+    let result: InstallResourcesResult | undefined;
     assert.doesNotThrow(() => {
       result = installResources({ root, log: (msg) => warnings.push(msg) });
     });
-    assert.ok(result.failed.length > 0, "expected every entry to fail against an unwritable root");
+    assert.ok(result!.failed.length > 0, "expected every entry to fail against an unwritable root");
     assert.ok(warnings.length > 0, "expected at least one warning logged instead of a thrown exception");
   } finally {
     chmodSync(root, 0o700); // restore so the temp dir can be cleaned up
@@ -281,7 +283,7 @@ test("pruneResources(): a manifest entry containing a parent-directory hop is re
   const escapee = "../outside-the-target.txt";
   writeDeployManifest(root, [...resourceEntries(), escapee]);
 
-  const warnings = [];
+  const warnings: string[] = [];
   const result = pruneResources({ root, log: (m) => warnings.push(m) });
 
   assert.ok(result.skipped.includes(escapee), "expected the escaping entry to be reported skipped");
@@ -311,13 +313,13 @@ test("pruneResources(): an unlink failure on a read-only deployment target is re
   writeDeployManifest(root, [...resourceEntries(), "vice-pool-retired.sh"]);
 
   chmodSync(installTargetDir(root), 0o500); // read+execute, no write -- unlink of a file inside requires write on the containing dir
-  const warnings = [];
+  const warnings: string[] = [];
   try {
-    let result;
+    let result: PruneResourcesResult | undefined;
     assert.doesNotThrow(() => {
       result = pruneResources({ root, log: (m) => warnings.push(m) });
     });
-    assert.ok(result.failed.includes("vice-pool-retired.sh"), "expected the unlink failure to be reported as failed");
+    assert.ok(result!.failed.includes("vice-pool-retired.sh"), "expected the unlink failure to be reported as failed");
     assert.ok(warnings.length > 0, "expected a warning logged instead of a thrown exception");
   } finally {
     chmodSync(installTargetDir(root), 0o700); // restore so the temp dir can be cleaned up

@@ -19,26 +19,21 @@ import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 
-// install-resources.mjs stays .mjs this wave (Plan 03 converts it and this
-// import specifier together) -- it is not part of the tsc project
-// (tsconfig's include is `**/*.ts`/`**/*.mts` only, `allowJs: false`), so
-// tsc has no declaration to check this import against yet. A `declare
-// module` shim was tried first and rejected by tsc itself (TS2665: "cannot
-// be augmented" -- a relative specifier that resolves to a REAL file is not
-// eligible for a shorthand ambient module declaration, only a genuinely
-// missing one is). `@ts-expect-error` is the correct tool here instead: it
-// documents the gap at the exact line that causes it, and the moment Plan 03
-// lands a typed install-resources.ts this directive itself becomes an error
-// (TS2578, "unused '@ts-expect-error' directive") -- a loud, self-cancelling
-// signal to remove it, not a silent suppression that outlives its cause.
-// @ts-expect-error TS7016 -- untyped .mjs sibling, not converted this wave (see comment above)
-import { DEPLOY_MANIFEST_NAME, resourceEntries } from "./install-resources.mjs";
+// install-resources.ts (Plan 03 of 01.6.1): the scoped @ts-expect-error that
+// used to sit on this import (added Plan 01, when install-resources.mjs was
+// still untyped) is now GONE -- the moment Plan 03 landed a typed
+// install-resources.ts, that directive would have become a loud TS2578
+// ("unused '@ts-expect-error' directive") error, which was the whole point
+// of using @ts-expect-error over a declare-module shim in the first place:
+// a self-cancelling signal to remove it, never a silent suppression that
+// outlives its cause.
+import { DEPLOY_MANIFEST_NAME, resourceEntries } from "./install-resources.ts";
 
 const execFileP = promisify(execFile);
 const HERE = dirname(fileURLToPath(import.meta.url));
 
 // REPO-ROOT RESOLUTION, DELIBERATELY NOT `repoRoot()` FROM THE SIBLING
-// `repo-root.mjs`: that resolver's documented precedence checks
+// `repo-root.ts`: that resolver's documented precedence checks
 // `CONTAINER_WORKSPACE_PATH` FIRST and returns it whenever this file's
 // location resolves inside it -- which, in THIS devcontainer, is
 // unconditionally true regardless of which git worktree is actually
@@ -207,7 +202,7 @@ function deployedIgnoreLines(gitignoreText: string): string[] {
     .filter((line) => line.startsWith("/tools/"));
 }
 
-test("`.gitignore` and install-resources.mjs's deployed set (resourceEntries() + the deploy manifest) are in two-way parity", () => {
+test("`.gitignore` and install-resources.ts's deployed set (resourceEntries() + the deploy manifest) are in two-way parity", () => {
   const gitignoreText = readFileSync(join(REPO_ROOT, ".gitignore"), "utf8");
   const ignoreLines = deployedIgnoreLines(gitignoreText);
   const ignoreSet = new Set(ignoreLines);
@@ -223,7 +218,7 @@ test("`.gitignore` and install-resources.mjs's deployed set (resourceEntries() +
       ignoreSet.has(expected),
       `.gitignore is missing ${expected} -- a deployed artifact with no ignore line shows up as ` +
         "untracked noise in git status in whatever commit happens to follow. Add the line to " +
-        ".gitignore's deployed-path block (see install-resources.mjs's resourceEntries())."
+        ".gitignore's deployed-path block (see install-resources.ts's resourceEntries())."
     );
   }
 

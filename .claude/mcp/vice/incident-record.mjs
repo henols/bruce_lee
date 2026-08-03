@@ -9,7 +9,7 @@
 // file-writing remit this phase adds expands, the transport remit does not
 // (T-01.3-SC's package-legitimacy gate has nothing in scope here either: no
 // import beyond node:fs/node:crypto/node:path and this directory's own
-// repo-root.mjs).
+// repo-root.ts).
 //
 // Filename safety (T-01.3-07): incidentRecordPath() below builds the
 // filename ONLY from a UTC timestamp, an integer port and an integer epoch.
@@ -21,7 +21,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
 
-import { repoRoot } from "./repo-root.mjs";
+import { repoRoot } from "./repo-root.ts";
 
 export const INCIDENT_RECORD_VERSION = 1;
 

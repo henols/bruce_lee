@@ -1,10 +1,10 @@
-// node:test coverage of repo-root.mjs's repoRoot() ladder, the path-anchor
+// node:test coverage of repo-root.ts's repoRoot() ladder, the path-anchor
 // hop count it falls back to as a last resort, and the resources/-versus-
 // tools/ path-agreement regression -- rescued from vice-pool.test.mjs
 // (quick-260730-oga Task 2, quick-260731-p8a) before that file is deleted
 // wholesale in plan 04 (D-02). repoRoot() itself SURVIVES D-02/D-05: it is
 // the one shared path resolver every remaining module in this tree
-// (vice.mjs, vice-probe.mjs, install-resources.mjs's caller) derives its
+// (vice.mjs, vice-probe.ts, install-resources.ts's caller) derives its
 // state directory through. Nothing here imports vice-pool.mjs or
 // vice-session.mjs -- both are deleted in plan 04.
 import { test } from "node:test";
@@ -15,17 +15,17 @@ import { join } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
-import { repoRoot } from "./repo-root.mjs";
-import { installResources } from "./install-resources.mjs";
+import { repoRoot } from "./repo-root.ts";
+import { installResources } from "./install-resources.ts";
 
 const execFileP = promisify(execFile);
-const REPO_ROOT_MODULE_URL = new URL("./repo-root.mjs", import.meta.url).href;
+const REPO_ROOT_MODULE_URL = new URL("./repo-root.ts", import.meta.url).href;
 const VICE_MODULE_URL = new URL("./vice.mjs", import.meta.url).href;
 
 /** Parse `key=value` lines (one per line, as `--print-paths` emits) into a
  * plain object. */
-function parseKeyValueLines(text) {
-  const out = {};
+function parseKeyValueLines(text: string): Record<string, string> {
+  const out: Record<string, string> = {};
   for (const line of text.trim().split("\n")) {
     const idx = line.indexOf("=");
     if (idx === -1) continue;

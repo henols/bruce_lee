@@ -41,7 +41,7 @@ import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve, sep } from "node:path";
 
-import { ensureResourcesInstalled } from "./install-resources.mjs";
+import { ensureResourcesInstalled } from "./install-resources.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -51,6 +51,17 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 let warnedEnvOutsideFrom = false;
 let warnedNoMarkerFound = false;
 
+/** Options accepted by repoRoot()/supervisorDir(): `from` overrides the
+ * caller location the ladder resolves relative to (defaults to this file's
+ * own location, HERE), and `env` overrides the environment it reads
+ * CONTAINER_WORKSPACE_PATH from (defaults to process.env) -- both exist so
+ * the ladder is deterministically testable without mutating real process
+ * state, per repo-root.test.ts's own injection idiom. */
+export interface RepoRootOptions {
+  from?: string;
+  env?: NodeJS.ProcessEnv;
+}
+
 /**
  * True iff `child` is `parent` itself or lies inside it, compared as plain
  * resolved path strings (no filesystem access) -- deliberately not a symlink-
@@ -58,7 +69,7 @@ let warnedNoMarkerFound = false;
  * own location are both already resolved, non-symlinked container paths in
  * every case this project runs in.
  */
-function isInside(child, parent) {
+function isInside(child: string, parent: string): boolean {
   const c = resolve(child);
   const p = resolve(parent);
   return c === p || c.startsWith(p.endsWith(sep) ? p : p + sep);
@@ -85,10 +96,10 @@ function isInside(child, parent) {
  *      Last resort only -- three levels is what `<root>/.claude/mcp/<server>/`
  *      implies. In this repo branch 4 never actually runs (there is always a
  *      `.git` ancestor), which is exactly why the paired synthetic test in
- *      repo-root.test.mjs is the only thing that would catch a wrong hop
+ *      repo-root.test.ts is the only thing that would catch a wrong hop
  *      count here.
  */
-export function repoRoot({ from = HERE, env = process.env } = {}) {
+export function repoRoot({ from = HERE, env = process.env }: RepoRootOptions = {}): string {
   const cwp = env.CONTAINER_WORKSPACE_PATH;
 
   if (cwp && isInside(from, cwp)) {
@@ -133,24 +144,24 @@ export function repoRoot({ from = HERE, env = process.env } = {}) {
 /** The one shared directory name every module in this skill reads/writes
  * host-synchronised state through -- `join(repoRoot(...), ".vice-supervisor")`,
  * so the literal directory name also has exactly one definition. */
-export function supervisorDir(opts = {}) {
+export function supervisorDir(opts: RepoRootOptions = {}): string {
   return join(repoRoot(opts), ".vice-supervisor");
 }
 
 // Fires once per process, on whatever entry point happens to import THIS
 // module -- which is vice.mjs and vice-broker-client.mjs already (both
 // import repoRoot()/supervisorDir()), among other modules in this tree,
-// plus vice-probe.mjs's own side-effect-only import (see that file). This
+// plus vice-probe.ts's own side-effect-only import (see that file). This
 // one call is what makes the
 // deploy-on-first-use check (quick-260730-q4b, D-3) fire for every skill
-// .mjs entry point without any of them referencing install-resources.mjs
+// .mjs entry point without any of them referencing install-resources.ts
 // directly.
 //
 // POSITION IS LOAD-BEARING: this must run at the BOTTOM of this module body,
 // after HERE, repoRoot() and supervisorDir() are all initialised. Moving it
 // above HERE's initialisation reintroduces the exact module-cycle TDZ crash
-// install-resources.mjs's own header describes ("Cannot access 'HERE' before
-// initialization") -- install-resources.mjs takes the repo root as an
+// install-resources.ts's own header describes ("Cannot access 'HERE' before
+// initialization") -- install-resources.ts takes the repo root as an
 // argument specifically so it never needs to import this file back.
 try {
   ensureResourcesInstalled({ root: repoRoot() });

@@ -2,7 +2,7 @@
 // Build a CONTAINER path from something a HOST-side process handed back to
 // us in host-filesystem terms.
 //
-// This is the INVERSE of hostpath.mjs's outbound direction. hostpath.mjs
+// This is the INVERSE of hostpath.ts's outbound direction. hostpath.ts
 // solves "I have a container path and need to hand it to something running
 // on the host" -- container -> host. This file solves the opposite: "a
 // host-side process handed ME a path (or a URL naming a loopback host) in
@@ -24,7 +24,7 @@
 // "The bug" section for the full, already-root-caused failure shape this
 // module fixes.
 //
-// Mirrors hostpath.mjs deliberately: the same derive-never-hardcode rule
+// Mirrors hostpath.ts deliberately: the same derive-never-hardcode rule
 // (the mapping is never written down as a literal -- see hostRootCandidates()
 // below), the same `{ candidates, exact?, reason? }` return contract, the
 // same throw-with-the-env-hint contract, the same CLI-at-the-bottom guard.
@@ -35,21 +35,21 @@
 // only ever answers "given a host path or a URL naming a host, what is its
 // container-side equivalent" -- nothing more, so it stays a generic
 // host<->container primitive rather than a second copy of broker knowledge.
-import { hostPathCandidates, SET_ENV_HINT } from "./hostpath.mjs";
-import { repoRoot } from "./repo-root.mjs";
+import { hostPathCandidates, SET_ENV_HINT } from "./hostpath.ts";
+import { repoRoot } from "./repo-root.ts";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 
 export { SET_ENV_HINT };
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-// Same derivation and the same env override hostpath.mjs's own
+// Same derivation and the same env override hostpath.ts's own
 // WORKSPACE_ROOT/CONTAINER_WS use -- this file lives beside it, so the two
 // must always agree; this is not a second, possibly-diverging copy, just the
 // same resolution applied to this file's own location. Both dropped their
 // hard-coded four-level hop when they moved here from
 // .claude/skills/devcontainer-host-path/scripts/, where that count was
-// correct; see hostpath.mjs's note on why a fixed count is the wrong shape.
+// correct; see hostpath.ts's note on why a fixed count is the wrong shape.
 const WORKSPACE_ROOT = repoRoot({ from: HERE });
 const CONTAINER_WS = process.env.CONTAINER_WORKSPACE_PATH || WORKSPACE_ROOT;
 
@@ -90,7 +90,7 @@ export function hostRootCandidates() {
  * container's cwd, the input is already host-absolute or it is not
  * translatable at all).
  *
- * STATED RESIDUAL, matching hostpath.mjs's own for its direction: a
+ * STATED RESIDUAL, matching hostpath.ts's own for its direction: a
  * non-absolute string is left alone, never guessed at -- indistinguishable
  * from a non-path value without guessing, and guessing would be a worse
  * failure than leaving it untranslated.
@@ -102,7 +102,7 @@ export function containerPathCandidates(hostish) {
       candidates: [],
       reason:
         "not an absolute host-style path -- relative strings are deliberately untouched " +
-        "(mirrors hostpath.mjs's own stated residual for its own direction).",
+        "(mirrors hostpath.ts's own stated residual for its own direction).",
     };
   }
   const { roots, exact } = hostRootCandidates();
@@ -218,7 +218,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
 
 Print the container-side path(s) for host filesystem paths handed back by a
 host-side process (e.g. the on-demand VICE broker's grant records), best
-first, one per line -- the inverse of hostpath.mjs.
+first, one per line -- the inverse of hostpath.ts.
 
 env: CONTAINER_WORKSPACE_PATH   container-side workspace root (default ${CONTAINER_WS})`);
     process.exit(argv.length === 0 ? 1 : 0);

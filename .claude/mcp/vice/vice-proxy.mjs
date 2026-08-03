@@ -19,8 +19,8 @@ import { call, activeInstance, useInstance, DENY_LIST, readEpoch, beginSession, 
 // 1500ms-budget round trip, no retry, no dependency on vice.mjs's resilient
 // reconnect ladder.
 import { probeInstance } from "./vice-probe.ts";
-import { repoRoot } from "./repo-root.mjs";
-import { hostPath, SET_ENV_HINT } from "./hostpath.mjs";
+import { repoRoot } from "./repo-root.ts";
+import { hostPath, SET_ENV_HINT } from "./hostpath.ts";
 // The INVERSE direction (host -> container), for inverting a broker grant's
 // own host-local coordinates before useInstance() ever adopts them (this
 // task, quick-260801-ccn). Consuming this from the proxy -- rather than

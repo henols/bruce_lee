@@ -38,8 +38,8 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, readdirSync, existsSync, statSync } from "node:fs";
 import { tmpdir, networkInterfaces } from "node:os";
-import { hostPath } from "./hostpath.mjs";
-import { repoRoot } from "./repo-root.mjs";
+import { hostPath } from "./hostpath.ts";
+import { repoRoot } from "./repo-root.ts";
 // Read-only import for test assertions only -- this test file does not
 // modify vice-broker-client.mjs (outside this plan's file-ownership set);
 // GRANT_POLL_TIMEOUT_MS is already exported for exactly this purpose.
