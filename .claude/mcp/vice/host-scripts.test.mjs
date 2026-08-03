@@ -247,7 +247,6 @@ const EXPECTED_TRACKED_SHELL_SCRIPTS = [
   ".claude/mcp/vice/resources/lib/repo-root.sh",
   ".claude/mcp/vice/resources/vice-broker.sh",
   ".claude/mcp/vice/resources/vice-launcher.sh",
-  ".claude/mcp/vice/resources/vice-pool.sh",
   ".claude/mcp/vice/resources/vice-supervisor.sh",
 ].sort();
 

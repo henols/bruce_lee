@@ -11,13 +11,10 @@
 // the shared host MCP server (see CLAUDE.md's hazard note and STATE.md's
 // blocker entry).  The guard below runs *before* any request is serialised,
 // so no caller -- however indirect -- can reach that tool by accident.
-import { fileURLToPath } from "node:url";
 import { resolve, join } from "node:path";
 import { readFileSync } from "node:fs";
 
-import { supervisorDir, repoRoot } from "./repo-root.mjs";
-
-const SELF = fileURLToPath(import.meta.url);
+import { supervisorDir } from "./repo-root.mjs";
 
 // Renamed from ENDPOINT to DEFAULT_ENDPOINT (D-5): a pool lease redirects
 // the seam to a DIFFERENT endpoint at runtime via useInstance() below, so
@@ -32,9 +29,10 @@ const DEFAULT_TIMEOUT_MS = Number(process.env.VICE_MCP_TIMEOUT_MS || 30000);
 // three such copies before this: vice-pool.mjs's instanceFor() and
 // defaultInstance(), and vice-session.mjs's readSession()). A FUNCTION, not
 // a module-level constant, so it stays sensitive to a runtime env override
-// -- vice-pool.test.mjs's own withMcpHostEnv() helper mutates
-// process.env.VICE_MCP_HOST across test cases within the SAME process, which
-// a constant captured once at import time would silently stop honouring.
+// -- vice-pool.test.mjs's own withMcpHostEnv() helper mutated
+// process.env.VICE_MCP_HOST across test cases within the SAME process
+// (before that file's 2026-08-02 deletion), which a constant captured once
+// at import time would have silently stopped honouring.
 // Leaves DEFAULT_ENDPOINT (above) untouched -- that is a full URL read once
 // at startup, a different concern from this alias, which is read fresh on
 // every call.
@@ -149,8 +147,6 @@ export class MachineRestartedError extends ViceError {
     this.lastToolCall = lastToolCall;
   }
 }
-
-const die = (m) => { console.error(`error: ${m}`); process.exit(1); };
 
 let reqId = 0;
 
@@ -557,262 +553,3 @@ export async function serverInfo() {
   return { ...payload, tools: payload.tools.filter((t) => !DENY_LIST.includes(t?.name)) };
 }
 
-/**
- * Pure formatter for a `tools/list` result (D-3). Removing the MCP
- * registration (D-5) removes the typed tool schemas an agent used to read
- * from Claude Code's own tool listing -- this is the replacement, and it has
- * to be good enough that an agent can work out how to call a tool with no
- * external docs at all.
- *
- * With no `query`, renders one line per tool: name plus its one-line
- * description. With a `query` (an exact name or a substring), renders the
- * FULL input schema for every matching tool -- parameter name, type,
- * required-ness, and enum/default values where the schema carries them.
- * `json: true` returns the raw payload, pretty-printed, for anything that
- * wants the unprocessed `tools/list` result.
- *
- * There is no FORBIDDEN rendering branch: serverInfo() strips DENY_LIST tools
- * before any payload reaches here, so a denied tool has nothing to render.
- * Marking a tool as forbidden in a listing still told the reader it existed;
- * removing it from discovery entirely is the stronger property.
- *
- * A pure function of its `payload` argument (never calls the network
- * itself) so it is fully testable with a synthetic `tools/list` payload,
- * with no server involved.
- */
-export function formatToolsOutput(payload, { query, json = false } = {}) {
-  if (json) return JSON.stringify(payload, null, 2);
-
-  const tools = Array.isArray(payload?.tools) ? payload.tools : [];
-
-  if (!query) {
-    if (tools.length === 0) return "(server reported no tools)";
-    return tools
-      .map((t) => `${t.name}${t.description ? ` -- ${t.description}` : ""}`)
-      .join("\n");
-  }
-
-  const matches = tools.filter((t) => t.name === query || t.name.includes(query));
-  if (matches.length === 0) return `no tool matches "${query}"`;
-
-  return matches
-    .map((t) => {
-      const lines = [`${t.name}`];
-      if (t.description) lines.push(`  ${t.description}`);
-      const schema = t.inputSchema && typeof t.inputSchema === "object" ? t.inputSchema : {};
-      const props = schema.properties && typeof schema.properties === "object" ? schema.properties : {};
-      const required = new Set(Array.isArray(schema.required) ? schema.required : []);
-      const paramNames = Object.keys(props);
-      if (paramNames.length === 0) {
-        lines.push("  (no parameters)");
-      } else {
-        for (const name of paramNames) {
-          const p = props[name] && typeof props[name] === "object" ? props[name] : {};
-          const type = p.type ?? "any";
-          const reqTag = required.has(name) ? "required" : "optional";
-          const extras = [];
-          if (Array.isArray(p.enum)) extras.push(`enum: ${p.enum.join("|")}`);
-          if (p.default !== undefined) extras.push(`default: ${JSON.stringify(p.default)}`);
-          lines.push(`  ${name}: ${type} [${reqTag}]${extras.length ? ` (${extras.join(", ")})` : ""}`);
-        }
-      }
-      return lines.join("\n");
-    })
-    .join("\n\n");
-}
-
-// -------------------------------------------------------------------- CLI
-
-if (process.argv[1] && resolve(process.argv[1]) === SELF) {
-  const [cmd, ...rest] = process.argv.slice(2);
-
-  async function main() {
-    // Session resolution (D-1, D-5): this is the ONE place every CLI verb
-    // funnels through before touching the emulator, so `ping` and `call`
-    // transparently honour whatever `session acquire` set up in an earlier,
-    // separate Bash invocation. Loaded via a DYNAMIC import, not a static
-    // top-level one: tools/vice-session.mjs imports THIS file (useInstance,
-    // readEpoch), so a static import here would be a module cycle -- and
-    // more importantly, a static import would give every programmatic
-    // caller of vice.mjs's library surface (tools/recover.mjs, its test
-    // suite) an unwanted dependency on the pool/session layer, which must
-    // stay purely a CLI concern (D-6).
-    //
-    // Deliberately skipped for the `session` verb itself: resolveInstance()
-    // throws on an EXPIRED session, and if that happened unconditionally
-    // here, `session release` -- the one command that's supposed to fix an
-    // expired session -- would itself refuse to run. `session acquire` and
-    // `session status` read/write the session file directly and have no
-    // need for the redirect either.
-    //
-    // Also skipped for `pool` (quick-260730-p5x, D-5): health reporting has
-    // to work when the session is expired or the emulator is unreachable --
-    // that is exactly when it is most needed -- the same reasoning that
-    // already makes `session status` a pure file read never gated on a live
-    // session.
-    //
-    // Also skipped for `install` (quick-260730-q4b, D-5): deploying the
-    // host launcher scripts must work when the session is expired and the
-    // emulator is unreachable -- exactly when a human is most likely to
-    // reach for it while troubleshooting.
-    let resolved = null;
-    if (cmd !== "session" && cmd !== "pool" && cmd !== "install") {
-      const { resolveInstance } = await import("./vice-session.mjs");
-      resolved = resolveInstance();
-    }
-
-    if (cmd === "ping") {
-      const res = await call("vice_ping", {});
-      const inst = activeInstance();
-      const sessionId = resolved?.session?.session_id;
-      console.log(
-        `VICE ${res.version} (${res.machine}) -- ${res.execution} [port ${inst.port}, ${inst.url}]` +
-          (sessionId ? ` (session ${sessionId})` : "")
-      );
-      return;
-    }
-    if (cmd === "call") {
-      const toolName = rest[0];
-      if (!toolName) die("usage: call <tool-name> [json-args]");
-      const args = rest[1] ? JSON.parse(rest[1]) : {};
-      const res = await call(toolName, args);
-      console.log(JSON.stringify(res, null, 2));
-      return;
-    }
-    if (cmd === "tools") {
-      const jsonFlag = rest.includes("--json");
-      const query = rest.find((a) => !a.startsWith("--"));
-      const info = await serverInfo();
-      console.log(formatToolsOutput(info, { query, json: jsonFlag }));
-      return;
-    }
-    if (cmd === "session") {
-      const { acquireSession, releaseSession, sessionStatus } = await import("./vice-session.mjs");
-      const sub = rest[0];
-      if (sub === "acquire") {
-        const ttlIdx = rest.indexOf("--ttl-min");
-        const ttlMin = ttlIdx !== -1 ? Number(rest[ttlIdx + 1]) : null;
-        const opts = Number.isFinite(ttlMin) ? { ttlMs: ttlMin * 60 * 1000 } : {};
-        const record = await acquireSession(opts);
-        console.log(
-          `session acquired: ${record.session_id} on port ${record.port} (${record.url})` +
-            `${record.pooled ? "" : " [default instance, not pooled]"}, expires ${record.expires_at}`
-        );
-        return;
-      }
-      if (sub === "release") {
-        const r = await releaseSession();
-        console.log(r.released ? `session released: ${r.sessionId}` : "no active session to release");
-        return;
-      }
-      if (sub === "status") {
-        const s = sessionStatus();
-        if (!s.present) {
-          console.log(`no active session (${s.reason})`);
-        } else {
-          console.log(
-            `session ${s.session_id}: port ${s.port} (${s.url})${s.pooled ? "" : " [default instance, not pooled]"}, ` +
-              `${s.expired ? "EXPIRED" : "active"}, expires ${s.expires_at}` +
-              (s.ttl_remaining_ms != null && !s.expired ? ` (${Math.round(s.ttl_remaining_ms / 1000)}s remaining)` : "")
-          );
-        }
-        return;
-      }
-      die("usage: session <acquire [--ttl-min N] | release | status>");
-    }
-    if (cmd === "pool") {
-      const { poolHealth, formatPoolHealth } = await import("./vice-pool.mjs");
-      const sub = rest[0];
-      if (sub === "status") {
-        const health = await poolHealth({});
-        console.log(formatPoolHealth(health));
-        return;
-      }
-      die("usage: pool status");
-    }
-    if (cmd === "install") {
-      // Dynamic import (D-6, matching the `session`/`pool` verbs' own
-      // pattern above): install-resources.mjs is a CLI-only concern and must
-      // not become a static dependency of vice.mjs's library surface, which
-      // tools/recover.mjs and its test suite import purely for `call()` /
-      // `useInstance()` / `serverInfo()`.
-      const { resourcesStatus, installResources, installTargetDir } = await import("./install-resources.mjs");
-      const force = rest.includes("--force");
-      const root = repoRoot();
-      const targetDir = installTargetDir(root);
-
-      if (!force) {
-        // Bare `install` reports status and acts on nothing (D-5): any
-        // MISSING entry has already been deployed automatically by
-        // repo-root.mjs's module-level ensureResourcesInstalled() trigger by
-        // the time this CLI even parses argv (unless
-        // VICE_SKIP_RESOURCE_INSTALL=1 opted out) -- this verb's own job is
-        // purely to report, never to write, so a diverged file is
-        // discoverable on demand without ever risking it.
-        const status = resourcesStatus({ root });
-        const entries = Object.keys(status);
-        for (const entry of entries) {
-          const s = status[entry];
-          if (s === "diverged") {
-            console.log(`DIVERGED  ${entry}  -- deployed copy differs from the tracked source; 'install --force' is the only thing that will overwrite it`);
-          } else {
-            console.log(`${s.padEnd(9)} ${entry}`);
-          }
-        }
-        console.log(
-          `\n${entries.length} entr${entries.length === 1 ? "y" : "ies"} checked under ${targetDir}. ` +
-            "Nothing written -- bare 'install' never overwrites; 'install --force' is the only overwrite path."
-        );
-        return;
-      }
-
-      // --force: the deliberate, human-invoked overwrite path. Every entry
-      // is restored from resources/, whatever its current state -- a
-      // divergence is information, not a failure, everywhere else in this
-      // command; forcing is simply the one command that acts on it.
-      const result = installResources({ root, force: true, log: console.error });
-      console.log(`install --force: wrote ${result.installed.length} entr${result.installed.length === 1 ? "y" : "ies"} from resources/ into ${targetDir}:`);
-      for (const entry of result.installed) console.log(`  wrote ${entry}`);
-      if (result.failed.length) {
-        console.log(`  FAILED (see stderr): ${result.failed.join(", ")}`);
-      }
-      return;
-    }
-
-    // This block is the fallback documentation surface when the vice-session
-    // skill isn't loaded (D-3): it has to document every verb completely, not
-    // just the ones a quick reminder would cover.
-    let sessionLine;
-    try {
-      const { sessionStatus } = await import("./vice-session.mjs");
-      const s = sessionStatus();
-      sessionLine = s.present
-        ? `active session: ${s.session_id} on port ${s.port}${s.expired ? " (EXPIRED)" : ""}`
-        : `no active session (${s.reason}) -- default instance in use`;
-    } catch (e) {
-      sessionLine = `no active session (could not read session file: ${e.message})`;
-    }
-
-    console.log(`usage: node ${SELF} <command>
-
-  ping                            print server version, machine, execution state
-  tools [name|substring] [--json] list every tool, or show one tool's input schema
-  call <tool> [json-args]         invoke any vice_* tool and print its JSON result
-  session acquire [--ttl-min N]   lease an instance and record it in a session file
-  session release                 free the active session's lease and delete its file
-  session status                  read-only report on the active session (no MCP call)
-  pool status                     launched/alive/leased/supervised per instance, plus a diagnosis
-  install [--force]                report deployed host-script status; --force restores every entry from resources/
-
-active instance: port ${activeInstance().port} (${activeInstance().url})
-${sessionLine}
-
-env: VICE_MCP_URL          override the MCP endpoint (default ${DEFAULT_ENDPOINT})
-     VICE_MCP_TIMEOUT_MS   per-request abort timeout in ms (default ${DEFAULT_TIMEOUT_MS})
-     VICE_SESSION_FILE     session file location (default <repo>/.vice-supervisor/session.json)
-     VICE_SESSION_TTL_MS   default session TTL in ms (default 1800000 -- 30 minutes)`);
-    process.exit(cmd ? 1 : 0);
-  }
-
-  main().catch((e) => die(e.message));
-}
