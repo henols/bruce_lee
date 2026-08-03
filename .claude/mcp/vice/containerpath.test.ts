@@ -1,4 +1,4 @@
-// node:test coverage for containerpath.mjs -- the host->container inverse
+// node:test coverage for containerpath.ts -- the host->container inverse
 // beside hostpath.ts (D-7). Every test here is guard-removal-sensitive
 // (D-6): each one is written so it fails if the property it covers is
 // removed, not merely absent from a description.
@@ -16,17 +16,17 @@ import {
   containerPathCandidates,
   containerHost,
   containerizeRecord,
-} from "./containerpath.mjs";
+} from "./containerpath.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const MODULE_PATH = join(HERE, "containerpath.mjs");
-// Same derivation containerpath.mjs itself uses (env-first, else four
+const MODULE_PATH = join(HERE, "containerpath.ts");
+// Same derivation containerpath.ts itself uses (env-first, else four
 // levels up from this directory) -- not a second, possibly-diverging guess.
 const CONTAINER_WS = process.env.CONTAINER_WORKSPACE_PATH || resolve(HERE, "..", "..", "..", "..");
 
-function firstNonInternalIPv4() {
+function firstNonInternalIPv4(): string | null {
   for (const addrs of Object.values(networkInterfaces())) {
-    for (const a of addrs) {
+    for (const a of addrs ?? []) {
       if (a.family === "IPv4" && !a.internal) return a.address;
     }
   }
@@ -54,13 +54,13 @@ test("round-trip: containerPath(hostPath(p)) === p, for the workspace root, a .v
 
 // -------------------------------------------------------------------- D-3
 
-test("D-3: containerpath.mjs's own source contains no literal of the runtime-derived host root", () => {
+test("D-3: containerpath.ts's own source contains no literal of the runtime-derived host root", () => {
   const { roots } = hostRootCandidates();
   assert.ok(roots.length > 0, "hostRootCandidates() must return at least one root in this environment");
   const source = readFileSync(MODULE_PATH, "utf8");
   assert.ok(
     !source.includes(roots[0]),
-    `containerpath.mjs's source must not contain the runtime-derived host root (${roots[0]}) as a literal`
+    `containerpath.ts's source must not contain the runtime-derived host root (${roots[0]}) as a literal`
   );
 });
 

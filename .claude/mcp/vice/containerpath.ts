@@ -59,8 +59,17 @@ const CONTAINER_WS = process.env.CONTAINER_WORKSPACE_PATH || WORKSPACE_ROOT;
 // was actually observed with (D-4).
 const IPV4_LOOPBACK_RE = /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
 
-function isLoopbackHostname(hostname) {
+function isLoopbackHostname(hostname: string): boolean {
   return hostname === "localhost" || hostname === "[::1]" || IPV4_LOOPBACK_RE.test(hostname);
+}
+
+/** hostRootCandidates()'s own return shape: `roots` the cleaned, de-duplicated,
+ * longest-first list of candidate host root paths, `exact` true only when the
+ * sibling's own hostPathCandidates() came back with an exact (env-derived)
+ * match needing no adjudication. */
+export interface HostRootCandidatesResult {
+  roots: string[];
+  exact: boolean;
 }
 
 /**
@@ -68,7 +77,7 @@ function isLoopbackHostname(hostname) {
  * `hostPathCandidates()`, the sibling's own outbound derivation, never
  * duplicated here (this is the whole of D-3: the mapping is derived at
  * runtime off the sibling's own knowledge, and no absolute host path is ever
- * written down in this file, checked by containerpath.test.mjs's own
+ * written down in this file, checked by containerpath.test.ts's own
  * runtime-derived source assertion). Cleaned up for use as a match prefix: a
  * trailing separator stripped (hostPathCandidates() for the workspace root
  * itself returns a candidate with one, since its template joins an empty
@@ -76,11 +85,24 @@ function isLoopbackHostname(hostname) {
  * empty guess prefix can never shadow a longer, more specific one when
  * matching a host path below.
  */
-export function hostRootCandidates() {
+export function hostRootCandidates(): HostRootCandidatesResult {
   const { candidates, exact } = hostPathCandidates(CONTAINER_WS, { workspaceRoot: WORKSPACE_ROOT });
   const cleaned = [...new Set(candidates.map((c) => c.replace(/\/+$/, "")).filter((c) => c.length > 0))];
   cleaned.sort((a, b) => b.length - a.length);
   return { roots: cleaned, exact: Boolean(exact) };
+}
+
+/** containerPathCandidates()'s own return shape, mirroring hostpath.ts's
+ * HostPathCandidatesResult with `raw` in place of `abs`: there is nothing to
+ * resolve against this container's cwd, the input is already host-absolute
+ * or it is not translatable at all. `raw` is `unknown` rather than `string`
+ * because this module's whole job is judging host-side input that may not
+ * even be a path string -- see the non-absolute-input branch below. */
+export interface ContainerPathCandidatesResult {
+  raw: unknown;
+  candidates: string[];
+  exact?: boolean;
+  reason?: string;
 }
 
 /**
@@ -95,7 +117,7 @@ export function hostRootCandidates() {
  * from a non-path value without guessing, and guessing would be a worse
  * failure than leaving it untranslated.
  */
-export function containerPathCandidates(hostish) {
+export function containerPathCandidates(hostish: unknown): ContainerPathCandidatesResult {
   if (typeof hostish !== "string" || !hostish.startsWith("/")) {
     return {
       raw: hostish,
@@ -106,7 +128,7 @@ export function containerPathCandidates(hostish) {
     };
   }
   const { roots, exact } = hostRootCandidates();
-  const candidates = [];
+  const candidates: string[] = [];
   for (const root of roots) {
     if (hostish === root || hostish.startsWith(`${root}/`)) {
       const tail = hostish.slice(root.length);
@@ -126,10 +148,10 @@ export function containerPathCandidates(hostish) {
 
 /** The single best container path, or throw with the reason plus the env
  * hint -- exactly as the sibling's hostPath() does. */
-export function containerPath(hostish) {
+export function containerPath(hostish: unknown): string {
   const { candidates, reason, raw } = containerPathCandidates(hostish);
   if (!candidates.length) {
-    throw new Error(`${reason || `cannot determine a container path for ${raw}`}\n  Or ${SET_ENV_HINT}`);
+    throw new Error(`${reason || `cannot determine a container path for ${String(raw)}`}\n  Or ${SET_ENV_HINT}`);
   }
   return candidates[0];
 }
@@ -142,8 +164,8 @@ export function containerPath(hostish) {
  * hand back some other hostname), and a string that does not parse as a URL
  * at all is returned exactly as given.
  */
-export function containerHost(urlString, alias) {
-  let url;
+export function containerHost(urlString: string, alias: string): string {
+  let url: URL;
   try {
     url = new URL(urlString);
   } catch {
@@ -154,6 +176,41 @@ export function containerHost(urlString, alias) {
   }
   url.hostname = alias;
   return url.toString();
+}
+
+/** containerizeRecord()'s options -- the FIELD LIST is supplied by the
+ * caller deliberately (D-7), so `pathFields`/`urlFields` default to empty
+ * arrays. `alias` is required: every real caller (vice-proxy.mjs's
+ * containerizeGrant()) and every test in this suite always supplies one, so
+ * typing it as mandatory here costs nothing in practice (the same
+ * cost-free-tightening call Plan 03 made for install-resources.ts's
+ * resourcesStatus() -- see that plan's SUMMARY). */
+export interface ContainerizeRecordOptions {
+  pathFields?: string[];
+  urlFields?: string[];
+  alias: string;
+}
+
+/** One field actually rewritten by containerizeRecord(). */
+export interface ContainerizeRecordChange {
+  field: string;
+  from: unknown;
+  to: unknown;
+}
+
+/** One field left alone by containerizeRecord(), with the reason why. */
+export interface ContainerizeRecordUntranslated {
+  field: string;
+  value: unknown;
+  reason: string;
+}
+
+/** containerizeRecord()'s return shape: a NEW record (the input is never
+ * mutated), plus the changed and untranslated field lists. */
+export interface ContainerizeRecordResult {
+  record: Record<string, unknown>;
+  changes: ContainerizeRecordChange[];
+  untranslated: ContainerizeRecordUntranslated[];
 }
 
 /**
@@ -171,19 +228,22 @@ export function containerHost(urlString, alias) {
  * this module is what keeps this a generic host<->container primitive
  * rather than a broker-protocol module wearing a generic name.
  */
-export function containerizeRecord(record, { pathFields = [], urlFields = [], alias } = {}) {
-  const out = { ...(record || {}) };
-  const changes = [];
-  const untranslated = [];
+export function containerizeRecord(
+  record: Record<string, unknown> | undefined,
+  { pathFields = [], urlFields = [], alias }: ContainerizeRecordOptions
+): ContainerizeRecordResult {
+  const out: Record<string, unknown> = { ...(record || {}) };
+  const changes: ContainerizeRecordChange[] = [];
+  const untranslated: ContainerizeRecordUntranslated[] = [];
 
   for (const field of pathFields) {
     const value = record ? record[field] : undefined;
     if (typeof value !== "string") continue; // absent/non-string -- skip silently
-    let translated;
+    let translated: string;
     try {
       translated = containerPath(value);
     } catch (e) {
-      untranslated.push({ field, value, reason: e.message });
+      untranslated.push({ field, value, reason: (e as Error).message });
       continue;
     }
     out[field] = translated;
@@ -214,7 +274,7 @@ export function containerizeRecord(record, { pathFields = [], urlFields = [], al
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const argv = process.argv.slice(2);
   if (argv.includes("--help") || argv.includes("-h") || argv.length === 0) {
-    console.log(`usage: node containerpath.mjs <host-path...>
+    console.log(`usage: node containerpath.ts <host-path...>
 
 Print the container-side path(s) for host filesystem paths handed back by a
 host-side process (e.g. the on-demand VICE broker's grant records), best
@@ -226,11 +286,11 @@ env: CONTAINER_WORKSPACE_PATH   container-side workspace root (default ${CONTAIN
   try {
     for (const p of argv) {
       const { candidates, reason, raw } = containerPathCandidates(p);
-      if (!candidates.length) throw new Error(reason || `cannot determine a container path for ${raw}`);
+      if (!candidates.length) throw new Error(reason || `cannot determine a container path for ${String(raw)}`);
       for (const c of candidates) console.log(c);
     }
   } catch (e) {
-    console.error(`error: ${e.message}`);
+    console.error(`error: ${(e as Error).message}`);
     process.exit(1);
   }
 }
