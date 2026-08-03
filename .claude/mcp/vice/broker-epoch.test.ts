@@ -146,7 +146,13 @@ test("broker-epoch.mts's writeEpochRecord() round-trips a record built from the 
     const path = writeEpochRecord({ supervisorDir: dir, record });
     const written = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
 
-    assert.deepEqual(Object.keys(written).sort(), [...EPOCH_FIELDS].sort());
+    // Asserted against the FIXTURE FILE's own key set directly (plan 03,
+    // Task 1's own acceptance criterion) -- not the EPOCH_FIELDS literal
+    // above. A literal-list comparison could drift silently if EPOCH_FIELDS
+    // were ever edited to match a mistaken understanding of the contract;
+    // comparing against the fixture's own keys means the contract can only
+    // ever be judged against the frozen evidence itself.
+    assert.deepEqual(Object.keys(written).sort(), Object.keys(fixture).sort());
     for (const field of EPOCH_FIELDS) {
       assert.equal(
         typeof written[field],
