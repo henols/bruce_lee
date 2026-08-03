@@ -232,7 +232,18 @@ grades.
   turn-taking, which disagrees with item 8 above and `FEATURES.md:202`'s claim that **Yamo can be
   driven by a second human player** in one of the C64 release's two-player modes — both may be
   true across different ports; recorded as an open question in `.planning/RE-FINDINGS.md`, not
-  resolved here, and line 202 is left standing rather than overwritten
+  resolved here, and line 202 is left standing rather than overwritten. **RESOLVED 2026-08-03 by
+  the C64-Wiki entry below: both are right, about different modes. Line 202 is vindicated.**
+- Bruce Lee, [C64-Wiki](https://www.c64-wiki.com/wiki/Bruce_Lee) — archived locally as
+  `docs/Bruce_Lee_C64wiki_2026-08-03.html` and `…_2026-08-03.txt` (extraction); graded **MEDIUM**
+  — community-authored and unsourced, so corroboration rather than ground truth, but rated above
+  the retroarcadia blog because it is a structured reference making checkable claims, and because
+  its scoring table independently reproduces the Apple II manual's on all eight values. **This is
+  the only archived source whose platform claims are C64-specific.** It settles the two-player
+  question: the C64 has *three* modes — 1P, 2P-versus-computer (turn-taking), and
+  2P-versus-each-other where player two **is** Yamo and the roles swap when Bruce loses a life.
+  Also supplies `POKE 5472,99` (unlimited lives) — a direct pointer at the lives counter, `$1560`
+  — the second-loop difficulty escalation, and the SID attribution to John A. Fitzpatrick
 - Bruce Lee retrospective, [retroarcadia.blog (2024)](https://retroarcadia.blog/2024/06/19/my-life-with-bruce-lee-on-commodore-64/) —
   archived locally as `docs/Bruce_Lee_C64_retroarcadia_2024_retrospective.html`; graded **LOW**,
   the same reasoning the Spriters Resource entry below already gets: enthusiast recollection is a

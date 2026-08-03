@@ -1,0 +1,280 @@
+Bruce Lee — C64-Wiki article
+Source URL : https://www.c64-wiki.com/wiki/Bruce_Lee
+Retrieved  : 2026-08-03 (curl -L, desktop User-Agent)
+Archived   : docs/Bruce_Lee_C64wiki_2026-08-03.html (raw page)
+
+PLATFORM SCOPE: this is a Commodore 64-specific community wiki article. Unlike the Apple II
+Project 64 etext also archived here, its platform claims apply to the C64 release. It is
+community-authored and unsourced, so it is corroboration, not ground truth.
+
+Extraction note: produced by regex tag-stripping, because this container's python3 is
+python3-minimal and lacks the `html`/`html.parser` stdlib modules. Wiki chrome (nav, edit
+links, TOC numbering) was dropped; article prose and tables were kept. The points table is
+value-first, then label.
+
+--------------------------------------------------------------------------------
+
+Bruce Lee / Banzai
+Titleimage from the game
+Game No.
+45
+Voting
+8.14 points
+, 64 votes
+Developer
+Ron J. Fortier
+,
+Richard Mirsky
+,
+Kelly Day
+Company
+Datasoft
+Publisher
+Datasoft,
+Edicola
+,
+Load 'n' Run
+,
+Hi-Tech Expressions
+Musician
+John A. Fitzpatrick
+HVSC
+-File
+MUSICIANS/F/Fitzpatrick_John/Bruce_Lee.sid
+Release
+1984
+Platform
+Amstrad CPC
+,
+Apple II
+,
+Atari
+,
+C64
+,
+PC
+,
+ZX Spectrum
+Genre
+Arcade, Beat'em Up
+Gamemode
+Single player
+2
+players (in turns)
+2
+players (simultaneous)
+Operation
+Media
+Language
+Information
+aka
+Banzai
+Inofficial followers:
+Bruce Lee II
+(2015)
+Bruce Lee - Return of Fury
+(2019)
+Compilations:
+Bruce Lee - Duology
+Bruce Lee - Triology
+Contents
+1
+Description
+2
+Design
+3
+Hints
+3.1
+Game modes
+3.2
+Joystick operation
+3.3
+Button functions
+3.4
+Table of points
+4
+Solution
+4.1
+Map
+5
+Cheats
+6
+Voting
+7
+Reviews
+8
+Miscellaneous
+8.1
+Cover
+8.2
+Video
+9
+Highscore
+10
+Links
+10.1
+Videos
+Description
+Bruce Lee
+is searching for the evil sorcerer, to defeat him. Different traps and two enemies give Bruce a hard time.
+The black Ninja, who constantly attacks Bruce with a stick, can easily be knocked out with 2 kicks. The more dangerous enemy is Yamo, who -as Bruce- knows how to do kicks during a jump.
+You need 3 kicks to defeat Yamo. To get to other rooms, Bruce can climb onto nets, upwards, downwards and sidewards. When Bruce collects all lanterns, doors open and he can get into other rooms. Bruce has 5 lives, to get to the chamber of the sorcerer and to defeat him there.
+After passing through the game once, the difficulty increases. Yamo and the Ninja will respawn instantly when killed. Additionally, one of the rooms that does not have enemies becomes far more dangerous, with an elimination of "safe spots."
+Design
+The action game
+Bruce Lee
+is multicoloured 2D-graphics, single screens, which switch when crossing the screen borders.
+... an animation from the game ...
+... another animation from the game ...
+Hints
+Game modes
+1 player: You are Bruce and you fight against Yamo and the Ninja.
+2 players against computer: You are Bruce and you fight against Yamo and the Ninja. If you lose a life, player two is next.
+2 players against each other: one player is Bruce and the other is Yamo. If Bruce loses a life the roles are swapped.
+Joystick operation
+left = walk to the left
+right = walk to the right
+down = lie flat on the floor or climb downward
+up = jump or climb upward
+up + left = jump to the left
+up + right = jump to the right
+fire button while standing still = punch in the direction of sight
+/
+fire button while running = kick in the running direction
+Button functions
+SPACE
+= Pause
+Table of points
+50
+Landing on Ninja or on Yamo
+75
+Kick at Ninja or Yamo
+100
+Punch on Ninja or Yamo
+125
+Collecting lanterns
+200
+Victory over Ninja
+450
+Victory over Yamo
+2000
+Enter new room
+3000
+Victory over sorcerer
+Solution
+Map
+... overview map ...
+Cheats
+Load the
+original
+program and type
+POKE 5472,99
+. Then start with
+RUN
+and you have unlimited lives.
+The version by "Remember" contains next to different cheats (unlimited lives, enemies do not hit), also the manual.
+In the
+CSDb
+exists
+cracks
+with
+trainers
+.
+Also exists (in the
+CSDb
+)
+fan projects
+with enhanced game modes and options.
+Voting
+of the C64-Wiki users (10=the best vote):
+8.14 points
+at 64 votes (rank 80).
+You need to be logged in to cast a vote.
+C64Games
+8
+28th April 2011 - "Super"  17993 downs
+Lemon64
+8,7
+28th April 2011 - 352 votes
+Kultboy.com
+8,75
+28th April 2011 - 36 votes
+Gamebase64
+10
+"Classic!"
+Rombach
+7
+1986 - "Voting 3"
+ZZap64
+92%
+Edition 8/88
+Reviews
+Werner
+: "A classic which is great fun: 9 points from me."
+TheKills
+: "Fascinated me for 3 months! It belongs to every good collection."
+Goondoc
+: "For me it is incomprehensible that this game is so far at the back of the ranking list. In my opinion it belongs to the absolute top games on the C64. It still fascinates me today although playing through it is no problem any more after so many years."
+Shakermaker303
+: "Bruce Lee was the master of Kung Fu as is generally known. At that time I thought of a fighting game in International Karate-style and was disappointed at first, when a clumsy Ninja and a green bull apperared as dim enemies. But then I have learned to appreciate this adventurous game. A really great play, which is also quickly understandable for players without practice. I would not define it as too difficult. It was funny to so send the enemies with a fly kick into the mines where they then died due to the detonation. At first I thought the graphics were a bit strange, but I liked it more and more in the course of time. The sound is kept to a minimum but that is not so tragic. For this game I consider the full 10 points adequate."
+Blubarju
+: "Many people believe that this is a mere beat'em up game, when they hear of it for the first time. But far from it! Bruce Lee is in my opinion one of the best jump'n runs on the C64. The grade of difficulty is rather low, which for me personally came in handy, as most of the action games are too hard.
+The graphics is rather successful and the animations are sufficient. The sound is also absolutely alright, but there is only music in the main menue. The gameplay is brilliant and lets you forget some weaknesses in graphics and sound. I like playing this game every now and then. 9 points from me!"
+Descore
+: "No doubt this is one of the best C64 games. It's one of the reasons I keep coming back to the C64 every few years (aside from general nostalgia). The gameplay is fantastic, and the slightly odd graphics somehow manage to convey an immersive atmosphere. Definitely a 10, this game is one of the true classics."
+Schmitzo
+: "I freely admit that I hardly ever played a game to the end -
+except
+Bruce Lee! But not only because the difficulty grade was rather low, far from that. I died a thousand deaths often enough. Just banging the fat sumo's head was already motivating enough to play it again, even if only for 5 minutes. 10 points."
+Shmendric
+: "I did not know the game in the "old days", I only got to know it through the C-64 Wiki and then played it. A really nice gameplay in the type of Zorro and Goonies, all in all a really good game."
+Miscellaneous
+Cover
+"Cover"
+Video
+Video at Archive.org
+Highscore
+Topscore of Stormhawk
+Stormhawk - 999.125 (18.05.2015)
+Kiki77 - 754.850 (02.12.2014)
+Equinoxe - 251.775 (09.12.2012)
+mombasajoe - 230.900 (10.10.2012)
+Blubarju - 157.675 (26.04.2012)
+Camailleon - 116.350 (03.10.2011)
+Werner - 111.325 (09.10.2010)
+Robotron2084 - 106.375 (30.03.2009)
+Ivanpaduano - 57.825 - All (20.05.2019)
+Sledgie - 48.200 (19.01.2008)
+#2 Kiki77
+#3 Equinoxe
+&#x23;4 mombasajoe
+&#x23;5 Blubarju
+&#x23;6 Camailleon
+&#x23;7 Werner
+&#x23;8 Robotron2084
+&#x23;9 Ivanpaduano
+&#x23;10 Sledgie
+Links
+Wikipedia: Bruce_Lee_(video_game)
+C64Games.de - Game No. 27
+Lemon64 - Game No. 376
+Gamebase64.com - Game No. 1135
+Gamebase64.com - Game No. 9805
+Gamebase64.com - Game No. 19891
+Banzai
+C64.com - Game No. 90
+ready64 - Game No. 56
+Test Report No. 794
+on Kultboy.com
+ZZap64
+test report
+The SixtyFour Originals DataBase - Game No. 653
+CSDb
+Bruce Lee 2 - Enter the Dragon at GTW
+C64endings
+(archive.org)
+PC remake for download
+Videos
+Video at Archive.org
+Video at YouTube
+(played without savestates with live comment by Reinhard Klinksiek)

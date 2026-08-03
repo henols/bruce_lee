@@ -112,6 +112,34 @@ silent re-fetch or substitution is detectable.
   `.planning/research/FEATURES.md:221` already applies to the Spriters Resource rip: a sanity
   check against other claims, never ground truth.
 
+## `Bruce_Lee_C64wiki_2026-08-03.html` and `Bruce_Lee_C64wiki_2026-08-03.txt`
+
+- **What it is:** The C64-Wiki article on *Bruce Lee* — a community-authored, C64-specific
+  reference page. The `.txt` is a regex tag-stripped extraction of the same page (same
+  extraction constraint as the Lemon64 file: this container's `python3` is `python3-minimal`
+  and has no `html`/`html.parser`). Wiki chrome was dropped; article prose and tables kept.
+- **Edition / platform:** **Commodore 64** — and this is why it earns its place. It is the only
+  archived document here whose platform claims apply to *this project's* target release. Where
+  it and the Apple II etext disagree, this is the one that speaks to the C64.
+- **Origin URL:** `https://www.c64-wiki.com/wiki/Bruce_Lee`
+- **Retrieval date:** 2026-08-03, via `curl -L -A "Mozilla/5.0 (X11; Linux x86_64)"`.
+- **SHA-256:** `786694dad3ede001d2871f57c9455cb1efce6005bf4b9b54024e690e9f3a9e5d` (html),
+  `9a97e91448e61a399c166d8ad45e72827b8c8bfe4b86f8d22c1d8d331e6913ed` (txt).
+- **Size:** 64,931 bytes (html), 8,117 bytes (txt).
+- **Confidence grade:** **MEDIUM** — community-authored and unsourced, so it is corroboration,
+  not ground truth. It rates above the retroarcadia blog (LOW) because it is a structured
+  reference making checkable factual claims rather than recollection, and because its scoring
+  table independently reproduces the Apple II manual's to the point on all eight values.
+- **What it settles:** the C64 has **three** game modes, not two — 1P; 2P-versus-computer
+  (turn-taking); and 2P-versus-each-other where **player two is Yamo** and the roles swap when
+  Bruce loses a life. That reconciles the Apple II manual against
+  `.planning/research/FEATURES.md:202`: both descriptions were right about different modes.
+- **Caution — extraction hazard, recorded because it nearly landed a wrong table in this repo:**
+  the points table is rendered **value-first, then label**, and a first-pass text extraction that
+  filtered short lines silently dropped the two-digit values (`50`, `75`), shifting every label
+  against the wrong number. Read the table from the archived `.txt` (or the raw HTML), never from
+  an ad-hoc re-extraction.
+
 ---
 
 ## Summary table
@@ -123,6 +151,8 @@ silent re-fetch or substitution is detectable.
 | `Bruce_Lee_1984_manual_AppleII_Project64_etext_lemon64.html` | **Apple II**, not C64 | 2026-08-03 | `25b6930cbccd` | 32,277 | MEDIUM |
 | `Bruce_Lee_1984_manual_AppleII_Project64_etext.txt` | **Apple II**, not C64 (derived) | 2026-08-03 | `8138f3081954` | 5,034 | MEDIUM |
 | `Bruce_Lee_C64_retroarcadia_2024_retrospective.html` | Commodore 64, enthusiast blog | 2026-08-03 | `df77bf5249e4` | 232,611 | LOW |
+| `Bruce_Lee_C64wiki_2026-08-03.html` | **Commodore 64**, community wiki | 2026-08-03 | `786694dad3ed` | 64,931 | MEDIUM |
+| `Bruce_Lee_C64wiki_2026-08-03.txt` | **Commodore 64**, community wiki (derived) | 2026-08-03 | `9a97e91448e6` | 8,117 | MEDIUM |
 
 ## Open items
 
@@ -133,8 +163,10 @@ silent re-fetch or substitution is detectable.
   Once identified, this file should be renamed off its `edition-unknown` placeholder.
 - **Diffing the two manual scans** (Mastertronic budget vs. the c64online PDF) is blocked on the
   same OCR step, and is todo step 4.
-- **The Apple II etext's two-player-mode description (turn-taking) disagrees with
-  `.planning/research/FEATURES.md:202`'s claim that Yamo can be driven by a second human player.**
-  Recorded as an open question in `.planning/RE-FINDINGS.md`, not resolved here — both may be true
-  across different ports.
+- ~~**The Apple II etext's two-player-mode description (turn-taking) disagrees with
+  `.planning/research/FEATURES.md:202`'s claim that Yamo can be driven by a second human player.**~~
+  **RESOLVED 2026-08-03** by `Bruce_Lee_C64wiki_2026-08-03.txt`: the C64 has three modes, and the
+  two descriptions are two *different* modes of the same game, not a contradiction. `FEATURES.md:202`
+  stands; the Apple II manual was describing 2P-versus-computer. Still MEDIUM — a community wiki,
+  not the disassembly — so the mode set remains a live-execution check, just no longer a conflict.
 </content>

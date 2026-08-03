@@ -1643,3 +1643,105 @@ Fix before relying on any of it: `apt-get install -y python3 libpython3.13-stdli
 `python3-pip` / `python3-venv` as STACK.md already notes). Cheap check that would have caught it
 earlier, and is worth preferring to `--version` for any interpreter in any container:
 `python3 -c "import shutil, tempfile, ctypes"`.
+
+### 2026-08-03 — RESOLVED: the two-player disagreement was never a contradiction — the C64 has three game modes
+
+**Type:** confirmation
+**Evidence:** C64-Wiki, archived as `docs/Bruce_Lee_C64wiki_2026-08-03.txt`, § Hints → Game modes,
+verbatim: "1 player: You are Bruce and you fight against Yamo and the Ninja." / "2 players against
+computer: You are Bruce and you fight against Yamo and the Ninja. If you lose a life, player two is
+next." / "2 players against each other: one player is Bruce and the other is Yamo. If Bruce loses a
+life the roles are swapped."
+**Confidence:** MEDIUM — a community wiki, unsourced, not the disassembly.
+**Saves / costs:** this closes the open question logged earlier today. The Apple II manual's
+turn-taking description and `.planning/research/FEATURES.md:202`'s Yamo-controlling claim are
+**both correct, about different modes** — the Apple II manual documented 2P-versus-computer and
+simply did not describe the versus mode. `FEATURES.md:202` is vindicated and was right to be left
+standing. New detail neither prior source had: in versus mode **the roles swap when Bruce loses a
+life**, so the Bruce/Yamo assignment is state, not a fixed per-player binding — a mode-select and
+role-swap path the state machine must implement. Also relevant to
+`pin-canonical-character-names`: the Ninja is never player-controllable in any of the three modes,
+so "AI opponent" is unconditional for him and mode-dependent for Yamo, exactly as that todo
+hypothesised.
+
+### 2026-08-03 — `POKE 5472,99` for unlimited lives: a community cheat that hands over the lives-counter address
+
+**Type:** shortcut
+**Evidence:** C64-Wiki, archived as `docs/Bruce_Lee_C64wiki_2026-08-03.txt`, § Cheats, verbatim:
+"Load the original program and type POKE 5472,99. Then start with RUN and you have unlimited
+lives."
+**Confidence:** MEDIUM — community-published, not yet executed or confirmed against a live capture
+by this project.
+**Saves / costs:** 5472 decimal = **`$1560`**. A cheat that *writes a count* (99) rather than
+NOPing a decrement is almost certainly writing the lives-counter variable itself, which makes
+`$1560` a free, checkable hypothesis for the lives counter — and a lives counter is one of the
+highest-value anchors in a fresh disassembly, because everything that can kill the player writes
+to it. Cheapest confirmation: set a watch on `$1560` in a live run and take a hit. Note the cheat
+is specified against "the original program", so the address is only valid for a build with the
+original's memory layout — on a cracked release with a relocating loader it may not hold, which is
+itself worth knowing. Promote to HIGH only by re-logging with live evidence.
+
+### 2026-08-03 — the scoring table is cross-confirmed by two independent sources, all eight values
+
+**Type:** confirmation
+**Evidence:** two sources agreeing to the point, neither derived from the other — the Apple II
+Project 64 etext (`docs/Bruce_Lee_1984_manual_AppleII_Project64_etext.txt`) and the C64-Wiki
+article (`docs/Bruce_Lee_C64wiki_2026-08-03.txt`, § Table of points): landing on an opponent 50 ·
+kick 75 · chop/punch 100 · lantern 125 · KO ninja 200 · KO Yamo 450 · new room 2000 · wizard 3000.
+Wording differs ("Chopping"/"Punch on", "Knocking out"/"Victory over"); every value is identical.
+**Confidence:** MEDIUM, but a *stronger* MEDIUM than either source alone — a 1984 Apple II manual
+and a modern C64 community wiki agreeing on eight arbitrary integers is hard to explain by
+coincidence or by copying, and it means the scoring table did not change between those two ports.
+Still not HIGH: neither source is the code.
+**Saves / costs:** eight exact integers to grep a captured 64K image for. 2000 (`$07D0`) and 3000
+(`$0BB8`) are the distinctive ones; 50/75/100/125 are too common to search on alone. Finding them
+adjacent in memory locates the score table, and the score table is a short hop from the scoring
+routine.
+
+### 2026-08-03 — second-loop difficulty escalation: instant respawn plus one room losing its safe spots
+
+**Type:** confirmation
+**Evidence:** C64-Wiki, archived as `docs/Bruce_Lee_C64wiki_2026-08-03.txt`, § Description,
+verbatim: "After passing through the game once, the difficulty increases. Yamo and the Ninja will
+respawn instantly when killed. Additionally, one of the rooms that does not have enemies becomes
+far more dangerous, with an elimination of 'safe spots.'"
+**Confidence:** MEDIUM — community-authored; the specific room is not named.
+**Saves / costs:** flags a **loop counter** as a real piece of game state and a documentation
+subsystem in its own right — there is at least one difficulty variable that is read by the
+opponent-respawn logic *and* by per-room hazard setup, meaning the second loop is not simply the
+first replayed. Worth knowing before the AI and room-hazard systems are documented as if they were
+loop-invariant, and worth a checkpoint: any behavioural-equivalence replay that never completes a
+full loop will never exercise this path at all.
+
+### 2026-08-03 — C64-specific metadata: SID attribution, HVSC path, and the alternate title "Banzai"
+
+**Type:** shortcut
+**Evidence:** C64-Wiki infobox, archived as `docs/Bruce_Lee_C64wiki_2026-08-03.txt`: Musician
+**John A. Fitzpatrick**; HVSC file `MUSICIANS/F/Fitzpatrick_John/Bruce_Lee.sid`; developers Ron J.
+Fortier, Richard Mirsky, Kelly Day; company Datasoft; released 1984 across Amstrad CPC, Apple II,
+Atari, C64 and ZX Spectrum; **aka "Banzai"**.
+**Confidence:** MEDIUM — community-authored infobox.
+**Saves / costs:** the HVSC path is the useful part: a ripped, independently-preserved `.sid` of
+this game's music is a **reference artifact to diff the reconstructed music engine against**, which
+is otherwise an awkward thing to verify behaviourally. "Banzai" is a search term that will surface
+material the string "Bruce Lee" does not. The credit list also names all three of Fortier, Mirsky
+and Day against the C64 entry without splitting roles by platform, which neither confirms nor
+refutes the Apple II manual's Mirsky-programmed/Fortier-concept split logged earlier today.
+
+### 2026-08-03 — hazard: a naive HTML-to-text extraction silently corrupted a value/label table
+
+**Type:** hazard
+**Evidence:** live, this session. Flattening the C64-Wiki page with a regex tag-strip plus a
+`len(line) > 2` noise filter dropped the two-digit cells `50` and `75` from a value-first points
+table, leaving every remaining label paired with the *next* value — a plausible, complete-looking,
+entirely wrong scoring table (lantern 200, wizard-less, kick 100). It was caught only because the
+result was cross-checked against the Apple II manual's table, which disagreed.
+**Confidence:** HIGH — reproduced and then fixed by re-extracting with the cell structure intact.
+**Saves / costs:** the failure mode is the dangerous kind — no error, no gap, just shifted data
+that reads as authoritative. Two rules follow. **Never apply a minimum-length filter when the
+payload is numeric**: short lines are exactly the values. **Never read a table out of a flattened
+page**; extract cell-wise, or read it out of the archived file where the structure survives — this
+is why `docs/Bruce_Lee_C64wiki_2026-08-03.txt` carries a note that its table is value-first. The
+general lesson for this project: any table lifted from a web source should be cross-checked against
+a second source before it is written down, because a single-source table has no way to announce
+that it has been mangled.
