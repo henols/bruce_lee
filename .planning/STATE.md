@@ -31,7 +31,7 @@ See: .planning/PROJECT.md (updated 2026-07-31)
 
 Milestone: **v1.1 — Emulator Access Hardened** *(inserted 2026-08-02, ahead of the rest of v1.0)*
 Phase: 01.6.1 (container-side-conversion-to-typescript) — **VERIFIED + THREAT-SECURE, NOT SEALED**
-Next: 01.6.2 (the one-process host broker) — **discussed, split at plan time, being planned now**; CONTEXT.md, RESEARCH.md, PATTERNS.md and VALIDATION.md exist
+Next: 01.6.2 (the one-process host broker) — **PLANNED, ready to execute: 11 plans, 11 sequential waves.** `/gsd-execute-phase 01.6.2`. Plans 01 and 11 are non-autonomous (each carries a blocking `checkpoint:decision` — the control-plane wire format, and the four-file deletion). Then 01.6.2.1, which still needs planning.
 Execution order within v1.1 is **01.6 → 01.6.1 → 01.6.2 → 01.6.2.1 → 01.6.3 → 01.4 → 01.3**, not numeric order.
 
 **Phases 01.5 and 01.7 are ABSORBED into 01.6.2 (2026-08-03) and no longer run.** Their ROADMAP
@@ -147,13 +147,20 @@ outage) and D-04's epoch file.
 (`/gsd-extract-learnings 01.6.1` — the TypeScript closure-narrowing hazard, the negated-clause gate
 false positives, and the tracer-vs-daemon distinction are all worth harvesting).
 
-Status: Phase 01.6.1 verified and threat-secure, unsealed on one carried-forward host truth; 01.6.2 next to plan
+Status: **Phase 01.6.2 planned — READY TO EXECUTE (11 plans, 11 strictly-sequential waves).** Phase 01.6.1 verified and threat-secure, unsealed on one carried-forward host truth. Phase 01.6.2.1 is inserted and **not yet planned** — it needs its own `/gsd-plan-phase 01.6.2.1` run.
+
+> `gsd-tools query state.planned-phase` returned `updated: []` and changed nothing here, so this line
+> and the Last-activity line below were written by hand. Same family as the `phase insert` /
+> `roadmap analyze` parser defects already filed under `.planning/todos/pending/` — the read verbs
+> resolve this ROADMAP fine, the write verbs do not see its phases. `roadmap.annotate-dependencies`
+> was correctly a no-op (`updated: false`): the planner had already written the wave headers and the
+> per-plan list into § Phase 01.6.2.
 
 **Known-failing check, carried forward for whoever resumes 01-04:** the plan's own Task 3 automated verification fails today — `saeger`'s `death` milestone is recorded `reached: true` with `cycles_advanced: null` and an explicit `evidentiary_gap` (no screen-matrix SHA-256 captured, attempt 4). Attempt 6 must re-capture that signature, not merely reach the two remaining milestones. danish's five milestones all carry full mechanical proof and pass.
 
-Last activity: 2026-08-03 — Phase 01.6.1 UAT complete (3 passed, 1 skipped, 0 issues); `01.6.1-VERIFICATION.md` → `passed`; `01.6.1-SECURITY.md` created, 25 threats / 0 open; `01.6.1-COVERAGE.md` created to clear the api-coverage gate
+Last activity: 2026-08-03 — **Phase 01.6.2 planned.** `/gsd-plan-phase 01.6.2` split the phase at plan time (01.6.2.1 inserted, `0b7e332`), then authored **11 plans across 11 sequential waves** (`c7d838f`); `gsd-plan-checker` returned VERIFICATION PASSED, 0 issues, 72 threats at ASVS L1; the decision-coverage gate was cleared legitimately at **31/31** by making the 01.6.2.1 scope boundary machine-visible as descriptor-less prohibitions in plan 01 (`3337fe3`) rather than by override, plus a presentational D-05/D-10 bullet unwrap the decision parser requires (`d2366e5`). Earlier the same day: Phase 01.6.1 UAT complete (3 passed, 1 skipped, 0 issues); `01.6.1-VERIFICATION.md` → `passed`; `01.6.1-SECURITY.md` created, 25 threats / 0 open; `01.6.1-COVERAGE.md` created to clear the api-coverage gate
 
-Progress (v1.1): 17 of 18 authored plans done — 01.6 complete (4/4), 01.6.1 complete (8/8), 01.3 paused at 5/6 (01.3-06 outstanding). **No percentage given on purpose:** 01.6.2, 01.6.3, 01.4, 01.5 and 01.7 are not yet broken into plans, so the denominator is still not knowable and any bar here would overstate progress.
+Progress (v1.1): 17 of 29 authored plans done — 01.6 complete (4/4), 01.6.1 complete (8/8), 01.3 paused at 5/6 (01.3-06 outstanding), **01.6.2 authored 0/11**. **No percentage given on purpose:** 01.6.2.1, 01.6.3 and 01.4 are not yet broken into plans, so the denominator is still not knowable and any bar here would overstate progress. (01.5 and 01.7 are `ABSORBED` and contribute no plans.)
 Progress (v1.0, paused): [████░░░░░░] 40% — 8/20 plans
 Progress (overall): [██░░░░░░░░] 23% — 8/35 plans
 
