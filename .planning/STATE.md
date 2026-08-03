@@ -5,16 +5,16 @@ milestone_name: insertion note
 current_phase: 01.6.1
 current_phase_name: container-side-conversion-to-typescript
 status: verified_unsealed
-stopped_at: Phase 01.6.1 VERIFIED and THREAT-SECURE, but NOT sealed — the completion predicate's one remaining blocker is UAT test 3 (skipped), a Phase 01.6 host-side truth restated in 01.6.1 for bookkeeping. Phase 01.6 is unsealed on the SAME truth (12/14, 2 host-side backstops). Both clear as a side effect of 01.6.2, which replaces the bash daemon with a TypeScript broker that writes node_version from a live process. Next action is /gsd-plan-phase 01.6.2 (not yet planned — no phase dir). 01.3 still PAUSED at 5/6.
-last_updated: "2026-08-03T17:40:00.000Z"
+stopped_at: "Phase 01.6.2 context gathered — scope changed: Phase 01.7 merged in, Phase 01.5 folded in. ROADMAP amendments required BEFORE /gsd-plan-phase 01.6.2 (see CONTEXT.md § ROADMAP amendments required)."
+last_updated: "2026-08-03T19:54:06.628Z"
 last_activity: 2026-08-03
-last_activity_desc: Phase 01.6.1 UAT complete (3 passed, 1 skipped, 0 issues) + security verified (25 threats, 0 open)
+last_activity_desc: Phase 01.6.1 UAT complete (3 passed, 1 skipped, 0 issues); `01.6.1-VERIFICATION.md` → `passed`; `01.6.1-SECURITY.md` created, 25 threats / 0 open; `01.6.1-COVERAGE.md` created to clear the api-coverage gate
 progress:
-  total_phases: 9
-  completed_phases: 3
+  total_phases: 10
+  completed_phases: 4
   total_plans: 33
   completed_plans: 29
-  percent: 33
+  percent: 40
 ---
 
 # Project State
@@ -42,11 +42,13 @@ UAT test 3 is its one remaining blocker.
 
 **Both of 01.6.1's own backstop truths were closed LIVE, not abstained** — the circumstances that
 made them unclosable changed mid-session:
+
 - *Fresh-session tool surface.* The verifying session was itself spawned after the conversion landed,
   making it the NEW-session observer `01.6.1-07-BASELINE.md` §G requires. 66 tools, name-set `diff`
   against the served surface **empty**, `vice_disk_list` absent, all 66 carrying description +
   inputSchema, offline handshake reproducing the baseline exactly, and a live forwarded `vice_ping`
   returning invariant producer `brokerNeverStartedMessage` verbatim.
+
 - *Live behavioral equivalence.* The developer started the host broker mid-session, so all four named
   paths were driven against a real emulator (VICE 3.10 / C64SC): broker-lease, diagnose
   (42,920-cycle bracket, left paused per contract), checkpoint-bracket (`$EA31`, hits 0 → 228,
@@ -351,6 +353,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-08-02T13:33:33.361Z
-Stopped at: Phase 01.3 context gathered
-Resume file: .planning/phases/01.3-wedge-detection-and-recovery/01.3-CONTEXT.md
+Last session: 2026-08-03T19:54:06.571Z
+Stopped at: Phase 01.6.2 context gathered — scope changed: Phase 01.7 merged in, Phase 01.5 folded in. ROADMAP amendments required BEFORE /gsd-plan-phase 01.6.2 (see CONTEXT.md § ROADMAP amendments required).
+Resume file: .planning/phases/01.6.2-the-one-process-host-broker/01.6.2-CONTEXT.md
