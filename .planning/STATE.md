@@ -2,19 +2,19 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: insertion note
-current_phase: 01.6.1
-current_phase_name: container-side-conversion-to-typescript
-status: verified_unsealed
+current_phase: 01.6.2
+current_phase_name: the-one-process-host-broker
+status: executing
 stopped_at: "Phase 01.6.2 context gathered — scope changed: Phase 01.7 merged in, Phase 01.5 folded in. ROADMAP amendments required BEFORE /gsd-plan-phase 01.6.2 (see CONTEXT.md § ROADMAP amendments required)."
-last_updated: "2026-08-03T20:28:31.384Z"
+last_updated: "2026-08-03T21:54:27.190Z"
 last_activity: 2026-08-03
-last_activity_desc: Phase 01.6.1 UAT complete (3 passed, 1 skipped, 0 issues); `01.6.1-VERIFICATION.md` → `passed`; `01.6.1-SECURITY.md` created, 25 threats / 0 open; `01.6.1-COVERAGE.md` created to clear the api-coverage gate
+last_activity_desc: Phase 01.6.2 execution started
 progress:
-  total_phases: 10
+  total_phases: 11
   completed_phases: 4
-  total_plans: 33
+  total_plans: 44
   completed_plans: 29
-  percent: 40
+  percent: 36
 ---
 
 # Project State
@@ -25,12 +25,12 @@ See: .planning/PROJECT.md (updated 2026-07-31)
 
 **Core value:** An ACME source tree that rebuilds a Bruce Lee which plays identically to the original, where every gameplay system is explained well enough that someone could change it.
 **Current milestone:** v1.1 — Emulator Access Hardened (Phases 01.3–01.7, 0 requirements — tooling)
-**Current focus:** Phase 01.6.2 — the one-process host broker (next to plan; 01.6.1 is done bar a bookkeeping blocker)
+**Current focus:** Phase 01.6.2 — the-one-process-host-broker
 
 ## Current Position
 
 Milestone: **v1.1 — Emulator Access Hardened** *(inserted 2026-08-02, ahead of the rest of v1.0)*
-Phase: 01.6.1 (container-side-conversion-to-typescript) — **VERIFIED + THREAT-SECURE, NOT SEALED**
+Phase: 01.6.2 (the-one-process-host-broker) — EXECUTING
 Next: 01.6.2 (the one-process host broker) — **PLANNED, ready to execute: 11 plans, 11 sequential waves.** `/gsd-execute-phase 01.6.2`. Plans 01 and 11 are non-autonomous (each carries a blocking `checkpoint:decision` — the control-plane wire format, and the four-file deletion). Then 01.6.2.1, which still needs planning.
 Execution order within v1.1 is **01.6 → 01.6.1 → 01.6.2 → 01.6.2.1 → 01.6.3 → 01.4 → 01.3**, not numeric order.
 
@@ -147,7 +147,7 @@ outage) and D-04's epoch file.
 (`/gsd-extract-learnings 01.6.1` — the TypeScript closure-narrowing hazard, the negated-clause gate
 false positives, and the tracer-vs-daemon distinction are all worth harvesting).
 
-Status: **Phase 01.6.2 planned — READY TO EXECUTE (11 plans, 11 strictly-sequential waves).** Phase 01.6.1 verified and threat-secure, unsealed on one carried-forward host truth. Phase 01.6.2.1 is inserted and **not yet planned** — it needs its own `/gsd-plan-phase 01.6.2.1` run.
+Status: Executing Phase 01.6.2
 
 > `gsd-tools query state.planned-phase` returned `updated: []` and changed nothing here, so this line
 > and the Last-activity line below were written by hand. Same family as the `phase insert` /
@@ -158,7 +158,7 @@ Status: **Phase 01.6.2 planned — READY TO EXECUTE (11 plans, 11 strictly-seque
 
 **Known-failing check, carried forward for whoever resumes 01-04:** the plan's own Task 3 automated verification fails today — `saeger`'s `death` milestone is recorded `reached: true` with `cycles_advanced: null` and an explicit `evidentiary_gap` (no screen-matrix SHA-256 captured, attempt 4). Attempt 6 must re-capture that signature, not merely reach the two remaining milestones. danish's five milestones all carry full mechanical proof and pass.
 
-Last activity: 2026-08-03 — **Phase 01.6.2 planned.** `/gsd-plan-phase 01.6.2` split the phase at plan time (01.6.2.1 inserted, `0b7e332`), then authored **11 plans across 11 sequential waves** (`c7d838f`); `gsd-plan-checker` returned VERIFICATION PASSED, 0 issues, 72 threats at ASVS L1; the decision-coverage gate was cleared legitimately at **31/31** by making the 01.6.2.1 scope boundary machine-visible as descriptor-less prohibitions in plan 01 (`3337fe3`) rather than by override, plus a presentational D-05/D-10 bullet unwrap the decision parser requires (`d2366e5`). Earlier the same day: Phase 01.6.1 UAT complete (3 passed, 1 skipped, 0 issues); `01.6.1-VERIFICATION.md` → `passed`; `01.6.1-SECURITY.md` created, 25 threats / 0 open; `01.6.1-COVERAGE.md` created to clear the api-coverage gate
+Last activity: 2026-08-03 — Phase 01.6.2 execution started
 
 Progress (v1.1): 17 of 29 authored plans done — 01.6 complete (4/4), 01.6.1 complete (8/8), 01.3 paused at 5/6 (01.3-06 outstanding), **01.6.2 authored 0/11**. **No percentage given on purpose:** 01.6.2.1, 01.6.3 and 01.4 are not yet broken into plans, so the denominator is still not knowable and any bar here would overstate progress. (01.5 and 01.7 are `ABSORBED` and contribute no plans.)
 Progress (v1.0, paused): [████░░░░░░] 40% — 8/20 plans
