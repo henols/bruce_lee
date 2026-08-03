@@ -72,7 +72,7 @@ const IMPORT_REPO_ROOT_PATTERN =
 
 /** Wraps IMPORT_REPO_ROOT_PATTERN as a named predicate so both the real-file
  * assertion and the regression tests below read the same way. */
-function importsRepoRoot(text) {
+function importsRepoRoot(text: string): boolean {
   return IMPORT_REPO_ROOT_PATTERN.test(text);
 }
 
@@ -135,7 +135,7 @@ test("importsRepoRoot(): regression corpus -- catches every import shape, includ
  * rename mid-flight); picking one silently would check the stale copy
  * while the real file goes unpoliced, which is the specific failure this
  * task exists to prevent -- so this throws in that case too, never picks. */
-function resolveStemAgainst(moduleNames, stem) {
+function resolveStemAgainst(moduleNames: string[], stem: string): string {
   const matches = moduleNames.filter((name) => {
     const dot = name.lastIndexOf(".");
     return (dot === -1 ? name : name.slice(0, dot)) === stem;
@@ -155,7 +155,7 @@ function resolveStemAgainst(moduleNames, stem) {
  * itself polices (listModuleFiles()'s own enumeration) -- so a rename of
  * this test's own subject needs no edit here, ever. See
  * resolveStemAgainst() above for the resolution and throw behaviour. */
-function resolveModuleByStem(stem) {
+function resolveModuleByStem(stem: string): string {
   return resolveStemAgainst(listModuleFiles(), stem);
 }
 
@@ -216,7 +216,7 @@ test("Criterion 10: install-resources.mjs never imports from repo-root.mjs, in a
  * module tree's own flattened layout) -- test files excluded, since a test
  * importing its subject is not part of the PRODUCTION import graph this
  * check polices. */
-function listModuleFiles() {
+function listModuleFiles(): string[] {
   return readdirSync(HERE, { withFileTypes: true })
     .filter((dirent) => dirent.isFile())
     .map((dirent) => dirent.name)
@@ -242,8 +242,8 @@ function listModuleFiles() {
  * "module enumeration" sanity test failing in an unexpected shape --
  * anchoring to a real statement start (optional whitespace, then `import`/
  * `export`, never `//`) removes the phantom edge structurally. */
-function extractRelativeImportSpecifiers(text) {
-  const specifiers = new Set();
+function extractRelativeImportSpecifiers(text: string): Set<string> {
+  const specifiers = new Set<string>();
   for (const m of text.matchAll(/^[ \t]*(?:import|export)(?:\s+type)?\s+[^;]*?from\s+["'](\.[^"']+)["']/gm)) {
     specifiers.add(m[1]);
   }
@@ -257,14 +257,14 @@ function extractRelativeImportSpecifiers(text) {
  * restricted to edges landing on another file in `moduleNames` (a specifier
  * resolving outside this flat set, e.g. into resources/ or a test file, is
  * simply not an edge in this graph). */
-function buildImportGraph(moduleNames) {
+function buildImportGraph(moduleNames: string[]): Map<string, string[]> {
   const moduleSet = new Set(moduleNames);
-  const graph = new Map();
+  const graph = new Map<string, string[]>();
   for (const name of moduleNames) {
     const text = readFileSync(join(HERE, name), "utf8");
-    const edges = [];
+    const edges: string[] = [];
     for (const specifier of extractRelativeImportSpecifiers(text)) {
-      const basename = specifier.split("/").pop();
+      const basename = specifier.split("/").pop()!;
       if (moduleSet.has(basename) && basename !== name) edges.push(basename);
     }
     graph.set(name, edges);
@@ -280,12 +280,12 @@ function buildImportGraph(moduleNames) {
  * `startNode` is abandoned (not a cycle through startNode at this
  * traversal), matching this test's only concern: cycles that pass through
  * repo-root.mjs specifically. */
-function findCyclesThroughNode(graph, startNode) {
-  const cycles = [];
+function findCyclesThroughNode(graph: Map<string, string[]>, startNode: string): string[][] {
+  const cycles: string[][] = [];
   const stack = [startNode];
   const onStack = new Set([startNode]);
 
-  function dfs(node) {
+  function dfs(node: string): void {
     for (const next of graph.get(node) || []) {
       if (next === startNode) {
         cycles.push([...stack]);
@@ -306,9 +306,9 @@ function findCyclesThroughNode(graph, startNode) {
  * reported as the SET of modules participating in it, not as one specific
  * traversal order) and dedupes, so two different corners of a DFS finding
  * "the same" cycle collapse to one entry. */
-function canonicalCycles(cycles) {
-  const seen = new Set();
-  const out = [];
+function canonicalCycles(cycles: string[][]): string[][] {
+  const seen = new Set<string>();
+  const out: string[][] = [];
   for (const cycle of cycles) {
     const sorted = [...cycle].sort();
     const key = sorted.join(",");
@@ -332,7 +332,7 @@ function canonicalCycles(cycles) {
 // same test, not discovered by accident. See 01.6.1-RESEARCH.md §3.4 for
 // the retirement, and Part 3 below for the complementary call-site guard
 // that survives the cycle's removal.
-const ALLOWED_CYCLES_THROUGH_REPO_ROOT = [];
+const ALLOWED_CYCLES_THROUGH_REPO_ROOT: string[][] = [];
 
 test("cycle allowlist: module enumeration under .claude/mcp/vice/ returns a non-empty flat set", () => {
   const moduleNames = listModuleFiles();
@@ -395,8 +395,13 @@ test("cycle allowlist: exactly the recorded three-module cycle passes through re
  * characters open a comment (`//` or `/*`), a continuation line of an
  * already-open block comment, and the repo-root module's own
  * `function repoRoot(` declaration line -- a declaration, not a call. */
-function moduleScopeRepoRootCalls(text) {
-  const results = [];
+interface ModuleScopeCall {
+  line: string;
+  guarded: boolean;
+}
+
+function moduleScopeRepoRootCalls(text: string): ModuleScopeCall[] {
+  const results: ModuleScopeCall[] = [];
   let inBlockComment = false;
   for (const line of text.split("\n")) {
     if (inBlockComment) {
