@@ -120,8 +120,75 @@ test("importsRepoRoot(): regression corpus -- catches every import shape, includ
   );
 });
 
+/** Filters `moduleNames` to entries whose basename minus its extension
+ * equals `stem`, and requires exactly one match -- throwing a message
+ * naming the stem and what it found otherwise. Split from
+ * resolveModuleByStem() below (which supplies the real flat directory via
+ * listModuleFiles()) so the zero/one/two-match cases can be exercised
+ * directly against a synthetic corpus, the same directly-testable-pure-
+ * function pattern this file already uses for importsRepoRoot() and
+ * moduleScopeRepoRootCalls() above.
+ *
+ * Zero matches means the subject this file names by stem has renamed away
+ * from every enumerated file -- a loud, survivable failure. Two matches
+ * means both the old and new extension transiently coexist on disk (a
+ * rename mid-flight); picking one silently would check the stale copy
+ * while the real file goes unpoliced, which is the specific failure this
+ * task exists to prevent -- so this throws in that case too, never picks. */
+function resolveStemAgainst(moduleNames, stem) {
+  const matches = moduleNames.filter((name) => {
+    const dot = name.lastIndexOf(".");
+    return (dot === -1 ? name : name.slice(0, dot)) === stem;
+  });
+  if (matches.length !== 1) {
+    throw new Error(
+      `resolveModuleByStem(${JSON.stringify(stem)}): expected exactly one match, found ` +
+        `${matches.length}${matches.length > 0 ? `: ${JSON.stringify(matches)}` : ""} in ` +
+        `${JSON.stringify(moduleNames)}. Picking the stale copy while the real one goes unpoliced is ` +
+        "exactly the failure this resolver exists to prevent."
+    );
+  }
+  return matches[0];
+}
+
+/** Resolves a module file by STEM against the real flat directory this file
+ * itself polices (listModuleFiles()'s own enumeration) -- so a rename of
+ * this test's own subject needs no edit here, ever. See
+ * resolveStemAgainst() above for the resolution and throw behaviour. */
+function resolveModuleByStem(stem) {
+  return resolveStemAgainst(listModuleFiles(), stem);
+}
+
+test("resolveStemAgainst(): regression corpus -- exactly one match resolves by stem regardless of extension, zero matches throws naming the stem, two matches throws rather than silently picking one", () => {
+  assert.equal(
+    resolveStemAgainst(["install-resources.mjs", "hostpath.mjs"], "install-resources"),
+    "install-resources.mjs",
+    "exactly one match for the stem must resolve to that file, whatever its extension"
+  );
+  assert.equal(
+    resolveStemAgainst(["install-resources.ts", "hostpath.mjs"], "install-resources"),
+    "install-resources.ts",
+    "the resolver must be extension-agnostic -- a renamed subject resolves identically, which is the " +
+      "whole point: no future rename of this file's own subject requires an edit here"
+  );
+  assert.throws(
+    () => resolveStemAgainst(["hostpath.mjs", "containerpath.mjs"], "install-resources"),
+    /expected exactly one match, found 0/,
+    "zero matches must throw loudly, naming the stem and the count -- a skipped assertion here (the " +
+      "subject silently going unpoliced after a rename) is the failure this task exists to prevent"
+  );
+  assert.throws(
+    () => resolveStemAgainst(["install-resources.mjs", "install-resources.ts"], "install-resources"),
+    /expected exactly one match, found 2/,
+    "two matches -- both the old and new extension transiently coexisting on disk mid-rename -- must " +
+      "throw rather than silently picking one; picking the stale copy while the real file goes " +
+      "unpoliced is the specific failure named in this task's own <behavior>"
+  );
+});
+
 test("Criterion 10: install-resources.mjs never imports from repo-root.mjs, in any form", () => {
-  const src = readFileSync(join(HERE, "install-resources.mjs"), "utf8");
+  const subject = resolveModuleByStem("install-resources");
+  const src = readFileSync(join(HERE, subject), "utf8");
   assert.ok(
     !importsRepoRoot(src),
     "install-resources.mjs must not import from repo-root.mjs -- this reintroduces the module cycle " +
