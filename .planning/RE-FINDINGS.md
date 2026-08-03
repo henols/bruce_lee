@@ -1855,3 +1855,35 @@ no group/world bits set, both before and after `finaliseIncidentRecord()`'s re-r
 lesson: when a plan or pattern doc says a discipline "already exists" in a specific file, read
 that file's actual current bytes before trusting the claim -- a plan authored from a broader
 pattern survey can generalize a NEIGHBORING file's property onto the one actually being converted.
+
+### 2026-08-03 — a fresh worktree has no node_modules; `npm ci` against the already-committed package-lock.json is the fix, not a new install decision
+
+**Type:** hazard (toolchain), caught before it produced a false "the suite is red" reading
+**Evidence:** live, during Phase 01.6.1 Plan 05 execution, in a parallel-executor git worktree
+(`/workspaces/bruce_lee/.claude/worktrees/agent-a08c1590af9f9a608`). The baseline
+`node --test '.claude/mcp/vice/'*.test.*` run reported `253 pass, 1 fail`, with the one failure
+being `resources-sync.test.ts`'s own "resources/ is byte-identical to a fresh build" test throwing
+`spawnSync .../node_modules/.bin/tsc ENOENT`. `ls node_modules` in the worktree came back empty
+entirely (`ls: cannot access 'node_modules'`), while the main checkout at
+`/workspaces/bruce_lee/.claude/mcp/vice/node_modules` had it populated -- confirming the gap is a
+per-worktree artifact, not a real regression in the converted source. `.claude/mcp/vice/package.json`
+declares only `typescript@7.0.2` and `@types/node@24.13.3` as devDependencies (both already
+human-approved in Phase 01.6's own Package Legitimacy Audit), and a `package-lock.json` for
+exactly those versions is already committed and tracked -- so `npm ci` there materializes the
+already-locked, already-approved tree rather than making any new package-manager decision. Running
+it (`cd .claude/mcp/vice && npm ci`) immediately fixed both the typecheck (`npx tsc --version` had
+been silently falling through to `npx`'s own auto-install of an unrelated, deprecated `tsc@2.0.4`
+package from the registry -- a near-miss slopsquat-adjacent surprise in its own right, printing
+"This is not the tsc command you are looking for") and the one failing test; the full suite
+returned to 254/254 immediately after.
+**Confidence:** HIGH -- reproduced live, `ls`/`which` checked directly in both the worktree and the
+main checkout, and the before/after suite counts (253/254 -> 254/254) are direct command output.
+**Saves / costs:** costs nothing to check (`ls node_modules/.bin/tsc` before trusting a worktree's
+baseline suite run); costs a wrongly-attributed "pre-existing failure, not my problem" writeup, or
+worse, a genuine new-package install decision reached for out of confusion, if missed. The general
+lesson for any future parallel-worktree executor in this repo: a worktree does NOT inherit the main
+checkout's `node_modules` (git worktrees never share untracked directories), so the FIRST thing to
+check when a fresh worktree's baseline suite run shows an unexpected failure is whether
+`node_modules/.bin/<tool>` exists at all -- and if a `package-lock.json` is already committed,
+`npm ci` there is a mechanical materialization step, not a new dependency decision requiring a
+package-legitimacy checkpoint.
