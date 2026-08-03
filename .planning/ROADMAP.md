@@ -584,7 +584,7 @@ Plans:
 
 **Risks**: This is the bulk of the line count and the place a mechanical conversion drifts silently. `vice-proxy.mjs`'s ~2,100 lines of project-specific logic (broker leasing, epoch/liveness, recycle/diagnose, deny-list, path rewriting, incident capture) must come through untouched — 01.6.3 swaps its transport seam afterwards, and doing both at once would make a regression ambiguous.
 
-**Plans:** 1/8 plans executed
+**Plans:** 2/8 plans executed
 
 Plans:
 **Wave 1**
@@ -593,7 +593,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 01.6.1-02-PLAN.md — Criterion B, both halves (PTD-1): break the `repo-root`/`install-resources`/`hostpath` cycle structurally, empty the allowlist, add a module-scope `repoRoot` call-site guard, and **prove both guards fail against an injected regression**. No renames
+- [x] 01.6.1-02-PLAN.md — Criterion B, both halves (PTD-1): break the `repo-root`/`install-resources`/`hostpath` cycle structurally, empty the allowlist, add a module-scope `repoRoot` call-site guard, and **prove both guards fail against an injected regression**. No renames
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
