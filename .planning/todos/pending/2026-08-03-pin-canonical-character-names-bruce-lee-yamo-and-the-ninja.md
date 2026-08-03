@@ -62,6 +62,28 @@ cross-contaminating.
    provenance and a confidence grade alongside the name, as with every other claim in this
    project. If no in-game name is found, say so explicitly and keep "the Ninja" as the
    documented name, with the negative result written down so it is not re-investigated.
+
+   **2026-08-03:** The Apple II Project 64 etext manual (`docs/Bruce_Lee_1984_manual_AppleII_Project64_etext.txt`,
+   archived this session) gives the ninja no proper name — "the ninja" throughout, lowercase and
+   often plural, against "the Yamo" with a definite article and a capitalised name. See finding
+   `.planning/RE-FINDINGS.md` § "Manual and printed-documentation findings", entry "dead end /
+   negative result: this edition's manual gives the ninja no proper name (edition-scoped)".
+   **This narrows the item, it does not close it:** the negative result is scoped to this one
+   Apple II edition. The two Commodore 64 manual scans
+   (`docs/Bruce_Lee_1984_Mastertronic_budget.pdf`, `docs/Bruce_Lee_1984_manual_c64online_edition-unknown.pdf`)
+   remain unread image scans (OCR deferred — see
+   `.planning/todos/pending/2026-08-03-register-the-primary-source-documents-manuals-and-writeups.md`),
+   so step 1 is still open pending either those two printings or a live in-game string sweep.
+
+   **2026-08-03, second note:** the two-player-mode asymmetry this item already flags as
+   unconfirmed now has a documented data point, not a resolution — the same Apple II manual
+   describes a **turn-taking** two-player mode ("you and another person take turns being
+   Bruce"), which disagrees with `.planning/research/FEATURES.md:202`'s claim that the C64
+   release lets a second human player drive Yamo. See `.planning/RE-FINDINGS.md`'s "open
+   question, not a conclusion" entry naming both sources. Neither source is confirmed as the
+   definitive C64 truth; `FEATURES.md:202` was deliberately left standing, not overwritten.
+   Confirming whether the Ninja is ever player-controllable in either C64 two-player mode — this
+   item's actual open question — is unaffected and still requires live disassembly/execution.
 2. Write the result into a single glossary — a short `docs/glossary.md`, or a named section
    of whichever docs entry point exists when Phase 5 starts — covering all three actors, each
    with its canonical name, its visual description, and the `src/` label prefix that belongs

@@ -209,6 +209,35 @@ Concrete enumeration for documentation-phase planning, derived from the game's k
 
 ## Sources
 
+**Primary sources — archived locally under `docs/`, retrieved 2026-08-03.** These four are the
+list's first *primary* in-box source documents; everything below them is prior-art and community
+material. See `docs/SOURCES.md` for full retrieval provenance, SHA-256 hashes, and confidence
+grades.
+
+- Bruce Lee manual scan, Mastertronic budget re-release — archived locally as
+  `docs/Bruce_Lee_1984_Mastertronic_budget.pdf` (handed to the project directly, no URL);
+  image-only scan with no text layer, as yet unread — OCR (`poppler-utils`/`tesseract-ocr`)
+  deliberately deferred
+- Bruce Lee manual scan, [c64online.com](https://c64online.com/wp-content/uploads/2021/03/Bruce-Lee.pdf) —
+  archived locally as `docs/Bruce_Lee_1984_manual_c64online_edition-unknown.pdf`; edition
+  unidentified, as yet unread (same OCR blocker as above)
+- Bruce Lee manual, Project 64 etext, via [Lemon64](https://www.lemon64.com/doc/bruce-lee/112) —
+  archived locally as `docs/Bruce_Lee_1984_manual_AppleII_Project64_etext.txt` (plain text
+  transcription) and `docs/Bruce_Lee_1984_manual_AppleII_Project64_etext_lemon64.html` (source
+  page); **this is the Apple II manual, not the C64 one** — its REQUIREMENTS section names an
+  "Apple II(R) series computer" outright — so its game-design content (scoring table, damage
+  thresholds, named hazards, movement verbs) transfers across ports at MEDIUM confidence, but its
+  platform specifics (loading procedure, controls hardware) do not and must not be cited as C64
+  fact. Its own TWO-PLAYER GAME description ("you and another person take turns being Bruce") is
+  turn-taking, which disagrees with item 8 above and `FEATURES.md:202`'s claim that **Yamo can be
+  driven by a second human player** in one of the C64 release's two-player modes — both may be
+  true across different ports; recorded as an open question in `.planning/RE-FINDINGS.md`, not
+  resolved here, and line 202 is left standing rather than overwritten
+- Bruce Lee retrospective, [retroarcadia.blog (2024)](https://retroarcadia.blog/2024/06/19/my-life-with-bruce-lee-on-commodore-64/) —
+  archived locally as `docs/Bruce_Lee_C64_retroarcadia_2024_retrospective.html`; graded **LOW**,
+  the same reasoning the Spriters Resource entry below already gets: enthusiast recollection is a
+  sanity check, never ground truth
+
 - [mwenge/iridisalpha](https://github.com/mwenge/iridisalpha) — fetched directly
 - [mwenge/gridrunner](https://github.com/mwenge/gridrunner) and [Disassembling.md](https://github.com/mwenge/gridrunner/blob/master/Disassembling.md) — fetched directly
 - [Piddewitt/C64-Game-Source-Code](https://github.com/Piddewitt/C64-Game-Source-Code) — fetched directly

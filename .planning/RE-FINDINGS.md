@@ -1499,3 +1499,124 @@ serving a stale snapshot": `ps -eo pid,lstart,cmd | grep vice-proxy.mjs` cross-r
 `git log -1 --format=%cI -- .claude/mcp/vice/vice-proxy.mjs` — if any commit post-dates a live
 process's start time, every session bound to that process has been snapshotted from before that
 commit and will not see whatever it added, however long that session continues to run.
+
+## Manual and printed-documentation findings
+
+A new heading rather than a continuation of "Corrections to earlier entries" above: none of the
+following are corrections. All eight entries below are dated 2026-08-03 and were extracted from
+`docs/Bruce_Lee_1984_manual_AppleII_Project64_etext.txt` (archived and greppable — see
+`docs/SOURCES.md`) during archival of the four *Bruce Lee* source documents. Every claim here is
+design intent from one manual, one edition; none of it is HIGH confidence about the C64 release
+until live execution against the disassembly confirms it, per this file's own confidence scale.
+
+### 2026-08-03 — the Lemon64 `/doc/` page is a full plain-text transcription of the manual, not a scan
+
+**Type:** shortcut
+**Evidence:** live — fetched and archived this session as
+`docs/Bruce_Lee_1984_manual_AppleII_Project64_etext_lemon64.html`, with a plain-text extraction at
+`docs/Bruce_Lee_1984_manual_AppleII_Project64_etext.txt`. The page states its own provenance chain
+in its footer, preserved verbatim in the `.txt` file: Project 64
+(`https://project64.c64.org/Games/BRUCEL10.TXT`), converted to HTML by Lemon64, itself converted to
+etext by an anonymous transcriber from the Asimov Apple ][ site's `BRUCEL10.TXT` (April 1997,
+etext #200).
+**Confidence:** HIGH (the file is archived and greppable; the provenance chain is stated by the
+source itself, not inferred).
+**Saves / costs:** the manual's contents, today, without OCR and without installing
+`poppler-utils` — the two scanned PDFs (`docs/Bruce_Lee_1984_Mastertronic_budget.pdf`,
+`docs/Bruce_Lee_1984_manual_c64online_edition-unknown.pdf`) remain unread image scans, but this
+transcription already supplies the same class of content for one edition.
+
+### 2026-08-03 — the Lemon64/Project 64 transcription is the APPLE II manual, not the C64 one
+
+**Type:** hazard
+**Evidence:** live — `docs/Bruce_Lee_1984_manual_AppleII_Project64_etext.txt`'s own REQUIREMENTS
+section names an "Apple II(R) series computer" and an "Apple compatible disk drive" outright, and
+its GETTING STARTED section instructs the reader to "Insert the BRUCE LEE(TM) diskette"; the C64
+is never named anywhere in the document body.
+**Confidence:** HIGH for the identification itself (stated outright by the source, not inferred).
+**Saves / costs:** the cost this entry exists to prevent — citing this manual's platform specifics
+(loading procedure, controls hardware, memory) as C64 fact. Its game-design content (scoring,
+damage, hazards, moves) is shared across ports and usable at MEDIUM; its platform specifics are
+not transferable at any confidence.
+
+### 2026-08-03 — the Apple II manual's scoring table, all eight values
+
+**Type:** confirmation
+**Evidence:** manual scan (Apple II edition) — `docs/Bruce_Lee_1984_manual_AppleII_Project64_etext.txt`,
+§ POINTS: Lantern 125, Chopping ninja or Yamo 100, Kicking ninja or Yamo 75, Entering new room
+2000, Knocking out ninja 200, Knocking out Yamo 450, Destroying wizard 3000, Landing on ninja or
+Yamo 50.
+**Confidence:** MEDIUM — design intent from one edition's manual, directly checkable against the
+disassembly's own scoring routine later. That checkability is the point of logging it now.
+**Saves / costs:** a scoring table to check the disassembly against, rather than reverse-deriving
+point values from scratch by observing the HUD across many play sessions.
+
+### 2026-08-03 — damage thresholds and life count, from the Apple II manual
+
+**Type:** confirmation
+**Evidence:** manual scan (Apple II edition) — `docs/Bruce_Lee_1984_manual_AppleII_Project64_etext.txt`,
+verbatim: "the Yamo can survive only three blows and the ninja can survive only two." Also, in a
+one-player game: "You can take five falls before the game is over."
+**Confidence:** MEDIUM, same reasoning as the scoring table above.
+**Saves / costs:** a concrete numeric target (3 hits / 2 hits / 5 falls) for whatever counter
+variables the disassembly turns out to use for opponent health and player lives.
+
+### 2026-08-03 — named in-fiction hazards/objects, doubling as a string-sweep target list
+
+**Type:** shortcut
+**Evidence:** manual scan (Apple II edition) — `docs/Bruce_Lee_1984_manual_AppleII_Project64_etext.txt`:
+electrical charges in the gaps between ledges; "PAN lights streaming across the floor"; exploding
+"T'SUNG-LIN (bushes)"; the ninja's weapon is a "BOKKEN" stick; the wizard streams fire balls from
+his eyes and is destroyed by a button press.
+**Confidence:** MEDIUM for the names as design vocabulary (one edition's manual).
+**Saves / costs:** these names (BOKKEN, T'SUNG-LIN, PAN, YAMO) are a ready-made string-sweep target
+list for a captured 64K image — the sweep itself, not this entry, is what would promote any single
+name to HIGH by confirming it appears in the game's own data.
+
+### 2026-08-03 — dead end / negative result: this edition's manual gives the ninja no proper name (edition-scoped)
+
+**Type:** dead end
+**Evidence:** manual scan (Apple II edition) — `docs/Bruce_Lee_1984_manual_AppleII_Project64_etext.txt`
+says "the ninja" throughout, lowercase and frequently plural ("the ninja brandishing their BOKKEN
+sticks"), against "the Yamo" with a definite article and a capitalised proper name. No other name
+for the ninja appears anywhere in the document.
+**Confidence:** HIGH that this specific edition (Apple II, Project 64 etext) contains no proper
+name for the ninja. LOW as evidence about the Commodore 64 printings — the Mastertronic budget
+scan (`docs/Bruce_Lee_1984_Mastertronic_budget.pdf`) and the c64online PDF
+(`docs/Bruce_Lee_1984_manual_c64online_edition-unknown.pdf`) are both still unread image scans, and
+either could name him differently.
+**Saves / costs:** this is the negative result
+`.planning/todos/pending/2026-08-03-pin-canonical-character-names-bruce-lee-yamo-and-the-ninja.md`'s
+Solution step 1 asks for, but it is scoped to one edition — the item is narrowed, not closed. A
+future session should not re-run this exact check against this exact file; it should read the two
+unread C64 scans (once OCR is available) or sweep a live 64K capture for a proper name instead.
+
+### 2026-08-03 — open question, not a conclusion: the Apple II manual's two-player mode is turn-taking, disagreeing with `FEATURES.md:202`'s Yamo-controlling claim
+
+**Type:** dead end (an open question, not a conclusion)
+**Evidence:** manual scan (Apple II edition) — `docs/Bruce_Lee_1984_manual_AppleII_Project64_etext.txt`,
+verbatim: "In a TWO-PLAYER GAME, you and another person take turns being Bruce, competing against
+the Yamo and ninja. As soon as you (Bruce) take a fall, the other player takes a turn as Bruce."
+Compare `.planning/research/FEATURES.md:202` (unchanged by this task), which describes a C64
+two-player mode where player 2 drives Yamo against player 1's Bruce Lee.
+**Confidence:** LOW for either description being the definitive Commodore 64 truth — this manual
+is the Apple II edition and may simply describe a different port's mode set; the C64 release is
+widely described elsewhere as having a Yamo-controlling mode, but that claim is itself unconfirmed
+against this project's own disassembly.
+**Saves / costs:** both sources may be correct about their respective ports. Recorded here as an
+open question naming both sources, per this task's explicit instruction not to overwrite
+`FEATURES.md:202` — settling which mode(s) the C64 release actually implements is a live-execution
+question, not a re-reading-the-manual question.
+
+### 2026-08-03 — credits attribution nuance: this manual credits Mirsky (programming) and Fortier (concept) — for the Apple II edition
+
+**Type:** confirmation
+**Evidence:** manual scan (Apple II edition) — `docs/Bruce_Lee_1984_manual_AppleII_Project64_etext.txt`,
+§ CREDITS, verbatim: "Programming by Richard Mirsky / Concept by Ron J. Fortier and Kelly Day /
+Computer graphics by Kelly Day / Documentation by Ingrid Holcomb." (C) 1984 Datasoft Inc.,
+licensed by Ziv International.
+**Confidence:** MEDIUM — one edition's manual; Fortier is conventionally credited elsewhere as the
+Atari/C64 programmer, which this document does not confirm or deny for that platform.
+**Saves / costs:** `.claude/CLAUDE.md` frames this project as "Datasoft / Ron J. Fortier" and is
+**not** to be edited on the strength of this Apple II manual alone — noted here so the nuance is on
+record without triggering an unwarranted edit to the project's own framing document.

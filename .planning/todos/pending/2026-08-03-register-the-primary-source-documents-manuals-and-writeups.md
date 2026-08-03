@@ -94,3 +94,62 @@ these documents.
 Anything the manuals reveal about *how a system works* — rather than what it is called — goes
 in `.planning/RE-FINDINGS.md` at the moment it is found, graded `Evidence: manual scan,
 <edition>` / `Confidence: MEDIUM`, per the findings-log rules.
+
+## Progress (2026-08-03)
+
+Executed as quick task `260803-9hi`. Disposition of each step:
+
+- **Step 1 (commit the PDF first) — DONE.** `docs/Bruce_Lee_1984_Mastertronic_budget.pdf` is
+  tracked at its original 1,143,924 bytes, in its own commit, before any network call.
+- **Step 2 (make it readable, `poppler-utils`/`tesseract-ocr`) — DEFERRED, not done.** Reasoning
+  reproduced from the executing plan so it is not re-litigated:
+  1. An apt install is ephemeral container state, not an artifact — it does not survive a
+     devcontainer rebuild, so this task cannot "deliver" it; whoever does the OCR work installs
+     it then, in the session that uses it.
+  2. The urgency behind wanting OCR evaporated: the reason to want the manual readable *today*
+     was to get at its contents, and the Lemon64 transcription (see step 3) already supplies
+     them for one edition. What remains — the C64-vs-Apple-II diff — is genuine work with its
+     own scope, not a side effect of archiving.
+  3. This task's whole value was irreversibility-avoidance (step 1); it should not acquire an
+     unrelated network/privilege failure mode that could strand it before that commit landed.
+  Both `docs/Bruce_Lee_1984_Mastertronic_budget.pdf` and
+  `docs/Bruce_Lee_1984_manual_c64online_edition-unknown.pdf` remain unread image scans.
+- **Step 3 (fetch and archive the other three) — DONE**, with one deliberate naming deviation.
+  All three archived under `docs/`: the c64online PDF as
+  `docs/Bruce_Lee_1984_manual_c64online_edition-unknown.pdf` (see below — its edition, unlike
+  what this todo originally guessed, is **not** assumed to be the Datasoft original), the
+  Lemon64 page as `docs/Bruce_Lee_1984_manual_AppleII_Project64_etext_lemon64.html`, and the
+  retroarcadia post as `docs/Bruce_Lee_C64_retroarcadia_2024_retrospective.html`. A fourth
+  artifact was also produced: a plain-text extraction of the Lemon64 page at
+  `docs/Bruce_Lee_1984_manual_AppleII_Project64_etext.txt` — this turned out to be a full
+  transcription of the manual, not a scan, which is why it gets its own `.txt` file rather than
+  only an archived HTML page.
+
+  **Naming deviation from this todo's own step 3 suggestion:** the todo text above proposed
+  `Bruce_Lee_1984_Datasoft_original.pdf` for the c64online copy. The file was named
+  `..._edition-unknown.pdf` instead, because the PDF is an unread image scan (same OCR blocker
+  as step 2) and nobody has actually confirmed which printing it is — naming it "Datasoft
+  original" would assert an edition nobody has read. The `edition-unknown` filename is the
+  rename trigger for whenever OCR happens.
+- **Step 4 (diff the two manual printings) — OUTSTANDING, blocked only on step 2.** Cannot start
+  until both `docs/Bruce_Lee_1984_Mastertronic_budget.pdf` and
+  `docs/Bruce_Lee_1984_manual_c64online_edition-unknown.pdf` are readable.
+- **Step 5 (add all four to `FEATURES.md`'s Sources list) — DONE.** Added as the list's first
+  four *primary* entries (`.planning/research/FEATURES.md`, Sources section), each pointing at
+  its `docs/` filename as well as its origin URL. The retroarcadia retrospective is graded LOW,
+  per this todo's own instruction. `FEATURES.md:202`'s existing two-player claim was left
+  standing, not overwritten — see step 6.
+- **Step 6 (feed the result back into the character-names todo) — DONE.** See
+  `2026-08-03-pin-canonical-character-names-bruce-lee-yamo-and-the-ninja.md`'s own progress
+  note: the Lemon64 etext gives the ninja no proper name (a negative result, edition-scoped —
+  the two C64 printings remain unread), and the two-player-mode asymmetry that todo flags as
+  unconfirmed is now recorded as an open question in `.planning/RE-FINDINGS.md` naming both
+  sources, rather than resolved.
+
+**New outstanding item, not in the original Solution list:** the c64online PDF's edition is
+unidentified (see step 3's naming note above) — identifying it is a second thing step 2's OCR
+work unblocks, alongside step 4's diff. Full retrieval provenance (SHA-256, byte size, retrieval
+date, confidence grade) for every archived file lives in the new `docs/SOURCES.md`, which did
+not exist before this task.
+
+This todo remains in `pending/` — steps 2 and 4 are still open.
