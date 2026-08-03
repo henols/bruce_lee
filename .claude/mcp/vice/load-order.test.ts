@@ -349,7 +349,16 @@ test("cycle allowlist: module enumeration under .claude/mcp/vice/ returns a non-
 test("cycle allowlist: exactly the recorded three-module cycle passes through repo-root.mjs", () => {
   const moduleNames = listModuleFiles();
   const graph = buildImportGraph(moduleNames);
-  const cycles = canonicalCycles(findCyclesThroughNode(graph, "repo-root.mjs"));
+  // Resolved by STEM (Task 1's own resolveModuleByStem(), reused here), not the
+  // literal "repo-root.mjs" -- 01.6.1-08's end-of-phase re-proof found this
+  // hardcoded live: after 01.6.1-03 renamed repo-root.mjs to repo-root.ts, this
+  // DFS was started from a node that no longer exists in the graph, so
+  // findCyclesThroughNode() returned [] UNCONDITIONALLY and this assertion had
+  // been vacuously passing since Plan 03 landed -- it could not have failed no
+  // matter what cycle existed. Confirmed live via a scratch-copy regression
+  // (see 01.6.1-08-SUMMARY.md Task 2 step B): reintroducing the cycle in a
+  // scratch copy did NOT fail this test until this line was fixed.
+  const cycles = canonicalCycles(findCyclesThroughNode(graph, resolveModuleByStem("repo-root")));
 
   assert.deepEqual(
     cycles,
