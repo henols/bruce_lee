@@ -32,8 +32,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, execFile } from "node:child_process";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { promisify } from "node:util";
 import { createServer } from "node:http";
+import type { Server } from "node:http";
+import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, readdirSync, existsSync, statSync } from "node:fs";
@@ -50,6 +53,51 @@ const PROXY_PATH = join(HERE, "vice-proxy.ts");
 const BROKER_SCRIPT = join(HERE, "resources", "vice-broker.sh");
 const execFileP = promisify(execFile);
 
+// ---------------------------------------------------------------------------
+// Shared test-local types. vice-proxy.ts exports nothing (it is a stdio
+// entry point, spawned as a subprocess or driven over a bare HTTP stand-in --
+// never imported), so there are no production types to reuse at this
+// boundary; these are declared once here rather than left for every helper
+// below to re-infer its own shape. `params`/`result` on the JSON-RPC
+// envelope stay deliberately `any`: each MCP method's payload has its own
+// shape and this file's whole job is asserting on that variation, so a
+// precise union would either duplicate vice-proxy.ts's own (unexported)
+// internal interfaces or fight the test's own dynamic fixtures for no
+// behavioural benefit. See 01.6.1-08-SUMMARY.md's Decisions section.
+// ---------------------------------------------------------------------------
+interface JsonRpcMessage {
+  jsonrpc?: string;
+  id?: string | number | null;
+  method?: string;
+  params?: any;
+  result?: any;
+  error?: { code: number; message?: string };
+  /** Set only by startProxy()'s own stdout-line parser when a line fails to
+   * parse as JSON -- never sent or received over the wire, but a genuine
+   * shape this file's own "stdout carries only valid JSON-RPC" guard reads. */
+  __parseError?: string;
+  __raw?: string;
+}
+
+interface ProxyHandle {
+  child: ChildProcessWithoutNullStreams;
+  send(msg: JsonRpcMessage): void;
+  sendRaw(line: string): void;
+  messages: JsonRpcMessage[];
+  nextMessage(timeoutMs?: number): Promise<JsonRpcMessage>;
+  stderr: string[];
+}
+
+interface StandInServer {
+  server: Server;
+  requests: (JsonRpcMessage | null)[];
+}
+
+/** The shape every stand-in server's own `respond(name, args)` callback
+ * takes -- `args` stays `any` for the same reason `params`/`result` do
+ * above (each tool's own argument shape differs per fixture). */
+type RespondFn = (name: string, args: any) => any;
+
 /**
  * A minimal in-process stand-in for the host VICE MCP server. Answers
  * `initialize` (the proxy-as-client's own handshake to the host, distinct
@@ -57,8 +105,8 @@ const execFileP = promisify(execFile);
  * `tools/call` for `vice_ping`. Records every request it receives, verbatim
  * parsed, so tests can assert on exactly what reached the "host".
  */
-function startStandInServer() {
-  const requests = [];
+function startStandInServer(): StandInServer {
+  const requests: (JsonRpcMessage | null)[] = [];
   const server = createServer((req, res) => {
     let body = "";
     req.setEncoding("utf8");
@@ -66,7 +114,7 @@ function startStandInServer() {
       body += chunk;
     });
     req.on("end", () => {
-      let msg;
+      let msg: JsonRpcMessage | null;
       try {
         msg = JSON.parse(body);
       } catch {
@@ -104,9 +152,9 @@ function startStandInServer() {
   return { server, requests };
 }
 
-async function listen(server) {
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  return server.address().port;
+async function listen(server: Server): Promise<number> {
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+  return (server.address() as AddressInfo).port;
 }
 
 /**
@@ -116,12 +164,12 @@ async function listen(server) {
  * forwarded call is only possible if the containerization inverse actually
  * rewrote the grant's loopback url to that address.
  */
-async function listenOn(server, host) {
-  await new Promise((resolvePromise, reject) => {
+async function listenOn(server: Server, host: string): Promise<number> {
+  await new Promise<void>((resolvePromise, reject) => {
     server.once("error", reject);
-    server.listen(0, host, resolvePromise);
+    server.listen(0, host, () => resolvePromise());
   });
-  return server.address().port;
+  return (server.address() as AddressInfo).port;
 }
 
 /** The container's first non-internal (non-loopback) IPv4 address -- what
@@ -130,8 +178,9 @@ async function listenOn(server, host) {
  * this task's PLAN.md). Asserted present, never silently skipped -- a test
  * relying on this address must fail loudly if the environment lacks one,
  * not quietly pass having tested nothing. */
-function firstNonInternalIPv4() {
+function firstNonInternalIPv4(): string | null {
   for (const addrs of Object.values(networkInterfaces())) {
+    if (!addrs) continue;
     for (const a of addrs) {
       if (a.family === "IPv4" && !a.internal) return a.address;
     }
@@ -145,13 +194,13 @@ function firstNonInternalIPv4() {
  * exact framing vice-proxy.mjs itself implements (newline-delimited, one
  * JSON value per line).
  */
-function startProxy(env) {
+function startProxy(env: Record<string, string>): ProxyHandle {
   const child = spawn(process.execPath, [PROXY_PATH], {
     env: { ...process.env, ...env },
-    stdio: ["pipe", "pipe", "pipe"],
+    stdio: ["pipe", "pipe", "pipe"] as const,
   });
 
-  const messages = [];
+  const messages: JsonRpcMessage[] = [];
   let consumed = 0;
   let outBuf = "";
 
@@ -163,29 +212,29 @@ function startProxy(env) {
       const line = outBuf.slice(0, idx);
       outBuf = outBuf.slice(idx + 1);
       if (line.trim().length === 0) continue;
-      let parsed;
+      let parsed: JsonRpcMessage;
       try {
         parsed = JSON.parse(line);
       } catch (e) {
-        parsed = { __parseError: e.message, __raw: line };
+        parsed = { __parseError: (e as Error).message, __raw: line };
       }
       messages.push(parsed);
     }
   });
 
-  const stderrChunks = [];
+  const stderrChunks: string[] = [];
   child.stderr.setEncoding("utf8");
   child.stderr.on("data", (chunk) => stderrChunks.push(chunk));
 
-  function send(msg) {
+  function send(msg: JsonRpcMessage): void {
     child.stdin.write(JSON.stringify(msg) + "\n");
   }
 
-  function sendRaw(line) {
+  function sendRaw(line: string): void {
     child.stdin.write(line + "\n");
   }
 
-  async function nextMessage(timeoutMs = 8000) {
+  async function nextMessage(timeoutMs = 8000): Promise<JsonRpcMessage> {
     const start = Date.now();
     while (consumed >= messages.length) {
       if (Date.now() - start > timeoutMs) {
@@ -260,7 +309,7 @@ test("tracer: one real tool call round-trips end to end", async () => {
     // 01.1-03's pre-flight liveness probe (probeInstance()) does its own
     // vice_ping round trip BEFORE the real forwarded call -- see that
     // plan's SUMMARY for the coverage-affecting change this represents.
-    const toolCallsSeen = requests.filter((r) => r && r.method === "tools/call");
+    const toolCallsSeen = requests.filter((r) => r && r.method === "tools/call") as JsonRpcMessage[];
     assert.equal(
       toolCallsSeen.length,
       2,
@@ -383,7 +432,7 @@ test("tools/list reads the committed snapshot with no emulator", async () => {
     // vice_diagnose (plan 01.3-02) -- tools/list never omits any synthetic tool.
     assert.equal(tools.length, 5, "both fixture tools plus all three synthetic tools must come back");
 
-    const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+    const byName = Object.fromEntries(tools.map((t: any) => [t.name, t]));
     assert.ok(byName.vice_ping, "vice_ping must be present");
     assert.ok(byName.vice_memory_read, "vice_memory_read must be present");
     assert.deepEqual(
@@ -438,7 +487,7 @@ test("tools/list survives a missing or corrupt snapshot", async () => {
         // not sourced from the manifest at all, so a broken manifest can't
         // take any of them down with it.
         assert.deepEqual(
-          resp.result.tools.map((t) => t.name),
+          resp.result.tools.map((t: any) => t.name),
           ["vice_result_continue", "vice_recycle", "vice_diagnose"],
           `expected only the synthetic tools for ${manifestFile}`
         );
@@ -457,7 +506,7 @@ test("tools/list survives a missing or corrupt snapshot", async () => {
 
         proxy.send({ jsonrpc: "2.0", id: 4, method: "tools/list", params: {} });
         const secondList = await proxy.nextMessage();
-        assert.deepEqual(secondList.result.tools.map((t) => t.name), ["vice_result_continue", "vice_recycle", "vice_diagnose"]);
+        assert.deepEqual(secondList.result.tools.map((t: any) => t.name), ["vice_result_continue", "vice_recycle", "vice_diagnose"]);
 
         assert.equal(proxy.child.exitCode, null, "the proxy process must still be running");
         assert.equal(proxy.child.killed, false);
@@ -547,7 +596,7 @@ test("vice_disk_list is absent from tools/list", async () => {
 
     proxy.send({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} });
     const resp = await proxy.nextMessage();
-    const names = resp.result.tools.map((t) => t.name);
+    const names = resp.result.tools.map((t: any) => t.name);
     assert.ok(names.includes("vice_ping"), "the other fixture tool must still be present");
     assert.ok(!names.includes("vice_disk_list"), "vice_disk_list must be filtered out even from a manifest that names it");
   } finally {
@@ -675,14 +724,14 @@ test("a missing epoch file is not a restart", async () => {
  * the host unreachable -- short-circuiting every test in this section
  * before the oversized-result logic is ever exercised.
  */
-function startBigPayloadServer(payloadText, { targetTool = "vice_memory_read" } = {}) {
-  const requests = [];
+function startBigPayloadServer(payloadText: string, { targetTool = "vice_memory_read" }: { targetTool?: string } = {}): StandInServer {
+  const requests: (JsonRpcMessage | null)[] = [];
   const server = createServer((req, res) => {
     let body = "";
     req.setEncoding("utf8");
     req.on("data", (chunk) => (body += chunk));
     req.on("end", () => {
-      let msg;
+      let msg: JsonRpcMessage | null;
       try {
         msg = JSON.parse(body);
       } catch {
@@ -778,7 +827,7 @@ test("an oversized result is recoverable in full across continuations", async ()
     // liveness probe's own vice_ping round trip, plus the one real forwarded
     // vice_memory_read call (plan 01.1-03 task 2) -- every continuation
     // chunk after that is served entirely from the proxy's local store.
-    const toolCallsSeen = requests.filter((r) => r && r.method === "tools/call");
+    const toolCallsSeen = requests.filter((r) => r && r.method === "tools/call") as JsonRpcMessage[];
     assert.equal(
       toolCallsSeen.length,
       2,
@@ -875,7 +924,7 @@ test("tools/list declares the same cap it enforces", async () => {
         `${t.name} must declare the SAME cap the child was started with`
       );
     }
-    const continueTool = resp.result.tools.find((t) => t.name === "vice_result_continue");
+    const continueTool = resp.result.tools.find((t: any) => t.name === "vice_result_continue");
     assert.ok(continueTool, "vice_result_continue must appear in tools/list");
     assert.ok(
       Array.isArray(continueTool.inputSchema.required) && continueTool.inputSchema.required.includes("token"),
@@ -990,12 +1039,12 @@ test("never-throw: a notification draws no response", async () => {
 
 /** Reserve a free TCP port and release it immediately, so a proxy can be
  * pointed at "nothing listening here yet" before something real starts. */
-function reserveFreePort() {
-  return new Promise((resolvePort, reject) => {
+function reserveFreePort(): Promise<number> {
+  return new Promise<number>((resolvePort, reject) => {
     const probe = createServer();
     probe.on("error", reject);
     probe.listen(0, "127.0.0.1", () => {
-      const { port } = probe.address();
+      const { port } = probe.address() as AddressInfo;
       probe.close(() => resolvePort(port));
     });
   });
@@ -1006,7 +1055,7 @@ test("never-cache: host down then up succeeds without a restart", async () => {
   // Nothing is listening on `port` yet -- the very first call must observe
   // a refused connection, not a cached assumption from some earlier check.
   const proxy = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${port}/mcp` });
-  let server;
+  let server: Server | undefined;
 
   try {
     proxy.send({
@@ -1032,10 +1081,11 @@ test("never-cache: host down then up succeeds without a restart", async () => {
 
     // Now start the real stand-in server ON THE SAME PORT.
     const standIn = startStandInServer();
-    server = standIn.server;
-    await new Promise((resolveListen, rejectListen) => {
-      server.listen(port, "127.0.0.1", resolveListen);
-      server.once("error", rejectListen);
+    const standInServer = standIn.server;
+    server = standInServer;
+    await new Promise<void>((resolveListen, rejectListen) => {
+      standInServer.listen(port, "127.0.0.1", () => resolveListen());
+      standInServer.once("error", rejectListen);
     });
 
     // Call 2, same child process, no restart: must succeed now, proving the
@@ -1048,7 +1098,8 @@ test("never-cache: host down then up succeeds without a restart", async () => {
     assert.equal(proxy.child.exitCode, null);
   } finally {
     proxy.child.kill("SIGKILL");
-    if (server) await new Promise((resolve) => server.close(resolve));
+    const finalServer = server;
+    if (finalServer) await new Promise((resolve) => finalServer.close(resolve));
   }
 });
 
@@ -1172,14 +1223,14 @@ test("three states: each unreachable shape gets its own message and fix", async 
   }
 
   // ---- Alive, but the operation itself failed. ----
-  function startAliveButFailingServer() {
-    const requests = [];
+  function startAliveButFailingServer(): StandInServer {
+    const requests: (JsonRpcMessage | null)[] = [];
     const server = createServer((req, res) => {
       let body = "";
       req.setEncoding("utf8");
-      req.on("data", (c) => (body += c));
+      req.on("data", (c: string) => (body += c));
       req.on("end", () => {
-        let msg;
+        let msg: JsonRpcMessage | null;
         try {
           msg = JSON.parse(body);
         } catch {
@@ -1509,7 +1560,7 @@ test("path translation: relative paths resolve for declared path arguments only"
       "an absolute in-workspace path must translate exactly as it always did"
     );
     assert.ok(
-      !/resolved relative path/.test(auto.result.content.map((c) => c.text).join("\n")),
+      !/resolved relative path/.test(auto.result.content.map((c: any) => c.text).join("\n")),
       "a call that passed an absolute path must read exactly as it always did -- no note"
     );
   } finally {
@@ -1608,7 +1659,7 @@ test("path translation: a lexical .. cannot escape the workspace, and one that r
 // only creates a lease on the FIRST forwarded call.
 // -----------------------------------------------------------------------
 
-function runBrokerOnceDryRun(dir, basePort, extraEnv = {}) {
+function runBrokerOnceDryRun(dir: string, basePort: number, extraEnv: Record<string, string> = {}) {
   return execFileP("bash", [BROKER_SCRIPT, "--once", "--dry-run"], {
     env: {
       ...process.env,
@@ -1624,7 +1675,10 @@ function runBrokerOnceDryRun(dir, basePort, extraEnv = {}) {
 /** Poll `predicate` to a bounded deadline rather than sleeping a fixed
  * duration -- this task's own convention for waiting on a filesystem
  * effect. Returns predicate()'s truthy result, or null on timeout. */
-async function waitForCondition(predicate, { timeoutMs = 8000, pollMs = 20 } = {}) {
+async function waitForCondition<T>(
+  predicate: () => T,
+  { timeoutMs = 8000, pollMs = 20 }: { timeoutMs?: number; pollMs?: number } = {}
+): Promise<T | null> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const result = predicate();
@@ -1638,7 +1692,7 @@ function initThenListParams() {
   return { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } };
 }
 
-async function handshake(proxy) {
+async function handshake(proxy: ProxyHandle): Promise<void> {
   proxy.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: initThenListParams() });
   await proxy.nextMessage();
   proxy.send({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} });
@@ -1650,7 +1704,7 @@ async function handshake(proxy) {
  * once the call has resolved. Shared by every test below that needs a REAL
  * lease held before it can meaningfully assert that ending the session
  * releases it. */
-async function acquireLeaseViaBroker(proxy, dir, port, callId) {
+async function acquireLeaseViaBroker(proxy: ProxyHandle, dir: string, port: number, callId: number) {
   // Plan 01.2-03 task 1: ensureBrokerLease() now classifies broker liveness
   // BEFORE writing any request (C10) -- never_started returns immediately
   // with no request written at all. A broker.json with a fresh heartbeat
@@ -1723,7 +1777,7 @@ async function acquireLeaseViaBroker(proxy, dir, port, callId) {
  * request file, not necessarily this one specifically) -- callers pass the
  * SAME id waitForCondition() found.
  */
-function grantDirectly(dir, id, fields) {
+function grantDirectly(dir: string, id: string, fields: Record<string, unknown>) {
   const dirPath = join(dir, "grants");
   mkdirSync(dirPath, { recursive: true });
   const record = { version: 1, id, granted_at: new Date().toISOString(), ...fields };
@@ -1734,7 +1788,7 @@ function grantDirectly(dir, id, fields) {
 /** Waits for a request file to appear under dir/requests and returns its id
  * (the basename minus ".json"). Shared by every containerization test below
  * that plants its own grant directly rather than via acquireLeaseViaBroker(). */
-async function waitForRequestId(dir) {
+async function waitForRequestId(dir: string): Promise<string> {
   const reqDir = join(dir, "requests");
   const reqFiles = await waitForCondition(() => {
     if (!existsSync(reqDir)) return null;
@@ -1745,7 +1799,7 @@ async function waitForRequestId(dir) {
   return reqFiles[0].replace(/\.json$/, "");
 }
 
-function writeFreshBrokerJson(dir) {
+function writeFreshBrokerJson(dir: string): void {
   writeFileSync(
     join(dir, "broker.json"),
     JSON.stringify({ version: 1, pid: process.pid, heartbeat_at: new Date().toISOString() }),
@@ -1754,11 +1808,11 @@ function writeFreshBrokerJson(dir) {
 }
 
 const ENDING_TRIGGERS = [
-  { name: "SIGINT", end: (proxy) => proxy.child.kill("SIGINT") },
-  { name: "SIGTERM", end: (proxy) => proxy.child.kill("SIGTERM") },
-  { name: "SIGHUP", end: (proxy) => proxy.child.kill("SIGHUP") },
-  { name: "stdin end", end: (proxy) => proxy.child.stdin.end() },
-  { name: "stdin close", end: (proxy) => proxy.child.stdin.destroy() },
+  { name: "SIGINT", end: (proxy: ProxyHandle) => proxy.child.kill("SIGINT") },
+  { name: "SIGTERM", end: (proxy: ProxyHandle) => proxy.child.kill("SIGTERM") },
+  { name: "SIGHUP", end: (proxy: ProxyHandle) => proxy.child.kill("SIGHUP") },
+  { name: "stdin end", end: (proxy: ProxyHandle) => proxy.child.stdin.end() },
+  { name: "stdin close", end: (proxy: ProxyHandle) => proxy.child.stdin.destroy() },
 ];
 
 for (const trigger of ENDING_TRIGGERS) {
@@ -2464,7 +2518,7 @@ test("broker-granted unreachable: names the broker launcher, carries the probe r
   const probeServer = createServer();
   const refusedPort = await new Promise((resolvePort, reject) => {
     probeServer.once("error", reject);
-    probeServer.listen(0, "127.0.0.1", () => resolvePort(probeServer.address().port));
+    probeServer.listen(0, "127.0.0.1", () => resolvePort((probeServer.address() as AddressInfo).port));
   });
   await new Promise((resolveClose) => probeServer.close(resolveClose));
 
@@ -2534,7 +2588,7 @@ test("fixed-port unreachable is unchanged: no lease held still produces the 01.1
 // .gitignore lines 62-67) is made observable on stderr rather than silent.
 // -----------------------------------------------------------------------
 
-function countStderrLinesMatching(proxy, pattern) {
+function countStderrLinesMatching(proxy: ProxyHandle, pattern: RegExp): number {
   return proxy.stderr.join("").split("\n").filter((line) => pattern.test(line)).length;
 }
 
@@ -2546,7 +2600,7 @@ function countStderrLinesMatching(proxy, pattern) {
  * which would read the wrong .mcp.json when this test itself runs inside a
  * worktree. Mirrors vice-mcp-selector-docs.test.mjs's own findRepoRoot(),
  * anchored at THIS file's actual on-disk location instead. */
-function findWorktreeAwareRepoRoot(from) {
+function findWorktreeAwareRepoRoot(from: string): string {
   let dir = from;
   while (true) {
     if (existsSync(join(dir, ".git"))) return dir;
@@ -2648,7 +2702,11 @@ function tmpIncidentsDir() {
   return mkdtempSync(join(tmpdir(), "vice-proxy-incidents-"));
 }
 
-function writeEpochFileFixture(dir, port, { epoch = 1, pid = 40001, viceBin = "x64sc" } = {}) {
+function writeEpochFileFixture(
+  dir: string,
+  port: number,
+  { epoch = 1, pid = 40001, viceBin = "x64sc" }: { epoch?: number; pid?: number; viceBin?: string } = {}
+) {
   mkdirSync(join(dir, String(port)), { recursive: true });
   writeFileSync(
     join(dir, String(port), "epoch.json"),
@@ -2665,7 +2723,7 @@ function writeEpochFileFixture(dir, port, { epoch = 1, pid = 40001, viceBin = "x
   );
 }
 
-function writeRecycleAckFixture(dir, id, fields) {
+function writeRecycleAckFixture(dir: string, id: string, fields: Record<string, unknown>) {
   const adir = join(dir, "recycle-acks");
   mkdirSync(adir, { recursive: true });
   const record = {
@@ -2691,7 +2749,7 @@ function writeRecycleAckFixture(dir, id, fields) {
  * since the fake ack is written directly rather than via a real broker
  * pass) to appear under dir/requests -- the recycle request handleRecycle()
  * writes. Returns its id. */
-async function waitForRecycleRequestId(dir, excludeId, extraExcludeIds = []) {
+async function waitForRecycleRequestId(dir: string, excludeId: string, extraExcludeIds: string[] = []) {
   const reqDir = join(dir, "requests");
   const excluded = new Set([excludeId, ...extraExcludeIds].map((id) => `${id}.json`));
   const found = await waitForCondition(() => {
@@ -3036,7 +3094,15 @@ function tmpWorkspaceIncidentsDir() {
  * vice_display_screenshot, and vice_snapshot_save), with any field
  * override-able per test via `overrides`.
  */
-function healthyEvidenceRespond(overrides = {}) {
+interface HealthyEvidenceOverrides {
+  checkpoints?: any[];
+  registers?: any;
+  port01?: number;
+  ramVector?: number[];
+  stopwatchCycles?: number;
+}
+
+function healthyEvidenceRespond(overrides: HealthyEvidenceOverrides = {}): RespondFn {
   const {
     checkpoints = [],
     registers = { PC: 0x1000, A: 0, X: 0, Y: 0, SP: 0xf0 },
@@ -3044,7 +3110,7 @@ function healthyEvidenceRespond(overrides = {}) {
     ramVector = [0x31, 0xea],
     stopwatchCycles = 500000,
   } = overrides;
-  return (name, args) => {
+  return (name: string, args: any) => {
     if (name === "vice_ping") return { version: "3.10", machine: "C64SC", execution: "paused" };
     if (name === "vice_checkpoint_list") return { checkpoints };
     if (name === "vice_registers_get") return registers;
@@ -3127,7 +3193,7 @@ test("vice_recycle: a rejected screenshot capture records unavailable with the r
   const dir = mkdtempSync(join(tmpdir(), "vice-proxy-recycle-evidence-noscreenshot-"));
   const evidenceDir = tmpWorkspaceIncidentsDir();
   const healthy = healthyEvidenceRespond({});
-  const respond = (name, args) => (name === "vice_display_screenshot" ? undefined : healthy(name, args));
+  const respond = (name: string, args: any) => (name === "vice_display_screenshot" ? undefined : healthy(name, args));
   const { server } = startFlexibleStandInServer(respond);
   const port = await listen(server);
   const proxy = startProxy({
@@ -3150,6 +3216,7 @@ test("vice_recycle: a rejected screenshot capture records unavailable with the r
     assert.equal(resp.result.isError, false, "a rejected screenshot must not fail the recycle");
 
     const incidentFile = readdirSync(evidenceDir).find((f) => f.endsWith(".md"));
+    assert.ok(incidentFile, "an incident record must have been written");
     const content = readFileSync(join(evidenceDir, incidentFile), "utf8");
     assert.match(content, /screenshot: unavailable \(/);
     assert.match(content, /cycle bracket: \d+ cycles retired/, "the bracket entry must still be populated");
@@ -3167,7 +3234,7 @@ test("vice_recycle: a rejected checkpoint enumeration records unavailable for th
   const dir = mkdtempSync(join(tmpdir(), "vice-proxy-recycle-evidence-nocheckpoints-"));
   const incidentsDir = tmpIncidentsDir();
   const healthy = healthyEvidenceRespond({});
-  const respond = (name, args) => (name === "vice_checkpoint_list" ? undefined : healthy(name, args));
+  const respond = (name: string, args: any) => (name === "vice_checkpoint_list" ? undefined : healthy(name, args));
   const { server } = startFlexibleStandInServer(respond);
   const port = await listen(server);
   const proxy = startProxy({
@@ -3190,6 +3257,7 @@ test("vice_recycle: a rejected checkpoint enumeration records unavailable for th
     assert.equal(resp.result.isError, false);
 
     const incidentFile = readdirSync(incidentsDir).find((f) => f.endsWith(".md"));
+    assert.ok(incidentFile, "an incident record must have been written");
     const content = readFileSync(join(incidentsDir, incidentFile), "utf8");
     assert.match(content, /armed checkpoints: unavailable \(/);
     assert.match(content, /cycle bracket: \d+ cycles retired/);
@@ -3209,7 +3277,7 @@ test("vice_recycle: a stand-in that rejects every read produces a fully-populate
   // generic path's own preflight probe) -- every evidence-specific read is
   // left unhandled, which the stand-in answers with an immediate JSON-RPC
   // error (never a hang).
-  const respond = (name) => (name === "vice_ping" ? { version: "3.10", machine: "C64SC", execution: "paused" } : undefined);
+  const respond = (name: string) => (name === "vice_ping" ? { version: "3.10", machine: "C64SC", execution: "paused" } : undefined);
   const { server } = startFlexibleStandInServer(respond);
   const port = await listen(server);
   const proxy = startProxy({
@@ -3232,6 +3300,7 @@ test("vice_recycle: a stand-in that rejects every read produces a fully-populate
     assert.equal(resp.result.isError, false, "the recycle must still complete even when every evidence read is rejected");
 
     const incidentFile = readdirSync(incidentsDir).find((f) => f.endsWith(".md"));
+    assert.ok(incidentFile, "an incident record must have been written");
     const content = readFileSync(join(incidentsDir, incidentFile), "utf8");
     assert.match(content, /cycle bracket: unavailable \(/);
     assert.match(content, /program counter \/ register snapshot: unavailable \(/);
@@ -3258,7 +3327,7 @@ test("vice_recycle: a rejected snapshot attempt records unavailable with the rea
   const dir = mkdtempSync(join(tmpdir(), "vice-proxy-recycle-snapshot-rejected-"));
   const incidentsDir = tmpIncidentsDir();
   const healthy = healthyEvidenceRespond({});
-  const respond = (name, args) => (name === "vice_snapshot_save" ? undefined : healthy(name, args));
+  const respond = (name: string, args: any) => (name === "vice_snapshot_save" ? undefined : healthy(name, args));
   const { server } = startFlexibleStandInServer(respond);
   const port = await listen(server);
   const proxy = startProxy({
@@ -3282,6 +3351,7 @@ test("vice_recycle: a rejected snapshot attempt records unavailable with the rea
     assert.match(resp.result.content[0].text, /Snapshot: unavailable \(/);
 
     const incidentFile = readdirSync(incidentsDir).find((f) => f.endsWith(".md"));
+    assert.ok(incidentFile, "an incident record must have been written");
     const content = readFileSync(join(incidentsDir, incidentFile), "utf8");
     assert.match(content, /pre-kill snapshot attempt: unavailable \(/);
   } finally {
@@ -3296,7 +3366,7 @@ test("vice_recycle: an unanswered snapshot call does not prevent the recycle fro
   const dir = mkdtempSync(join(tmpdir(), "vice-proxy-recycle-snapshot-hang-"));
   const incidentsDir = tmpIncidentsDir();
   const healthy = healthyEvidenceRespond({});
-  const respond = (name, args) => (name === "vice_snapshot_save" ? HANG : healthy(name, args));
+  const respond = (name: string, args: any) => (name === "vice_snapshot_save" ? HANG : healthy(name, args));
   const { server } = startFlexibleStandInServer(respond);
   const port = await listen(server);
   const proxy = startProxy({
@@ -3325,6 +3395,7 @@ test("vice_recycle: an unanswered snapshot call does not prevent the recycle fro
     assert.match(resp.result.content[0].text, /Snapshot: unavailable/i);
 
     const incidentFile = readdirSync(incidentsDir).find((f) => f.endsWith(".md"));
+    assert.ok(incidentFile, "an incident record must have been written");
     const content = readFileSync(join(incidentsDir, incidentFile), "utf8");
     assert.match(content, /pre-kill snapshot attempt: unavailable \(/);
   } finally {
@@ -3395,6 +3466,7 @@ test("vice_recycle: two recycles at the same port and epoch produce two distinct
     );
 
     const secondFile = filesAfterSecond.find((f) => join(incidentsDir, f) !== firstPath);
+    assert.ok(secondFile, "a second, distinct incident file must exist");
     const secondContent = readFileSync(join(incidentsDir, secondFile), "utf8");
     assert.match(secondContent, /second recycle/);
   } finally {
@@ -3482,7 +3554,7 @@ test("structural: neither synthetic tool name appears in tools-manifest.json, an
     await handshake(proxy);
     proxy.send({ jsonrpc: "2.0", id: 3, method: "tools/list", params: {} });
     const resp = await proxy.nextMessage();
-    const names = resp.result.tools.map((t) => t.name);
+    const names = resp.result.tools.map((t: any) => t.name);
     assert.ok(names.includes("vice_recycle"), "vice_recycle must be present in a live tools/list response");
     assert.ok(names.includes("vice_result_continue"), "vice_result_continue must be present in a live tools/list response");
   } finally {
@@ -3499,7 +3571,7 @@ test("vice_disk_list is still absent from tools/list and still refused at tools/
     await handshake(proxy);
     proxy.send({ jsonrpc: "2.0", id: 3, method: "tools/list", params: {} });
     const listResp = await proxy.nextMessage();
-    const names = listResp.result.tools.map((t) => t.name);
+    const names = listResp.result.tools.map((t: any) => t.name);
     assert.ok(!names.includes("vice_disk_list"), "vice_disk_list must remain absent");
     assert.ok(names.includes("vice_recycle"));
     assert.ok(names.includes("vice_result_continue"));
@@ -3525,7 +3597,7 @@ test("vice_disk_list is still absent from tools/list and still refused at tools/
 
 /** Encode a plain byte array as the compact "hex" vice_memory_read shape
  * resolveLiveIrqHandler() requests. */
-function memHex(bytes) {
+function memHex(bytes: number[]) {
   return { hex: bytes.map((b) => b.toString(16).padStart(2, "0")).join("") };
 }
 
@@ -3539,14 +3611,14 @@ function memHex(bytes) {
  * calls) is just a closure variable the test itself owns and mutates between
  * `proxy.send()` calls -- this stand-in imposes no shape of its own on that.
  */
-function startFlexibleStandInServer(respond) {
-  const requests = [];
+function startFlexibleStandInServer(respond: RespondFn): StandInServer {
+  const requests: (JsonRpcMessage | null)[] = [];
   const server = createServer((req, res) => {
     let body = "";
     req.setEncoding("utf8");
     req.on("data", (chunk) => (body += chunk));
     req.on("end", () => {
-      let msg;
+      let msg: JsonRpcMessage | null;
       try {
         msg = JSON.parse(body);
       } catch {
@@ -3595,17 +3667,17 @@ function startFlexibleStandInServer(respond) {
   return { server, requests };
 }
 
-function sendDiagnose(proxy, id = 3) {
+function sendDiagnose(proxy: ProxyHandle, id = 3): Promise<JsonRpcMessage> {
   proxy.send({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "vice_diagnose", arguments: {} } });
   return proxy.nextMessage();
 }
 
-function forwardedCallsNamed(requests, toolName) {
-  return requests.filter((r) => r && r.method === "tools/call" && r.params && r.params.name === toolName);
+function forwardedCallsNamed(requests: (JsonRpcMessage | null)[], toolName: string): JsonRpcMessage[] {
+  return requests.filter((r) => r && r.method === "tools/call" && r.params && r.params.name === toolName) as JsonRpcMessage[];
 }
 
 test("diagnose: a stopping checkpoint at the current PC is a checkpoint trap, and no bracket is run", async () => {
-  const respond = (name, args) => {
+  const respond = (name: string, args: any) => {
     if (name === "vice_checkpoint_list") {
       return { checkpoints: [{ checkpoint_num: 1, start: "$1103", stop: true, exec: true, enabled: true, hit_count: 3 }] };
     }
@@ -3644,7 +3716,7 @@ test("diagnose: a stopping checkpoint at the current PC is a checkpoint trap, an
 });
 
 test("diagnose: a stopping checkpoint at the resolved live IRQ handler is a checkpoint trap", async () => {
-  const respond = (name, args) => {
+  const respond = (name: string, args: any) => {
     if (name === "vice_checkpoint_list") {
       return { checkpoints: [{ checkpoint_num: 7, start: "$EA31", stop: true, exec: true, enabled: true, hit_count: 0 }] };
     }
@@ -3677,7 +3749,7 @@ test("diagnose: a stopping checkpoint at the resolved live IRQ handler is a chec
 });
 
 test("diagnose: the trap report names the vector pair, the $01 value, and that remediation is not guaranteed", async () => {
-  const respond = (name, args) => {
+  const respond = (name: string, args: any) => {
     if (name === "vice_checkpoint_list") {
       return { checkpoints: [{ checkpoint_num: 2, start: "$1574", stop: true, exec: true, enabled: true, hit_count: 5 }] };
     }
@@ -3712,8 +3784,8 @@ test("diagnose: the trap report names the vector pair, the $01 value, and that r
 });
 
 test("diagnose: does not fire on disabled, non-stopping, or address-mismatched checkpoints", async () => {
-  const scenario = { checkpoints: [] };
-  const respond = (name, args) => {
+  const scenario: { checkpoints: any[] } = { checkpoints: [] };
+  const respond = (name: string, args: any) => {
     if (name === "vice_checkpoint_list") return { checkpoints: scenario.checkpoints };
     if (name === "vice_registers_get") return { PC: 0x4000 };
     if (name === "vice_memory_read") {
@@ -3759,7 +3831,7 @@ test("diagnose: a restarted epoch is reported with both epoch values, and no che
   writeFileSync(epochFile, JSON.stringify({ epoch: 1, pid: 111, spawned_at: "2026-08-02T00:00:00.000Z" }), "utf8");
 
   let checkpointListCalls = 0;
-  const respond = (name) => {
+  const respond = (name: string) => {
     if (name === "vice_ping") return { version: "3.10", machine: "C64SC", execution: "paused" };
     if (name === "vice_checkpoint_list") {
       checkpointListCalls += 1;
@@ -3794,7 +3866,7 @@ test("diagnose: a restarted epoch is reported with both epoch values, and no che
 
 test("diagnose: the live IRQ handler resolver is called fresh on every diagnose call, never cached", async () => {
   const scenario = { port01: 0x37 }; // banked in, target $EA31
-  const respond = (name, args) => {
+  const respond = (name: string, args: any) => {
     if (name === "vice_checkpoint_list") {
       return { checkpoints: [{ checkpoint_num: 1, start: "$4000", stop: true, exec: true, enabled: true, hit_count: 3 }] };
     }
@@ -3834,7 +3906,7 @@ test("vice_diagnose appears in tools/list alongside the other synthetic tools", 
     await handshake(proxy);
     proxy.send({ jsonrpc: "2.0", id: 3, method: "tools/list", params: {} });
     const resp = await proxy.nextMessage();
-    const names = resp.result.tools.map((t) => t.name);
+    const names = resp.result.tools.map((t: any) => t.name);
     assert.ok(names.includes("vice_diagnose"), "vice_diagnose must be present in a live tools/list response");
     assert.ok(names.includes("vice_recycle"));
     assert.ok(names.includes("vice_result_continue"));
@@ -3863,10 +3935,18 @@ test("vice_diagnose appears in tools/list alongside the other synthetic tools", 
  * vice_cycles_stopwatch "read" responses (index 0 is bracket 1; index 1,
  * only consumed when bracket 1 read zero, is bracket 2).
  */
-function bracketPhaseHandlers({ registerSequence, stopwatchReadSequence, pingExecution = "running" }) {
+function bracketPhaseHandlers({
+  registerSequence,
+  stopwatchReadSequence,
+  pingExecution = "running",
+}: {
+  registerSequence: any[];
+  stopwatchReadSequence: number[];
+  pingExecution?: string;
+}): RespondFn {
   let registerCallIndex = 0;
   let stopwatchReadIndex = 0;
-  return (name, args) => {
+  return (name: string, args: any) => {
     if (name === "vice_checkpoint_list") return { checkpoints: [] };
     if (name === "vice_registers_get") {
       const value = registerSequence[Math.min(registerCallIndex, registerSequence.length - 1)];
@@ -4067,13 +4147,13 @@ test("structural: DIAGNOSE_VERDICTS is a frozen five-member array, and every fix
 // back annotated, never refused.
 // ---------------------------------------------------------------------------
 
-function sendCheckpointAdd(proxy, args, id = 3) {
+function sendCheckpointAdd(proxy: ProxyHandle, args: Record<string, unknown>, id = 3): Promise<JsonRpcMessage> {
   proxy.send({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "vice_checkpoint_add", arguments: args } });
   return proxy.nextMessage();
 }
 
-function checkpointAddRespond(overrides = {}) {
-  return (name, args) => {
+function checkpointAddRespond(overrides: Record<string, unknown> = {}): RespondFn {
+  return (name: string, args: any) => {
     if (name === "vice_ping") return { version: "3.10", machine: "C64SC", execution: "paused" };
     if (name === "vice_checkpoint_add") {
       return { checkpoint_num: 9, start: args.start, stop: args.stop !== false, exec: args.exec !== false, ...overrides };
@@ -4127,7 +4207,7 @@ test("seam: the annotated result's error flag is false and the host payload is i
 });
 
 test("seam: a continue-only checkpoint, a disabled one and a non-exec watchpoint draw no annotation", async () => {
-  const respond = (name, args) => {
+  const respond = (name: string, args: any) => {
     if (name === "vice_ping") return { version: "3.10", machine: "C64SC", execution: "paused" };
     if (name === "vice_checkpoint_add") return { checkpoint_num: 1, start: args.start, stop: args.stop, exec: args.exec };
     if (name === "vice_checkpoint_toggle") return { checkpoint_num: args.checkpoint_num, enabled: args.enabled };
@@ -4166,7 +4246,7 @@ test("seam: a continue-only checkpoint, a disabled one and a non-exec watchpoint
 });
 
 test("seam: a checkpoint-add call the host rejects is returned as an error, with no annotation appended", async () => {
-  const respond = (name) => {
+  const respond = (name: string) => {
     if (name === "vice_ping") return { version: "3.10", machine: "C64SC", execution: "paused" };
     return undefined; // vice_checkpoint_add itself is answered with the stand-in's generic JSON-RPC error
   };
@@ -4259,9 +4339,9 @@ test("seam: a repeat arm at the same address is suppressed to a pointer, and an 
 // trigger is one entry away, never new plumbing at this seam.
 // ---------------------------------------------------------------------------
 
-const TEST_FILE_PATH = join(HERE, "vice-proxy.test.mjs");
+const TEST_FILE_PATH = join(HERE, "vice-proxy.test.ts");
 
-function extractSeamHazardsBody(src) {
+function extractSeamHazardsBody(src: string): string {
   const startIdx = src.indexOf("const SEAM_HAZARDS = [");
   assert.ok(startIdx >= 0, "SEAM_HAZARDS definition not found in source");
   const endIdx = src.indexOf("\n];", startIdx);
@@ -4269,7 +4349,7 @@ function extractSeamHazardsBody(src) {
   return src.slice(startIdx, endIdx);
 }
 
-function extractSetLiteral(src, constName) {
+function extractSetLiteral(src: string, constName: string): string[] | null {
   const re = new RegExp(`const ${constName} = new Set\\(\\[([^\\]]*)\\]\\)`);
   const m = src.match(re);
   if (!m) return null;
@@ -4323,7 +4403,7 @@ test("structural: the refusal set and the annotation set are disjoint", () => {
   assert.ok(denyList.includes("vice_disk_list"), "sanity: vice_disk_list must still be on the deny list");
 
   const body = extractSeamHazardsBody(proxySrc);
-  const annotatedCapabilities = new Set();
+  const annotatedCapabilities = new Set<string>();
   // Inline form: capabilities: new Set(["a", "b"])
   for (const m of body.matchAll(/capabilities:\s*new Set\(\[([^\]]*)\]\)/g)) {
     m[1]
@@ -4357,7 +4437,7 @@ test("synthetic second entry ('test-fixture-synthetic-entry') is detected and an
   // proves instead is that the annotation appears exactly once (the walk
   // does not re-render it per pass) purely from injecting a table entry via
   // an env var, with zero changes to the production checkpoint-arming entry.
-  const respond = (name) => (name === "vice_ping" ? { version: "3.10", machine: "C64SC", execution: "paused" } : undefined);
+  const respond = (name: string) => (name === "vice_ping" ? { version: "3.10", machine: "C64SC", execution: "paused" } : undefined);
   const { server } = startFlexibleStandInServer(respond);
   const port = await listen(server);
   const proxy = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${port}/mcp`, VICE_SEAM_HAZARDS_TEST_FIXTURE: "1" });
