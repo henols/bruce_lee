@@ -254,13 +254,18 @@ function canonicalCycles(cycles) {
   return out;
 }
 
-// The recorded allowlist. Exactly one member today: the live cycle
-// documented in install-resources.mjs's own header, repo-root.mjs's own
-// header, and 01.6-RESEARCH.md §E. Widening this to TypeScript sources
-// (.ts/.mts specifiers) and deciding whether to break the cycle outright are
-// Phase 01.6.1 criterion B's job, not this scaffold's -- this file only
-// records what is true of the FLAT .mjs graph as it stands today.
-const ALLOWED_CYCLES_THROUGH_REPO_ROOT = [["hostpath.mjs", "install-resources.mjs", "repo-root.mjs"]];
+// The recorded allowlist. EMPTY as of 01.6.1-02 (PTD-1, locked by the
+// developer; RESEARCH §3.4 Option B): the three-module cycle this array
+// used to record (hostpath.mjs -> install-resources.mjs -> repo-root.mjs ->
+// hostpath.mjs) was retired STRUCTURALLY -- hostpath.mjs no longer imports
+// repo-root.mjs at all; it takes the workspace root as an optional argument
+// instead. This array does not record that there is no cycle "for now"; it
+// records that a new one is not allowed through silently. A future cycle
+// through repo-root.mjs must be justified by amending this array in this
+// same test, not discovered by accident. See 01.6.1-RESEARCH.md §3.4 for
+// the retirement, and Part 3 below for the complementary call-site guard
+// that survives the cycle's removal.
+const ALLOWED_CYCLES_THROUGH_REPO_ROOT = [];
 
 test("cycle allowlist: module enumeration under .claude/mcp/vice/ returns a non-empty flat set", () => {
   const moduleNames = listModuleFiles();
@@ -302,11 +307,45 @@ test("cycle allowlist: exactly the recorded three-module cycle passes through re
 // inside vice-sync.mjs, which this same plan gave a repo-root import it did
 // not have before (see that file's own header comment).
 //
-// moduleScopeRepoRootCalls() is written and exercised by its own regression
-// corpus BEFORE it is implemented (RED), matching this file's own Part 1
-// red-then-green shape -- it does not exist yet at this point in the file's
-// history; the corpus test below is expected to fail until it is added.
+// moduleScopeRepoRootCalls() was written and exercised by its own
+// regression corpus BEFORE it was implemented (RED, matching this file's
+// own Part 1 red-then-green shape) -- confirmed live: both new tests failed
+// with `ReferenceError: moduleScopeRepoRootCalls is not defined` before this
+// function existed.
 // ============================================================================
+
+/** Every module-scope repoRoot(...) call found in `text`, as `{ line,
+ * guarded }` objects. Anchored on the ABSENCE of leading whitespace: a
+ * module-scope statement starts at column zero, a call inside any function
+ * body is indented -- this matters because five of the seven real
+ * repoRoot() call sites in this tree today are exactly that indented, lazy,
+ * safe shape (01.6.1-RESEARCH.md's own measured table). Three column-zero
+ * shapes are excluded, none of them calls: a line whose first non-whitespace
+ * characters open a comment (`//` or `/*`), a continuation line of an
+ * already-open block comment, and the repo-root module's own
+ * `function repoRoot(` declaration line -- a declaration, not a call. */
+function moduleScopeRepoRootCalls(text) {
+  const results = [];
+  let inBlockComment = false;
+  for (const line of text.split("\n")) {
+    if (inBlockComment) {
+      if (line.includes("*/")) inBlockComment = false;
+      continue;
+    }
+    const trimmed = line.replace(/^[ \t]+/, "");
+    if (trimmed !== line) continue; // indented -- function-body scope, not module scope
+    if (trimmed.startsWith("//")) continue; // line comment
+    if (trimmed.startsWith("/*")) {
+      if (!trimmed.includes("*/")) inBlockComment = true;
+      continue; // block-comment opener (single- or multi-line)
+    }
+    if (/^(?:export\s+)?(?:async\s+)?function\s+repoRoot\s*\(/.test(trimmed)) continue; // the declaration itself
+    if (!/\brepoRoot\(/.test(trimmed)) continue;
+    const guarded = /\brepoRoot\(\s*\{[^)]*?\bfrom\s*:/.test(trimmed);
+    results.push({ line: trimmed, guarded });
+  }
+  return results;
+}
 
 test("moduleScopeRepoRootCalls(): regression corpus -- guarded vs. unguarded module-scope calls, indented calls ignored, the declaration itself and prose comments not classified as calls", () => {
   assert.deepEqual(
