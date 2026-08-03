@@ -584,7 +584,7 @@ Plans:
 
 **Risks**: This is the bulk of the line count and the place a mechanical conversion drifts silently. `vice-proxy.mjs`'s ~2,100 lines of project-specific logic (broker leasing, epoch/liveness, recycle/diagnose, deny-list, path rewriting, incident capture) must come through untouched — 01.6.3 swaps its transport seam afterwards, and doing both at once would make a regression ambiguous.
 
-**Plans:** 6/8 plans executed
+**Plans:** 7/8 plans executed
 
 Plans:
 **Wave 1**
@@ -613,7 +613,7 @@ Plans:
 
 **Wave 7** *(blocked on Wave 6 completion)*
 
-- [ ] 01.6.1-07-PLAN.md — Slice 9a: the 2,441-line hub converts and `.mcp.json` is rewired in the same commit, audited against a pre-captured invariant baseline and a real offline MCP handshake over stdio; its 4,370-line test file stays `.mjs` as an unchanged oracle
+- [x] 01.6.1-07-PLAN.md — Slice 9a: the 2,441-line hub converts and `.mcp.json` is rewired in the same commit, audited against a pre-captured invariant baseline and a real offline MCP handshake over stdio; its 4,370-line test file stays `.mjs` as an unchanged oracle
 
 **Wave 8** *(blocked on Wave 7 completion)*
 
