@@ -180,6 +180,59 @@ test asserting `resources/` is in sync with the TS source.
 2. ~~Sequencing inside 01.6 — does it warrant a split?~~ **Yes, and the split is now mandatory rather
    than advisable — D-2d. 01.6 is the conversion; the new 01.7 is the transport.**
 
+## D-1.2-B override, 2026-08-02 (Phase 01.6 plan 04)
+
+**What `D-1.2-B` said, verbatim (`ROADMAP.md` line 253, Phase 01.2):** *"`vice-pool.sh` and
+`vice-pool.mjs`'s classic port-keyed lease are left **entirely untouched**: they still serve the
+non-MCP recovery pipeline, whose Phase 1 plans 01-04…01-06 are unexecuted, so 'superseded in
+intent' is not 'safe to delete' (accepts the research recommendation)."*
+
+**D-02 and D-05 reverse it.** CONTEXT.md's D-02 deletes `vice-pool.mjs` (753 lines),
+`vice-pool.sh` (611), `vice-session.mjs` (357) and their tests (`vice-pool.test.mjs`, 1,893
+lines / 76 tests) outright — not converted, not preserved inert. D-05, a consequence of D-02 no
+source artifact had recorded before this note, deletes `vice.mjs`'s entire command-line surface
+along with them: `vice.mjs:659–660` dynamically imports `resolveInstance` from
+`vice-session.mjs` for every CLI verb except `session`/`pool`/`install`, so `ping`, `call` and
+`tools` break on the subsystem's deletion too, not only the two obviously-doomed subcommands.
+Rather than rework the survivors, the CLI goes with the subsystem it depends on.
+
+**Reasoning: the consumer `D-1.2-B` protected no longer exists.** `D-1.2-B`'s entire rationale
+was that `vice-pool.sh`/`vice-pool.mjs` "still serve the non-MCP recovery pipeline, whose Phase 1
+plans 01-04…01-06 are unexecuted." Phase 1's 2026-08-01 replan rewrote plan 01-04 to go through
+`mcp__vice__*` tools exclusively, which removed that consumer from the tree. "Superseded in
+intent" became "the intent's own reason to exist is gone" — a materially different claim from the
+one `D-1.2-B` was declining to act on.
+
+**Date:** 2026-08-02 (decided in session, CONTEXT.md D-02/D-03/D-05); executed 2026-08-02 in
+Phase 01.6 plan 04.
+
+**Confidence: container-side evidence topped out at MEDIUM, promoted to HIGH only by a blocking
+human confirmation.** An exhaustive grep across `tools/`, `.claude/skills/` and `.claude/mcp/`
+found zero live importers of `vice-pool.mjs`/`vice-session.mjs` outside the module tree itself,
+its own tests and historical planning documents — MEDIUM confidence, because absence-of-import is
+strong evidence of absence-of-use but not proof; the container cannot see a host cron entry, a
+shell alias, or a human's own habit of typing a command from a terminal. Plan 04's task 1 was
+therefore a blocking, non-auto-approvable `checkpoint:decision` asking exactly that question,
+against one further complication the plan surfaced: `.planning/STATE.md`'s entry on the pool
+(pre-2026-08-02 text: *"VICE is a **pool of supervised instances**... `tools/vice-pool.sh start
+N` on the host, verified 3/3 alive and free (epoch 3) during plan 01-02"*) recorded the workflow
+as **actually used**, not merely available — exactly the class of thing the checkpoint asked
+about. **The developer's verdict, quoted verbatim: option `delete` — "Delete, as CONTEXT D-02 and
+D-05 specify"**, put to them with both directions costed (stranding Phase 1's dormant recovery
+pipeline vs. carrying 4,896 dead lines into 01.6.1's TypeScript conversion) and the STATE.md
+counter-evidence in view, re-confirmed 2026-08-03 before plan 04's task 2 ran.
+
+**What was deleted, by name and line count:** `.claude/mcp/vice/vice-pool.mjs` (753 lines),
+`.claude/mcp/vice/vice-session.mjs` (357), `.claude/mcp/vice/vice-pool.test.mjs` (1,893 lines /
+76 tests), `.claude/mcp/vice/resources/vice-pool.sh` (611), and `vice.mjs`'s command-line block
+(the `process.argv` guard onward) plus its two CLI-only helpers (`formatToolsOutput`, `die`) —
+4,896 lines of source and tests in total. `vice.mjs`'s **library** exports (`call`, `callTool`,
+`activeInstance`, `useInstance`, `mcpHost`, `DENY_LIST`, `EPOCH_FILE`, `readEpoch`,
+`beginSession`, `sessionReconnects`, `lastToolCall`, `assertSameMachine`, `serverInfo`,
+`ViceError`, `MachineRestartedError`) survive untouched — `vice-proxy.mjs`, `vice-sync.mjs` and
+`refresh-manifest.mjs` keep importing them. The deployed host copy, `tools/vice-pool.sh`, was
+removed by plan 03's manifest-scoped prune on the next suite run, not by hand.
+
 ## Open questions — for 01.6 planning, not decided here
 
 1. **Is the `vice-pool.mjs` / `vice-pool.sh` split absorbed entirely, or does the container-side half
