@@ -2018,3 +2018,94 @@ project's own full-suite run time (~45-50s) is long enough that resource content
 tests, several of which spawn real subprocesses, is a plausible source of one-off timing
 flakes, distinct from the genuine, reproducible module-cycle/liveness hazards logged elsewhere
 in this file.
+
+### 2026-08-03 — the criterion-B cycle guard went VACUOUS after a rename it did not track, and stayed that way, undetected, for five plans -- promoting Plan 02's own "proven to discriminate" entry above with the live counter-evidence
+
+**Type:** hazard (a static guard that silently stopped discriminating), confirmed and fixed live
+**Evidence:** live, this session (01.6.1-08, Task 2's end-of-phase re-proof). `load-order.test.mjs`'s
+Part 2 cycle test called `findCyclesThroughNode(graph, "repo-root.mjs")` -- a LITERAL string, not
+resolved by stem the way Part 1's `resolveModuleByStem()` already does two tests earlier in the
+SAME file. Plan 03 (01.6.1-03) renamed `repo-root.mjs` to `repo-root.ts` and repointed every
+consumer, but this one hardcoded literal was never updated. From that commit onward,
+`graph.get("repo-root.mjs")` returned `undefined` (the node simply does not exist under that key
+any more), so `findCyclesThroughNode()` returned `[]` UNCONDITIONALLY regardless of whether any
+real cycle existed through the real `repo-root.ts` node. The test still reported 7/7 green on
+every subsequent plan (04 through 07) because `ALLOWED_CYCLES_THROUGH_REPO_ROOT` is also `[]` --
+an empty-expected-vs-empty-actual match that looked identical to a genuinely enforced invariant.
+Confirmed by injecting Plan 02's own Task 3 regression (reintroducing the cycle in a scratch copy
+of `hostpath.ts`, WITH an explicit `from:` override) against the pre-fix test: it passed cleanly
+(0 failures) when it should have failed. After changing the literal to
+`resolveModuleByStem("repo-root")`, the identical injected regression correctly failed with
+`the set of cycles through repo-root.mjs changed -- expected exactly [], got
+[["hostpath.ts","install-resources.ts","repo-root.ts"]]`, and the combined-regression crash
+(`Cannot access 'HERE' before initialization`) still reproduced byte-for-byte against the fixed
+tree's real modules via a fresh dynamic `import()`.
+**Confidence:** HIGH -- reproduced live, twice (failing before the fix, passing after), with the
+exact failure text quoted and the crash re-triggered a third time independently.
+**Saves/costs:** this is the seventh instance this phase has caught of the
+extension/format-hardcoded-check hazard, and the FIRST one to survive completely silently across
+five whole plans rather than failing loudly or being caught the same session it was introduced --
+because an empty-vs-empty assertion match gives no signal that the check stopped running at all.
+The lesson: a static analysis test that names a SPECIFIC file by its literal extension-qualified
+name is a landmine the moment that file is a rename candidate in a phase that renames files for a
+living; prefer stem-based resolution (already established in the SAME file, two tests earlier)
+from the day the check is written, not just for the file the check's own module lives in but for
+every file NAME it passes as a literal argument. A green re-run of an existing test proves
+nothing about whether it is still testing the right subject -- only a live-injected regression,
+repeated at the END of a conversion phase and not just when the guard was first written, catches
+this class of drift. Directly vindicates T-01.6.1-04's own stated concern ("six plans of renames
+after they were written") and is the reason Task 2 step B exists as a mandatory re-proof rather
+than a citation of Plan 02's prior evidence.
+
+### 2026-08-03 — TypeScript flags an implicit-any callback parameter on a `.map()`/`.filter()` call even when the array itself is typed `any`; it does NOT flag an implicit-any on a bare `for...of` over the same `any` value
+
+**Type:** trick / non-obvious TypeScript rule, useful for any future test-file conversion in this repo
+**Evidence:** live, this session (01.6.1-08), converting `vice-proxy.test.mjs`'s ~4,400 lines.
+`const x: any = f(); x.tools.map((t) => t.name)` DOES report `TS7006: Parameter 't' implicitly
+has an 'any' type` under `strict`, confirmed by a minimal throwaway `.ts` file compiled with
+`tsc --noEmit --strict` -- calling a method on an `any`-typed receiver still requires the
+CALLBACK's own parameter to be explicitly annotated, because when the callee resolves to `any`
+there is no signature left to contextually type the argument from. By contrast
+`for (const t of x.tools) { ... }` (`x.tools` also `any`) draws no such error -- `for...of`
+iteration over `any` does not go through a call-signature contextual-typing step at all, so `t`
+is silently `any` with no diagnostic. Also confirmed: passing a 1-required-parameter callback
+(e.g. a `Promise` executor's own `resolve`, inferred as `(value: unknown) => void` when the
+executor never calls `resolve` with a value) into a 0-parameter callback SLOT (`server.listen(port,
+host, resolve)`, whose Node type is `() => void`) is a real `TS2345` error ("Target signature
+provides too few arguments. Expected 1 or more, but got 0") -- fixed by wrapping,
+`() => resolve()`, not by typing `resolve` differently.
+**Confidence:** HIGH -- both claims reproduced live in isolated scratch `.ts` files against this
+project's own `tsconfig.json` (`strict: true`, `erasableSyntaxOnly: true`), not reasoned about.
+**Saves/costs:** when converting a large, dynamically-shaped JSON-RPC test harness (MCP responses
+whose payload legitimately differs per method) to TypeScript, the pragmatic and idiom-consistent
+fix for the resulting wave of `.map((t) => t.name)`-shaped errors is a targeted `(t: any) =>`
+annotation at each call site -- not a parallel set of hand-declared response-shape interfaces
+that would drift from the untyped reality being tested, and not a blanket suppression. Declare a
+small number of shared ENVELOPE types (method/id/params/result, with the volatile payload fields
+left `any`) once near the top of the file, then annotate individual callback parameters as `tsc`
+finds them; do not expect the envelope's own looseness to propagate through `.map`/`.filter`
+callbacks automatically.
+
+### 2026-08-03 — TypeScript narrowing (`if (x) ...`) does NOT survive into a closure that captures a mutable outer `let`, even when the closure is created and invoked synchronously in the same statement as the check
+
+**Type:** hazard (a subtle strict-mode gotcha), tested and worked around
+**Evidence:** live, this session (01.6.1-08). `let server: Server | undefined; ... if (server)
+await new Promise((resolve) => server.close(resolve));` reports `TS18048: 'server' is possibly
+'undefined'` INSIDE the arrow closure, despite the `if (server)` check on the same line --
+reproduced live in an isolated scratch `.ts` file compiled against this project's own
+`tsconfig.json`. A simpler variant with NO closure (`if (server) server.close();`) does NOT
+error -- confirmed by removing the closure and re-running the same file -- isolating the cause to
+closure capture specifically, not to the try/finally structure the real code also had (also
+tested in isolation and ruled out separately). The fix is to bind the narrowed value to a new
+`const` immediately before constructing the closure (`const finalServer = server; if
+(finalServer) await new Promise((resolve) => finalServer.close(resolve));`) -- a `const` is never
+reassignable, so TypeScript's narrowing survives the closure boundary for it even though it does
+not for the original mutable `let`.
+**Confidence:** HIGH -- reproduced live in isolated scratch files, both the failing shape and the
+two working variants (no-closure; closure-over-a-fresh-const).
+**Saves/costs:** this is a general TypeScript strict-mode rule (not specific to `node:http`'s
+`Server` type) worth recognizing by its shape rather than re-deriving from the error text each
+time: `if (mutableVar) <closure using mutableVar>` inside a `try`/`finally` cleanup block is
+exactly the pattern this project's test helpers use repeatedly for "close the stand-in server if
+one was ever created," and every future conversion of a similar helper should reach for the
+capture-into-a-const idiom immediately rather than debugging the narrowing loss from scratch.
