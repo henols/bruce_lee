@@ -8,13 +8,19 @@
 // writer (`broker-epoch.mts`, plan 03) can be held to it with something
 // concrete to diff against.
 //
-// Plan 03 extends this file with the writer's own round-trip tests. Nothing
-// here imports `broker-epoch.mts` -- it does not exist yet.
+// Task 3 (this file, this plan) extends this with the writer's own
+// fixture-diff test now that `broker-epoch.mts` exists: build a record from
+// the 6510 fixture's own values, write it through the real writer, and
+// assert the emitted key set and each value's type match the fixture
+// exactly. Plan 03 owns any further extension of this file.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { writeEpochRecord, type EpochRecord } from "./broker-epoch.mts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FIXTURES_DIR = join(HERE, "fixtures");
@@ -111,4 +117,42 @@ test("frozen broker fixture bash-broker.json: written_by is the retiring bash da
   // false the moment the new broker exists (D-26). This assertion is
   // EXPECTED TO CHANGE in task 3, once the new writer names itself instead.
   assert.equal(parsed.written_by, "vice-broker.sh");
+});
+
+test("broker-epoch.mts's writeEpochRecord() round-trips a record built from the 6510 fixture's own values, matching key set and value types exactly", () => {
+  const fixture = readFixtureJson("bash-epoch-6510.json") as Record<string, unknown>;
+  const dir = mkdtempSync(join(tmpdir(), "broker-epoch-fixture-diff-"));
+  try {
+    const record: EpochRecord = {
+      epoch: fixture.epoch as number,
+      spawned_at: fixture.spawned_at as string,
+      pid: fixture.pid as number,
+      supervisor_pid: fixture.supervisor_pid as number,
+      vice_bin: fixture.vice_bin as string,
+      vice_args: fixture.vice_args as string[],
+      log: fixture.log as string,
+      dry_run: fixture.dry_run as boolean,
+    };
+
+    const path = writeEpochRecord({ supervisorDir: dir, record });
+    const written = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+
+    assert.deepEqual(Object.keys(written).sort(), [...EPOCH_FIELDS].sort());
+    for (const field of EPOCH_FIELDS) {
+      assert.equal(
+        typeof written[field],
+        typeof (fixture as Record<string, unknown>)[field],
+        `field ${field}: type must match the fixture's own type`,
+      );
+    }
+    assert.deepEqual(written.vice_args, fixture.vice_args);
+    assert.equal(written.epoch, fixture.epoch);
+    assert.equal(written.pid, fixture.pid);
+    assert.equal(written.supervisor_pid, fixture.supervisor_pid);
+    assert.equal(written.vice_bin, fixture.vice_bin);
+    assert.equal(written.log, fixture.log);
+    assert.equal(written.dry_run, fixture.dry_run);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

@@ -21,7 +21,15 @@ const HERE = dirname(fileURLToPath(import.meta.url));
  * the emitted file set equals this exactly, so an unexpected addition or a
  * silent omission both fail loudly rather than deploying something nobody
  * reviewed. */
-export const HOST_BOUND_ARTIFACTS: string[] = ["vice-broker.mjs"];
+export const HOST_BOUND_ARTIFACTS: string[] = [
+  "vice-broker.mjs",
+  "container-guard.mjs",
+  "broker-state.mjs",
+  "broker-launch.mjs",
+  "broker-kill.mjs",
+  "broker-epoch.mjs",
+  "broker-control.mjs",
+];
 
 /** The generated-file banner (01.6-RESEARCH.md §F), a function of the
  * source's relative path. Prepended to every emitted file by build() below --

@@ -21,6 +21,7 @@
 import { readFileSync, writeFileSync, unlinkSync, mkdirSync, renameSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
+import { connect } from "node:net";
 
 import { supervisorDir } from "./repo-root.ts";
 
@@ -448,4 +449,130 @@ export function startHeartbeat(id: string, { intervalMs = HEARTBEAT_MS }: StartH
   }, intervalMs);
   if (typeof timer.unref === "function") timer.unref();
   return timer;
+}
+
+// ---------------------------------------------------- TCP control plane (ADDITIVE)
+//
+// Phase 01.6.2: the container-side half of the new TCP control plane
+// (broker-control.mts is the host-side half). This is ADDITIVE ONLY --
+// nothing above this line is deleted or modified, and the proxy still runs
+// on the file protocol above until plan 07 swaps it over, so the suite
+// stays green continuously. Wire format confirmed at this plan's blocking
+// checkpoint:decision (2026-08-03, `as-specified`; see
+// .planning/RE-FINDINGS.md for the full record): newline-delimited JSON,
+// per-boot capability token, connection open = claim / close = release.
+export interface AcquireGrant {
+  id: string;
+  port: number;
+  url: string;
+  epoch_file: string;
+  supervisor_dir: string;
+}
+
+export interface AcquireOverControlPlaneHandle {
+  grant: AcquireGrant;
+  /** Closes the connection -- the connection IS the lease, so this alone
+   * is the release; the broker's own "close" handler tears the instance
+   * down (broker-control.mts). */
+  release: () => void;
+}
+
+export const CONTROL_ACQUIRE_TIMEOUT_MS: number = Number(process.env.VICE_BROKER_ACQUIRE_TIMEOUT_MS || 25000);
+
+/** Reads broker.json ONCE for control_host/control_port/control_token,
+ * opens ONE TCP connection, sends a single `acquire` request framed as one
+ * JSON line, and awaits the grant line against
+ * CONTROL_ACQUIRE_TIMEOUT_MS. Rejects (never throws synchronously) on any
+ * failure: broker.json absent/unreadable/missing the control fields, a
+ * connection error, an `error` response, or a timeout. */
+export function acquireOverControlPlane(dir: string = brokerRootDir()): Promise<AcquireOverControlPlaneHandle> {
+  return new Promise((resolvePromise, reject) => {
+    const broker = readJsonMaybe(brokerJsonPath(dir));
+    if (broker === null) {
+      reject(new Error("acquireOverControlPlane: broker.json not present or unreadable"));
+      return;
+    }
+    const host = typeof broker.control_host === "string" ? broker.control_host : null;
+    const port = typeof broker.control_port === "number" ? broker.control_port : null;
+    const token = typeof broker.control_token === "string" ? broker.control_token : null;
+    if (host === null || port === null || token === null) {
+      reject(new Error("acquireOverControlPlane: broker.json missing control_host/control_port/control_token"));
+      return;
+    }
+
+    const socket = connect({ host, port });
+    let buffer = "";
+    let settled = false;
+
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      reject(new Error(`acquireOverControlPlane: no grant within ${CONTROL_ACQUIRE_TIMEOUT_MS}ms`));
+    }, CONTROL_ACQUIRE_TIMEOUT_MS);
+    if (typeof timer.unref === "function") timer.unref();
+
+    socket.on("connect", () => {
+      const requestId = newRequestId();
+      socket.write(`${JSON.stringify({ op: "acquire", id: requestId, token })}\n`);
+    });
+
+    socket.on("data", (chunk: Buffer) => {
+      if (settled) return;
+      buffer += chunk.toString("utf8");
+      const newlineIdx = buffer.indexOf("\n");
+      if (newlineIdx === -1) return;
+      const line = buffer.slice(0, newlineIdx);
+
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(line);
+      } catch {
+        settled = true;
+        clearTimeout(timer);
+        socket.destroy();
+        reject(new Error("acquireOverControlPlane: malformed response line"));
+        return;
+      }
+      if (typeof parsed !== "object" || parsed === null) {
+        settled = true;
+        clearTimeout(timer);
+        socket.destroy();
+        reject(new Error("acquireOverControlPlane: response line is not a JSON object"));
+        return;
+      }
+      const resp = parsed as Record<string, unknown>;
+      if (resp.kind === "grant") {
+        settled = true;
+        clearTimeout(timer);
+        const grant: AcquireGrant = {
+          id: String(resp.id),
+          port: Number(resp.port),
+          url: String(resp.url),
+          epoch_file: String(resp.epoch_file),
+          supervisor_dir: String(resp.supervisor_dir),
+        };
+        resolvePromise({
+          grant,
+          release: () => {
+            socket.destroy();
+          },
+        });
+      } else if (resp.kind === "error") {
+        settled = true;
+        clearTimeout(timer);
+        socket.destroy();
+        reject(new Error(`acquireOverControlPlane: ${String(resp.code)}: ${String(resp.message)}`));
+      }
+      // any other kind: not a terminal response to THIS request -- ignored,
+      // matching pollGrant()'s own "keep waiting" posture above.
+    });
+
+    socket.on("error", (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(err);
+    });
+  });
 }
