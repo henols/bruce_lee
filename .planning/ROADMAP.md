@@ -768,6 +768,57 @@ Plans:
 
 **Risks**: **Even after the 2026-08-03 split this phase carries two of three phases' content** — the consolidation, the language change and the transport, with only the five behaviour changes moved out. **Every failure mode changes shape at once** when a lease stops being a file: anything that quietly depended on one of criterion F's six mechanisms fails in a new way. **Nothing here is live-verifiable** until Phase 01.4, and criterion E's carry-forward list — the thing that makes that survivable — is now authored in **01.6.2.1**, so this phase seals with its unverified set itemised but not yet consolidated. Collapsing the per-instance supervisor inward also removes an independent channel — `vice-supervisor.sh` currently outlives broker restarts, which is what made the epoch file trustworthy on its own; D-04 keeps the file but not that independence, and criterion I's unconditional reap is what pays for it. **Criterion I's reap has a derivation problem the seed already flagged and no plan may hand-wave:** in-process state means a restarted broker has *no* registry, so the reap must be derived from the port band plus process identity (`ps`-verified `x64sc` on 6600+), not from a file. That is the one place where deleting the on-disk registry costs something real. **Five agent-facing strings become instructions to run a file that will not exist** — `supervisorHostPath()` at `vice-proxy.ts:1387` feeds `neverStartedMessage()`/`deadOrHungMessage()`/`aliveButFailedMessage()`, and `vice.ts:236,352,546` plus `vice-sync.ts:254` each tell the agent to run `tools/vice-supervisor.sh` on the host. RESEARCH §A6 names only `brokerHostPath()`. That is Phase 01.4 criterion 5's exact failure shape arriving as a side effect of this phase. **`install-resources.ts`'s `hostLaunchInstructions()` needs a paragraph deleted, not a path swapped** — it advertises the standalone non-MCP recovery pipeline, whose scripts D-23 confirms are already gone; swapping the path would keep advertising a dead capability. **The live epoch fixture must be captured before anything is deleted** — `01.6.2-VALIDATION.md` flags the capture as order-dependent and irreversible if missed, and a bash-written broker with four recorded instances exists *now*.
 
+**Plans:** 11 plans
+
+Plans:
+**Wave 1**
+
+- [ ] 01.6.2-01-PLAN.md — **Tracer.** The live epoch/broker fixture capture (order-dependent, irreversible), a blocking `checkpoint:decision` on the control-plane wire format, and then one `acquire` end to end: authored TypeScript → `tsc` → banner-marked `resources/` → the container guard in **TypeScript at broker startup** (PD-03) → the control listener on `0.0.0.0:19510` with per-boot capability-token auth (criterion N) → the guarded spawn seam → `epoch.json` → a grant the existing `containerizeGrant()` consumes → connection close releases and identity-verified-kills (criteria A/B/C1/C6/N, D-04, D-18, D-26, D-27, PD-03)
+
+**Wave 2** *(blocked on Wave 1)*
+
+- [ ] 01.6.2-02-PLAN.md — In-process state (C4), port allocation re-banded to **6600** (D-18), the three counts, serialised warming with its break-after-first-success, the readiness probe's three branches with the injectable seam intact, and **criterion C's concurrency race test** with proven discriminating power — Phase 01.6.2.1's stated prerequisite for D-07
+
+**Wave 3** *(blocked on Wave 2)*
+
+- [ ] 01.6.2-03-PLAN.md — The epoch writer held to the frozen bash fixture by a diff test (criterion B, D-04); the per-instance supervisor absorbed wholesale — crash respawn with doubling clamped backoff, crash-loop give-up, the deliberate-kill marker that stops a teardown respawning, and the per-instance boot/crash logs a human reads (D-23)
+
+**Wave 4** *(blocked on Wave 3)*
+
+- [ ] 01.6.2-04-PLAN.md — `verifiedKill()` with the **corrected** identity string and the four-word stage contract (criterion D, Pitfall 2); catchable shutdown across all six paths with the uncatchable case recorded as accepted (C5); the **unconditional startup reap derived from the port band plus `ps` identity, not from a file** (criterion I, D-15); the mandatory start-time banner (D-25)
+
+**Wave 5** *(blocked on Wave 4)*
+
+- [ ] 01.6.2-05-PLAN.md — The complete control-plane message set (`acquire`/`release`/`recycle`/`status`/`host_state`), the arrival-ordered pending-acquire structure without the fairness claim, `broker.json` at its full field set with a refreshed `heartbeat_at` and a true `written_by` (criterion G, D-24, D-26, D-27), and the **kernel-enforced singleton with its two distinct outcomes — CR-01 closes** (criterion K, D-17)
+
+**Wave 6** *(blocked on Wave 5)*
+
+- [ ] 01.6.2-06-PLAN.md — The container-side control client, additive: one connection per session, one discovery-record read, all five kinds, real deadlines, correct framing both directions, broker death as its own typed outcome. Plus `vice-broker-client.test.ts` redesigned with a per-test disposition table — **criterion A's second half**
+
+**Wave 7** *(blocked on Wave 6)*
+
+- [ ] 01.6.2-07-PLAN.md — The proxy swapped onto TCP (acquire, release, recycle) **and** the file protocol's container half deleted in the same commit, with a structural closure gate proving none of criterion F's six mechanisms survives (criteria F/H, D-01, D-09, D-12, PD-05)
+
+**Wave 8** *(blocked on Wave 7)*
+
+- [ ] 01.6.2-08-PLAN.md — A lost machine costs one acquisition, not the session, and the triggering call fails loudly naming the replacement (criterion J, D-13, closing Defect 4); broker death gets the same discipline and the same vocabulary as an accepted knowing regression (D-14)
+
+**Wave 9** *(blocked on Wave 8)*
+
+- [ ] 01.6.2-09-PLAN.md — All eight host-instruction messages repointed at the surviving launcher with invocations it actually accepts; `hostLaunchInstructions()`'s dead-capability paragraph **deleted, not repointed** (D-23); and the **per-occurrence triage** of every `6510` reference — one of which is the processor, not a port (D-18)
+
+**Wave 10** *(blocked on Wave 9)*
+
+- [ ] 01.6.2-10-PLAN.md — **Criterion A's first half:** the 61-test disposition ledger and the function-by-function disposition table (C2), both into `01.6.2-VALIDATION.md`, plus every replacement test a row names but nobody wrote, plus the reconciled count arithmetic plan 11 asserts against
+
+**Wave 11** *(blocked on Wave 10)*
+
+- [ ] 01.6.2-11-PLAN.md — **The deletion, behind a blocking `checkpoint:decision`.** The repo-root ladder inlined into the launcher and every retiring-script test fixture repointed first; then the four bash files, `vice-broker.test.mjs`, `host-scripts.test.ts`'s two structural arrays, its SIGHUP test and its `bash -n` loop, and the ignore-block lines — **all in one commit** (C2, C6, C7, D-01, D-24, PD-04)
+
+**Waves:** strictly sequential, 1 → 11. **Deliberately no parallelism.** Every plan after the tracer writes into the same broker modules or the same two container-side hubs, so `files_modified` overlap forces the ordering; there is essentially no parallelism to buy, which the split analysis already quantified.
+
+**Planning note (2026-08-03, `/gsd-plan-phase 01.6.2`, Group A only).** **Eleven plans, not the ~9 the split analysis projected** — the two extra come from splitting work that would otherwise have produced tasks in the three-thousand-line class, the exact failure the split existed to avoid. Tracer-first: plan 01 leads with a `type="tracer"` slice wiring one `acquire` through every layer the phase modifies, verified before any expansion task. Reversibility: **two `one-way` ratings, each with its own blocking `checkpoint:decision`** — criterion N's wire format before the listener is written (plan 01), and the four-file deletion (plan 11, following the Phase 01.6 plan 04 precedent). **Four plan-time findings no source artifact records.** (1) `vice-broker-launch.test.ts`'s `NETWORK_CALL_PATTERNS` scan asserts that NO host-bound source contains a network-call construct — the control listener, the readiness probe and the port-in-use check all trip it by design, so it must be amended deliberately in plan 01 with the container-side-versus-host-side distinction recorded, rather than discovered red. (2) `vice-proxy.test.ts`'s second network-call scan enumerates the whole module directory and pins the `fetch(`-containing set to exactly two files, so every new host-bound `.mts` is in its scope. (3) `vice-broker-launch.test.ts`'s three-key `broker.json` assertion and its two refuse-to-clobber tests all change here — a **third** test-file surgery beyond the two RESEARCH counted, and the refuse-to-clobber heuristic is *replaced* by the bind-before-write singleton, not merely extended. (4) **Not all ~34 `6510` references are ports**: `vice-proxy.ts:824` names the processor in a comment about a memory-mapped register, and `vice.ts`'s fixed-port fallback endpoint is *more* correct at 6510 after D-18 than before, because that band is now reserved by convention for an emulator a human launched — which is precisely why CONTEXT said re-check every one rather than replace them. Control port `19510`: above the registered range, below this container's measured ephemeral range start (`32768`), trailing `510` as a 6510 mnemonic; the **host's** range is unverifiable from here, so **MEDIUM** confidence, and the singleton guarantee holds only while that default is kept. No package installs, so no legitimacy gate — `typescript`/`@types/node` were approved at Phase 01.6 plan 01's checkpoint with an explicit forward-reference to this phase. **Spec-less probe fallback skipped, visibly:** no SPEC.md and no requirement IDs to probe, so there are no probe-derived predicates in this plan set. `requirements:` frontmatter carries criteria and decision IDs rather than fabricated REQ-IDs. Security: `<threat_model>` in all eleven plans, ASVS L1, blocking on high, **72 threats** — the listener is treated as a genuinely new surface with no inherited register, because the bash daemon had none. **Nothing from criteria E, L or M is planned here.**
+
 ---
 
 ### Phase 01.6.2.1: Broker Lifecycle Policy
