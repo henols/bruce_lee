@@ -1,5 +1,5 @@
 // node:test coverage for containerpath.mjs -- the host->container inverse
-// beside hostpath.mjs (D-7). Every test here is guard-removal-sensitive
+// beside hostpath.ts (D-7). Every test here is guard-removal-sensitive
 // (D-6): each one is written so it fails if the property it covers is
 // removed, not merely absent from a description.
 import { test } from "node:test";
@@ -9,7 +9,7 @@ import { networkInterfaces } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
 
-import { hostPath } from "./hostpath.mjs";
+import { hostPath } from "./hostpath.ts";
 import {
   hostRootCandidates,
   containerPath,

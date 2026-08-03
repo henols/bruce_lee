@@ -14,7 +14,7 @@
 // thrown exception. See 01.2-PATTERNS.md's "Never-throw /
 // never-cache-a-negative-result" section.
 //
-// MUST NOT import hostpath.mjs: the host-path consumer set is closed to
+// MUST NOT import hostpath.ts: the host-path consumer set is closed to
 // four production modules by vice-mcp-selector-docs.test.mjs's assertion 4,
 // and host-path message text stays in vice-proxy.mjs, which is already on
 // that list.
@@ -22,7 +22,7 @@ import { readFileSync, writeFileSync, unlinkSync, mkdirSync, renameSync } from "
 import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
 
-import { supervisorDir } from "./repo-root.mjs";
+import { supervisorDir } from "./repo-root.ts";
 
 // -------------------------------------------------------------- request ids
 //
@@ -46,7 +46,7 @@ export function isValidRequestId(id) {
 
 // -------------------------------------------------------------- directories
 //
-// Resolved from VICE_POOL_DIR when set, otherwise from repo-root.mjs's
+// Resolved from VICE_POOL_DIR when set, otherwise from repo-root.ts's
 // supervisorDir() -- the SAME default `.vice-supervisor` directory every
 // other host/container pairing in this module tree already agrees on, so
 // container and host never derive two different roots for this protocol.

@@ -14,7 +14,7 @@
 import { resolve, join } from "node:path";
 import { readFileSync } from "node:fs";
 
-import { supervisorDir } from "./repo-root.mjs";
+import { supervisorDir } from "./repo-root.ts";
 
 // Renamed from ENDPOINT to DEFAULT_ENDPOINT (D-5): a pool lease redirects
 // the seam to a DIFFERENT endpoint at runtime via useInstance() below, so
@@ -41,7 +41,7 @@ export function mcpHost() {
 }
 
 // Where tools/vice-supervisor.sh (host-only) writes its restart epoch --
-// resolved via repo-root.mjs's supervisorDir() (never a fixed hop count off
+// resolved via repo-root.ts's supervisorDir() (never a fixed hop count off
 // this file's own location), so the path is correct regardless of the
 // caller's cwd AND regardless of how deep this file sits under the repo
 // root. Overridable for tests and for anyone running the supervisor with a

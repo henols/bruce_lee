@@ -337,9 +337,13 @@ const ALLOWED_CYCLES_THROUGH_REPO_ROOT = [];
 test("cycle allowlist: module enumeration under .claude/mcp/vice/ returns a non-empty flat set", () => {
   const moduleNames = listModuleFiles();
   assert.ok(moduleNames.length > 0, "module enumeration returned nothing -- path resolution is broken, not a real pass");
-  assert.ok(moduleNames.includes("repo-root.mjs"), "expected repo-root.mjs to be part of the enumerated module set");
-  assert.ok(moduleNames.includes("install-resources.mjs"));
-  assert.ok(moduleNames.includes("hostpath.mjs"));
+  // Resolved by STEM (Task 1's own resolveModuleByStem(), reused here) rather
+  // than a hardcoded extension -- so THIS sanity check does not go stale the
+  // next time one of these three renames, exactly the failure mode Task 1
+  // fixed for Part 1's real-file guard above.
+  assert.ok(resolveModuleByStem("repo-root"), "expected a repo-root module to be part of the enumerated module set");
+  assert.ok(resolveModuleByStem("install-resources"), "expected an install-resources module to be part of the enumerated module set");
+  assert.ok(resolveModuleByStem("hostpath"), "expected a hostpath module to be part of the enumerated module set");
 });
 
 test("cycle allowlist: exactly the recorded three-module cycle passes through repo-root.mjs", () => {

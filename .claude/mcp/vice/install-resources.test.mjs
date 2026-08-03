@@ -30,7 +30,7 @@ import {
   readDeployManifest,
   writeDeployManifest,
   pruneResources,
-} from "./install-resources.mjs";
+} from "./install-resources.ts";
 
 const execFileP = promisify(execFile);
 
@@ -138,7 +138,7 @@ test("installResources(): a real install writes its host-launch instructions to 
   // process that's doing the writing.
   const root = mkdtempSync(join(tmpdir(), "vice-install-stderr-"));
   const src = `
-    import { installResources } from ${JSON.stringify(new URL("./install-resources.mjs", import.meta.url).href)};
+    import { installResources } from ${JSON.stringify(new URL("./install-resources.ts", import.meta.url).href)};
     installResources({ root: ${JSON.stringify(root)} });
   `;
   const { stdout, stderr } = await execFileP(process.execPath, ["--input-type=module", "-e", src]);
@@ -151,7 +151,7 @@ test("installResources(): a real install writes its host-launch instructions to 
 test("ensureResourcesInstalled(): fire-once-per-process -- calling it twice in one process with the target deleted in between does NOT recreate it", async () => {
   const root = mkdtempSync(join(tmpdir(), "vice-install-fireonce-"));
   const src = `
-    import { ensureResourcesInstalled } from ${JSON.stringify(new URL("./install-resources.mjs", import.meta.url).href)};
+    import { ensureResourcesInstalled } from ${JSON.stringify(new URL("./install-resources.ts", import.meta.url).href)};
     import { existsSync, rmSync } from "node:fs";
     import { join } from "node:path";
     const root = ${JSON.stringify(root)};
@@ -172,7 +172,7 @@ test("ensureResourcesInstalled(): fire-once-per-process -- calling it twice in o
 test("ensureResourcesInstalled(): env opt-out -- VICE_SKIP_RESOURCE_INSTALL=1 makes it do nothing at all", async () => {
   const root = mkdtempSync(join(tmpdir(), "vice-install-skipenv-"));
   const src = `
-    import { ensureResourcesInstalled } from ${JSON.stringify(new URL("./install-resources.mjs", import.meta.url).href)};
+    import { ensureResourcesInstalled } from ${JSON.stringify(new URL("./install-resources.ts", import.meta.url).href)};
     import { existsSync } from "node:fs";
     import { join } from "node:path";
     ensureResourcesInstalled({ root: ${JSON.stringify(root)} });

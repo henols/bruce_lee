@@ -31,14 +31,14 @@
 // no business being touched by a health check.
 //
 // The one exception (quick-260730-q4b, D-3): a side-effect-only import of
-// repo-root.mjs, below. This module is the ONE skill file that imports
+// repo-root.ts, below. This module is the ONE skill file that imports
 // nothing else from the skill, so without this line the deploy-on-first-use
 // resource check never fires when this probe is the entry point. This does
 // NOT violate the no-dependencies stance above, which is specifically about
 // never importing vice.mjs's resilient retry ladder into this deliberately-
-// fragile probe -- repo-root.mjs is a pure path resolver plus this one
+// fragile probe -- repo-root.ts is a pure path resolver plus this one
 // trigger, and pulls in nothing that speaks MCP.
-import "./repo-root.mjs";
+import "./repo-root.ts";
 
 /** The one and only tool this module will ever call. Hardcoded, not a
  * parameter on any exported function -- that is the structural reason no

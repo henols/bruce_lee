@@ -34,18 +34,18 @@
 // `tryHostPaths` (used by screenshot() below) comes from the sibling
 // `devcontainer-host-path` skill -- and that is not a new dependency this
 // module introduces. This module tree's own resource-deployment path already
-// pulls it in: `vice.mjs` statically imports `repo-root.mjs`, which statically
-// imports `install-resources.mjs`, which imports
+// pulls it in: `vice.mjs` statically imports `repo-root.ts`, which statically
+// imports `install-resources.ts`, which imports
 // `../../skills/devcontainer-host-path/scripts/hostpath.mjs` -- a mandatory
 // edge on every entry into this tree. screenshot() is simply its second
 // consumer. A future maintainer should neither believe this module introduced
 // that edge nor "fix" it by hand-rolling a second path translator.
 //
-// This module's OWN `repo-root.mjs` import (below) is new as of 01.6.1-02
-// (RESEARCH §3.4 Option B): hostpath.mjs no longer resolves the workspace
+// This module's OWN `repo-root.ts` import (below) is new as of 01.6.1-02
+// (RESEARCH §3.4 Option B): hostpath.ts no longer resolves the workspace
 // root itself, so every caller of tryHostPaths()/hostPath() now threads it
 // through explicitly. vice-sync.mjs is NOT a member of the repo-root cycle
-// (repo-root.mjs -> install-resources.mjs -> hostpath.mjs -> repo-root.mjs)
+// (repo-root.ts -> install-resources.ts -> hostpath.ts -> repo-root.ts)
 // -- it only calls repoRoot() lazily, inside screenshot(), well after every
 // cycle member has already finished evaluating -- but this import is exactly
 // the kind of fresh route load-order.test.mjs's module-scope call-site guard
@@ -56,8 +56,8 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 
 import { call } from "./vice.mjs";
-import { tryHostPaths } from "./hostpath.mjs";
-import { repoRoot } from "./repo-root.mjs";
+import { tryHostPaths } from "./hostpath.ts";
+import { repoRoot } from "./repo-root.ts";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 

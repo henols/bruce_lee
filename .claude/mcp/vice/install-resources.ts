@@ -34,9 +34,44 @@ import {
 import { fileURLToPath } from "node:url";
 import { dirname, join, isAbsolute, resolve, sep } from "node:path";
 
-import { hostPath, SET_ENV_HINT } from "./hostpath.mjs";
+import { hostPath, SET_ENV_HINT } from "./hostpath.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+
+/** true iff `value` is a well-formed, generic JSON object -- not null, not
+ * an array. Narrows JSON.parse()'s otherwise-`any` result before any field
+ * on it is touched, matching vice-broker.mts's isPlainObject() idiom
+ * exactly (PATTERNS.md "Narrowing unknown, not casting"). */
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** The on-disk shape of `.vice-deployed.json`, as read/written by
+ * readDeployManifest()/writeDeployManifest() below. */
+export interface DeployManifest {
+  entries: string[];
+}
+
+/** Per-entry outcome of a copy attempt: which resources/ entries landed,
+ * were left alone (already present or diverged), or failed -- returned by
+ * both installResources() and, for the prune half, pruneResources(). */
+export interface InstallResourcesResult {
+  installed: string[];
+  skipped: string[];
+  diverged: string[];
+  failed: string[];
+  pruned: string[];
+}
+
+export interface PruneResourcesResult {
+  pruned: string[];
+  skipped: string[];
+  failed: string[];
+}
+
+/** missing | present (byte-identical to the resource) | diverged (exists,
+ * differs) -- statusForEntry()'s own return type, reused by resourcesStatus(). */
+export type ResourceStatus = "missing" | "present" | "diverged";
 
 /** This module directory's resources/ subdirectory -- a plain SIBLING of this
  * module (scripts/ was flattened away in the .claude/mcp/vice/ move), the
@@ -49,7 +84,7 @@ export const RESOURCES_DIR = join(HERE, "resources");
 
 /** Where resources/ gets deployed to, for a given repo root. Always
  * `<root>/tools` -- the host's existing muscle-memory location. */
-export function installTargetDir(root) {
+export function installTargetDir(root: string): string {
   return join(root, "tools");
 }
 
@@ -57,8 +92,8 @@ export function installTargetDir(root) {
  * "/"-joined) of every regular file underneath it -- a WALK, not a hardcoded
  * list, so a file added under resources/lib/ later deploys with no code
  * change here. */
-function walk(dir, base = "") {
-  const out = [];
+function walk(dir: string, base = ""): string[] {
+  const out: string[] = [];
   for (const dirent of readdirSync(dir, { withFileTypes: true })) {
     const rel = base ? `${base}/${dirent.name}` : dirent.name;
     const abs = join(dir, dirent.name);
@@ -71,7 +106,7 @@ function walk(dir, base = "") {
   return out;
 }
 
-export function resourceEntries() {
+export function resourceEntries(): string[] {
   return walk(RESOURCES_DIR);
 }
 
@@ -79,7 +114,7 @@ export function resourceEntries() {
  * differs). An unreadable target is treated as "diverged" -- conservative on
  * purpose, so a permissions oddity never gets silently reported as
  * "present" and skipped. */
-function statusForEntry(entry, root) {
+function statusForEntry(entry: string, root: string): ResourceStatus {
   const src = join(RESOURCES_DIR, entry);
   const target = join(installTargetDir(root), entry);
   if (!existsSync(target)) return "missing";
@@ -91,8 +126,8 @@ function statusForEntry(entry, root) {
 }
 
 /** Per-entry status against a given repo root, without writing anything. */
-export function resourcesStatus({ root } = {}) {
-  const out = {};
+export function resourcesStatus({ root }: { root: string }): Record<string, ResourceStatus> {
+  const out: Record<string, ResourceStatus> = {};
   for (const entry of resourceEntries()) {
     out[entry] = statusForEntry(entry, root);
   }
@@ -107,16 +142,16 @@ export function resourcesStatus({ root } = {}) {
  * type -- the same cross-skill shape tools/recover.mjs already uses -- and
  * degrades to the container path plus hostpath.mjs's own SET_ENV_HINT when
  * translation fails (e.g. no /proc/self/mountinfo, or an unmapped mount). */
-export function hostLaunchInstructions(root) {
+export function hostLaunchInstructions(root: string): string {
   const target = join(installTargetDir(root), "vice-supervisor.sh");
-  let displayPath;
+  let displayPath: string;
   try {
     displayPath = hostPath(target, { workspaceRoot: root });
   } catch {
     displayPath = `${target}\n  (host path could not be determined -- ${SET_ENV_HINT})`;
   }
   const brokerTarget = join(installTargetDir(root), "vice-broker.sh");
-  let brokerDisplayPath;
+  let brokerDisplayPath: string;
   try {
     brokerDisplayPath = hostPath(brokerTarget, { workspaceRoot: root });
   } catch {
@@ -145,7 +180,7 @@ export const DEPLOY_MANIFEST_NAME = ".vice-deployed.json";
 
 /** Where the manifest lives, for a given repo root -- always beneath
  * installTargetDir(root), same as every other deployed entry. */
-export function deployManifestPath(root) {
+export function deployManifestPath(root: string): string {
   return join(installTargetDir(root), DEPLOY_MANIFEST_NAME);
 }
 
@@ -159,18 +194,18 @@ export function deployManifestPath(root) {
  * failure (ENOENT, EACCES, a directory at that path, ...), the inner catches
  * a JSON.parse failure -- matching readJsonMaybe()'s posture elsewhere in
  * this module tree (vice-broker-client.mjs) exactly. */
-export function readDeployManifest(root) {
-  let raw;
+export function readDeployManifest(root: string): string[] {
+  let raw: string;
   try {
     raw = readFileSync(deployManifestPath(root), "utf8");
   } catch {
     return [];
   }
   try {
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return [];
+    const parsed: unknown = JSON.parse(raw);
+    if (!isPlainObject(parsed)) return [];
     if (!Array.isArray(parsed.entries)) return [];
-    return parsed.entries;
+    return parsed.entries as string[];
   } catch {
     return [];
   }
@@ -184,7 +219,7 @@ export function readDeployManifest(root) {
  * is sorted before being written so the on-disk manifest is stable and
  * diff-friendly across runs that deploy the same resource set in a
  * different enumeration order. */
-export function writeDeployManifest(root, entries) {
+export function writeDeployManifest(root: string, entries: Iterable<string>): void {
   const target = deployManifestPath(root);
   mkdirSync(dirname(target), { recursive: true });
   const tmpPath = `${target}.tmp-${process.pid}-${Date.now()}`;
@@ -201,7 +236,7 @@ export function writeDeployManifest(root, entries) {
  * `..`-escaping path, and anything else that would resolve outside the
  * deployment target (T-01.6-12). Every check here runs BEFORE any
  * filesystem access is attempted on `entry`. */
-function isSafeManifestCandidate(entry, targetDir) {
+function isSafeManifestCandidate(entry: unknown, targetDir: string): entry is string {
   if (typeof entry !== "string" || entry.length === 0) return false;
   if (isAbsolute(entry)) return false;
   if (entry.split(/[\\/]/).includes("..")) return false;
@@ -237,10 +272,16 @@ function isSafeManifestCandidate(entry, targetDir) {
  * Returns { pruned, skipped, failed }, arrays of the candidate's manifest-
  * recorded relative path.
  */
-export function pruneResources({ root, log = console.error } = {}) {
-  const pruned = [];
-  const skipped = [];
-  const failed = [];
+export function pruneResources({
+  root,
+  log = console.error,
+}: {
+  root: string;
+  log?: (message: string) => void;
+}): PruneResourcesResult {
+  const pruned: string[] = [];
+  const skipped: string[] = [];
+  const failed: string[] = [];
 
   const manifestEntries = readDeployManifest(root);
   const currentEntries = new Set(resourceEntries());
@@ -267,7 +308,7 @@ export function pruneResources({ root, log = console.error } = {}) {
       failed.push(entry);
       log(
         `warn: install-resources: prune failed to remove retired entry ${entry} from ${resolvedTarget} -- ` +
-          `${e.message}. Continuing; a failed prune must never break the caller.`
+          `${(e as Error).message}. Continuing; a failed prune must never break the caller.`
       );
     }
   }
@@ -296,11 +337,19 @@ export function pruneResources({ root, log = console.error } = {}) {
  * Returns { installed, skipped, diverged, failed, pruned }, arrays of the
  * resource's relative path (or, for `pruned`, the manifest's recorded path).
  */
-export function installResources({ root, force = false, log = console.error } = {}) {
-  const installed = [];
-  const skipped = [];
-  const diverged = [];
-  const failed = [];
+export function installResources({
+  root,
+  force = false,
+  log = console.error,
+}: {
+  root: string;
+  force?: boolean;
+  log?: (message: string) => void;
+}): InstallResourcesResult {
+  const installed: string[] = [];
+  const skipped: string[] = [];
+  const diverged: string[] = [];
+  const failed: string[] = [];
 
   for (const entry of resourceEntries()) {
     const src = join(RESOURCES_DIR, entry);
@@ -326,7 +375,7 @@ export function installResources({ root, force = false, log = console.error } = 
     } catch (e) {
       failed.push(entry);
       log(
-        `warn: install-resources: failed to deploy ${entry} to ${target} -- ${e.message}. ` +
+        `warn: install-resources: failed to deploy ${entry} to ${target} -- ${(e as Error).message}. ` +
           "Continuing; a failed deployment must never break the caller."
       );
     }
@@ -344,7 +393,7 @@ export function installResources({ root, force = false, log = console.error } = 
     writeDeployManifest(root, resourceEntries());
   } catch (e) {
     log(
-      `warn: install-resources: failed to write the deploy manifest -- ${e.message}. ` +
+      `warn: install-resources: failed to write the deploy manifest -- ${(e as Error).message}. ` +
         "Continuing; a failed manifest write must never break the caller."
     );
   }
@@ -371,19 +420,19 @@ export function installResources({ root, force = false, log = console.error } = 
 let _resourcesInstallAttempted = false;
 
 /**
- * The fire-once entry point, wired from the bottom of repo-root.mjs's module
+ * The fire-once entry point, wired from the bottom of repo-root.ts's module
  * body. Never throws (D-3): the whole body runs inside a try/catch that
  * degrades to a stderr warning. Does nothing at all when
  * VICE_SKIP_RESOURCE_INSTALL=1 (D-7's env opt-out), and does nothing on any
  * call after the first in this process.
  */
-export function ensureResourcesInstalled({ root } = {}) {
+export function ensureResourcesInstalled({ root }: { root: string }): void {
   if (_resourcesInstallAttempted) return;
   _resourcesInstallAttempted = true;
   if (process.env.VICE_SKIP_RESOURCE_INSTALL === "1") return;
   try {
     installResources({ root });
   } catch (e) {
-    console.error(`warn: install-resources: ensureResourcesInstalled failed -- ${e.message}`);
+    console.error(`warn: install-resources: ensureResourcesInstalled failed -- ${(e as Error).message}`);
   }
 }
