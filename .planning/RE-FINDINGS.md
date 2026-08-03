@@ -2109,3 +2109,48 @@ time: `if (mutableVar) <closure using mutableVar>` inside a `try`/`finally` clea
 exactly the pattern this project's test helpers use repeatedly for "close the stand-in server if
 one was ever created," and every future conversion of a similar helper should reach for the
 capture-into-a-const idiom immediately rather than debugging the narrowing loss from scratch.
+
+### 2026-08-03 — `tools/vice-launcher.sh` CANNOT produce a `node_version` broker record while a real (bash) broker is alive, and running it to try would trade the working daemon for a record that reads as `never_started`
+
+**Type:** dead end (an approach that looked right and was not) + hazard
+**Evidence:** live, this session (`/gsd-verify-work 01.6.1`, UAT test 3). Phase 01.6's backstop
+truth expects `broker.json` to carry `pid`/`started_at`/`node_version` written by
+`vice-launcher.sh` → `exec node tools/vice-broker.mjs`. With the host broker up and serving this
+session's lease, the live `.vice-supervisor/broker.json` was read directly (it is inside the
+mounted workspace, so it is readable from the container) and shows `pid`/`started_at` present,
+`node_version` **absent**, and `"written_by": "vice-broker.sh"` — i.e. the record was written by
+the **2,103-line bash daemon** (`resources/vice-broker.sh`), which does not emit `node_version`.
+That absence is correct behaviour for the bash writer, not a defect.
+
+The obvious next move — "restart with a fresh broker via the launcher so the Node path writes the
+record" — is a dead end, for three independent reasons found by reading the source rather than by
+trying it:
+
+1. **Double refuse-to-clobber guard.** `vice-broker.mts:132-140`'s `writeBrokerRecord()` refuses
+   if `pidIsAlive(existing.pid)` (the bash broker's pid was alive) **and** separately refuses if
+   the existing record `hasOwnProperty("heartbeat_at")` (it did: `heartbeat_at` was present).
+   Either guard alone makes the write refuse and exit non-zero. So the launcher cannot write a
+   `node_version` record at all while a real broker is alive.
+2. **It is a tracer, not a broker.** `vice-broker.mts` is **190 lines** with no `setInterval`, no
+   listener and no poll loop — `main()` writes one record, sets `process.exitCode`, returns. The
+   real broker is the 2,103-line `resources/vice-broker.sh`. Phase 01.6 was "prove the build
+   topology end-to-end on ONE REAL MODULE"; this is that module, not a broker implementation.
+3. **Succeeding would strand every later session.** `vice-broker.mts:14-20` states it
+   "DELIBERATELY OMITS heartbeat_at" because `vice-broker-client`'s `readBrokerLiveness()`
+   classifies a heartbeat-less record as `never_started` — "adding a heartbeat field here would
+   make an inert record read as 'alive' to every session's proxy and strand it on a request nobody
+   serves." So the only state in which the launcher *can* write (dead pid, no heartbeat) is also a
+   state in which it leaves no daemon behind and the record it leaves says nobody is home.
+
+**Confidence:** HIGH for guards 1–3 and the bash-authorship of the live record (source read
+directly plus the live `broker.json` inspected in-session). The end-to-end host ritual was
+deliberately NOT executed, so the claim "the launcher would write `node_version` once the record
+is clear" remains MEDIUM — mechanism-derived, matching `01.6-VERIFICATION.md`'s own backstop
+status, not run.
+
+**Saves/costs:** saves a self-inflicted emulator outage. The tempting remedy for the missing
+`node_version` field costs the working broker and produces a record that actively misinforms the
+next session's proxy. The field arrives honestly in **Phase 01.6.2**, which replaces the bash
+daemon with a TypeScript process that genuinely *is* the broker — at which point `node_version` is
+written by a live process with a heartbeat, and the truth becomes verifiable without stopping
+anything. Do not chase this field before then.
