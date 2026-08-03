@@ -584,7 +584,7 @@ Plans:
 
 **Risks**: This is the bulk of the line count and the place a mechanical conversion drifts silently. `vice-proxy.mjs`'s ~2,100 lines of project-specific logic (broker leasing, epoch/liveness, recycle/diagnose, deny-list, path rewriting, incident capture) must come through untouched — 01.6.3 swaps its transport seam afterwards, and doing both at once would make a regression ambiguous.
 
-**Plans:** 5/8 plans executed
+**Plans:** 6/8 plans executed
 
 Plans:
 **Wave 1**
@@ -609,7 +609,7 @@ Plans:
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
-- [ ] 01.6.1-06-PLAN.md — Slices 7–8: `refresh-manifest` and `vice-sync` convert **and get their first-ever coverage**; the emulator-dependent checkpoint primitives recorded as machine-visible todos, never faked with a stub
+- [x] 01.6.1-06-PLAN.md — Slices 7–8: `refresh-manifest` and `vice-sync` convert **and get their first-ever coverage**; the emulator-dependent checkpoint primitives recorded as machine-visible todos, never faked with a stub
 
 **Wave 7** *(blocked on Wave 6 completion)*
 
