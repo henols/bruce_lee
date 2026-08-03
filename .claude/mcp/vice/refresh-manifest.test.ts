@@ -34,14 +34,14 @@ try {
   realManifestBefore = null;
 }
 
-function withTempManifestPath<T>(fn: (path: string) => T): T {
+async function withTempManifestPath<T>(fn: (path: string) => Promise<T> | T): Promise<T> {
   const dir = mkdtempSync(join(tmpdir(), "vice-manifest-test-"));
   const path = join(dir, "tools-manifest.json");
   const prevPath = process.env.VICE_TOOLS_MANIFEST;
   const prevExitCode = process.exitCode;
   process.env.VICE_TOOLS_MANIFEST = path;
   try {
-    return fn(path);
+    return await fn(path);
   } finally {
     if (prevPath === undefined) delete process.env.VICE_TOOLS_MANIFEST;
     else process.env.VICE_TOOLS_MANIFEST = prevPath;
