@@ -21,11 +21,11 @@
 import { readFileSync, mkdirSync, openSync, writeFileSync, chmodSync, renameSync } from "node:fs";
 import { join, basename, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
-import { spawn as nodeSpawn } from "node:child_process";
+import { spawn as nodeSpawn, type ChildProcess } from "node:child_process";
 
 import { containerGuardReport, containerGuardEnforce } from "./container-guard.mjs";
-import { createBrokerState, nextFreePort, type BrokerState } from "./broker-state.mjs";
-import { tryLaunchOne } from "./broker-launch.mjs";
+import { createBrokerState, nextFreePort, countReady, countTotal, countLaunching, type BrokerState, type InstanceRecord } from "./broker-state.mjs";
+import { acquirePortAndLaunch, maintainWarmFloor, probeReady, runBrokerPass } from "./broker-launch.mjs";
 import { verifiedKill } from "./broker-kill.mjs";
 import { writeEpochRecord, type EpochRecord } from "./broker-epoch.mjs";
 import { startControlListener, newControlToken, type AcquireGrant } from "./broker-control.mjs";
@@ -142,49 +142,123 @@ function writeBrokerRecordFile(stateDir: string, record: BrokerRecord): string {
   return finalPath;
 }
 
+/** Builds a spawn function that redirects the child's stdout/stderr into a
+ * FRESH per-launch log file under logDir (D-23: per-instance boot/crash
+ * logs survive under .vice-supervisor/<port>/logs/, same paths, same
+ * format as the retiring bash supervisor), returning both the spawn
+ * closure and the log's path relative to supervisorDir (the epoch
+ * record's own `log` field). Shared by both launch paths -- a cold
+ * acquire and warm-floor maintenance -- so there is exactly one place that
+ * opens a launch log fd. */
+function makeLoggingSpawn(logDir: string): { spawn: (cmd: string, args: string[]) => ReturnType<typeof nodeSpawn>; logRelPath: string } {
+  mkdirSync(logDir, { recursive: true });
+  const viceBinForLog = basename(process.env.VICE_BIN ?? "x64sc");
+  const logName = `${viceBinForLog}-${Date.now()}.log`;
+  const logFd = openSync(join(logDir, logName), "a");
+  return {
+    spawn: (cmd, cmdArgs) => nodeSpawn(cmd, cmdArgs, { stdio: ["ignore", logFd, logFd] }),
+    logRelPath: `logs/${logName}`,
+  };
+}
+
+/** Writes the epoch record for a just-launched instance -- shared by both
+ * launch paths so D-04's contract (format, location, atomic-write
+ * discipline, all unchanged -- only the writer moves) is discharged from
+ * exactly one place regardless of WHY the instance was launched. A
+ * granted instance and a still-warm spare are equally real processes; both
+ * need a real epoch.json the moment they exist, or plan 04's grant-time
+ * re-probe (which reads a spare's recorded epoch_file, per
+ * grant_from_spare()'s bash original) would carry forward a path to
+ * nothing. */
+function writeEpochForLaunch(record: InstanceRecord, logRelPath: string): void {
+  const epochRecord: EpochRecord = {
+    epoch: 1,
+    spawned_at: new Date(record.launchedAt).toISOString(),
+    pid: record.pid as number,
+    supervisor_pid: process.pid,
+    vice_bin: record.viceBin,
+    vice_args: record.viceArgs,
+    log: logRelPath,
+    dry_run: false,
+  };
+  writeEpochRecord({ supervisorDir: record.supervisorDir, record: epochRecord });
+}
+
 /** Allocates a port, launches through tryLaunchOne() (the single in_flight
  * owner), writes the epoch record, and records the grant. Returns null on
  * a launch failure -- the caller reports that as an `internal` control
  * error; the full denied/no_free_port/at_capacity vocabulary is plan 05's. */
 async function handleAcquire(requestId: string, stateDir: string, state: BrokerState): Promise<AcquireGrant | null> {
-  const port = nextFreePort(state);
-  const supervisorDir = join(stateDir, String(port));
-  const epochFile = join(supervisorDir, "epoch.json");
-  const logDir = join(supervisorDir, "logs");
-  mkdirSync(logDir, { recursive: true });
-
-  const viceBinForLog = basename(process.env.VICE_BIN ?? "x64sc");
-  const logName = `${viceBinForLog}-${Date.now()}.log`;
-  const logFd = openSync(join(logDir, logName), "a");
-
-  const record = tryLaunchOne("acquire", port, {
+  // acquirePortAndLaunch() holds the single in_flight owner across its own
+  // async port allocation (not merely tryLaunchOne()'s synchronous spawn
+  // instant) -- see that function's own header comment for the race this
+  // closes between a cold acquire and a concurrent warm-floor pass. This
+  // is also what restores vice-broker.sh's own process_requests() throttle:
+  // a cold acquire that arrives while ANY launch (cold or warm) is already
+  // under way is refused here, matching the bash original's declined-to-
+  // change behaviour, rather than racing a second instance into existence.
+  let lastLogRelPath = "";
+  const result = await acquirePortAndLaunch("acquire", {
     state,
-    supervisorDir,
-    epochFile,
-    spawn: (cmd, cmdArgs) => nodeSpawn(cmd, cmdArgs, { stdio: ["ignore", logFd, logFd] }),
+    stateDir,
+    allocatePort: nextFreePort,
+    spawnFactory: (port: number) => {
+      const supervisorDir = join(stateDir, String(port));
+      const { spawn, logRelPath } = makeLoggingSpawn(join(supervisorDir, "logs"));
+      lastLogRelPath = logRelPath;
+      return spawn;
+    },
   });
 
-  if (!record || record.pid === null) {
+  if (!result.ok || result.record.pid === null) {
     return null;
   }
+  const record = result.record;
 
-  const epochRecord: EpochRecord = {
-    epoch: 1,
-    spawned_at: new Date(record.launchedAt).toISOString(),
-    pid: record.pid,
-    supervisor_pid: process.pid,
-    vice_bin: record.viceBin,
-    vice_args: record.viceArgs,
-    log: `logs/${logName}`,
-    dry_run: false,
-  };
-  writeEpochRecord({ supervisorDir, record: epochRecord });
+  writeEpochForLaunch(record, lastLogRelPath);
 
-  state.grants.set(requestId, { id: requestId, port, grantedAt: Date.now() });
+  state.grants.set(requestId, { id: requestId, port: record.port, grantedAt: Date.now() });
   record.state = "granted";
 
-  return { port, url: record.url, epochFile, supervisorDir };
+  return { port: record.port, url: record.url, epochFile: record.epochFile, supervisorDir: record.supervisorDir };
 }
+
+/** The warm-floor concern of the fixed-order evaluation pass (D-24 drops
+ * the projection write; the grant sweep does not appear -- D-12's
+ * connection-is-the-lease). Builds a fresh MaintainWarmFloorDeps per call
+ * (never reused across passes) wiring broker-state.mjs's real
+ * allocatePort/counts and broker-launch.mjs's real probeReady, and hooks
+ * onLaunched to write the SAME epoch record a cold acquire writes -- a
+ * warm spare is a real process the moment it exists, per D-04. */
+function maintainWarmFloorForRealBroker(stateDir: string, state: BrokerState): Promise<void> {
+  return maintainWarmFloor({
+    state,
+    stateDir,
+    spawnFactory: (port: number) => {
+      const supervisorDir = join(stateDir, String(port));
+      const { spawn, logRelPath } = makeLoggingSpawn(join(supervisorDir, "logs"));
+      return (cmd: string, args: string[]) => {
+        const child = spawn(cmd, args);
+        // Stash the log path where onLaunched (fired synchronously right
+        // after this returns, still within the SAME maintainWarmFloor()
+        // call -- at most one launch per call, per the serialised-warming
+        // invariant) can find it.
+        lastWarmLaunchLogRelPath = logRelPath;
+        return child;
+      };
+    },
+    probe: (port: number) => probeReady(port),
+    allocatePort: nextFreePort,
+    countReady,
+    countTotal,
+    countLaunching,
+    onLaunched: (record: InstanceRecord) => {
+      writeEpochForLaunch(record, lastWarmLaunchLogRelPath);
+    },
+    log: (line: string) => process.stderr.write(`${line}\n`),
+  });
+}
+let lastWarmLaunchLogRelPath = "";
 
 /** Releases a grant and identity-verified-kills its instance. Fire-and-
  * forget from the control listener's close handler's own perspective --
@@ -259,6 +333,36 @@ async function run(args: ParsedArgs): Promise<void> {
     record = { ...record, heartbeat_at: new Date().toISOString() };
     writeBrokerRecordFile(args.stateDir, record);
   }, heartbeatMs);
+
+  // The fixed-order evaluation pass (runBrokerPass, broker-launch.mts):
+  // serve pending acquires, then maintain the warm floor -- mirroring
+  // vice-broker.sh's own broker_once() ordering. Ticks on
+  // VICE_BROKER_POLL_MS (default 500, the SAME env var name and semantics
+  // the bash daemon used). serveAcquires is a documented no-op here: under
+  // this phase's TCP control plane (plan 01), an acquire is already served
+  // immediately, per connection, by onAcquire above -- there is no
+  // file-based request queue left to iterate. It stays a named, orderable
+  // step because plan 05 adds the real arrival-ordered queue (D-08) here.
+  // Re-entrancy guarded: a pass that is still running (e.g. a slow external
+  // VICE_BROKER_PROBE_CMD) is never overlapped by the next tick.
+  const pollMs = Number(process.env.VICE_BROKER_POLL_MS) || 500;
+  let passInFlight = false;
+  setInterval(() => {
+    if (passInFlight) return;
+    passInFlight = true;
+    runBrokerPass({
+      serveAcquires: () => {
+        // no-op by construction -- see this block's own header comment.
+      },
+      maintainWarmFloor: () => maintainWarmFloorForRealBroker(args.stateDir, state),
+    })
+      .catch((e) => {
+        process.stderr.write(`vice-broker: evaluation pass failed: ${(e as Error).message}\n`);
+      })
+      .finally(() => {
+        passInFlight = false;
+      });
+  }, pollMs);
 }
 
 /** Parses argv, evaluates the container guard FIRST -- before any state

@@ -353,6 +353,10 @@ const NETWORK_CALL_PATTERNS: RegExp[] = [
 const JUSTIFIED_NETWORK_CALLERS: Record<string, string> = {
   "broker-control.mts":
     "N/D-01: this IS the control listener (createServer) -- the host-side broker's own TCP acceptor. The broker owns the emulator's lifecycle; this is not container-side code reaching the emulator.",
+  "broker-state.mts":
+    "Plan 02, C4: defaultPortInUse() binds-and-releases a candidate port on 127.0.0.1 to answer 'is a TCP listener already bound here' for the broker's OWN port allocator (never a readiness check against the emulator itself). Host-side broker code inspecting its own host's ports; not container-side code reaching the emulator.",
+  "broker-launch.mts":
+    "Plan 02, D-05's permitted-route note: probeReady()'s HTTP branch is a POST against the instance's own /mcp endpoint using the global fetch, matching vice-broker.sh's own curl-based probe_ready(). This is host-side broker code owning the emulator's lifecycle (it already probes today, per RESEARCH.md D-05) -- not container-side code reaching the emulator outside mcp__vice__*.",
 };
 
 test("structural: every host-bound source containing a network-call construct carries an explicit justification; the launcher stays network-free", () => {
