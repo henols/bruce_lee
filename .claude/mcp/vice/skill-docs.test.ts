@@ -96,12 +96,12 @@ const DOC_NAMEABLE_MODULES = {
     "named verbatim in .claude/CLAUDE.md's Emulator Access section as the generated-resources/ enforcement mechanism -- a maintainer instruction, not a route to the emulator",
 };
 
-test("module directory enumeration is non-empty and anchored on vice-sync.mjs", () => {
+test("module directory enumeration is non-empty and anchored on vice-sync.ts", () => {
   const modules = scriptModules();
   assert.ok(modules.length > 0, "module directory enumerated as empty -- glob or path resolution is broken");
   assert.ok(
-    modules.includes("vice-sync.mjs"),
-    "vice-sync.mjs not found in the module directory -- the enumeration cannot be trusted if it misses a module known to exist"
+    modules.includes("vice-sync.ts"),
+    "vice-sync.ts not found in the module directory -- the enumeration cannot be trusted if it misses a module known to exist"
   );
 });
 

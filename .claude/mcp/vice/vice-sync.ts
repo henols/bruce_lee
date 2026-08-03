@@ -31,6 +31,18 @@
 //      checkpoint's own `hit_count`.
 //   3. Never delete a checkpoint VICE marked `temporary`.
 //
+// These three invariants are also precisely why 01.6.1-06 cannot cover
+// readCheckpoint()/waitCheckpointHit()/runToCheckpoint()/reset()/
+// screenshot() with a unit test: each is only meaningful against a real
+// emulator's timing (a stub server answering fast and deterministically
+// would prove nothing about a resume count or a hit_count race), and
+// mcp__vice__* is this project's only permitted route to that emulator --
+// a test process cannot open its own connection (CLAUDE.md's hard rule).
+// vice-sync.test.ts records this as five named `todo` entries rather than
+// faking it with a stub. Everything else below (addrNum, hex4, the two
+// timing constants, the armedCheckpoints tracker) is pure or near-pure and
+// IS covered for real.
+//
 // `tryHostPaths` (used by screenshot() below) comes from the sibling
 // `devcontainer-host-path` skill -- and that is not a new dependency this
 // module introduces. This module tree's own resource-deployment path already
@@ -48,8 +60,8 @@
 // (repo-root.ts -> install-resources.ts -> hostpath.ts -> repo-root.ts)
 // -- it only calls repoRoot() lazily, inside screenshot(), well after every
 // cycle member has already finished evaluating -- but this import is exactly
-// the kind of fresh route load-order.test.mjs's module-scope call-site guard
-// (Part 3, added in this same plan) exists to police: a future top-level,
+// the kind of fresh route load-order.test.ts's module-scope call-site guard
+// (Part 3, added in 01.6.1-02) exists to police: a future top-level,
 // unguarded `repoRoot()` call added here would rebuild the TDZ hazard by a
 // new path even though the three-module cycle itself is gone.
 import { mkdirSync } from "node:fs";
@@ -59,7 +71,7 @@ import { call } from "./vice.ts";
 import { tryHostPaths } from "./hostpath.ts";
 import { repoRoot } from "./repo-root.ts";
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 /**
  * Normalise an address to a number, accepting either a number or a string in
@@ -69,7 +81,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  * "invalid hex address" -- so every address entering a vice_* call goes
  * through here first.
  */
-export function addrNum(a) {
+export function addrNum(a: number | string): number {
   if (typeof a === "number") return a;
   if (typeof a === "string") {
     const s = a.trim().replace(/^\$/, "").replace(/^0x/i, "");
@@ -79,7 +91,7 @@ export function addrNum(a) {
   throw new Error(`addrNum: cannot interpret ${JSON.stringify(a)} as an address`);
 }
 
-export const hex4 = (n) => `$${addrNum(n).toString(16).toUpperCase().padStart(4, "0")}`;
+export const hex4 = (n: number | string): string => `$${addrNum(n).toString(16).toUpperCase().padStart(4, "0")}`;
 
 // Each poll cycle is: read state (which PAUSES the machine), resume, then let
 // it run for one window. The window is not idle waiting -- it is the only
@@ -97,10 +109,14 @@ export const hex4 = (n) => `$${addrNum(n).toString(16).toUpperCase().padStart(4,
 // (`vice_execution_run` or checkpoint work), so transition count is the one
 // risk factor we control. This schedule spans ~150s of emulated running in 8
 // round-trips instead of ~60.
-export const POLL_WINDOWS_MS = [3000, 6000, 12000, 20000, 25000, 28000, 28000, 28000];
+//
+// Typed as a readonly array (01.6.1-06): a later mutation (push/splice/index
+// assignment) is now a compile error rather than a silent runtime change to
+// a timing contract other code reasons about.
+export const POLL_WINDOWS_MS: readonly number[] = [3000, 6000, 12000, 20000, 25000, 28000, 28000, 28000];
 // How often to ask `vice_ping` whether the machine has stopped yet. Ping is
 // free (it does not pause the machine), so this only costs a round-trip.
-export const PING_INTERVAL_MS = 1000;
+export const PING_INTERVAL_MS: number = 1000;
 
 // NOTE: a `waitPaused()` helper used to live here, polling vice_ping until
 // execution reported "paused". It is deliberately DELETED, not kept "just in
@@ -111,6 +127,19 @@ export const PING_INTERVAL_MS = 1000;
 // caller then read hit_count 0 and either refused or captured from the wrong
 // place. Wait on the checkpoint's own hit_count instead -- see
 // waitCheckpointHit below. Do not reintroduce a paused-poll.
+
+/** The shape of one entry from vice_checkpoint_list/vice_checkpoint_add --
+ * loosely typed (`start` accepts either form addrNum() itself accepts,
+ * unknown fields pass through) since this module only ever reads
+ * checkpoint_num/start/hit_count/temporary off it, never asserts a closed
+ * shape. */
+export interface Checkpoint {
+  checkpoint_num: number;
+  start?: number | string;
+  hit_count?: number;
+  temporary?: boolean;
+  [key: string]: unknown;
+}
 
 // Checkpoints this harness itself armed for its own reasons (a boot gate, the
 // dump trigger), tracked here so assertSameMachine()'s checkpoint-fallback
@@ -127,18 +156,26 @@ export const PING_INTERVAL_MS = 1000;
 // arm/wait/delete so it can interleave the identity check and the held-key
 // release between the wait and the delete -- must register ids in the same
 // place. One source of truth, both callers writing through one door.
-const armedCheckpointIds = new Set();
-export const armedCheckpoints = {
-  track(id) {
+const armedCheckpointIds = new Set<number>();
+
+export interface ArmedCheckpointTracker {
+  track(id: number): void;
+  untrack(id: number): void;
+  ids(): number[];
+  clear(): void;
+}
+
+export const armedCheckpoints: ArmedCheckpointTracker = {
+  track(id: number): void {
     armedCheckpointIds.add(id);
   },
-  untrack(id) {
+  untrack(id: number): void {
     armedCheckpointIds.delete(id);
   },
-  ids() {
+  ids(): number[] {
     return [...armedCheckpointIds];
   },
-  clear() {
+  clear(): void {
     armedCheckpointIds.clear();
   },
 };
@@ -153,11 +190,16 @@ export const armedCheckpoints = {
  * is a checkpoint hit, never an elapsed duration -- a duration cannot be
  * re-armed, and success criterion 1's byte-identical claim depends on the stop
  * point being re-armable.
+ *
+ * NOT unit-tested (01.6.1-06): needs a real emulator's vice_checkpoint_list
+ * to exercise meaningfully; see vice-sync.test.ts's named todo entry.
  */
-export async function readCheckpoint(cpId, addr) {
-  const { checkpoints } = await call("vice_checkpoint_list", {});
-  return checkpoints.find((c) => c.checkpoint_num === cpId) ||
-         checkpoints.find((c) => addrNum(c.start) === addr);
+export async function readCheckpoint(cpId: number | null, addr: number): Promise<Checkpoint | undefined> {
+  const { checkpoints } = (await call("vice_checkpoint_list", {})) as { checkpoints: Checkpoint[] };
+  return (
+    checkpoints.find((c) => c.checkpoint_num === cpId) ||
+    checkpoints.find((c) => c.start !== undefined && addrNum(c.start) === addr)
+  );
 }
 
 /**
@@ -177,21 +219,25 @@ export async function readCheckpoint(cpId, addr) {
  * resuming would run straight past the dump point), then resume, then wait for
  * `paused`, then CONFIRM via hit_count that the stop was actually this
  * checkpoint rather than something else.
+ *
+ * NOT unit-tested (01.6.1-06): the exactly-one-resume and poll-on-hit_count
+ * invariants only mean something against a real emulator's timing; see
+ * vice-sync.test.ts's named todo entry.
  */
-export async function waitCheckpointHit(cpId, addr, label) {
+export async function waitCheckpointHit(cpId: number | null, addr: number, label: string): Promise<Checkpoint> {
   // Already fired? Then we are standing on the trigger -- never resume past it.
   const pre = await readCheckpoint(cpId, addr);
-  if (pre && pre.hit_count >= 1) return pre;
+  if (pre && (pre.hit_count ?? 0) >= 1) return pre;
 
   await call("vice_execution_run", {}); // the single resume
   const budgetMs = POLL_WINDOWS_MS.reduce((a, b) => a + b, 0);
   const deadline = Date.now() + budgetMs;
   while (Date.now() < deadline) {
     await sleep(PING_INTERVAL_MS);
-    const p = await call("vice_ping", {}); // does not pause the machine
+    const p = (await call("vice_ping", {})) as { execution?: string };
     if (p.execution !== "paused") continue;
     const cp = await readCheckpoint(cpId, addr);
-    if (cp && cp.hit_count >= 1) return cp;
+    if (cp && (cp.hit_count ?? 0) >= 1) return cp;
     // Paused for some other reason: resume and keep waiting. Rare, and we
     // deliberately do not treat a bare pause as the trigger.
     await call("vice_execution_run", {});
@@ -199,7 +245,7 @@ export async function waitCheckpointHit(cpId, addr, label) {
   // Deadline passed -- one last read before giving up, in case the checkpoint
   // fired between the final ping and now.
   const last = await readCheckpoint(cpId, addr);
-  if (last && last.hit_count >= 1) return last;
+  if (last && (last.hit_count ?? 0) >= 1) return last;
 
   throw new Error(
     `waitCheckpointHit(${label} ${hex4(addr)}): checkpoint never fired within ${budgetMs / 1000}s. ` +
@@ -210,9 +256,14 @@ export async function waitCheckpointHit(cpId, addr, label) {
   );
 }
 
-export async function runToCheckpoint(addr, label) {
-  const added = await call("vice_checkpoint_add", { start: hex4(addr), exec: true, stop: true });
-  const id = added.checkpoint_num ?? added.checkpoint?.checkpoint_num;
+/** NOT unit-tested (01.6.1-06): composes readCheckpoint()/waitCheckpointHit()
+ * against a real emulator; see vice-sync.test.ts's named todo entry. */
+export async function runToCheckpoint(addr: number, label: string): Promise<{ id: number | null; hitCount?: number }> {
+  const added = (await call("vice_checkpoint_add", { start: hex4(addr), exec: true, stop: true })) as {
+    checkpoint_num?: number;
+    checkpoint?: { checkpoint_num?: number };
+  };
+  const id = added.checkpoint_num ?? added.checkpoint?.checkpoint_num ?? null;
   if (id != null) armedCheckpoints.track(id);
   // No resume here: waitCheckpointHit owns the single resume, so that the
   // vice_execution_run count stays at exactly one per wait.
@@ -228,14 +279,18 @@ export async function runToCheckpoint(addr, label) {
  * The clean-slate ritual, and a step of `recover` -- not an optional
  * courtesy. No bulk-clear checkpoint tool exists, so each returned id is
  * enumerated and deleted individually.
+ *
+ * NOT unit-tested (01.6.1-06): the never-delete-a-temporary-checkpoint
+ * invariant needs a real emulator's own `temporary` checkpoint flag; see
+ * vice-sync.test.ts's named todo entry.
  */
-export async function reset() {
+export async function reset(): Promise<void> {
   // Any checkpoint id tracked from a PRIOR run in this same process (e.g.
   // reproduce()'s second recover() call) is no longer valid once we're about
   // to delete every checkpoint the server knows about -- clear it here so a
   // later assertSameMachine() probe never gets tripped up by a stale id.
   armedCheckpoints.clear();
-  const { checkpoints } = await call("vice_checkpoint_list", {});
+  const { checkpoints } = (await call("vice_checkpoint_list", {})) as { checkpoints: Checkpoint[] };
   for (const cp of checkpoints) {
     // Never delete a checkpoint VICE marked `temporary`: those are created and
     // auto-reaped by vice_run_until, so by the time we enumerate them the id
@@ -246,14 +301,14 @@ export async function reset() {
     try {
       await call("vice_checkpoint_delete", { checkpoint_num: cp.checkpoint_num });
     } catch (e) {
-      console.error(`warn: checkpoint_delete ${cp.checkpoint_num} failed (continuing): ${e.message}`);
+      console.error(`warn: checkpoint_delete ${cp.checkpoint_num} failed (continuing): ${(e as Error).message}`);
     }
   }
   for (const unit of [8, 9, 10, 11]) {
     try {
       await call("vice_disk_detach", { unit });
     } catch (e) {
-      console.error(`warn: disk_detach unit ${unit} failed (continuing): ${e.message}`);
+      console.error(`warn: disk_detach unit ${unit} failed (continuing): ${(e as Error).message}`);
     }
   }
   await call("vice_machine_reset", { mode: "hard", run_after: false });
@@ -264,12 +319,16 @@ export async function reset() {
  * vice_display_screenshot must be a host path, exactly like the one handed to
  * vice_disk_attach. Passing the container path silently fails with
  * "Failed to save screenshot".
+ *
+ * NOT unit-tested (01.6.1-06): needs a real emulator to prove the host-path
+ * translation actually lands a screenshot; see vice-sync.test.ts's named
+ * todo entry.
  */
-export async function screenshot(containerPath) {
+export async function screenshot(containerPath: string): Promise<string> {
   mkdirSync(dirname(containerPath), { recursive: true });
   const { hostPath } = await tryHostPaths(
     containerPath,
-    (p) => call("vice_display_screenshot", { path: p }),
+    (p: string) => call("vice_display_screenshot", { path: p }),
     { workspaceRoot: repoRoot() }
   );
   return hostPath;

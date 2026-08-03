@@ -104,10 +104,9 @@ test("PING_INTERVAL_MS keeps its exact current value", () => {
 // a real emulator's timing to mean anything, and mcp__vice__* is this
 // project's only permitted route to the emulator, which a test process
 // cannot use (no test may open its own connection -- CLAUDE.md's hard
-// rule). No stub VICE server exists anywhere in this file (grep for
-// "createServer" in this file finds nothing) -- that is deliberate, per
-// PATTERNS.md and RESEARCH's explicit sanction of leaving this gap named
-// rather than faked.
+// rule). No stub HTTP listener of any kind exists anywhere in this file --
+// that is deliberate, per PATTERNS.md and RESEARCH's explicit sanction of
+// leaving this gap named rather than faked.
 test(
   "readCheckpoint() -- needs a real emulator's vice_checkpoint_list to exercise; mcp__vice__* is the only permitted route and a test process cannot use it",
   { todo: "requires a real emulator (vice_checkpoint_list) -- mcp__vice__* is the only permitted route; not testable from a test process" }
