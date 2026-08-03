@@ -1,4 +1,4 @@
-// node:test coverage of vice-broker-client.mjs in ISOLATION -- no broker
+// node:test coverage of vice-broker-client.ts in ISOLATION -- no broker
 // script and no proxy involved, matching vice-pool.test.mjs's own
 // in-process, synthetic-temp-dir style (mkdtempSync fixtures, no subprocess
 // needed for pure function coverage). Every exported function here reads
@@ -27,15 +27,15 @@ import {
   releaseLease,
   pollGrant,
   readBrokerLiveness,
-} from "./vice-broker-client.mjs";
+} from "./vice-broker-client.ts";
 
-const tmpPoolDir = () => mkdtempSync(join(tmpdir(), "vice-broker-client-test-"));
+const tmpPoolDir = (): string => mkdtempSync(join(tmpdir(), "vice-broker-client-test-"));
 
 /** Runs `fn` with VICE_POOL_DIR pointed at a fresh temp directory, restoring
  * the prior value (or deleting the var entirely) afterwards regardless of
  * how `fn` exits -- every exported function under test reads this env var
  * at call time, so this is the isolation seam for in-process testing. */
-async function withPoolDir(fn) {
+async function withPoolDir(fn: (dir: string) => Promise<void> | void): Promise<void> {
   const dir = tmpPoolDir();
   const prev = process.env.VICE_POOL_DIR;
   process.env.VICE_POOL_DIR = dir;
@@ -48,7 +48,7 @@ async function withPoolDir(fn) {
   }
 }
 
-const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
+const sleepMs = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 // -------------------------------------------------------------- request ids
 
@@ -178,7 +178,7 @@ test("pollGrant(): resolves granted:false and surfaces the denial's reason verba
     const result = await pollGrant(id, { timeoutMs: 5000, pollMs: 30 });
     assert.equal(result.granted, false);
     assert.equal(result.reason, "max_instances reached");
-    assert.equal(result.denial.reason, "max_instances reached");
+    assert.equal(result.denial?.reason, "max_instances reached");
   });
 });
 

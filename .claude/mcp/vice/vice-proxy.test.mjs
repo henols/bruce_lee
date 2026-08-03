@@ -41,9 +41,9 @@ import { tmpdir, networkInterfaces } from "node:os";
 import { hostPath } from "./hostpath.ts";
 import { repoRoot } from "./repo-root.ts";
 // Read-only import for test assertions only -- this test file does not
-// modify vice-broker-client.mjs (outside this plan's file-ownership set);
-// GRANT_POLL_TIMEOUT_MS is already exported for exactly this purpose.
-import { GRANT_POLL_TIMEOUT_MS } from "./vice-broker-client.mjs";
+// modify vice-broker-client.ts's own content; GRANT_POLL_TIMEOUT_MS is
+// already exported for exactly this purpose.
+import { GRANT_POLL_TIMEOUT_MS } from "./vice-broker-client.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PROXY_PATH = join(HERE, "vice-proxy.mjs");
@@ -1978,7 +1978,7 @@ test("teardown region: no promise-awaiting construct, and releaseLease() called 
   assert.doesNotMatch(region, /\.then\s*\(/, "the teardown region must contain no .then(");
   assert.doesNotMatch(region, /\basync\s+function\b|\basync\s*\(/, "the teardown region must define no async function");
 
-  // Exactly one filesystem call: releaseLease() (vice-broker-client.mjs) IS
+  // Exactly one filesystem call: releaseLease() (vice-broker-client.ts) IS
   // that one synchronous fs operation (an attempted unlinkSync) -- this
   // region calls INTO it rather than performing the unlink itself, so
   // asserting the call site appears exactly once is this region's own

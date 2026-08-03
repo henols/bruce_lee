@@ -48,7 +48,7 @@ import {
   writeRecycleRequest,
   pollRecycleAck,
   RECYCLE_ACK_TIMEOUT_MS,
-} from "./vice-broker-client.mjs";
+} from "./vice-broker-client.ts";
 // The recycle path's own incident record (plan 01.3-01) -- written BEFORE
 // anything is killed (D-17), never through any network call of its own.
 // incidentAssetPath()/incidentAssetStem() (plan 01.3-03) are the SAME stem-
@@ -1309,9 +1309,9 @@ function brokerWarmingMessage(elapsedMs) {
 /** Removes requests/<id>.json, best-effort. Called when a poll resolves to
  * a denial or a warming timeout, so a failed or still-warming acquisition
  * leaves no orphan request for the sweeper to reap later -- the request
- * file's own counterpart to releaseLease(id) (vice-broker-client.mjs),
+ * file's own counterpart to releaseLease(id) (vice-broker-client.ts),
  * which already handles the lease half of this cleanup. Uses requestsDir()
- * (already exported by vice-broker-client.mjs) rather than adding a new
+ * (already exported by vice-broker-client.ts) rather than adding a new
  * export there, so this task's file-ownership boundary (vice-proxy.mjs /
  * vice-proxy.test.mjs only) stays intact. */
 function removeRequestFile(id) {
@@ -1881,7 +1881,7 @@ async function ensureBrokerLease() {
   // written and no lease created -- there is nothing on the other side to
   // read a request, so writing one would litter the directory and delay the
   // diagnosis. readBrokerLiveness() re-reads broker.json fresh on every call
-  // (see its own implementation in vice-broker-client.mjs); nothing here
+  // (see its own implementation in vice-broker-client.ts); nothing here
   // memoises the verdict, so this is the broker-path instance of the same
   // never-cache-a-negative-result invariant the comment above
   // ensureViceSession() already states for the host path -- the call after a
@@ -1928,7 +1928,7 @@ async function ensureBrokerLease() {
   const containerized = containerizeGrant(result.grant);
   useInstance({ port: containerized.port, url: containerized.url, epochFile: containerized.epoch_file, pooled: true });
   viceSession = null; // re-baseline: the next ensureViceSession() reads the GRANTED instance's own epoch file
-  // startHeartbeat() (vice-broker-client.mjs) returns an unref'd interval
+  // startHeartbeat() (vice-broker-client.ts) returns an unref'd interval
   // timer -- unref'd so the TIMER never holds this process alive past its
   // natural lifetime; stdin being open is what does that. Keeping the timer
   // handle here is only so a future stop-the-heartbeat path has something to
