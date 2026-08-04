@@ -78,13 +78,26 @@ loop:   ldx $dc01                           ; $DC01 = Port B, keyboard matrix ro
 ```
 
 A header block listing every referenced address with its full description, symbol
-and region is prepended (elided above).
+and region is prepended (elided above): measured on the two examples on this page,
+the eleven-line listing above grows a 23-line header and the nine-line IRQ excerpt
+below grows a 25-line one — a little over 2x the input either way. Pass
+`--no-header` to drop it and get the annotated body alone.
 
 Options:
 
 - `--out FILE` writes the result to a file instead of stdout.
 - `--max-span N` keeps comments to hits narrower than N bytes, for terser output.
-  `--max-span 2` gives register- and variable-level comments only.
+  Default is 4096 bytes: at that width a hit as wide as screen RAM
+  (`$0400-$07E7`, 1000 bytes) or the `$C000-$CFFF` block still earns an inline
+  comment, while the 8 KB BASIC and KERNAL ROM blocks do not — a branch
+  annotated "KERNAL ROM (8192 bytes)" teaches nobody anything. The cap applies
+  only to non-flow instructions: flow instructions (`JMP`, `JSR`, branches,
+  `RTS`, `RTI`) are held to 2 bytes regardless of `--max-span`, so a jump or
+  branch only earns a comment when it targets a specific vector such as
+  `$0314`. `--max-span 2` gives register- and variable-level comments only.
+- `--no-header` suppresses the prepended header block, for piping annotated
+  output straight into a file across a large listing set.
+- `--file -` reads stdin, identical to a bare `annotate`.
 
 Piping works the same way, to annotate straight from another command:
 
@@ -120,6 +133,25 @@ Weigh a comment by the region it describes:
   there: annotating Bruce Lee at `$08E6` labels `LDA $49` as `FORPNT` ("value of
   current variable during LET"), while `$49` is really one of the game's own
   variables. Take the address, verify the meaning.
+- **A region-only answer is not an error.** An address that no source names
+  specifically prints only the wider regions enclosing it — no error, no
+  not-found line. `node $D lookup '$1234'` prints:
+  ```
+  === $1234 ===
+  $0801-$9FFF  [$0800-$9FFF, 2048-40959 BASIC area]  <sta>
+    Default BASIC area (38911 bytes).
+  $0800-$9FFF  [C64 memory map (labelled)]  <zim>
+    Normal BASIC Program space.
+  ```
+  This is the dominant case for Bruce Lee's own code: a region-only answer
+  means "the four tables do not name this exact address", not "this address is
+  unmapped". It differs from the genuine zero-hit case, where `lookup` prints
+  `(not in memory map)` because nothing at all covers the address
+  (driver.mjs:485-487). Checked directly against the committed table (a scan of
+  `memmap.json`, not a `memmap` rebuild): every address `$0000`-`$FFFF` is
+  covered by at least one entry as of this build, so `(not in memory map)` is
+  not reachable for any valid address today — the branch exists for a future
+  table that loses coverage, not for anything the current one omits.
 
 For a game, the fastest route to a real name is to annotate with `--max-span 2`,
 trust the I/O lines immediately, and confirm the rest by watching what the code
@@ -140,3 +172,28 @@ what the others leave out:
 The built table is committed alongside the script, so `lookup` and `annotate` need
 only Node. Rebuild when a source publishes a correction; `lookup`'s `<src>` tags
 show which table any given claim came from.
+
+`memmap` overwrites the committed, git-tracked `memmap.json` (driver.mjs:270 —
+235,925 bytes as of 2026-08-04, confirm with `wc -c`) **in place, with no backup
+and no diff.** One of the four sources (`http://unusedino.de/…`, driver.mjs:33)
+is fetched over plain HTTP with no TLS, and the only guard against a bad rebuild
+is a per-source emptiness check plus a 600-entry floor across all sources
+combined (driver.mjs:262, 268) — so a partially-reachable or partially-changed
+source set can silently replace good tracked data with less of it. Rebuild, then
+run `git diff --stat` on `memmap.json` before accepting the result, and
+`git checkout` the file if the diff is not explainable as the correction you
+were expecting. Because it mutates the repo, `memmap` belongs behind a GSD
+command (`/gsd-quick`), per this project's GSD Workflow Enforcement rule — it is
+not a read-only lookup like `lookup` and `annotate`.
+
+## Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| Comments land on regions too wide to be useful | `--max-span 2`; the default is 4096 bytes. |
+| A `JSR` or branch target got no comment at all | Flow instructions are capped at 2 bytes regardless of `--max-span`; `lookup` the target directly for the ROM routine name. |
+| The output is mostly header | `--no-header`. |
+| `lookup` printed only wide region lines and no specific name | Nothing in the four tables names that address; expected for the game's own code — take the region and name the address from what the code does with it. |
+| `lookup` printed `(not in memory map)` | Nothing covers it; check the address parsed as intended, since a bare `1234` reads as decimal. |
+| `no memmap.json; run: node driver.mjs memmap` | Restore the committed table with `git checkout` rather than rebuilding; the rebuild needs network and overwrites tracked data. |
+| `memmap` rewrote `memmap.json` and the diff is large or negative | A source was unreachable or changed; `git checkout` the file. |
