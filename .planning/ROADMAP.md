@@ -888,7 +888,7 @@ Plans:
 
 **Risks**: **The split's whole value is the seal boundary, and it is only real if this phase actually verifies** — a phase that seals on "the five tasks exist" rather than "each has a passing test" gives back exactly what the split bought. **Nothing here is live-verifiable either**, so criterion E's carry-forward list is this phase's most load-bearing deliverable, not its cleanup step. **The cross-phase ordering constraint is easy to lose across a phase boundary**: D-07 depends on a test that lives in 01.6.2's plans, so it must be a stated prerequisite in this phase's plan text and not an assumption that 01.6.2 sealed green. **Criterion M is where a defect gets silently lost if the disposition is treated as paperwork** — the two unsettled items above are the specific place that happens, and both arrive with a proposed answer precisely so "not settled" cannot quietly become "not addressed".
 
-**Plans:** 2/6 plans executed
+**Plans:** 3/6 plans executed
 
 Plans:
 **Wave 1**
@@ -901,7 +901,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2)*
 
-- [ ] 01.6.2.1-03-PLAN.md — Warm floor default 3 → 1 with the knob still honouring N, proved by a test that **reads the default** and demonstrably fails against 3; non-preemptive launch priority on the **unweakened** in-flight lock, citing 01.6.2 criterion C's green race test (verification truth #9) as its stated prerequisite and re-running it first; and D-08's direct arrival-order FIFO assertion plus a comment-stripped structural gate that the queue region cannot be re-ordered — the queue itself untouched (criterion L, D-06, D-07, D-08, D-20)
+- [x] 01.6.2.1-03-PLAN.md — Warm floor default 3 → 1 with the knob still honouring N, proved by a test that **reads the default** and demonstrably fails against 3; non-preemptive launch priority on the **unweakened** in-flight lock, citing 01.6.2 criterion C's green race test (verification truth #9) as its stated prerequisite and re-running it first; and D-08's direct arrival-order FIFO assertion plus a comment-stripped structural gate that the queue region cannot be re-ordered — the queue itself untouched (criterion L, D-06, D-07, D-08, D-20)
 
 **Wave 4** *(blocked on Wave 3)*
 
