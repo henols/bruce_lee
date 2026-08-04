@@ -131,6 +131,47 @@ test("nextFreePort: a port the injected port-in-use probe reports as in use is s
   assert.deepEqual(probedPorts, [6600, 6601, 6602]);
 });
 
+// Gap closure (plan 14, discovered live during Task 2's own end-to-end
+// proof -- RE-FINDINGS.md carries the full account): a scan running against
+// MANY in-use candidates in a row does not merely take longer -- verified
+// live against the real defaultPortInUse(), for its ENTIRE duration the
+// control listener could not accept a new connection or read data already
+// sitting on an existing one, because EADDRINUSE settles without ever
+// yielding to libuv's poll/check phase. This is a real liveness gap
+// independent of any one test: an unrelated release/recycle/status request
+// arriving on a DIFFERENT connection would be held up for as long as a
+// contended scan takes. The fix yields via setImmediate every few
+// candidates; this test proves that yield actually happens (a macrotask
+// queued before the scan starts gets AT LEAST one turn while the scan is
+// still running), without asserting exactly how many turns or exactly which
+// candidate triggers them -- that would over-specify an internal cadence
+// this function's own callers do not depend on.
+test("nextFreePort: yields to the event loop's check phase during a long run of in-use candidates -- a macrotask queued before the scan starts is not starved for the scan's whole duration", async () => {
+  const state = createBrokerState();
+  const inUseCount = 11; // several multiples of the yield cadence, well under PORT_SCAN_CEILING
+  const probe = (port: number): Promise<boolean> => Promise.resolve(port < 6600 + inUseCount);
+
+  let immediateTurns = 0;
+  let stop = false;
+  function scheduleNext(): void {
+    if (stop) return;
+    setImmediate(() => {
+      immediateTurns++;
+      scheduleNext();
+    });
+  }
+  scheduleNext();
+
+  const result = await nextFreePort(state, { portInUse: probe });
+  stop = true;
+
+  assert.deepEqual(result, { ok: true, port: 6600 + inUseCount });
+  assert.ok(
+    immediateTurns >= 1,
+    "at least one setImmediate-scheduled macrotask queued BEFORE the scan started must run WHILE the scan of many in-use candidates is still in flight -- a scan that never yields would starve it for the scan's entire duration",
+  );
+});
+
 // -------------------------------------------------------------------- counts
 
 test("counts: two ready, one granted and one launching instance yields ready=2, total=4, launching=1", () => {

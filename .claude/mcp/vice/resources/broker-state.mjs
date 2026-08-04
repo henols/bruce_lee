@@ -82,10 +82,30 @@ export function blockPort(state, port) {
  * set before scanning continues, so it is never re-offered or re-probed by
  * this process again. Never throws -- returns a typed failure naming
  * exhaustion when every candidate in the window is taken. */
+// Gap closure (plan 14, discovered live during Task 2's own end-to-end
+// proof -- see RE-FINDINGS.md's dated entry for the full account):
+// EADDRINUSE is delivered to defaultPortInUse()'s `error` listener without
+// ever yielding to libuv's poll phase, so a scan running against MANY
+// already-bound candidates in a row does not merely take longer -- for its
+// ENTIRE duration, the control listener cannot accept a new connection or
+// read data already sitting on an existing one (verified live: a second,
+// already-established connection's own request was not read by this
+// process until the ENTIRE scan, spawn and record sequence had already
+// resolved, confirmed with the real production functions in isolation
+// before this fix). That is a real liveness gap independent of this
+// plan's own test -- a release, a recycle or a status request over an
+// UNRELATED connection would be held up for as long as a contended scan
+// takes, not merely a competing acquire. Yielding via setImmediate every
+// few candidates restores that liveness at negligible cost (the scan
+// itself already costs one real bind-and-release round trip per
+// candidate; this adds one cheap timer-phase turn every YIELD_EVERY of
+// them) without changing what this function returns for any input.
+const YIELD_EVERY_N_CANDIDATES = 5;
 export async function nextFreePort(state, opts = {}) {
     const basePort = opts.basePort ?? resolveBasePort();
     const portInUse = opts.portInUse ?? defaultPortInUse;
     const limit = basePort + PORT_SCAN_CEILING;
+    let checked = 0;
     for (let port = basePort; port < limit; port++) {
         if (state.instances.has(port))
             continue;
@@ -93,6 +113,10 @@ export async function nextFreePort(state, opts = {}) {
             continue;
         if (await portInUse(port)) {
             blockPort(state, port);
+            checked++;
+            if (checked % YIELD_EVERY_N_CANDIDATES === 0) {
+                await new Promise((resolvePromise) => setImmediate(resolvePromise));
+            }
             continue;
         }
         return { ok: true, port };

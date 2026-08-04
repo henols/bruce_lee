@@ -15,7 +15,7 @@ import { mkdtempSync, rmSync, existsSync, readFileSync, readdirSync, writeFileSy
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { connect } from "node:net";
+import { connect, createServer, type Server } from "node:net";
 
 import { build } from "./build.ts";
 import { acquireOverControlPlane } from "./vice-broker-client.ts";
@@ -386,6 +386,16 @@ test(
  * vice-broker-client.ts. */
 function makeRawSession(host: string, port: number) {
   const socket = connect({ host, port });
+  // Nagle's algorithm, left enabled by default, can hold a small outgoing
+  // write back for tens of milliseconds waiting to coalesce -- invisible to
+  // every OTHER test in this file (each holds exactly one connection, so
+  // there is nothing to race against), but directly corrupts
+  // 01.6.2-14-PLAN.md's Task 2, which sends two acquire requests over TWO
+  // connections and depends on both reaching the broker with negligible,
+  // symmetric latency. Disabled unconditionally rather than only for that
+  // one test, since it can only ever make every OTHER caller's own request
+  // arrive sooner, never later.
+  socket.setNoDelay(true);
   const responses: Record<string, unknown>[] = [];
   const waiters: Array<(v: Record<string, unknown>) => void> = [];
   let buffer = "";
@@ -403,6 +413,15 @@ function makeRawSession(host: string, port: number) {
     }
   });
   return {
+    // Resolves once the TCP handshake itself completes -- exposed so a test
+    // sending on TWO connections "back to back" (01.6.2-14-PLAN.md's Task 2)
+    // can await BOTH connections' own handshakes first, so the ORDER their
+    // acquire lines are actually WRITTEN matches the order .send() was
+    // called in, uncontaminated by connection-setup jitter between the two
+    // sockets themselves.
+    ready: new Promise<void>((resolvePromise) => {
+      socket.once("connect", () => resolvePromise());
+    }),
     send(obj: Record<string, unknown>): void {
       socket.write(`${JSON.stringify(obj)}\n`);
     },
@@ -572,6 +591,202 @@ test(
       }
     } finally {
       await stopBroker(handle);
+      rmSync(stateDir, { recursive: true, force: true });
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// 01.6.2-14-PLAN.md, Task 2: the wired proof that a genuinely queued
+// acquirer's disconnect leaves exactly one instance behind, not two, against
+// the REAL spawned broker artifact -- Task 1's unit tests (broker-control.
+// test.ts) prove the guard in isolation with an injected callback; this
+// proves it at the real entry point, with a real (widened) port scan and a
+// real spawned child.
+//
+// The queueing window is made wide BY CONSTRUCTION, never hoped for: the
+// real port allocator (broker-state.mts's nextFreePort()) probes each
+// candidate with a real bind-and-release round trip before it can succeed,
+// so pre-occupying a contiguous run of candidates at the allocator's own
+// configured band base makes the first allocation cost one full round trip
+// PER occupied candidate -- a wide, deterministic window rather than a raced
+// one. See the dated entry appended to RE-FINDINGS.md by this same task for
+// the general technique.
+// ---------------------------------------------------------------------------
+
+/** How many contiguous loopback candidates to pre-occupy, starting at
+ * OCCUPIED_BASE_PORT below. Each candidate costs nextFreePort() one real
+ * bind-and-release probe round trip, so this count times that per-candidate
+ * cost is the queueing window's width -- chosen generously (well under the
+ * allocator's own 100-candidate scan ceiling, leaving room for the eventual
+ * free port to land inside it), not tuned to the minimum that happens to
+ * work today. */
+const OCCUPIED_PORT_COUNT = 60;
+/** A private base clear of BOTH the human-reserved 6510-6599 band and the
+ * broker's own default 6600-6699 scan band (D-18) -- this test's own
+ * occupied candidates must never collide with a port a human, or the
+ * broker's own default configuration, might actually be using. */
+const OCCUPIED_BASE_PORT = 7400;
+
+/** Binds `count` contiguous, plain TCP listeners on 127.0.0.1 starting at
+ * `basePort` -- ordinary loopback listeners, never emulator connections,
+ * standing in as pre-occupied candidates for defaultPortInUse() (broker-
+ * state.mts) to fail against. Does not close them -- the caller's own
+ * cleanup releases every one, per this task's own instruction. */
+function bindOccupyingListeners(basePort: number, count: number): Promise<Server[]> {
+  const servers: Server[] = [];
+  const listens: Promise<void>[] = [];
+  for (let i = 0; i < count; i++) {
+    const server = createServer();
+    servers.push(server);
+    listens.push(
+      new Promise<void>((resolvePromise, reject) => {
+        server.once("error", reject);
+        server.listen(basePort + i, "127.0.0.1", () => resolvePromise());
+      }),
+    );
+  }
+  return Promise.all(listens).then(() => servers);
+}
+
+function closeAllServers(servers: Server[]): Promise<void[]> {
+  return Promise.all(servers.map((s) => new Promise<void>((resolvePromise) => s.close(() => resolvePromise()))));
+}
+
+test(
+  "wired disconnect-while-queued: a genuinely queued acquire whose client disconnects leaves exactly one instance behind, not two",
+  { timeout: 30000 },
+  async () => {
+    build();
+    // Larger than the 100ms this file's other tests use, so this test's own
+    // reaction (observe the served grant, confirm the queued connection
+    // answered nothing, then close it) has a comfortable margin ahead of
+    // the next periodic evaluation pass.
+    const POLL_MS = 500;
+    const stateDir = mkdtempSync(join(tmpdir(), "broker-e2e-disconnect-queued-"));
+    const occupied = await bindOccupyingListeners(OCCUPIED_BASE_PORT, OCCUPIED_PORT_COUNT);
+    // VICE_BROKER_SPARES=0: same isolation reasoning as the recycle/release
+    // tests above -- an auto-warmed spare (Node's global fetch makes the
+    // warm floor's readiness mechanism real by default) could land on some
+    // OTHER free candidate in this same widened scan region and add a
+    // second, unrelated instance, corrupting this test's own "exactly one
+    // instance" assertions.
+    const handle = startBroker(stateDir, {
+      VICE_BROKER_POLL_MS: String(POLL_MS),
+      VICE_BROKER_SPARES: "0",
+      VICE_BROKER_BASE_PORT: String(OCCUPIED_BASE_PORT),
+    });
+    try {
+      const brokerJson = await waitForBrokerJson(stateDir);
+      const host = String(brokerJson.control_host);
+      const port = Number(brokerJson.control_port);
+      const token = String(brokerJson.control_token);
+
+      const a = makeRawSession(host, port);
+      const b = makeRawSession(host, port);
+      let servedClient: ReturnType<typeof makeRawSession> | null = null;
+      let queuedClient: ReturnType<typeof makeRawSession> | null = null;
+      try {
+        // Both connections' own TCP handshakes complete FIRST, awaited
+        // together, before either sends anything -- otherwise connection-
+        // setup jitter between the two sockets can reorder which acquire
+        // line the broker actually processes first, independent of which
+        // .send() call this test made first.
+        await Promise.all([a.ready, b.ready]);
+
+        // Sent back to back, over two SEPARATE connections -- the first to
+        // reach handleAcquire() wins the single in_flight owner and performs
+        // the whole (widened) port scan itself; the second finds a launch
+        // already in flight and is queued with NO response at all (per
+        // broker-control.mts's own attemptAcquire()/enqueueAcquire()).
+        a.send({ op: "acquire", id: "disconnect-queued-a", token });
+        b.send({ op: "acquire", id: "disconnect-queued-b", token });
+
+        // Both `.next()` calls are issued ONCE, up front, against the SAME
+        // two promises used below -- calling `.next()` a SECOND time on the
+        // "losing" connection would silently consume a response that
+        // already arrived (this session's `next()` shifts its own response
+        // queue), turning a genuinely-answered connection into a false
+        // "nothing yet" reading. The precondition check below awaits the
+        // very same loser promise instead of issuing a fresh `.next()`.
+        const aPromise = a.next(15000).then((r) => ({ which: "a" as const, r }));
+        const bPromise = b.next(15000).then((r) => ({ which: "b" as const, r }));
+        // Neither promise's eventual rejection (the LOSER's own `.next()`
+        // deadline, whichever way this resolves) is awaited a second time
+        // below -- silence it here so a timeout firing long after this test
+        // has moved on never surfaces as an unhandled rejection.
+        aPromise.catch(() => {});
+        bPromise.catch(() => {});
+        const first = await Promise.race([aPromise, bPromise]);
+        assert.equal(first.r.kind, "grant", `the first of the two connections to answer must be a grant -- got ${JSON.stringify(first.r)}`);
+        servedClient = first.which === "a" ? a : b;
+        queuedClient = first.which === "a" ? b : a;
+        const queuedPromise = first.which === "a" ? bPromise : aPromise;
+
+        // Assert the precondition explicitly, per this task's own
+        // instruction: the OTHER connection must have received NOTHING at
+        // all yet. Races the SAME queuedPromise (never a fresh `.next()`
+        // call) against a short timer -- if the queued connection also
+        // answers within this window, the queueing window did not
+        // reproduce -- fail loudly with a diagnostic naming that, rather
+        // than silently passing on an unreproduced precondition.
+        const NOTHING = Symbol("nothing-yet");
+        const raced = await Promise.race([queuedPromise, new Promise((resolvePromise) => setTimeout(() => resolvePromise(NOTHING), 300))]);
+        assert.equal(
+          raced,
+          NOTHING,
+          `PRECONDITION NOT REPRODUCED: the queued connection answered (${JSON.stringify(raced)}) instead of remaining queued -- ` +
+            `widen OCCUPIED_PORT_COUNT (currently ${OCCUPIED_PORT_COUNT}) and retry`,
+        );
+
+        const grantPort = Number(first.r.port);
+        const epochFile = String(first.r.epoch_file);
+        const epochBefore = JSON.parse(readFileSync(epochFile, "utf8"));
+        assert.ok(isAlive(epochBefore.pid), `served instance's pid ${epochBefore.pid} must be alive right after the grant`);
+
+        // Disconnect the QUEUED connection while it is still genuinely
+        // queued -- reproducing the always-reachable leak's own precondition
+        // (T-01.6.2-87): an owner-less entry a later drain pass would
+        // otherwise retry.
+        queuedClient.close();
+
+        // Wait past AT LEAST two evaluation passes -- the poll interval is
+        // configured explicitly above, so this is a known quantity. Goes
+        // through this file's own predicate-polling helper (waitFor) rather
+        // than a bare setTimeout, even though the predicate itself is a
+        // plain deadline check -- a single pass is not enough to prove the
+        // guard held across a RETRY, only that it held once.
+        const disconnectedAt = Date.now();
+        await waitFor(() => Date.now() - disconnectedAt >= POLL_MS * 2 + 250, POLL_MS * 2 + 1000);
+
+        const portDirs = readdirSync(stateDir, { withFileTypes: true }).filter((d) => d.isDirectory() && /^\d+$/.test(d.name));
+        assert.equal(
+          portDirs.length,
+          1,
+          `exactly one instance directory must exist after the queued acquirer disconnects, found ${JSON.stringify(portDirs.map((d) => d.name))}`,
+        );
+        assert.equal(Number(portDirs[0].name), grantPort, "the one instance directory must be the SERVED grant's own port");
+
+        const epochAfter = JSON.parse(readFileSync(epochFile, "utf8"));
+        assert.equal(epochAfter.pid, epochBefore.pid, "the served instance's pid must be unchanged -- nothing extra may have launched or replaced it");
+        assert.ok(isAlive(epochAfter.pid), "exactly one live child pid must be attributable to the broker after the wait");
+
+        servedClient.send({ op: "status", token });
+        const status = await servedClient.next();
+        assert.equal(status.kind, "status");
+        const instances = status.instances as Array<Record<string, unknown>>;
+        assert.equal(instances.length, 1, `the status response must list exactly one instance, got ${JSON.stringify(instances)}`);
+        assert.equal(Number(instances[0].port), grantPort);
+
+        servedClient.send({ op: "release", token });
+        await servedClient.next();
+      } finally {
+        a.close();
+        b.close();
+      }
+    } finally {
+      await stopBroker(handle);
+      await closeAllServers(occupied);
       rmSync(stateDir, { recursive: true, force: true });
     }
   },
