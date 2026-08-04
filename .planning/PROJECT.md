@@ -126,4 +126,6 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-08-01 after Phase 01.2*
+*Last updated: 2026-08-04 after Phase 01.6.2 (the-one-process-host-broker) — no requirements moved
+Active → Validated, because v1.1 carries none by design; next is Phase 01.6.2.1, which owns the
+lifecycle-policy corrections split out of 01.6.2.*
