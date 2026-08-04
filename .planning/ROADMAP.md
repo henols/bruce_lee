@@ -888,12 +888,12 @@ Plans:
 
 **Risks**: **The split's whole value is the seal boundary, and it is only real if this phase actually verifies** — a phase that seals on "the five tasks exist" rather than "each has a passing test" gives back exactly what the split bought. **Nothing here is live-verifiable either**, so criterion E's carry-forward list is this phase's most load-bearing deliverable, not its cleanup step. **The cross-phase ordering constraint is easy to lose across a phase boundary**: D-07 depends on a test that lives in 01.6.2's plans, so it must be a stated prerequisite in this phase's plan text and not an assumption that 01.6.2 sealed green. **Criterion M is where a defect gets silently lost if the disposition is treated as paperwork** — the two unsettled items above are the specific place that happens, and both arrive with a proposed answer precisely so "not settled" cannot quietly become "not addressed".
 
-**Plans:** 6 plans
+**Plans:** 1/6 plans executed
 
 Plans:
 **Wave 1**
 
-- [ ] 01.6.2.1-01-PLAN.md — **Tracer.** Defect 5 closed: `handleAcquire()` consults the warm floor end to end, re-probes the instance at grant time, drops-and-identity-verified-kills a failed candidate, walks the remainder and only then cold-launches — proved by a red-first unit test **and** an e2e test against the real spawned broker, plus a structural gate over the single grant-recording call site (criterion L, P-01…P-04, P-10)
+- [x] 01.6.2.1-01-PLAN.md — **Tracer.** Defect 5 closed: `handleAcquire()` consults the warm floor end to end, re-probes the instance at grant time, drops-and-identity-verified-kills a failed candidate, walks the remainder and only then cold-launches — proved by a red-first unit test **and** an e2e test against the real spawned broker, plus a structural gate over the single grant-recording call site (criterion L, P-01…P-04, P-10)
 
 **Wave 2** *(blocked on Wave 1)*
 

@@ -6,15 +6,15 @@ current_phase: 01.6.2.1
 current_phase_name: broker-lifecycle-policy
 status: executing
 stopped_at: Phase 01.6.2.1 planned — 6 plans, verified, ready to execute
-last_updated: "2026-08-04T13:37:05.224Z"
+last_updated: "2026-08-04T13:40:08.881Z"
 last_activity: 2026-08-04
-last_activity_desc: Phase 01.6.2.1 execution started
 progress:
   total_phases: 12
   completed_phases: 5
   total_plans: 54
   completed_plans: 44
   percent: 42
+last_activity_desc: Phase 01.6.2.1 execution started
 ---
 
 # Project State
@@ -172,14 +172,18 @@ this conversation.
 1. **Do the work that does not depend on the answer, first and completely.** A blocker on one
    criterion is not a blocker on a phase. Implementation, tests, structural gates, documentation and
    commits all proceed.
+
 2. **When a gate genuinely requires the developer, file it as an `HV-NN` row in ROADMAP § Phase
    01.8** with all four fields — ID, what it blocks, what the developer does, what the agent completes
    once answered. A row missing the fourth field is not filed.
+
 3. **Mark the owning criterion `CARRIED → HV-NN`** in that phase's verification artifact. Never
    `verified`, never silently omitted. The seal then reads "implemented, HV-NN carried", which is an
    honest seal.
+
 4. **Continue to the next available work.** Do not pause the run, do not ask, do not idle waiting for
    an answer.
+
 5. **Never answer an HV row by inference.** "The packages are probably fine", "the broker is probably
    up", "the criterion clearly wasn't reworded" are all prohibited. An unanswered row stays open.
 
@@ -190,10 +194,13 @@ this conversation.
   forwarded `mcp__vice__*` call already succeeds this session* — check with `vice_ping` before filing,
   because a broker that happens to be up makes the row closeable now, and filing it anyway wastes the
   developer's trip.
+
 - **A blocking approval the project has declared non-auto-approvable.** 01.6.3 criterion E is the
   only current instance.
+
 - **A decision the developer explicitly reserved.** D-06 is the only current instance. Arrive with a
   priced recommendation; do not take the decision.
+
 - **A check on the agent's own honesty.** 01.3-06's `checkpoint:human-verify` asks whether a criterion
   was reworded to fit its outcome. The agent is the subject of that check and cannot be its witness.
 
@@ -266,7 +273,7 @@ Status: Executing Phase 01.6.2.1
 
 **Known-failing check, carried forward for whoever resumes 01-04:** the plan's own Task 3 automated verification fails today — `saeger`'s `death` milestone is recorded `reached: true` with `cycles_advanced: null` and an explicit `evidentiary_gap` (no screen-matrix SHA-256 captured, attempt 4). Attempt 6 must re-capture that signature, not merely reach the two remaining milestones. danish's five milestones all carry full mechanical proof and pass.
 
-Last activity: 2026-08-04 — Phase 01.6.2.1 execution started
+Last activity: 2026-08-04
 
 Progress (v1.1): 32 of 39 authored plans done — 01.6 complete (4/4), 01.6.1 complete (8/8), 01.3 paused at 5/6 (01.3-06 outstanding), **01.6.2 complete and sealed 15/15 (20/20 verified, 2026-08-04)**, **01.6.2.1 planned 0/6 — six plans in six sequential waves, authored and unexecuted.** **No percentage given on purpose:** 01.6.3 and 01.4 are not yet broken into plans, so the denominator is still not knowable and any bar here would overstate progress. (01.5 and 01.7 are `ABSORBED` and contribute no plans.)
 Progress (v1.0, paused): [████░░░░░░] 40% — 8/20 plans
