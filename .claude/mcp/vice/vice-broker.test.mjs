@@ -541,7 +541,19 @@ function listAllFilesRecursive(dir) {
   return out;
 }
 
-test("tracer: request -> grant -> forward -> SIGINT release -> teardown, end to end", async () => {
+// SKIPPED, plan 01.6.2-07: this end-to-end tracer exercises the file
+// protocol (a written requests/<id>.json, polled for by this very test)
+// that vice-proxy.ts's acquisition/release/recycle no longer speaks at all
+// after this plan's swap onto the TCP control plane (D-01/D-12) -- there is
+// no request file for this test to find, by design, not by regression.
+// This file (vice-broker.test.mjs) is outside plan 07's own files_modified
+// scope; 01.6.2-10-PLAN.md already owns building a full replacement ledger
+// for every test in this file exercising a retiring property, and
+// 01.6.2-11-PLAN.md deletes this file outright once that ledger is
+// discharged. Skipping (not deleting or rewriting) this one test here keeps
+// plan 07's own "0 failures" acceptance criterion honest without
+// pre-empting plan 10's more careful, ledger-based replacement work.
+test("tracer: request -> grant -> forward -> SIGINT release -> teardown, end to end", { skip: "file protocol retired by plan 01.6.2-07 (D-12) -- replacement tracked by 01.6.2-10/-11" }, async () => {
   const dir = tmpPoolDir();
   const { server, requests } = startStandInServer();
   const port = await listen(server);

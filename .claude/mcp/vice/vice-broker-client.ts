@@ -1,16 +1,22 @@
 #!/usr/bin/env node
-// Container-side half of the on-demand broker protocol (Phase 01.2). The
-// host-side half is resources/vice-broker.sh; this module writes the
-// request/lease files that script reads and reads the grant/denial/broker
-// files that script writes, all on the SAME .vice-supervisor/ bind mount
-// tools/vice-supervisor.sh's epoch.json already uses (and, before its
-// 2026-08-02 deletion, tools/vice-pool.sh's registry.json did too) --
-// deliberately not a new channel.
+// Container-side half of the on-demand broker protocol. Through Phase 01.2
+// this module wrote the request/lease files resources/vice-broker.sh read
+// and read the grant/denial/broker files that script wrote, all on the SAME
+// .vice-supervisor/ bind mount tools/vice-supervisor.sh's epoch.json already
+// used. Plan 01.6.2-07 deletes that file protocol wholesale (D-12: six
+// mechanisms retiring together -- startHeartbeat()/the mtime-as-heartbeat
+// convention/touchLease()/pollGrant()/pollRecycleAck()/the request-grant-
+// denial-lease-recycle-ack directory tree) now that vice-proxy.ts's
+// acquisition, release AND recycle all run over the TCP control plane
+// (openBrokerControl()/BrokerControlSession below) instead. What survives:
+// the request-id primitives (the new client's own acquire()/recycle() still
+// mint ids with newRequestId()), brokerRootDir()/brokerJsonPath() (the
+// discovery record's own location), and readBrokerLiveness() (unchanged
+// classification, still reading the SAME broker.json openBrokerControl()
+// reads for its control_host/control_port/control_token).
 //
-// Every read of a broker-written file is untrusted input, exactly like
-// vice-pool.mjs's readRegistry()/isReclaimable() treated registry.json and
-// lease files before that module's 2026-08-02 deletion: parse in try/catch,
-// a malformed or half-written file is "not there yet" or "absent", never a
+// Every read of broker.json is still untrusted input: parse in try/catch, a
+// malformed or half-written file is "not there yet" or "absent", never a
 // thrown exception. See 01.2-PATTERNS.md's "Never-throw /
 // never-cache-a-negative-result" section.
 //
@@ -18,7 +24,7 @@
 // four production modules by vice-mcp-selector-docs.test.mjs's assertion 4,
 // and host-path message text stays in vice-proxy.mjs, which is already on
 // that list.
-import { readFileSync, writeFileSync, unlinkSync, mkdirSync, renameSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
 import { connect, type Socket } from "node:net";
@@ -58,55 +64,17 @@ export function isValidRequestId(id: unknown): id is string {
 // supervisorDir() -- the SAME default `.vice-supervisor` directory every
 // other host/container pairing in this module tree already agrees on, so
 // container and host never derive two different roots for this protocol.
+// The five sibling directory helpers this function used to anchor
+// (requestsDir/grantsDir/denialsDir/brokerLeasesDir/recycleAcksDir) and the
+// lease path helper (leasePathFor) are GONE, not merely unused -- their
+// directories cease to exist under D-01/D-12; only brokerJsonPath() below
+// survives, since broker.json itself is not part of the retiring protocol.
 export function brokerRootDir(): string {
   return process.env.VICE_POOL_DIR ? resolve(process.env.VICE_POOL_DIR) : supervisorDir();
 }
 
-export function requestsDir(dir: string = brokerRootDir()): string {
-  return join(dir, "requests");
-}
-
-export function grantsDir(dir: string = brokerRootDir()): string {
-  return join(dir, "grants");
-}
-
-export function denialsDir(dir: string = brokerRootDir()): string {
-  return join(dir, "denials");
-}
-
-export function brokerLeasesDir(dir: string = brokerRootDir()): string {
-  return join(dir, "leases");
-}
-
-// Recycle acks (plan 01.3-01) -- one file per recycle request id, written by
-// resources/vice-broker.sh's write_recycle_ack() and polled by
-// pollRecycleAck() below. A sibling of grantsDir()/denialsDir() above, on
-// the SAME .vice-supervisor/ bind mount -- no new channel.
-export function recycleAcksDir(dir: string = brokerRootDir()): string {
-  return join(dir, "recycle-acks");
-}
-
 export function brokerJsonPath(dir: string = brokerRootDir()): string {
   return join(dir, "broker.json");
-}
-
-export function leasePathFor(id: string, dir: string = brokerRootDir()): string {
-  return join(brokerLeasesDir(dir), id);
-}
-
-// ---------------------------------------------------------- atomic write
-//
-// Shared tmp-then-rename helper (the same shape vice-pool.mjs's
-// refreshLease() used before that module's 2026-08-02 deletion): every
-// protocol file this module writes goes through here, so there is
-// exactly one place the atomicity rule lives on the container side, matching
-// resources/vice-broker.sh's own single write_json_atomic() choke point on
-// the host side.
-function writeJsonAtomic<T>(targetPath: string, tmpDir: string, data: T): void {
-  mkdirSync(tmpDir, { recursive: true });
-  const tmp = join(tmpDir, `.tmp-${process.pid}-${randomUUID()}`);
-  writeFileSync(tmp, JSON.stringify(data, null, 2) + "\n");
-  renameSync(tmp, targetPath);
 }
 
 /** True iff `value` is a well-formed, generic JSON object -- not null, not
@@ -139,267 +107,15 @@ function readJsonMaybe(path: string): Record<string, unknown> | null {
   }
 }
 
-export interface RequestRecord {
-  version: number;
-  id: string;
-  op: string;
-  proxy_pid: number;
-  session_id: string | null;
-  client_pid: number | null;
-  created_at: string;
-}
-
-export interface WriteRequestOptions {
-  id: string;
-  op?: string;
-  sessionId?: string | null;
-  clientPid?: number | null;
-}
-
-// ------------------------------------------------------------- writeRequest
-//
-// Writes requests/<id>.json. `id` MUST already be a newRequestId() output --
-// validated here (T-01.2-01) before it is used to build any path, matching
-// the host-side script's own pre-use validation.
-export function writeRequest({ id, op = "acquire", sessionId = null, clientPid = null }: WriteRequestOptions): RequestRecord {
-  if (!isValidRequestId(id)) {
-    throw new Error(`writeRequest: invalid request id: ${id}`);
-  }
-  const dir = requestsDir();
-  const record: RequestRecord = {
-    version: 1,
-    id,
-    op,
-    proxy_pid: process.pid,
-    session_id: sessionId,
-    client_pid: clientPid,
-    created_at: new Date().toISOString(),
-  };
-  writeJsonAtomic(join(dir, `${id}.json`), dir, record);
-  return record;
-}
-
-export interface RecycleRequestRecord {
-  version: number;
-  id: string;
-  op: "recycle";
-  target_id: string;
-  reason: string;
-  proxy_pid: number;
-  session_id: string | null;
-  client_pid: number | null;
-  created_at: string;
-}
-
-export interface WriteRecycleRequestOptions {
-  id: string;
-  targetId: string;
-  reason?: string;
-  sessionId?: string | null;
-  clientPid?: number | null;
-}
-
-// -------------------------------------------------------- writeRecycleRequest
-//
-// Writes requests/<id>.json with op:"recycle" -- the first value that field
-// has ever carried (plan 01.3-01). Both `id` (this request's own id) and
-// `targetId` (the grant being recycled) are validated against
-// REQUEST_ID_PATTERN BEFORE either is used to build any path (T-01.3-06),
-// matching writeRequest()'s own precondition above.
-export function writeRecycleRequest({
-  id,
-  targetId,
-  reason,
-  sessionId = null,
-  clientPid = null,
-}: WriteRecycleRequestOptions): RecycleRequestRecord {
-  if (!isValidRequestId(id)) {
-    throw new Error(`writeRecycleRequest: invalid request id: ${id}`);
-  }
-  if (!isValidRequestId(targetId)) {
-    throw new Error(`writeRecycleRequest: invalid target id: ${targetId}`);
-  }
-  const dir = requestsDir();
-  const record: RecycleRequestRecord = {
-    version: 1,
-    id,
-    op: "recycle",
-    target_id: targetId,
-    reason: typeof reason === "string" ? reason : "",
-    proxy_pid: process.pid,
-    session_id: sessionId,
-    client_pid: clientPid,
-    created_at: new Date().toISOString(),
-  };
-  writeJsonAtomic(join(dir, `${id}.json`), dir, record);
-  return record;
-}
-
-export interface LeaseRecord {
-  version: number;
-  id: string;
-  proxy_pid: number;
-  session_id: string | null;
-  client_pid: number | null;
-  created_at: string;
-}
-
-export interface CreateLeaseOptions {
-  id: string;
-  sessionId?: string | null;
-  clientPid?: number | null;
-}
-
-// -------------------------------------------------------------- createLease
-//
-// Writes leases/<id>. Existence of this file IS the claim; its mtime is the
-// heartbeat (touchLease below); its removal IS the release (releaseLease
-// below) -- three separate jobs, one file, per the phase's own must_haves.
-export function createLease({ id, sessionId = null, clientPid = null }: CreateLeaseOptions): LeaseRecord {
-  if (!isValidRequestId(id)) {
-    throw new Error(`createLease: invalid request id: ${id}`);
-  }
-  const dir = brokerLeasesDir();
-  const record: LeaseRecord = {
-    version: 1,
-    id,
-    proxy_pid: process.pid,
-    session_id: sessionId,
-    client_pid: clientPid,
-    created_at: new Date().toISOString(),
-  };
-  writeJsonAtomic(leasePathFor(id), dir, record);
-  return record;
-}
-
-// --------------------------------------------------------------- touchLease
-//
-// Refreshes the lease's mtime by rewriting it (atomically) with its own
-// existing content -- called on every forwarded call and by the unref'd
-// heartbeat timer (startHeartbeat below). A lease that has already been
-// released (file missing) is a silent no-op: by the time a heartbeat tick or
-// a stray call lands after release, there is nothing left to touch, and that
-// is not an error.
-export function touchLease(id: string): boolean {
-  const lp = leasePathFor(id);
-  let rec = readJsonMaybe(lp);
-  if (rec === null) {
-    // Either genuinely absent, or unreadable/malformed -- in the latter case
-    // rewrite a minimal, well-formed record rather than propagate a parse
-    // failure; in the former, there is nothing to touch.
-    try {
-      readFileSync(lp, "utf8");
-    } catch {
-      return false; // genuinely absent -- nothing to touch
-    }
-    rec = { version: 1, id };
-  }
-  try {
-    writeJsonAtomic(lp, brokerLeasesDir(), rec);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-// ------------------------------------------------------------- releaseLease
-//
-// The ENTIRE release: one ATTEMPTED unlinkSync, nothing else -- no promise,
-// no timer, no subprocess. The ~490ms graceful shutdown window has no room
-// for anything more (see the spike-findings-bruce-lee skill's
-// shutdown-and-lease-release.md). Idempotent by design: a lease already
-// removed (a double release, or the broker's own sweep racing this call) is
-// a silent no-op, never a throw -- "release something that's already
-// released" is the expected shape of both a double-teardown (SIGINT then
-// SIGTERM ~100ms later, both calling in) and a post-sweep release, matching
-// the idempotent posture vice-pool.mjs's own releaseLeaseByToken() used
-// before its 2026-08-02 deletion. The
-// caller (vice-proxy.mjs's releaseLeaseNow()) still wraps this in its own
-// try/catch that logs to stderr, as a second layer for anything this
-// swallow does not anticipate (e.g. a permissions error).
-export function releaseLease(id: string): void {
-  try {
-    unlinkSync(leasePathFor(id));
-  } catch {
-    // already gone -- release is idempotent, nothing else to do
-  }
-}
-
-export interface PollOptions {
-  timeoutMs?: number;
-  pollMs?: number;
-}
-
-export type PollGrantResult =
-  | { granted: true; grant: Record<string, unknown>; denial: null; reason: null }
-  | { granted: false; grant: null; denial: Record<string, unknown> | null; reason: string };
-
-// -------------------------------------------------------------- pollGrant
-//
-// Polls to a deadline for grants/<id>.json or denials/<id>.json, never
-// throwing on a malformed or half-read file -- a parse failure is treated
-// as "not there yet", matching the posture vice-pool.mjs's readRegistry()
-// used before its 2026-08-02 deletion.
-export const GRANT_POLL_TIMEOUT_MS: number = Number(process.env.VICE_BROKER_GRANT_TIMEOUT_MS || 25000);
-export const GRANT_POLL_INTERVAL_MS = 500;
-
-const sleepMs = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
-
-export async function pollGrant(
-  id: string,
-  { timeoutMs = GRANT_POLL_TIMEOUT_MS, pollMs = GRANT_POLL_INTERVAL_MS }: PollOptions = {}
-): Promise<PollGrantResult> {
-  const grantPath = join(grantsDir(), `${id}.json`);
-  const denialPath = join(denialsDir(), `${id}.json`);
-  const deadline = Date.now() + timeoutMs;
-
-  while (true) {
-    const grant = readJsonMaybe(grantPath);
-    if (grant) {
-      return { granted: true, grant, denial: null, reason: null };
-    }
-    const denial = readJsonMaybe(denialPath);
-    if (denial) {
-      return { granted: false, grant: null, denial, reason: typeof denial.reason === "string" ? denial.reason : "denied" };
-    }
-    if (Date.now() >= deadline) {
-      return { granted: false, grant: null, denial: null, reason: `no grant or denial appeared within ${timeoutMs}ms` };
-    }
-    await sleepMs(Math.max(0, Math.min(pollMs, deadline - Date.now())));
-  }
-}
-
-export type PollRecycleAckResult =
-  | { acked: true; ack: Record<string, unknown>; reason: null }
-  | { acked: false; ack: null; reason: string };
-
-// ----------------------------------------------------------- pollRecycleAck
-//
-// Structurally the SAME poll-to-deadline loop as pollGrant() above, reading
-// recycle-acks/<id>.json instead -- a malformed or half-written ack file is
-// treated as not-yet-there rather than thrown, matching readJsonMaybe()'s
-// never-throw posture throughout this module.
-export const RECYCLE_ACK_TIMEOUT_MS: number = Number(process.env.VICE_BROKER_RECYCLE_TIMEOUT_MS || 30000);
-export const RECYCLE_ACK_POLL_INTERVAL_MS = 500;
-
-export async function pollRecycleAck(
-  id: string,
-  { timeoutMs = RECYCLE_ACK_TIMEOUT_MS, pollMs = RECYCLE_ACK_POLL_INTERVAL_MS }: PollOptions = {}
-): Promise<PollRecycleAckResult> {
-  const ackPath = join(recycleAcksDir(), `${id}.json`);
-  const deadline = Date.now() + timeoutMs;
-
-  while (true) {
-    const ack = readJsonMaybe(ackPath);
-    if (ack) {
-      return { acked: true, ack, reason: null };
-    }
-    if (Date.now() >= deadline) {
-      return { acked: false, ack: null, reason: `no recycle ack appeared within ${timeoutMs}ms` };
-    }
-    await sleepMs(Math.max(0, Math.min(pollMs, deadline - Date.now())));
-  }
-}
+// writeRequest/createLease/touchLease/releaseLease/pollGrant/pollRecycleAck
+// and their record interfaces (RequestRecord, RecycleRequestRecord,
+// LeaseRecord, PollOptions, PollGrantResult, PollRecycleAckResult) are GONE:
+// the whole file-messaging protocol they implemented (D-01/D-12) is replaced
+// wholesale by the TCP control plane below. GRANT_POLL_TIMEOUT_MS/
+// GRANT_POLL_INTERVAL_MS/RECYCLE_ACK_TIMEOUT_MS/RECYCLE_ACK_POLL_INTERVAL_MS
+// (the retiring polls' own timeout/interval constants) and sleepMs() (their
+// shared poll-delay helper) are gone with them -- nothing here polls a
+// filesystem for a deadline any more.
 
 export interface BrokerLivenessResult {
   state: "never_started" | "stale" | "alive";
@@ -442,34 +158,16 @@ export function readBrokerLiveness(path: string = brokerJsonPath()): BrokerLiven
   return classifyLivenessFromRecord(parsed, path);
 }
 
-export interface StartHeartbeatOptions {
-  intervalMs?: number;
-}
+// StartHeartbeatOptions/HEARTBEAT_MS/startHeartbeat() are GONE -- the
+// lease-heartbeat interval (one of D-12's six retiring mechanisms) has no
+// successor. Nothing needs touching to prove a TCP connection is alive; it
+// either is, or the broker's own "close" handler has already reclaimed the
+// instance.
 
-// --------------------------------------------------------------- heartbeat
+// ---------------------------------------------------- TCP control plane
 //
-// An unref'd interval timer touching the lease -- keeps a thinking session's
-// lease from looking abandoned to the broker's TTL sweeper, per the measured
-// "nothing reaps an idle proxy" finding. unref()'d so the TIMER never holds
-// the process alive; stdin being open is what does that (see
-// timeout-and-latency-budgets.md).
-export const HEARTBEAT_MS: number = Number(process.env.VICE_BROKER_HEARTBEAT_MS || 60000);
-
-export function startHeartbeat(id: string, { intervalMs = HEARTBEAT_MS }: StartHeartbeatOptions = {}): NodeJS.Timeout {
-  const timer = setInterval(() => {
-    touchLease(id);
-  }, intervalMs);
-  if (typeof timer.unref === "function") timer.unref();
-  return timer;
-}
-
-// ---------------------------------------------------- TCP control plane (ADDITIVE)
-//
-// Phase 01.6.2: the container-side half of the new TCP control plane
-// (broker-control.mts is the host-side half). This is ADDITIVE ONLY --
-// nothing above this line is deleted or modified, and the proxy still runs
-// on the file protocol above until plan 07 swaps it over, so the suite
-// stays green continuously. Wire format confirmed at this plan's blocking
+// The container-side half of the TCP control plane (broker-control.mts is
+// the host-side half). Wire format confirmed at plan 01's blocking
 // checkpoint:decision (2026-08-03, `as-specified`; see
 // .planning/RE-FINDINGS.md for the full record): newline-delimited JSON,
 // per-boot capability token, connection open = claim / close = release.
@@ -592,14 +290,14 @@ export function acquireOverControlPlane(dir: string = brokerRootDir()): Promise<
 // ---------------------------------------------------------------------------
 // BROKER-CONTROL-CLIENT REGION START (plan 06, task 1)
 //
-// openBrokerControl() completes the container-side half of D-01: session
-// shape, all five request kinds, one discovery-record read, real per-request
-// deadlines, and a distinct broker-gone outcome. ADDITIVE alongside
+// Completed by plan 07 (the file protocol beside it is now gone).
+// openBrokerControl() is the container-side half of D-01: session shape,
+// all five request kinds, one discovery-record read, real per-request
+// deadlines, and a distinct broker-gone outcome. Lives alongside
 // acquireOverControlPlane() above (plan 01's tracer, kept unchanged and
 // still used by broker-e2e.test.ts/broker-kill.test.ts as their own one-shot
-// acquire helper for exercising the SERVER side) and alongside the entire
-// file protocol earlier in this module, which the proxy still runs on until
-// plan 07's swap.
+// acquire helper for exercising the SERVER side) -- the file protocol this
+// region's own predecessor sat beside is gone (plan 07, D-12).
 //
 // Deliberately never REJECTS a promise: every failure -- deadline, a
 // refused connection, a malformed line, the broker going away mid-request --
@@ -611,10 +309,8 @@ export function acquireOverControlPlane(dir: string = brokerRootDir()): Promise<
 // A structural test in vice-broker-client.test.ts extracts exactly the
 // region between this marker and REGION END below (by these marker strings,
 // not a whole-file scan) and asserts it contains no filesystem-write
-// construct: writeFileSync/writeJsonAtomic/renameSync/mkdirSync/unlinkSync
-// all belong to the RETIRING file protocol above this marker, which plan 07
-// deletes wholesale (D-12) -- nothing in this region may reintroduce a
-// second on-disk authority for "is this lease alive."
+// construct -- nothing in this region may reintroduce a second on-disk
+// authority for "is this lease alive."
 // ---------------------------------------------------------------------------
 
 /** Same value as the tracer's own CONTROL_ACQUIRE_TIMEOUT_MS above --
@@ -627,13 +323,14 @@ export function acquireOverControlPlane(dir: string = brokerRootDir()): Promise<
  * plan's. */
 export const ACQUIRE_TIMEOUT_MS: number = CONTROL_ACQUIRE_TIMEOUT_MS;
 
-/** Same value as the retiring pollRecycleAck()'s own RECYCLE_ACK_TIMEOUT_MS
- * above -- referenced directly for the same never-drift reason as
- * ACQUIRE_TIMEOUT_MS. "The recycle bound takes the value the retiring
- * acknowledgement poll used" per 01.6.2-01-PLAN.md's environment variable
- * table (VICE_BROKER_RECYCLE_TIMEOUT_MS, default 30000) -- carried forward
- * unchanged. Final tuning is Phase 01.6.2.1's item. */
-export const RECYCLE_TIMEOUT_MS: number = RECYCLE_ACK_TIMEOUT_MS;
+/** The recycle bound. Plan 06 referenced the (now-deleted) retiring
+ * pollRecycleAck()'s own RECYCLE_ACK_TIMEOUT_MS directly, so the two could
+ * never drift apart while both existed; that predecessor is gone (plan 07,
+ * D-12), so this reads the SAME environment variable directly -- the value
+ * itself is unchanged (VICE_BROKER_RECYCLE_TIMEOUT_MS, default 30000, per
+ * 01.6.2-01-PLAN.md's own environment variable table). Final tuning is
+ * Phase 01.6.2.1's item. */
+export const RECYCLE_TIMEOUT_MS: number = Number(process.env.VICE_BROKER_RECYCLE_TIMEOUT_MS || 30000);
 
 /** Genuinely NEW: the file protocol never "connected" anywhere, so there is
  * no retiring value to carry forward for this one. A conservative bound for
