@@ -42,6 +42,7 @@ import {
   startControlListener,
   newControlToken,
   drainPendingAcquires,
+  resolveControlPort,
   type AcquireOutcome,
   type RecycleOutcome,
   type StatusInstanceEntry,
@@ -156,6 +157,31 @@ function resolveViceBinForHostState(): string {
   return process.env.VICE_BIN ?? "x64sc";
 }
 
+/** Duplicates vice-broker-client.ts's readBrokerLiveness() classification
+ * logic (never_started / stale / alive against BROKER_STALE_MS) rather than
+ * importing it -- confirmed empirically (plan 02's own SUMMARY) that
+ * importing vice-broker-client.ts into a HOST-BOUND module pulls its
+ * transitive dependents (repo-root.ts, install-resources.ts, hostpath.ts)
+ * into the SAME tsc build program, which either fails to compile under
+ * tsconfig.build.json's allowImportingTsExtensions:false or forces those
+ * container-side files to be committed under resources/ as if host-bound.
+ * This is the SAME classification a test can drive the REAL
+ * readBrokerLiveness() over (broker-control.test.ts does exactly that,
+ * against records this function's own caller writes), proving the two never
+ * diverge -- this module only needs the classification NAME (never_started
+ * / stale / alive), never the pid/heartbeatAt fields readBrokerLiveness()
+ * also returns. */
+const BROKER_STALE_MS = Number(process.env.VICE_BROKER_STALE_MS || 180000);
+
+function classifyBrokerLivenessLocal(path: string): "never_started" | "stale" | "alive" {
+  const parsed = readBrokerRecordMaybe(path);
+  if (parsed === null) return "never_started";
+  const heartbeatAt = typeof parsed.heartbeat_at === "string" ? parsed.heartbeat_at : null;
+  const heartbeatMs = heartbeatAt ? Date.parse(heartbeatAt) : NaN;
+  if (!Number.isFinite(heartbeatMs)) return "never_started";
+  return Date.now() - heartbeatMs > BROKER_STALE_MS ? "stale" : "alive";
+}
+
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -175,20 +201,6 @@ export function readBrokerRecordMaybe(path: string): Record<string, unknown> | n
     return isPlainObject(parsed) ? parsed : null;
   } catch {
     return null;
-  }
-}
-
-/** Zero-signal liveness probe: true iff a process with this pid currently
- * exists. EPERM (exists, but this process lacks permission to signal it)
- * still counts as alive. */
-function pidIsAlive(pid: unknown): boolean {
-  if (typeof pid !== "number" || !Number.isFinite(pid) || pid <= 0) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (e) {
-    const code = (e as NodeJS.ErrnoException).code;
-    return code === "EPERM";
   }
 }
 
@@ -437,22 +449,19 @@ function handleRelease(requestId: string, state: BrokerState): void {
 async function run(args: ParsedArgs): Promise<void> {
   const finalPath = join(args.stateDir, "broker.json");
 
-  // Refuse-to-clobber: ONLY a currently-live pid blocks a (re)start. This is
-  // narrower than the tracer's own guard, which also refused on the mere
-  // PRESENCE of a heartbeat_at field -- that rule made sense for a
-  // write-once tracer (any heartbeat_at meant "a real broker already wrote
-  // this"), but this broker's OWN records always carry heartbeat_at, so
-  // keeping that rule would make it impossible to ever restart a broker
-  // that crashed or was stopped. This is NOT the CR-01 singleton guard
-  // (Phase 01.6.2 plan 05's, TCP-listener-enforced) -- it only stops one
-  // broker from clobbering the state of another that is still alive.
-  const existing = readBrokerRecordMaybe(finalPath);
-  if (existing && pidIsAlive(existing.pid)) {
-    process.stderr.write(`vice-broker: refusing to overwrite broker.json naming live pid ${String(existing.pid)}\n`);
-    process.exitCode = 1;
-    return;
-  }
-
+  // Plan 05 (criterion K, D-17): the tracer/plan-04-era "refuse to overwrite
+  // a record naming a currently-live pid" pre-check is GONE -- REPLACED by
+  // the bind-before-write singleton guard below, not merely extended
+  // alongside it (this phase's own plan-time note is explicit: the
+  // refuse-to-clobber heuristic is replaced, not extended). That old check
+  // read broker.json's OWN recorded pid and asked "is that process alive" --
+  // a heuristic that can never tell "a live broker legitimately holds this
+  // port" apart from "a live but unrelated process happens to share a pid
+  // number with a stale record" (pids get reused). The kernel-enforced bind
+  // below asks the ONLY question that actually matters -- "is the control
+  // port itself already held" -- and broker.json becomes a pure ARBITER of
+  // that question's two possible causes, never a gate in its own right.
+  //
   // D-25: the mandatory start-time banner, printed unconditionally and
   // BEFORE anything else in this function runs -- an operator must be told
   // what a Ctrl-C costs before there is anything running for them to Ctrl-C.
@@ -463,6 +472,7 @@ async function run(args: ParsedArgs): Promise<void> {
   const controlHost = process.env.VICE_BROKER_CONTROL_HOST ?? "0.0.0.0";
   const startedAt = new Date().toISOString(); // FIXED across every heartbeat refresh -- see writeBrokerRecordFile()'s callers below
   const pollMs = Number(process.env.VICE_BROKER_POLL_MS) || 500;
+  const controlPort = resolveControlPort();
 
   // Criterion I / D-15: the unconditional startup reap runs BEFORE the
   // control listener accepts and before anything is launched. A SIGKILLed
@@ -470,6 +480,15 @@ async function run(args: ParsedArgs): Promise<void> {
   // "every emulator this project's port band could be squatting is either
   // ours or a human's own work" guarantee can be enforced -- no marker file
   // is consulted, per this reap's own header comment in broker-kill.mts.
+  //
+  // NOTE (plan 05): this reap runs UNCONDITIONALLY, before the bind attempt
+  // below -- including for a process that goes on to LOSE the singleton
+  // race a moment later (see the EADDRINUSE handling below). That ordering
+  // is D-15's own, already established and tested by plan 04
+  // (broker-kill.test.ts's own structural source-order check); this task
+  // does not change it. A losing second broker's own reap pass is an
+  // accepted, pre-existing consequence of "the reap is unconditional" --
+  // not something the singleton guard below is required to prevent.
   await reapOrphanedInstances({
     stateDir: args.stateDir,
     epochPathFor,
@@ -477,10 +496,12 @@ async function run(args: ParsedArgs): Promise<void> {
     writeEpochRecord,
   });
 
+  // D-18: the singleton guarantee holds only while the control port keeps its default -- two brokers deliberately configured onto different ports are two brokers, and no code prevents that.
   let listener: Awaited<ReturnType<typeof startControlListener>>;
   try {
     listener = await startControlListener({
       host: controlHost,
+      port: controlPort,
       token,
       onAcquire: (requestId) => handleAcquire(requestId, args.stateDir, state),
       onRelease: (requestId) => handleRelease(requestId, state),
@@ -497,7 +518,42 @@ async function run(args: ParsedArgs): Promise<void> {
       }),
     });
   } catch (e) {
-    process.stderr.write(`vice-broker: failed to start control listener: ${(e as Error).message}\n`);
+    // Criterion K / D-17 / D-18: CR-01 closes here. A well-known TCP port
+    // cannot be bound twice, so EADDRINUSE is the kernel enforcing the
+    // singleton -- but the guarantee holds only while the control port
+    // keeps its default (two brokers deliberately configured onto
+    // DIFFERENT ports are two brokers, and no code here or anywhere else
+    // prevents that). On EADDRINUSE, broker.json arbitrates via the SAME
+    // never_started/stale/alive classification vice-broker-client.ts's
+    // readBrokerLiveness() uses (duplicated locally above -- see
+    // classifyBrokerLivenessLocal()'s own header comment for why this
+    // cannot be a value import), and takes exactly one of two DISTINCT
+    // paths: a record classified alive means this process lost a genuine
+    // race against a live broker -- exit quietly, status 0, as designed.
+    // A record classified stale or never_started means the port is held by
+    // something that does not answer as a broker at all -- fail loudly,
+    // naming the port and what to check. Conflating these two would let a
+    // squatted port masquerade as a healthy singleton, permanently and
+    // silently (T-01.6.2-34). Neither path writes the discovery record,
+    // launches an instance, or reaps again -- both simply exit.
+    const err = e as NodeJS.ErrnoException;
+    if (err.code === "EADDRINUSE") {
+      const liveness = classifyBrokerLivenessLocal(finalPath);
+      if (liveness === "alive") {
+        process.stderr.write(
+          `vice-broker: another broker is already running and holds control port ${controlPort} -- exiting quietly as a second instance (record: ${finalPath})\n`,
+        );
+        process.exitCode = 0;
+        return;
+      }
+      process.stderr.write(
+        `vice-broker: FATAL -- control port ${controlPort} is held by something that does not answer as a broker (discovery record classified "${liveness}"). ` +
+          `Check what is bound to port ${controlPort} on the host (e.g. \`lsof -i :${controlPort}\` or \`ss -ltnp\`) before restarting. Record: ${finalPath}\n`,
+      );
+      process.exitCode = 1;
+      return;
+    }
+    process.stderr.write(`vice-broker: failed to start control listener: ${err.message}\n`);
     process.exitCode = 1;
     return;
   }
@@ -510,11 +566,13 @@ async function run(args: ParsedArgs): Promise<void> {
   // nothing to tear down before that point.
   registerShutdownHandlers({ state });
 
-  // The fourteen-field set (D-27, criterion G): the lease time-to-live field
-  // the bash original carried is gone -- the connection is the lease now
-  // (D-12) -- and every other config-echo field survives even though no
-  // consumer parses it beyond a status message, because a human reading
-  // this file by hand benefits from the full echo.
+  // A successful bind writes the record UNCONDITIONALLY, overwriting
+  // whatever was there -- the bind itself is the proof of singleton status
+  // (D-17). The fourteen-field set (D-27, criterion G): the lease
+  // time-to-live field the bash original carried is gone -- the connection
+  // is the lease now (D-12) -- and every other config-echo field survives
+  // even though no consumer parses it beyond a status message, because a
+  // human reading this file by hand benefits from the full echo.
   let record: BrokerRecord = {
     version: 1,
     written_by: WRITTEN_BY,

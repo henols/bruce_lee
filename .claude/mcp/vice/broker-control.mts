@@ -249,22 +249,45 @@ export async function drainPendingAcquires(queue: PendingAcquireQueue): Promise<
   }
 }
 
-/** Starts the TCP control listener: binds, then wires the full
- * newline-delimited-JSON protocol -- all five request kinds, the token
- * gate, and the arrival-ordered pending-acquire queue this listener
- * instance owns. Frames inbound bytes as newline-delimited JSON: buffers,
- * splits on "\n", parses each line with the never-throw posture this
- * codebase already uses for untrusted input -- a malformed line answers
- * `bad_request` and the connection survives. A connection exceeding
- * MAX_LINE_BYTES without a newline is destroyed rather than buffered
- * further (T-01.6.2-04). */
-export function startControlListener(opts: StartControlListenerOptions): Promise<StartControlListenerResult> {
-  const host = opts.host ?? process.env.VICE_BROKER_CONTROL_HOST ?? "0.0.0.0";
-  const port = resolveControlPort(opts.port);
-  const pendingAcquires: PendingAcquireQueue = [];
+// ---------------------------------------------------------------------------
+// Bind (low-level, no protocol) -- kept separate from startControlListener()
+// so a test can occupy a real port with a plain, non-broker listener (task
+// 3's singleton-guard tests) without pulling in this module's own protocol
+// handling.
+// ---------------------------------------------------------------------------
 
+export interface BoundListener {
+  server: Server;
+  port: number;
+  host: string;
+}
+
+/** Binds a bare TCP listener with NO protocol wired up -- no token check, no
+ * request handling, nothing. `startControlListener()` below calls this
+ * internally and then attaches the real protocol; a test wanting to occupy
+ * a control port with "something that is not a broker" (the loud singleton
+ * path's own fixture) can call this directly and never see anything that
+ * looks like this broker's wire format. */
+export function bindControlListener(host: string, port: number): Promise<BoundListener> {
   return new Promise((resolvePromise, reject) => {
-    const server = createServer((socket: Socket) => {
+    const server = createServer();
+    server.on("error", reject);
+    server.listen(port, host, () => {
+      const addr = server.address();
+      const boundPort = typeof addr === "object" && addr !== null ? addr.port : port;
+      resolvePromise({ server, port: boundPort, host });
+    });
+  });
+}
+
+/** Attaches the newline-delimited-JSON protocol (framing, token gate, all
+ * five request kinds) to an ALREADY-BOUND server. Split out of
+ * startControlListener() so the bind step and the protocol-wiring step are
+ * two separately callable primitives -- the real broker still calls
+ * startControlListener() as one step (this function is not part of its own
+ * public surface); this module's own tests exercise the two independently. */
+function attachControlProtocol(server: Server, opts: StartControlListenerOptions, pendingAcquires: PendingAcquireQueue): void {
+  server.on("connection", (socket: Socket) => {
     let buffer = "";
     let requestIdForThisConnection: string | null = null;
 
@@ -430,13 +453,25 @@ export function startControlListener(opts: StartControlListenerOptions): Promise
         writeLine(socket, { kind: "error", code: "bad_request" as ControlErrorCode, message: `unknown op: ${String(req.op)}` });
       }
     }
-    });
+  });
+}
 
-    server.on("error", reject);
-    server.listen(port, host, () => {
-      const addr = server.address();
-      const boundPort = typeof addr === "object" && addr !== null ? addr.port : port;
-      resolvePromise({ server, port: boundPort, host, pendingAcquires });
-    });
+/** Starts the TCP control listener: binds (bindControlListener()), then
+ * attaches the full newline-delimited-JSON protocol (attachControlProtocol()
+ * above) -- all five request kinds, the token gate, and the arrival-ordered
+ * pending-acquire queue this listener instance owns. Frames inbound bytes as
+ * newline-delimited JSON: buffers, splits on "\n", parses each line with
+ * the never-throw posture this codebase already uses for untrusted input --
+ * a malformed line answers `bad_request` and the connection survives. A
+ * connection exceeding MAX_LINE_BYTES without a newline is destroyed rather
+ * than buffered further (T-01.6.2-04). */
+export function startControlListener(opts: StartControlListenerOptions): Promise<StartControlListenerResult> {
+  const host = opts.host ?? process.env.VICE_BROKER_CONTROL_HOST ?? "0.0.0.0";
+  const port = resolveControlPort(opts.port);
+
+  return bindControlListener(host, port).then((bound) => {
+    const pendingAcquires: PendingAcquireQueue = [];
+    attachControlProtocol(bound.server, opts, pendingAcquires);
+    return { server: bound.server, port: bound.port, host: bound.host, pendingAcquires };
   });
 }

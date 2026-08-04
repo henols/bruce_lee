@@ -1,17 +1,16 @@
 // broker-control.test.ts
 //
-// Plan 05: the complete control-plane message set (recycle, status,
-// host_state, alongside plan 01's tracer-era acquire/release), the
-// arrival-ordered pending-acquire structure (Task 1), and the liveness
-// round trip proving broker.json's full fourteen-field record is read
-// correctly by the UNCHANGED container-side classifier (Task 2). Most tests
-// here drive a REAL listener bound on port zero, in this test's own
-// process, against injected onAcquire/onRelease/onRecycle/onStatus/
-// onHostState stubs -- no real emulator, no real spawn, no test opens a
-// connection to the host VICE. The liveness round trip additionally spawns
-// the real, BUILT broker artifact, exactly like broker-e2e.test.ts already
-// does, because it proves something about vice-broker.mts's own real
-// output, not about broker-control.mts in isolation.
+// Plan 05: the complete control-plane message set (acquire/release/recycle/
+// status/host_state), the arrival-ordered pending-acquire structure, and the
+// kernel-enforced singleton guard's two distinct outcomes. Most tests here
+// drive a REAL listener bound on port zero, in this test's own process,
+// against injected onAcquire/onRelease/onRecycle/onStatus/onHostState
+// stubs -- no real emulator, no real spawn, no test opens a connection to
+// the host VICE. The singleton-guard tests (task 3) additionally spawn the
+// real, BUILT broker artifact behind the escape hatch, exactly like
+// broker-e2e.test.ts/broker-kill.test.ts already do, because the guard is a
+// property of vice-broker.mts's own startup sequence, not of
+// broker-control.mts in isolation.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { connect } from "node:net";
@@ -23,6 +22,7 @@ import { fileURLToPath } from "node:url";
 
 import {
   startControlListener,
+  bindControlListener,
   enqueueAcquire,
   drainPendingAcquires,
   newControlToken,
@@ -473,6 +473,148 @@ test("liveness round trip: the existing container-side classifier reads a runnin
     assert.equal(stale.state, "stale", "a record whose heartbeat is far older than the stale threshold must classify as stale");
   } finally {
     if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+// ============================================================================
+// Task 3: the kernel-enforced singleton guard and its two distinct outcomes
+// (criterion K, D-17, D-18).
+// ============================================================================
+
+function startRealBroker(stateDir: string, env: Record<string, string> = {}): ChildProcessWithoutNullStreams {
+  const child = spawn(process.execPath, [BROKER_ARTIFACT, "--repo-root", "/tmp/fake-repo-root-singleton", "--state-dir", stateDir], {
+    env: { ...process.env, VICE_SUPERVISOR_ALLOW_CONTAINER: "1", VICE_BIN: "/bin/sleep", VICE_ARGS: "600", ...env },
+  }) as ChildProcessWithoutNullStreams;
+  return child;
+}
+
+async function stopRealBroker(child: ChildProcessWithoutNullStreams): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  child.kill("SIGTERM");
+  const exited = await waitFor(() => child.exitCode !== null || child.signalCode !== null, 3000);
+  if (!exited) child.kill("SIGKILL");
+}
+
+test("singleton: a second broker started against a live first broker's control port exits quietly (status 0), naming itself a second instance", { timeout: 20000 }, async () => {
+  build();
+  const stateDir = mkdtempSync(join(tmpdir(), "broker-control-singleton-live-"));
+  const first = startRealBroker(stateDir, { VICE_BROKER_CONTROL_PORT: "0" });
+  let firstStderr = "";
+  first.stderr.on("data", (d: Buffer) => (firstStderr += d.toString("utf8")));
+  try {
+    const recordPath = join(stateDir, "broker.json");
+    await waitFor(() => existsSync(recordPath), 5000);
+    const before = readFileSync(recordPath, "utf8");
+    const bound = JSON.parse(before).control_port as number;
+    assert.ok(Number.isInteger(bound) && bound > 0);
+
+    const second = startRealBroker(stateDir, { VICE_BROKER_CONTROL_PORT: String(bound) });
+    let secondStderr = "";
+    second.stderr.on("data", (d: Buffer) => (secondStderr += d.toString("utf8")));
+    const exited = await waitFor(() => second.exitCode !== null, 5000);
+    assert.ok(exited, `second broker never exited; stderr so far:\n${secondStderr}`);
+    assert.equal(second.exitCode, 0, `second broker must exit quietly (status 0); stderr:\n${secondStderr}`);
+    assert.match(secondStderr, /second instance/i);
+
+    const after = readFileSync(recordPath, "utf8");
+    assert.equal(after, before, "the discovery record must be byte-identical before and after the losing second broker's attempt");
+  } finally {
+    await stopRealBroker(first);
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("singleton: a broker started against a port held by a plain non-broker listener, with a stale discovery record present, exits loudly (non-zero) naming the port and what to check", { timeout: 20000 }, async () => {
+  build();
+  const stateDir = mkdtempSync(join(tmpdir(), "broker-control-singleton-stale-"));
+  const recordPath = join(stateDir, "broker.json");
+  // A stale discovery record: a plausible-looking pid, but a heartbeat far
+  // older than the stale threshold.
+  writeFileSync(
+    recordPath,
+    JSON.stringify({
+      version: 1,
+      written_by: "vice-broker.mjs",
+      pid: 999999999,
+      started_at: "2020-01-01T00:00:00Z",
+      heartbeat_at: "2020-01-01T00:00:00Z",
+      node_version: process.version,
+      control_host: "0.0.0.0",
+      control_port: 0,
+      control_token: "0".repeat(64),
+      spares_target: 3,
+      max_instances: 16,
+      base_port: 6600,
+      poll_ms: 500,
+      dry_run: false,
+    }),
+  );
+  const before = readFileSync(recordPath, "utf8");
+
+  // A plain, non-broker listener holding a real port -- bindControlListener()
+  // itself is a bare TCP bind with no protocol wired up, standing in exactly
+  // for "something that is not a broker" (it never speaks this module's own
+  // wire format).
+  const squatter = await bindControlListener("127.0.0.1", 0);
+  try {
+    const child = startRealBroker(stateDir, { VICE_BROKER_CONTROL_PORT: String(squatter.port) });
+    let stderr = "";
+    child.stderr.on("data", (d: Buffer) => (stderr += d.toString("utf8")));
+    const exited = await waitFor(() => child.exitCode !== null, 5000);
+    assert.ok(exited, `broker never exited; stderr so far:\n${stderr}`);
+    assert.notEqual(child.exitCode, 0, `must exit non-zero when the port is squatted; stderr:\n${stderr}`);
+    assert.match(stderr, new RegExp(String(squatter.port)));
+    assert.match(stderr, /check/i);
+
+    const after = readFileSync(recordPath, "utf8");
+    assert.equal(after, before, "the stale record must be byte-identical before and after the loud-failure attempt");
+  } finally {
+    squatter.server.close();
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("the two singleton messages are textually distinct, and neither is a substring of the other", () => {
+  const quiet = "vice-broker: another broker is already running and holds this control port -- exiting quietly as a second instance";
+  const loud = 'vice-broker: FATAL -- control port is held by something that does not answer as a broker (discovery record classified "stale")';
+  assert.notEqual(quiet, loud);
+  assert.ok(!quiet.includes(loud) && !loud.includes(quiet));
+});
+
+test("structural: the bind call precedes the record write in vice-broker.mts's own startup sequence", () => {
+  const source = readFileSync(join(HERE, "vice-broker.mts"), "utf8");
+  const bindIdx = source.indexOf("listener = await startControlListener(");
+  const writeIdx = source.indexOf("writeBrokerRecordFile(args.stateDir, record);");
+  assert.ok(bindIdx !== -1 && writeIdx !== -1);
+  assert.ok(bindIdx < writeIdx, "the control listener must bind BEFORE the discovery record is written");
+});
+
+test("structural: vice-broker.mts or broker-control.mts states in a comment that the singleton guarantee holds only while the control port keeps its default", () => {
+  const broker = readFileSync(join(HERE, "vice-broker.mts"), "utf8");
+  const control = readFileSync(join(HERE, "broker-control.mts"), "utf8");
+  const combined = `${broker}\n${control}`;
+  assert.match(combined, /holds only while the control port keeps its default/i);
+  assert.match(combined, /two brokers/i);
+});
+
+test("a bind failure whose cause is NOT address-in-use produces its own loud failure, distinct from either singleton path", async () => {
+  build();
+  const stateDir = mkdtempSync(join(tmpdir(), "broker-control-bind-other-failure-"));
+  try {
+    // An invalid host string (not a bindable address, and not "in use"
+    // either) reliably produces a non-EADDRINUSE bind error from Node's own
+    // net module.
+    const child = startRealBroker(stateDir, { VICE_BROKER_CONTROL_PORT: "0", VICE_BROKER_CONTROL_HOST: "256.256.256.256" });
+    let stderr = "";
+    child.stderr.on("data", (d: Buffer) => (stderr += d.toString("utf8")));
+    const exited = await waitFor(() => child.exitCode !== null, 5000);
+    assert.ok(exited, `broker never exited; stderr so far:\n${stderr}`);
+    assert.notEqual(child.exitCode, 0);
+    assert.doesNotMatch(stderr, /second instance/i);
+    assert.doesNotMatch(stderr, /does not answer as a broker/i);
+    assert.match(stderr, /failed to start control listener/i);
+  } finally {
     rmSync(stateDir, { recursive: true, force: true });
   }
 });

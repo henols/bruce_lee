@@ -215,42 +215,55 @@ test("heartbeat_at advances between two reads taken more than one heartbeat inte
   }
 });
 
-test("refuses to overwrite a record naming this test's own live pid, exits non-zero, leaves the record byte-identical, never starts a listener", () => {
-  const deployDir = freshDeployDir();
-  try {
-    const stateDir = join(deployDir, "state");
-    mkdirSync(stateDir, { recursive: true });
-    const recordPath = join(stateDir, "broker.json");
-    // This test process's own pid is guaranteed alive for the duration of
-    // this test -- the strongest "live pid" fixture available without
-    // spawning and tracking a helper process.
-    const before = JSON.stringify({ pid: process.pid, started_at: "fixture", heartbeat_at: "2020-01-01T00:00:00Z" });
-    writeFileSync(recordPath, before);
-
-    const result = runBrokerSync(deployDir, ["--repo-root", "/tmp/fake-repo-root", "--state-dir", stateDir], {
-      VICE_SUPERVISOR_ALLOW_CONTAINER: "1",
-    });
-    assert.notEqual(result.status, 0, "must exit non-zero when refusing to clobber");
-    assert.match(result.stderr, /live pid/i);
-
-    const after = readFileSync(recordPath, "utf8");
-    assert.equal(after, before, "the existing record must be left byte-identical on refusal");
-  } finally {
-    rmSync(deployDir, { recursive: true, force: true });
-  }
-});
-
-test("overwrites a record naming a DEAD pid even though it carries heartbeat_at -- only a LIVE pid blocks a restart", async () => {
+// Plan 05 (criterion K, D-17): the tracer/plan-04-era "refuse to overwrite a
+// record naming a currently-live pid" pre-check is GONE -- REPLACED by the
+// kernel-enforced bind-before-write singleton guard, not merely extended
+// alongside it. The two former tests here ("refuses to overwrite... live
+// pid... never starts a listener" and its dead-pid counterpart) tested THAT
+// pre-check directly and no longer describe real behaviour: with the
+// pre-check removed, a hand-seeded broker.json naming this test's OWN live
+// pid no longer blocks anything by itself (nothing is actually bound to the
+// control port), so the broker would start normally and never exit --
+// exactly why the FIRST of those two tests used to rely on the pre-check
+// firing to stay spawnSync()-safe, and would hang forever without it. The
+// singleton guard's own two real outcomes (a record naming a genuinely LIVE
+// broker vs. one that is stale/never-started) are now covered by
+// broker-control.test.ts's own singleton tests, which drive a REAL bind
+// conflict rather than a hand-seeded pid string -- the only way to actually
+// exercise the new guard's two distinct paths.
+test("a pre-existing broker.json naming this test's own live pid no longer blocks a restart by itself -- only an actual bind conflict does (criterion K)", async () => {
   const deployDir = freshDeployDir();
   const stateDir = join(deployDir, "state");
   mkdirSync(stateDir, { recursive: true });
   const recordPath = join(stateDir, "broker.json");
-  // An implausibly large pid: never alive on any real system. The tracer's
-  // own OLD rule refused here purely because heartbeat_at was PRESENT,
-  // regardless of pid liveness -- that rule does not survive into the
-  // long-lived broker, since every one of ITS OWN records also carries
-  // heartbeat_at, and refusing on presence alone would make it impossible
-  // to ever restart a broker that crashed or was stopped.
+  // This test process's own pid is guaranteed alive -- if any lingering
+  // pid-liveness pre-check existed, THIS is the fixture that would trip it.
+  const before = JSON.stringify({ pid: process.pid, started_at: "fixture", heartbeat_at: "2020-01-01T00:00:00Z" });
+  writeFileSync(recordPath, before);
+
+  const { child } = runBrokerAsync(deployDir, ["--repo-root", "/tmp/fake-repo-root", "--state-dir", stateDir], {
+    VICE_SUPERVISOR_ALLOW_CONTAINER: "1",
+    VICE_BROKER_CONTROL_PORT: "0",
+  });
+  try {
+    const wroteNewRecord = await waitFor(() => readFileSync(recordPath, "utf8") !== before, 5000);
+    assert.ok(wroteNewRecord, "a record naming this test's own live pid must NOT block a restart -- only a real bind conflict does now");
+
+    const record: Record<string, unknown> = JSON.parse(readFileSync(recordPath, "utf8"));
+    assert.deepEqual(Object.keys(record).sort(), [...BROKER_JSON_FOURTEEN_KEYS].sort());
+    assert.notEqual(record.pid, before, "the new record must name the SPAWNED BROKER's own pid, not the old fixture's");
+  } finally {
+    await stopBroker(child);
+    rmSync(deployDir, { recursive: true, force: true });
+  }
+});
+
+test("overwrites a record naming a DEAD pid -- a stale record on disk never blocks a restart, only a real bind conflict does", async () => {
+  const deployDir = freshDeployDir();
+  const stateDir = join(deployDir, "state");
+  mkdirSync(stateDir, { recursive: true });
+  const recordPath = join(stateDir, "broker.json");
+  // An implausibly large pid: never alive on any real system.
   const before = JSON.stringify({ pid: 999999999, started_at: "fixture", heartbeat_at: "2020-01-01T00:00:00Z" });
   writeFileSync(recordPath, before);
 

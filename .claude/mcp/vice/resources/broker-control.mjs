@@ -92,192 +92,213 @@ export async function drainPendingAcquires(queue) {
         }
     }
 }
-/** Starts the TCP control listener: binds, then wires the full
- * newline-delimited-JSON protocol -- all five request kinds, the token
- * gate, and the arrival-ordered pending-acquire queue this listener
- * instance owns. Frames inbound bytes as newline-delimited JSON: buffers,
- * splits on "\n", parses each line with the never-throw posture this
- * codebase already uses for untrusted input -- a malformed line answers
- * `bad_request` and the connection survives. A connection exceeding
- * MAX_LINE_BYTES without a newline is destroyed rather than buffered
- * further (T-01.6.2-04). */
-export function startControlListener(opts) {
-    const host = opts.host ?? process.env.VICE_BROKER_CONTROL_HOST ?? "0.0.0.0";
-    const port = resolveControlPort(opts.port);
-    const pendingAcquires = [];
+/** Binds a bare TCP listener with NO protocol wired up -- no token check, no
+ * request handling, nothing. `startControlListener()` below calls this
+ * internally and then attaches the real protocol; a test wanting to occupy
+ * a control port with "something that is not a broker" (the loud singleton
+ * path's own fixture) can call this directly and never see anything that
+ * looks like this broker's wire format. */
+export function bindControlListener(host, port) {
     return new Promise((resolvePromise, reject) => {
-        const server = createServer((socket) => {
-            let buffer = "";
-            let requestIdForThisConnection = null;
-            socket.on("data", (chunk) => {
-                buffer += chunk.toString("utf8");
-                if (Buffer.byteLength(buffer, "utf8") > MAX_LINE_BYTES) {
-                    socket.destroy();
-                    return;
+        const server = createServer();
+        server.on("error", reject);
+        server.listen(port, host, () => {
+            const addr = server.address();
+            const boundPort = typeof addr === "object" && addr !== null ? addr.port : port;
+            resolvePromise({ server, port: boundPort, host });
+        });
+    });
+}
+/** Attaches the newline-delimited-JSON protocol (framing, token gate, all
+ * five request kinds) to an ALREADY-BOUND server. Split out of
+ * startControlListener() so the bind step and the protocol-wiring step are
+ * two separately callable primitives -- the real broker still calls
+ * startControlListener() as one step (this function is not part of its own
+ * public surface); this module's own tests exercise the two independently. */
+function attachControlProtocol(server, opts, pendingAcquires) {
+    server.on("connection", (socket) => {
+        let buffer = "";
+        let requestIdForThisConnection = null;
+        socket.on("data", (chunk) => {
+            buffer += chunk.toString("utf8");
+            if (Buffer.byteLength(buffer, "utf8") > MAX_LINE_BYTES) {
+                socket.destroy();
+                return;
+            }
+            let newlineIdx;
+            while ((newlineIdx = buffer.indexOf("\n")) !== -1) {
+                const line = buffer.slice(0, newlineIdx);
+                buffer = buffer.slice(newlineIdx + 1);
+                handleLine(line);
+            }
+        });
+        socket.on("close", () => {
+            // Connection close IS the release -- including on the client's own
+            // SIGKILL, since "close" always fires either way. Idempotent: an
+            // explicit `release` already having cleared
+            // requestIdForThisConnection makes this a no-op.
+            if (requestIdForThisConnection) {
+                const id = requestIdForThisConnection;
+                requestIdForThisConnection = null;
+                opts.onRelease(id);
+            }
+        });
+        socket.on("error", () => {
+            // Per-connection error handling isolates one peer's failure from
+            // every other connection and from the server itself (T-01.6.2-06).
+        });
+        /** Attempts one acquire over THIS connection/socket, writing the
+         * terminal response (grant or a non-queueing error) when settled, or
+         * enqueueing itself and returning unsettled when a launch is already in
+         * flight. Shared by the immediate first attempt and every later retry
+         * `drainPendingAcquires()` drives, so the two paths can never answer
+         * differently for the same requestId. */
+        function attemptAcquire(requestId) {
+            return opts
+                .onAcquire(requestId)
+                .then((outcome) => {
+                if (socket.destroyed)
+                    return true; // nothing left to answer -- drop
+                if (outcome.ok) {
+                    requestIdForThisConnection = requestId;
+                    writeLine(socket, {
+                        kind: "grant",
+                        id: requestId,
+                        port: outcome.grant.port,
+                        url: outcome.grant.url,
+                        epoch_file: outcome.grant.epochFile,
+                        supervisor_dir: outcome.grant.supervisorDir,
+                    });
+                    return true;
                 }
-                let newlineIdx;
-                while ((newlineIdx = buffer.indexOf("\n")) !== -1) {
-                    const line = buffer.slice(0, newlineIdx);
-                    buffer = buffer.slice(newlineIdx + 1);
-                    handleLine(line);
+                if (outcome.reason === "launch_in_flight") {
+                    return false; // still blocked -- caller re-queues
                 }
+                const code = outcome.reason === "internal" ? "internal" : outcome.reason;
+                writeLine(socket, { kind: "error", code, message: `acquire failed: ${outcome.reason}` });
+                return true;
+            })
+                .catch(() => {
+                if (!socket.destroyed) {
+                    writeLine(socket, { kind: "error", code: "internal", message: "acquire threw" });
+                }
+                return true;
             });
-            socket.on("close", () => {
-                // Connection close IS the release -- including on the client's own
-                // SIGKILL, since "close" always fires either way. Idempotent: an
-                // explicit `release` already having cleared
-                // requestIdForThisConnection makes this a no-op.
+        }
+        function handleLine(line) {
+            if (line.trim() === "")
+                return;
+            let parsed;
+            try {
+                parsed = JSON.parse(line);
+            }
+            catch {
+                writeLine(socket, { kind: "error", code: "bad_request", message: "malformed JSON line" });
+                return;
+            }
+            if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+                writeLine(socket, { kind: "error", code: "bad_request", message: "request must be a JSON object" });
+                return;
+            }
+            const req = parsed;
+            // Token check BEFORE any state is read or written -- absence or
+            // mismatch is refused, the connection is destroyed, and nothing is
+            // allocated, spawned or signalled (T-01.6.2-01, T-01.6.2-03).
+            const token = typeof req.token === "string" ? req.token : "";
+            if (!tokensMatch(token, opts.token)) {
+                writeLine(socket, { kind: "error", code: "unauthorized", message: "missing or invalid control token" });
+                socket.destroy();
+                return;
+            }
+            if (req.op === "acquire") {
+                const requestId = typeof req.id === "string" && req.id !== "" ? req.id : defaultRequestId("req");
+                void attemptAcquire(requestId).then((settled) => {
+                    if (!settled) {
+                        enqueueAcquire(pendingAcquires, { requestId, attempt: () => attemptAcquire(requestId) });
+                    }
+                });
+            }
+            else if (req.op === "release") {
                 if (requestIdForThisConnection) {
                     const id = requestIdForThisConnection;
                     requestIdForThisConnection = null;
                     opts.onRelease(id);
                 }
-            });
-            socket.on("error", () => {
-                // Per-connection error handling isolates one peer's failure from
-                // every other connection and from the server itself (T-01.6.2-06).
-            });
-            /** Attempts one acquire over THIS connection/socket, writing the
-             * terminal response (grant or a non-queueing error) when settled, or
-             * enqueueing itself and returning unsettled when a launch is already in
-             * flight. Shared by the immediate first attempt and every later retry
-             * `drainPendingAcquires()` drives, so the two paths can never answer
-             * differently for the same requestId. */
-            function attemptAcquire(requestId) {
-                return opts
-                    .onAcquire(requestId)
-                    .then((outcome) => {
-                    if (socket.destroyed)
-                        return true; // nothing left to answer -- drop
-                    if (outcome.ok) {
-                        requestIdForThisConnection = requestId;
-                        writeLine(socket, {
-                            kind: "grant",
-                            id: requestId,
-                            port: outcome.grant.port,
-                            url: outcome.grant.url,
-                            epoch_file: outcome.grant.epochFile,
-                            supervisor_dir: outcome.grant.supervisorDir,
-                        });
-                        return true;
-                    }
-                    if (outcome.reason === "launch_in_flight") {
-                        return false; // still blocked -- caller re-queues
-                    }
-                    const code = outcome.reason === "internal" ? "internal" : outcome.reason;
-                    writeLine(socket, { kind: "error", code, message: `acquire failed: ${outcome.reason}` });
-                    return true;
+                writeLine(socket, { kind: "released" });
+            }
+            else if (req.op === "recycle") {
+                const recycleId = typeof req.id === "string" && req.id !== "" ? req.id : defaultRequestId("recycle");
+                const targetId = typeof req.target_id === "string" ? req.target_id : "";
+                // T-01.6.2-31: a connection may only recycle the grant IT ITSELF
+                // holds. This check happens here, before onRecycle() is ever
+                // called, so a mismatched target never reaches the kill discipline
+                // and never signals anything -- an injected signal recorder stays
+                // empty for this case.
+                if (requestIdForThisConnection === null || targetId !== requestIdForThisConnection) {
+                    writeLine(socket, {
+                        kind: "error",
+                        code: "denied",
+                        message: "recycle may only target the grant this connection itself holds",
+                    });
+                    return;
+                }
+                opts
+                    .onRecycle(targetId)
+                    .then((result) => {
+                    writeLine(socket, {
+                        kind: "recycle_ack",
+                        id: recycleId,
+                        target_id: targetId,
+                        port: result.port,
+                        x64sc_pid: result.pid,
+                        vice_bin: result.viceBin,
+                        kill_stage: result.killStage,
+                        epoch_before: result.epochBefore,
+                        outcome: result.outcome,
+                        reason: result.reason,
+                    });
                 })
                     .catch(() => {
-                    if (!socket.destroyed) {
-                        writeLine(socket, { kind: "error", code: "internal", message: "acquire threw" });
-                    }
-                    return true;
+                    writeLine(socket, { kind: "error", code: "internal", message: "recycle threw" });
                 });
             }
-            function handleLine(line) {
-                if (line.trim() === "")
-                    return;
-                let parsed;
-                try {
-                    parsed = JSON.parse(line);
-                }
-                catch {
-                    writeLine(socket, { kind: "error", code: "bad_request", message: "malformed JSON line" });
-                    return;
-                }
-                if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-                    writeLine(socket, { kind: "error", code: "bad_request", message: "request must be a JSON object" });
-                    return;
-                }
-                const req = parsed;
-                // Token check BEFORE any state is read or written -- absence or
-                // mismatch is refused, the connection is destroyed, and nothing is
-                // allocated, spawned or signalled (T-01.6.2-01, T-01.6.2-03).
-                const token = typeof req.token === "string" ? req.token : "";
-                if (!tokensMatch(token, opts.token)) {
-                    writeLine(socket, { kind: "error", code: "unauthorized", message: "missing or invalid control token" });
-                    socket.destroy();
-                    return;
-                }
-                if (req.op === "acquire") {
-                    const requestId = typeof req.id === "string" && req.id !== "" ? req.id : defaultRequestId("req");
-                    void attemptAcquire(requestId).then((settled) => {
-                        if (!settled) {
-                            enqueueAcquire(pendingAcquires, { requestId, attempt: () => attemptAcquire(requestId) });
-                        }
-                    });
-                }
-                else if (req.op === "release") {
-                    if (requestIdForThisConnection) {
-                        const id = requestIdForThisConnection;
-                        requestIdForThisConnection = null;
-                        opts.onRelease(id);
-                    }
-                    writeLine(socket, { kind: "released" });
-                }
-                else if (req.op === "recycle") {
-                    const recycleId = typeof req.id === "string" && req.id !== "" ? req.id : defaultRequestId("recycle");
-                    const targetId = typeof req.target_id === "string" ? req.target_id : "";
-                    // T-01.6.2-31: a connection may only recycle the grant IT ITSELF
-                    // holds. This check happens here, before onRecycle() is ever
-                    // called, so a mismatched target never reaches the kill discipline
-                    // and never signals anything -- an injected signal recorder stays
-                    // empty for this case.
-                    if (requestIdForThisConnection === null || targetId !== requestIdForThisConnection) {
-                        writeLine(socket, {
-                            kind: "error",
-                            code: "denied",
-                            message: "recycle may only target the grant this connection itself holds",
-                        });
-                        return;
-                    }
-                    opts
-                        .onRecycle(targetId)
-                        .then((result) => {
-                        writeLine(socket, {
-                            kind: "recycle_ack",
-                            id: recycleId,
-                            target_id: targetId,
-                            port: result.port,
-                            x64sc_pid: result.pid,
-                            vice_bin: result.viceBin,
-                            kill_stage: result.killStage,
-                            epoch_before: result.epochBefore,
-                            outcome: result.outcome,
-                            reason: result.reason,
-                        });
-                    })
-                        .catch(() => {
-                        writeLine(socket, { kind: "error", code: "internal", message: "recycle threw" });
-                    });
-                }
-                else if (req.op === "status") {
-                    writeLine(socket, { kind: "status", instances: opts.onStatus() });
-                }
-                else if (req.op === "host_state") {
-                    const hs = opts.onHostState();
-                    writeLine(socket, {
-                        kind: "host_state",
-                        pid: hs.pid,
-                        started_at: hs.startedAt,
-                        node_version: hs.nodeVersion,
-                        vice_bin: hs.viceBin,
-                        warm_floor: hs.warmFloor,
-                        max_instances: hs.maxInstances,
-                        base_port: hs.basePort,
-                    });
-                }
-                else {
-                    writeLine(socket, { kind: "error", code: "bad_request", message: `unknown op: ${String(req.op)}` });
-                }
+            else if (req.op === "status") {
+                writeLine(socket, { kind: "status", instances: opts.onStatus() });
             }
-        });
-        server.on("error", reject);
-        server.listen(port, host, () => {
-            const addr = server.address();
-            const boundPort = typeof addr === "object" && addr !== null ? addr.port : port;
-            resolvePromise({ server, port: boundPort, host, pendingAcquires });
-        });
+            else if (req.op === "host_state") {
+                const hs = opts.onHostState();
+                writeLine(socket, {
+                    kind: "host_state",
+                    pid: hs.pid,
+                    started_at: hs.startedAt,
+                    node_version: hs.nodeVersion,
+                    vice_bin: hs.viceBin,
+                    warm_floor: hs.warmFloor,
+                    max_instances: hs.maxInstances,
+                    base_port: hs.basePort,
+                });
+            }
+            else {
+                writeLine(socket, { kind: "error", code: "bad_request", message: `unknown op: ${String(req.op)}` });
+            }
+        }
+    });
+}
+/** Starts the TCP control listener: binds (bindControlListener()), then
+ * attaches the full newline-delimited-JSON protocol (attachControlProtocol()
+ * above) -- all five request kinds, the token gate, and the arrival-ordered
+ * pending-acquire queue this listener instance owns. Frames inbound bytes as
+ * newline-delimited JSON: buffers, splits on "\n", parses each line with
+ * the never-throw posture this codebase already uses for untrusted input --
+ * a malformed line answers `bad_request` and the connection survives. A
+ * connection exceeding MAX_LINE_BYTES without a newline is destroyed rather
+ * than buffered further (T-01.6.2-04). */
+export function startControlListener(opts) {
+    const host = opts.host ?? process.env.VICE_BROKER_CONTROL_HOST ?? "0.0.0.0";
+    const port = resolveControlPort(opts.port);
+    return bindControlListener(host, port).then((bound) => {
+        const pendingAcquires = [];
+        attachControlProtocol(bound.server, opts, pendingAcquires);
+        return { server: bound.server, port: bound.port, host: bound.host, pendingAcquires };
     });
 }
