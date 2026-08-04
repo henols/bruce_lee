@@ -130,24 +130,115 @@ function sprites({ dd00, d018, d015, ptrs }) {
 
 // ---------------------------------------------------------------------- vectors
 
-const VECTORS = [
-  ['$0314/$0315', 0x0314, 0xea31, 'CINV  — KERNAL IRQ (RAM, indirect)'],
-  ['$0316/$0317', 0x0316, 0xfe66, 'CBINV — BRK'],
-  ['$0318/$0319', 0x0318, 0xfe47, 'NMINV — NMI (music players retarget this)'],
-  ['$FFFA/$FFFB', 0xfffa, null, 'hardware NMI'],
-  ['$FFFC/$FFFD', 0xfffc, null, 'hardware RESET'],
-  ['$FFFE/$FFFF', 0xfffe, null, 'hardware IRQ/BRK'],
+// Every indirection a C64 program can be sitting behind, grouped by block.
+// Defaults are the stock KERNAL/BASIC values; `null` means the location is not
+// a KERNAL-maintained vector, so "retargeted" is not a meaningful verdict there.
+// `hook` marks a vector a cracker has a specific reason to divert — those are
+// read as provenance signals, not merely as structure.
+const VECTOR_BLOCKS = [
+  ['BASIC indirects ($0300-$030B) — only meaningful with BASIC banked in', [
+    ['$0300/$0301', 0x0300, 0xe38b, 'IERROR — print BASIC error message'],
+    ['$0302/$0303', 0x0302, 0xa483, 'IMAIN  — BASIC warm start / input loop'],
+    ['$0304/$0305', 0x0304, 0xa57c, 'ICRNCH — tokenise a BASIC line'],
+    ['$0306/$0307', 0x0306, 0xa71a, 'IQPLOP — list a tokenised line'],
+    ['$0308/$0309', 0x0308, 0xa7e4, 'IGONE  — execute next BASIC token'],
+    ['$030A/$030B', 0x030a, 0xae86, 'IEVAL  — evaluate an expression'],
+  ]],
+  ['KERNAL IRQ/BRK/NMI ($0314-$0319)', [
+    ['$0314/$0315', 0x0314, 0xea31, 'CINV  — KERNAL IRQ (RAM, indirect)'],
+    ['$0316/$0317', 0x0316, 0xfe66, 'CBINV — BRK'],
+    ['$0318/$0319', 0x0318, 0xfe47, 'NMINV — NMI (music players retarget this)'],
+  ]],
+  ['KERNAL I/O indirects ($031A-$0333)', [
+    ['$031A/$031B', 0x031a, 0xf34a, 'IOPEN'],
+    ['$031C/$031D', 0x031c, 0xf291, 'ICLOSE'],
+    ['$031E/$031F', 0x031e, 0xf20e, 'ICHKIN'],
+    ['$0320/$0321', 0x0320, 0xf250, 'ICKOUT'],
+    ['$0322/$0323', 0x0322, 0xf333, 'ICLRCH'],
+    ['$0324/$0325', 0x0324, 0xf157, 'IBASIN'],
+    ['$0326/$0327', 0x0326, 0xf1ca, 'IBSOUT'],
+    ['$0328/$0329', 0x0328, 0xf6ed, 'ISTOP  — STOP key check', 'hook'],
+    ['$032A/$032B', 0x032a, 0xf13e, 'IGETIN'],
+    ['$032C/$032D', 0x032c, 0xf32f, 'ICLALL'],
+    ['$032E/$032F', 0x032e, 0xfe66, 'USRCMD — unused by the KERNAL'],
+    ['$0330/$0331', 0x0330, 0xf4a5, 'ILOAD  — LOAD', 'hook'],
+    ['$0332/$0333', 0x0332, 0xf5ed, 'ISAVE  — SAVE', 'hook'],
+  ]],
+  ['Autostart / cartridge block ($8000-$8008)', [
+    ['$8000/$8001', 0x8000, null, 'cartridge cold-start entry'],
+    ['$8002/$8003', 0x8002, null, 'cartridge NMI entry'],
+  ]],
+  ['BASIC ROM entry ($A000-$A003) — check $01 LORAM first', [
+    ['$A000/$A001', 0xa000, null, 'BASIC cold-start ($E394 in stock ROM)'],
+    ['$A002/$A003', 0xa002, null, 'BASIC warm-start ($E37B in stock ROM)'],
+  ]],
+  ['Hardware vectors ($FFFA-$FFFF) — live when the KERNAL is banked out', [
+    ['$FFFA/$FFFB', 0xfffa, null, 'hardware NMI'],
+    ['$FFFC/$FFFD', 0xfffc, null, 'hardware RESET'],
+    ['$FFFE/$FFFF', 0xfffe, null, 'hardware IRQ/BRK'],
+  ]],
 ];
+
+// $8004-$8008 holds "CBM80" in PETSCII when a cartridge/autostart block is
+// present, and the KERNAL only honours $8000/$8002 when it does. Without the
+// signature those two words are just whatever is in RAM there.
+const CBM80 = [0xc3, 0xc2, 0xcd, 0x38, 0x30];
+
+// A target inside a ROM window is ambiguous from a static image alone: the byte
+// range it names is either ROM or the RAM underneath, decided by $01 at the
+// moment the vector is taken. Resolving it needs two live reads (see below).
+const ROM_WINDOWS = [
+  [0xa000, 0xbfff, 'BASIC ROM window'],
+  [0xd000, 0xdfff, 'I/O — or char ROM, or RAM'],
+  [0xe000, 0xffff, 'KERNAL ROM window'],
+];
+
+function romWindowOf(addr) {
+  for (const [lo, hi, label] of ROM_WINDOWS) if (addr >= lo && addr <= hi) return label;
+  return null;
+}
 
 function decodePort(v) {
   const loram = v & 1, hiram = (v >> 1) & 1, charen = (v >> 2) & 1;
   return { loram, hiram, charen };
 }
 
-function vectors(buf, portOverride) {
+// Blocks the CPU cannot currently be dispatching through, given $01. Their
+// bytes are real, but nothing maintains them, so "retargeted" says nothing.
+function dormantReason(title, { loram, hiram }, cbm80) {
+  if (title.startsWith('BASIC indirects') && !loram) return 'BASIC ROM banked out — nothing maintains these';
+  if (title.startsWith('BASIC ROM entry') && !loram) return 'BASIC ROM banked out — this is RAM';
+  if (title.startsWith('KERNAL') && !hiram) return 'KERNAL ROM banked out — nothing maintains these';
+  if (title.startsWith('Autostart') && !cbm80) return 'no CBM80 signature — the KERNAL ignores these words';
+  if (title.startsWith('Hardware') && hiram) return 'KERNAL ROM banked in — the ROM vectors, not the program\'s';
+  return null;
+}
+
+function vectorRow(buf, [name, addr, def, meaning, hook]) {
+  const v = buf[addr] | (buf[addr + 1] << 8);
+  const window = romWindowOf(v);
+  let status;
+  if (def === null) status = 'no default';
+  else if (v === def) status = 'default';
+  else status = '*** RETARGETED ***';
+  return { name, addr, def, meaning, hook: hook === 'hook', value: v, status, window };
+}
+
+function renderRows(rows) {
+  const out = ['vector        value   default   status'];
+  for (const r of rows) {
+    out.push(`${r.name}  ${hex(r.value)}   ${r.def === null ? '  --   ' : hex(r.def) + ' '}  ${r.status}`);
+    out.push(`              ${r.meaning}${r.window ? `   [target in ${r.window} — bank-ambiguous]` : ''}`);
+  }
+  return out;
+}
+
+function vectors(buf, portOverride, showAll) {
   const out = [];
   const port = portOverride !== undefined ? portOverride : buf[0x0001];
-  const { loram, hiram, charen } = decodePort(port);
+  const banking = decodePort(port);
+  const { loram, hiram, charen } = banking;
+  const cbm80 = CBM80.every((b, i) => buf[0x8004 + i] === b);
 
   out.push(`$01 = ${hex(port, 2)} ${bin8(port)}`);
   out.push(`  bit 0 LORAM  = ${loram}  BASIC ROM  ${loram ? 'in' : 'out (RAM at $A000-$BFFF)'}`);
@@ -156,22 +247,65 @@ function vectors(buf, portOverride) {
   out.push('');
   out.push(`LIVE VECTOR PAIR: ${hiram ? '$0314/$0315 (KERNAL path — the RAM vectors are live)'
     : '$FFFE/$FFFF (KERNAL banked OUT — the hardware vectors are live)'}`);
-  out.push('');
-  out.push('vector        value   default  status');
-  for (const [name, addr, def, meaning] of VECTORS) {
-    const v = buf[addr] | (buf[addr + 1] << 8);
-    let status;
-    if (def === null) status = 'RAM under ROM';
-    else if (v === def) status = 'default';
-    else status = '*** RETARGETED ***';
-    out.push(`${name}  ${hex(v)}   ${def === null ? '  --  ' : hex(def)}   ${status}`);
-    out.push(`              ${meaning}`);
+  out.push(`CBM80 SIGNATURE:  ${cbm80
+    ? 'PRESENT at $8004 — $8000/$8002 survive a reset and the KERNAL honours them'
+    : 'absent — nothing catches a reset here'}`);
+
+  const hooks = [];        // live block, hook site, diverted — an actual signal
+  const retargeted = [];   // live block, diverted, not a hook site
+  const residue = [];      // dormant block, non-default — leftover bytes, NOT a divert
+
+  for (const [title, block] of VECTOR_BLOCKS) {
+    const dormant = dormantReason(title, banking, cbm80);
+    const rows = block.map((v) => vectorRow(buf, v));
+    for (const r of rows) {
+      if (r.status !== '*** RETARGETED ***') continue;
+      if (dormant) residue.push(r);
+      else if (r.hook) hooks.push(r);
+      else retargeted.push(r);
+    }
+    const spine = title.startsWith('KERNAL IRQ') || title.startsWith('Hardware');
+    if (!showAll && !spine) continue;
+    out.push('');
+    out.push(`## ${title}`);
+    if (dormant) out.push(`   DORMANT: ${dormant}. Read it, do not act on it.`);
+    out.push(...renderRows(rows));
   }
+
+  if (hooks.length) {
+    out.push('');
+    out.push('*** CRACKER-HOOK SITES DIVERTED ***');
+    for (const r of hooks) out.push(`  ${r.name} -> ${hex(r.value)}   ${r.meaning}`);
+    out.push('  A diverted LOAD/SAVE is a custom loader bypassing the KERNAL; a diverted');
+    out.push('  STOP is anti-tamper. Both are provenance signals — see c64-provenance-diff.');
+  }
+  if (retargeted.length && !showAll) {
+    out.push('');
+    out.push('Other retargeted vectors in LIVE blocks (--all for the full table):');
+    for (const r of retargeted) out.push(`  ${r.name} -> ${hex(r.value)}   ${r.meaning}`);
+  }
+  if (residue.length) {
+    out.push('');
+    out.push(`Non-default bytes in DORMANT blocks: ${residue.length}. These are NOT diverted`);
+    out.push('vectors. Nothing maintains a block whose ROM is banked out, so the bytes are');
+    out.push('whatever was last written there — usually the KERNAL\'s own boot-time values,');
+    out.push('partly overwritten. Do not read a hook into them. A byte here that DIFFERS');
+    out.push('BETWEEN TWO RELEASES is a provenance question, not a structural one — take it');
+    out.push('to c64-provenance-diff, which can prove whether a cracker wrote it.');
+    if (showAll) for (const r of residue) out.push(`  ${r.name} -> ${hex(r.value)} (default ${hex(r.def)})   ${r.meaning}`);
+    else out.push('  --all lists them.');
+  }
+
   out.push('');
   out.push('A retargeted $0314 is the per-frame handler. Confirm it live: the handler');
   out.push('that runs exactly once per frame is the one that matters, whatever the');
   out.push('listing suggests. $FFFA-$FFFF read out of a RAM capture are the RAM bytes');
   out.push('under KERNAL ROM — which is exactly what runs when HIRAM = 0.');
+  out.push('');
+  out.push('A target marked bank-ambiguous is NOT resolved by this image. Read it twice');
+  out.push('live — mcp__vice__vice_memory_read with the default bank, then again with');
+  out.push('bank:"ram" — and compare. Differing from stock ROM at that address means the');
+  out.push('program has its own code hidden under ROM.');
   return out.join('\n');
 }
 
@@ -185,7 +319,7 @@ function flag(argv, name) {
 const USAGE = `usage:
   derive.mjs vic     --dd00 3E --d018 18 --d011 1B --d016 C8
   derive.mjs sprites --dd00 3E --d018 18 --d015 FF --ptrs 20,21,22,23,24,25,26,27
-  derive.mjs vectors <image.bin> [--port 35]
+  derive.mjs vectors <image.bin> [--port 35] [--all]
 
 Values are hex by default ($3E, 0x3E, 3E all work); %00111110 for binary.
 Register values come from mcp__vice__vice_vicii_get_state / vice_memory_read.
@@ -216,7 +350,7 @@ function main(argv) {
       const buf = readFileSync(path);
       if (buf.length !== 65536) throw new Error(`expected a 65536-byte image, got ${buf.length}`);
       const p = flag(argv, 'port');
-      console.log(vectors(buf, p === undefined ? undefined : parseNum(p, '--port')));
+      console.log(vectors(buf, p === undefined ? undefined : parseNum(p, '--port'), argv.includes('--all')));
     } else {
       console.log(USAGE);
       process.exit(verb === undefined || verb === '--help' || verb === '-h' ? 0 : 2);

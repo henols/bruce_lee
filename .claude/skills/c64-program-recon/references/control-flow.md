@@ -16,28 +16,82 @@ For a depacked image there is no BASIC stub to find. Do not spend time looking f
 `c64-ram-capture` § Find an entry point gives the live procedure: step in batches until PC and
 SP settle into a repeating range across three consecutive batches.
 
-## 2. Vectors — six pairs, and `$01` decides which pair is live
+## 2. Vectors — sweep every block, and `$01` decides which are live
 
-| Vector | Default | Meaning |
+Six pairs is not "all vectors". `node derive.mjs vectors <image.bin>` sweeps all six blocks below;
+it prints the IRQ/BRK/NMI and hardware blocks by default and takes `--all` for the rest.
+
+| Block | Range | Why it matters |
 |---|---|---|
-| `$0314/$0315` | `$EA31` | CINV, KERNAL IRQ (RAM, indirect). Changed ⇒ the per-frame handler is at the new target |
-| `$0316/$0317` | `$FE66` | CBINV, BRK |
-| `$0318/$0319` | `$FE47` | NMINV, NMI. Commonly retargeted by music players and anti-tamper code |
-| `$FFFA/$FFFB` | — | Hardware NMI |
-| `$FFFC/$FFFD` | — | Hardware RESET |
-| `$FFFE/$FFFF` | — | Hardware IRQ/BRK |
+| BASIC indirects | `$0300-$030B` | IERROR, IMAIN, ICRNCH, IQPLOP, IGONE, IEVAL — a program returning to a modified BASIC prompt hooks these |
+| KERNAL IRQ/BRK/NMI | `$0314-$0319` | CINV `$EA31`, CBINV `$FE66`, NMINV `$FE47`. The per-frame handler, and the pair music players retarget |
+| KERNAL I/O indirects | `$031A-$0333` | OPEN…SAVE. **`$0328` STOP and `$0330`/`$0332` LOAD/SAVE are where a cracker hooks** |
+| Autostart / cartridge | `$8000` cold, `$8002` warm, `$8004` `CBM80` | The standard survive-a-reset trick. Without the signature the KERNAL ignores both words |
+| BASIC ROM entry | `$A000/$A002` | Only meaningful with BASIC banked in — check `$01` LORAM first |
+| Hardware vectors | `$FFFA-$FFFF` | NMI, RESET, IRQ/BRK. Live when the KERNAL is banked out |
 
 **The hardware pairs are only live when the ROMs are banked out via `$01`.** The deciding bit is
 HIRAM, `$01` bit 1 (RE-FINDINGS 2026-08-02). HIRAM = 1 ⇒ KERNAL ROM is in and `$0314/$0315` is
 live. HIRAM = 0 ⇒ RAM at `$E000-$FFFF` and `$FFFE/$FFFF` is live.
 
-`node derive.mjs vectors <image.bin>` does this decode over a captured image.
+Why LOAD and STOP earn their own callout on this project: both releases use custom raw-sector
+loaders that bypass the KERNAL, so a diverted `$0330` is a provenance signal, and a diverted
+`$0328` is anti-tamper. Neither was being looked for before 2026-08-04.
 
 The second tell is the handler's own first instruction: the KERNAL's register-save preamble means
 the KERNAL path is in use; a jump straight into game code means it is not.
 
+### A non-default value in a dormant block is not a hook
+
 **A garbage-looking `$0314` is not a bug when HIRAM = 0.** With the KERNAL banked out, nothing
-maintains the RAM vectors and they hold whatever was last there. Read the live pair, not both.
+maintains the RAM vectors and they hold whatever was last there — usually the KERNAL's own
+boot-time values, partly overwritten. `derive.mjs` labels each such block `DORMANT` and reports
+its non-default bytes as *residue*, never as a divert, because reading a hook into residue is the
+fastest way to a confidently-wrong structural claim.
+
+A residue byte that **differs between two releases** is still worth something — but it is a
+provenance question, not a structural one. Take it to `c64-provenance-diff`.
+
+### A target in a ROM window is unresolved until you read it twice
+
+A vector target in `$A000-$BFFF`, `$D000-$DFFF` or `$E000-$FFFF` is *either* ROM *or* the RAM
+underneath, decided by `$01` at the moment the vector is taken. `derive.mjs` marks these
+`bank-ambiguous` and stops there, because a static image cannot settle it.
+
+Live, it is one extra call: read the target with `mcp__vice__vice_memory_read`'s default bank,
+then again with `bank: "ram"`, and compare (`vice_memory_banks` lists what is available). Agreeing
+with stock ROM bytes ⇒ the vector genuinely lands in ROM and the KERNAL path is in use. Differing
+⇒ **the program has its own code hidden under ROM**, which is a large structural finding and is
+otherwise not looked for at all. Record the stock bytes you compared against, so the check is
+reproducible.
+
+This supersedes the weaker "check `$01` and read the handler's preamble" tell, which silently
+reads whichever bank happens to be mapped.
+
+### What the widened sweep found here — 2026-08-04
+
+Run over all six committed gameentry captures (danish and saeger, runs 1-3 each):
+
+| Vector | danish | saeger | Reading |
+|---|---|---|---|
+| `$FFFE/$FFFF` IRQ | `$1103` | `$1103` | Known; matches the live-established handler chain |
+| `$FFFA/$FFFB` NMI | `$1116` | `$1116` | **New.** The game installs its own NMI handler under KERNAL ROM |
+| `$FFFC/$FFFD` RESET | `$1116` | `$1116` | **New.** RESET funnels to the *same* address as NMI |
+| `$0328/$0329` ISTOP | `$F6FC` | `$F6ED` (stock) | **New, and a divergence.** Residue — the block is dormant |
+| `$8004` `CBM80` | absent | absent | Nothing catches a reset via the cartridge route |
+
+NMI and RESET sharing one entry is the shape of an anti-tamper trap: RESTORE and reset are the two
+ways a user perturbs a running game, and both land in the same place. `$1116` is therefore the
+address to checkpoint when the emulator is next available — press RESTORE with
+`mcp__vice__vice_keyboard_restore` (it is *not* in the keyboard matrix, and NMI will not retrigger
+until the line is released, so it is a press→release **edge**), then `vice_machine_reset` soft and
+hard, and record where the PC actually lands.
+
+**Evidence:** derived mechanically from six three-run-verified captures; every value identical
+across all three runs of its release, so none of it is drift.
+**Confidence:** HIGH for the values and for the cross-release divergence. The *interpretation* of
+`$1116` as anti-tamper is **LOW** — unexercised, and the perturbation experiment above is exactly
+what would settle it.
 
 ## 3. IRQ source — two enable masks close the question
 
@@ -104,18 +158,17 @@ two captures gives the volatility rules that stop you chasing drift.
 
 ## Verified against this project — 2026-08-04
 
-Running `derive.mjs vectors` cold on `recovery/danish/dumps/danish-gameentry-run1.bin` and
-`recovery/saeger/dumps/saeger-gameentry-run1.bin` returns, for both releases:
-
-- `$01` = `$40` — LORAM 0, HIRAM 0, CHAREN 0. KERNAL and BASIC banked out.
-- Live pair is therefore `$FFFE/$FFFF`, which holds **`$1103`**.
-- `$0314/$0315` holds `$0101`, i.e. nothing meaningful — as expected with HIRAM = 0.
+Running `derive.mjs vectors` cold on both releases' `*-gameentry-run1.bin` returns `$01` = `$40`
+(LORAM 0, HIRAM 0, CHAREN 0 — KERNAL and BASIC banked out), so the live pair is `$FFFE/$FFFF`,
+holding **`$1103`**, while `$0314/$0315` holds `$0101` — nothing meaningful, exactly as the
+dormant-block rule predicts.
 
 `$1103` is the same IRQ-handler entry that phase-01 live work independently established, with the
 raster-split chain `$1103 → $1574 → $152C` (RE-FINDINGS 2026-08-02, checkpoint-trap entry). The
-method reproduces a known-good result from a static image with no emulator running.
+method reproduces a known-good result from a static image with no emulator running. The widened
+sweep's own results, including two facts this table never surfaced, are in §2 above.
 
 **Evidence:** derived mechanically from three-run-verified captures, cross-checked against a live
 finding recorded independently.
-**Confidence:** HIGH for the vector-table step and the HIRAM rule. The remaining steps in this
-file stay MEDIUM until exercised the same way.
+**Confidence:** HIGH for the vector-table step, the HIRAM rule, and the dormant-block rule. The
+remaining steps in this file stay MEDIUM until exercised the same way.
