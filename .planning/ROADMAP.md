@@ -768,7 +768,7 @@ Plans:
 
 **Risks**: **Even after the 2026-08-03 split this phase carries two of three phases' content** — the consolidation, the language change and the transport, with only the five behaviour changes moved out. **Every failure mode changes shape at once** when a lease stops being a file: anything that quietly depended on one of criterion F's six mechanisms fails in a new way. **Nothing here is live-verifiable** until Phase 01.4, and criterion E's carry-forward list — the thing that makes that survivable — is now authored in **01.6.2.1**, so this phase seals with its unverified set itemised but not yet consolidated. Collapsing the per-instance supervisor inward also removes an independent channel — `vice-supervisor.sh` currently outlives broker restarts, which is what made the epoch file trustworthy on its own; D-04 keeps the file but not that independence, and criterion I's unconditional reap is what pays for it. **Criterion I's reap has a derivation problem the seed already flagged and no plan may hand-wave:** in-process state means a restarted broker has *no* registry, so the reap must be derived from the port band plus process identity (`ps`-verified `x64sc` on 6600+), not from a file. That is the one place where deleting the on-disk registry costs something real. **Five agent-facing strings become instructions to run a file that will not exist** — `supervisorHostPath()` at `vice-proxy.ts:1387` feeds `neverStartedMessage()`/`deadOrHungMessage()`/`aliveButFailedMessage()`, and `vice.ts:236,352,546` plus `vice-sync.ts:254` each tell the agent to run `tools/vice-supervisor.sh` on the host. RESEARCH §A6 names only `brokerHostPath()`. That is Phase 01.4 criterion 5's exact failure shape arriving as a side effect of this phase. **`install-resources.ts`'s `hostLaunchInstructions()` needs a paragraph deleted, not a path swapped** — it advertises the standalone non-MCP recovery pipeline, whose scripts D-23 confirms are already gone; swapping the path would keep advertising a dead capability. **The live epoch fixture must be captured before anything is deleted** — `01.6.2-VALIDATION.md` flags the capture as order-dependent and irreversible if missed, and a bash-written broker with four recorded instances exists *now*.
 
-**Plans:** 9/11 plans executed
+**Plans:** 10/11 plans executed
 
 Plans:
 **Wave 1**
@@ -809,7 +809,7 @@ Plans:
 
 **Wave 10** *(blocked on Wave 9)*
 
-- [ ] 01.6.2-10-PLAN.md — **Criterion A's first half:** the 61-test disposition ledger and the function-by-function disposition table (C2), both into `01.6.2-VALIDATION.md`, plus every replacement test a row names but nobody wrote, plus the reconciled count arithmetic plan 11 asserts against
+- [x] 01.6.2-10-PLAN.md — **Criterion A's first half:** the 61-test disposition ledger and the function-by-function disposition table (C2), both into `01.6.2-VALIDATION.md`, plus every replacement test a row names but nobody wrote, plus the reconciled count arithmetic plan 11 asserts against
 
 **Wave 11** *(blocked on Wave 10)*
 
