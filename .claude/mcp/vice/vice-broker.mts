@@ -142,15 +142,20 @@ export const WRITTEN_BY = "vice-broker.mjs";
 // sibling .mjs directly -- exporting them would widen broker-launch.mts's
 // own surface for a one-line env-var read this file can duplicate exactly
 // as cheaply). Both mirror broker-launch.mts's defaults precisely
-// (VICE_BROKER_SPARES/3, VICE_BROKER_MAX/16) so broker.json's config echo
+// (VICE_BROKER_SPARES/1, VICE_BROKER_MAX/16) so broker.json's config echo
 // and host_state's own answer can never disagree with what maintainWarmFloor
-// itself actually enforces.
+// itself actually enforces. The floor default dropped from 3 to 1 in
+// 01.6.2.1-03-PLAN.md (D-06) -- BOTH readers changed together in that same
+// commit, deliberately, because this invariant (the two numbers never
+// disagree) breaks silently the moment only one of them moves. The
+// ceiling's own default (16) is untouched by D-06 -- it is the unrun
+// concurrency-ceiling spike's territory, not this phase's.
 // ---------------------------------------------------------------------------
 function resolveWarmFloorForRecord(): number {
   const raw = process.env.VICE_BROKER_SPARES;
-  if (raw === undefined || raw === "") return 3;
+  if (raw === undefined || raw === "") return 1;
   const n = Number(raw);
-  return Number.isFinite(n) ? n : 3;
+  return Number.isFinite(n) ? n : 1;
 }
 
 function resolveCeilingForRecord(): number {

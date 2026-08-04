@@ -3126,3 +3126,43 @@ before repeating it: removing the branch entirely — leaving no broken-host bra
 deliberate zero floor to be confused with — is what dissolved the ambiguity, and improving the
 branch's own log line (which an earlier, more cautious fix might have reached for instead) would
 not have.
+
+### 2026-08-04 — a stubbed probe resolving synchronously-true can silently defeat a "no second
+launch in this pass" test, and D-07's non-preemption/priority proof required all three of its own
+assumed-true properties to be re-derived from the code, not assumed
+
+**Type:** confirmation (plus a hazard for writing future `maintainWarmFloor` tests)
+
+**Evidence:** live, while writing 01.6.2.1-03-PLAN.md's Task 2 priority test. A first draft used
+`makeWarmFloorDeps`'s own default stub (`probe: () => Promise.resolve(true)`) for a scenario where
+an acquire's cold launch had JUST landed a "launching" record in the SAME pass, before
+`maintainWarmFloor()` ran. Because that stub resolves ready IMMEDIATELY, `maintainWarmFloor()`'s
+own step 1 (promote every launching instance whose probe now succeeds) promoted the freshly-landed
+acquire instance to `ready` WITHIN THE SAME CALL, which zeroes `countLaunching()` before step 2's
+gate is ever reached — so the function proceeded to warm a SECOND, genuinely unwanted spare in
+that same pass. This is not a bug in `maintainWarmFloor()` (a real emulator does not boot and
+answer an HTTP probe inside one synchronous JS pass), but it IS a trap for a test-writer: an
+always-ready probe stub silently converts a "no second launch when one is already in flight"
+scenario into "warming ran a second time anyway," failing for a reason that looks unrelated to
+the test's own intent. The fix was to give that ONE test's own `maintainWarmFloor` call a
+`probe: () => Promise.resolve(false)` stub (still booting within this pass) — the same idiom the
+already-landed "a pass overlapping an in-flight launch produces no second spawn" test already
+used for this exact shape, confirmed by reading it before writing the new one. Separately, all
+three of D-07's assumed-already-true properties (fixed pass order, single in-flight owner, plan
+01's `reason`-blind warm-instance selector) were re-derived by reading the landed code rather than
+taken on faith from the plan text, per that task's own instruction — all three held, so the
+task's own code delta was exactly the two tests plus the log line, with zero behavioural change.
+
+**Confidence:** HIGH — both halves observed directly: the promote-then-warm-twice failure was
+reproduced live (a first draft of the priority test failed for exactly this reason before the
+probe stub was corrected), and the "all three properties already held" determination was checked
+against the actual source (`runBrokerPass()`'s body, `acquirePortAndLaunch()`'s single `inFlight`
+guard, `selectWarmInstance()`'s own absence of any `reason` check), not merely the plan's own
+narrative.
+
+**Saves:** the next test written against `maintainWarmFloor()` in a "something else already
+launched into this same pass" scenario from silently defaulting to an always-ready probe stub and
+getting a confusing, seemingly-unrelated extra-spawn failure. The rule this finding distills:
+whenever a test's own scenario depends on an instance STAYING in the `launching` state for the
+duration of the assertion, the probe stub for that specific call must resolve `false`, matching
+the file's own established idiom rather than the generic `makeWarmFloorDeps()` default.

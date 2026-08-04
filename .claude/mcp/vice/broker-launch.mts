@@ -50,7 +50,30 @@ import type { EpochRecord } from "./broker-epoch.mjs";
 // Module-level: this file, not the caller, owns the single boolean --
 // synchronous check, synchronous set, released in a finally, with no
 // `await` between the check and the set.
+//
+// D-07 (01.6.2.1-03-PLAN.md): launch PRIORITY is layered on this owner, and
+// never replaces or weakens it. An in-flight boot always completes and is
+// NEVER killed or abandoned to serve a later arrival -- preemption was
+// considered and rejected (01.6.2-CONTEXT.md D-07) because a kill/relaunch
+// overlap re-creates the exact concurrent-spawn window the 2026-08-01
+// outage came from (one SEGV, one exit 1, one exit 0 at the identical spawn
+// second). Once a boot reaches `ready`, a waiting request takes it
+// regardless of which reason booted it (vice-broker.mts's
+// selectWarmInstance() performs no `reason` check at all -- proven by
+// vice-broker-acquire.test.ts). Priority governs only which REASON wins
+// this slot once it next frees, via the fixed pass order (runBrokerPass()'s
+// own invariant comment, below) -- it never decides who currently holds it.
 let inFlight = false;
+
+// The reason currently holding the slot, alongside `inFlight` -- metadata
+// only, never a second guard: nothing branches on this value's presence to
+// decide whether a launch may proceed (that is `inFlight` alone, checked
+// and set synchronously exactly as before). Its only consumer is the
+// launch-slot decision log line (D-07's standing constraint that a
+// lifecycle decision must be reconstructable from the log after an
+// incident -- both 2026-08-01 and 2026-08-02 were diagnosed from broker log
+// lines).
+let inFlightReason: string | null = null;
 
 /** True while a launch is in progress -- exported for the race test plan 02
  * writes against two concurrent tryLaunchOne() calls. */
@@ -170,6 +193,9 @@ export interface AcquirePortAndLaunchDeps {
   now?: () => number;
   viceBin?: string;
   mcpHost?: string;
+  /** Overrides the launch-slot decision log line's destination -- default
+   * writes to stderr, matching every other log seam in this module. */
+  log?: (line: string) => void;
 }
 
 export type AcquireLaunchResult =
@@ -194,13 +220,24 @@ export type AcquireLaunchResult =
  * process_requests() throttle (its `in_flight` local, checked before a
  * COLD launch, not only before a warm one): a cold acquire and a
  * warm-floor pass can never launch simultaneously, matching the bash
- * original's declined-to-change behaviour (RESEARCH.md §A1/§C) -- the
- * PRIORITY question (should a cold request preempt or queue ahead of a
- * warm one) is explicitly Phase 01.6.2.1's D-07, untouched here; this
- * function only says "one at a time," never "which one wins first." */
+ * original's declined-to-change behaviour (RESEARCH.md §A1/§C). D-07
+ * (01.6.2.1-03-PLAN.md) layers non-preemptive PRIORITY on top of this same
+ * "one at a time" guard, never replacing it: this function still only ever
+ * refuses a second concurrent caller (`launch_in_flight`), and never kills
+ * or preempts whichever caller already holds the slot -- which reason wins
+ * this slot NEXT, once it frees, falls out of runBrokerPass()'s own fixed
+ * evaluation order (that function's own invariant comment), not from
+ * anything in this function. The refusal below logs which reason currently
+ * holds the slot and which reason is waiting, so the decision is
+ * reconstructable from the log after an incident. */
 export async function acquirePortAndLaunch(reason: string, deps: AcquirePortAndLaunchDeps): Promise<AcquireLaunchResult> {
-  if (inFlight) return { ok: false, reason: "launch_in_flight" };
+  const log = deps.log ?? defaultLog;
+  if (inFlight) {
+    log(`vice-broker: launch-slot decision -- ${inFlightReason ?? "unknown"} holds the slot; ${reason} waits (D-07)`);
+    return { ok: false, reason: "launch_in_flight" };
+  }
   inFlight = true;
+  inFlightReason = reason;
   try {
     const portResult = await deps.allocatePort(deps.state);
     if (!portResult.ok) {
@@ -222,6 +259,7 @@ export async function acquirePortAndLaunch(reason: string, deps: AcquirePortAndL
     return { ok: true, record };
   } finally {
     inFlight = false;
+    inFlightReason = null;
   }
 }
 
@@ -330,9 +368,9 @@ export async function probeReady(port: number, deps: ProbeDeps = {}): Promise<bo
 function resolveWarmFloor(override?: number): number {
   if (typeof override === "number") return override;
   const raw = process.env.VICE_BROKER_SPARES;
-  if (raw === undefined || raw === "") return 3;
+  if (raw === undefined || raw === "") return 1;
   const n = Number(raw);
-  return Number.isFinite(n) ? n : 3;
+  return Number.isFinite(n) ? n : 1;
 }
 
 function resolveCeiling(override?: number): number {
@@ -362,9 +400,13 @@ export interface MaintainWarmFloorDeps {
   /** Probes a PORT (not a full InstanceRecord) -- defaults to a thin call
    * into probeReady() above with no overrides. */
   probe?: (port: number) => Promise<boolean>;
-  /** VICE_BROKER_SPARES override -- default 3, UNCHANGED in this plan; the
-   * default itself and the variable's name are both Phase 01.6.2.1's
-   * criterion L. */
+  /** VICE_BROKER_SPARES override -- default 1 (D-06, landed
+   * 01.6.2.1-03-PLAN.md), down from the tracer-era default of 3. The knob
+   * itself keeps working unchanged: an explicitly configured N still
+   * overrides this default exactly as before, so the 2026-08-02
+   * host-validation run stays reproducible with no code change. The
+   * variable's own NAME is Phase 01.6.2.1's separate criterion (D-11's
+   * rename lands in plan 05, not here). */
   warmFloor?: number;
   /** VICE_BROKER_MAX override -- default 16, untouched by this phase. */
   ceiling?: number;
@@ -439,7 +481,13 @@ export async function maintainWarmFloor(deps: MaintainWarmFloorDeps): Promise<vo
   // THE single in-flight counter (countLaunching) both this function and a
   // cold acquire (vice-broker.mts's handleAcquire) consult.
   if (deps.countLaunching(deps.state) > 0) {
-    log("vice-broker: spare warming waits -- a boot is already in flight this pass");
+    // D-07's launch-slot decision log line, this decision point's own half:
+    // name WHICH reason currently holds the slot (the launching record's
+    // own `reason`, whichever call produced it -- cold acquire or an
+    // earlier warming pass), not merely that warming is waiting.
+    const inFlightRecord = Array.from(deps.state.instances.values()).find((r) => r.state === "launching");
+    const winningReason = inFlightRecord?.reason ?? "unknown";
+    log(`vice-broker: launch-slot decision -- ${winningReason} holds the slot; spare waits (D-07)`);
     return;
   }
 
@@ -512,7 +560,20 @@ export interface BrokerPassDeps {
  * (see broker-state.mts's own FINDING 2 comment). Takes plain callbacks
  * rather than the full BrokerState/deps shape so a test can inject two
  * instrumented no-op functions and assert call ORDER without needing a
- * real broker, a real port or a real launch. */
+ * real broker, a real port or a real launch.
+ *
+ * D-07 (01.6.2.1-03-PLAN.md): THIS is where launch priority actually lives
+ * -- serving acquires before maintaining the warm floor is what lets a
+ * request-driven launch win a freed slot before a warming launch, within
+ * one pass, on top of the single in-flight owner (acquirePortAndLaunch()'s
+ * own invariant comment) that this order never weakens. Inverting this
+ * order lets a warming launch take the slot first and go untested against
+ * a concurrently arriving acquire, which is exactly the regression
+ * broker-launch.test.ts's own D-07 priority test is written to catch (its
+ * own discriminating-power demonstration inverts this exact order and
+ * observes the test go red). Priority decides only which reason wins the
+ * NEXT freed slot -- it is never a substitute for the lock, and it never
+ * kills or abandons whichever boot is already in flight. */
 export async function runBrokerPass(deps: BrokerPassDeps): Promise<void> {
   await deps.serveAcquires();
   await deps.maintainWarmFloor();

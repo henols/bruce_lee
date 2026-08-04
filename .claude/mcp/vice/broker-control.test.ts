@@ -32,6 +32,7 @@ import {
   type StatusInstanceEntry,
   type HostStateFields,
   type PendingAcquireQueue,
+  type PendingAcquireEntry,
 } from "./broker-control.mts";
 import { readBrokerLiveness } from "./vice-broker-client.ts";
 import { build } from "./build.ts";
@@ -589,6 +590,131 @@ test("enqueueAcquire appends to the back; drainPendingAcquires processes strictl
   await drainPendingAcquires(queue);
   assert.deepEqual(order, ["a", "b", "c"]);
   assert.equal(queue.length, 0);
+});
+
+// ============================================================================
+// 01.6.2.1-03-PLAN.md, Task 3: D-08/D-20's direct FIFO proof. The queue
+// itself is NOT modified by this task -- drainPendingAcquires()'s own header
+// comment already claims "no re-ordering call of any kind anywhere in this
+// region" and explicitly defers this direct fairness proof to this phase;
+// these two tests prove that claim, they do not implement it.
+//
+// Deliberately no end-to-end FIFO test here, and the reason is recorded
+// rather than left implicit: arrival order at the broker is not controllable
+// from a test that uses separate TCP connections -- broker-e2e.test.ts's own
+// landed "disconnect while queued" test's own comment already establishes
+// this (connection-setup jitter can reorder which acquire line the broker
+// actually processes first, independent of which send call a test made
+// first). An end-to-end test asserting grant order would therefore be
+// asserting connection-setup jitter, and would be flaky by construction.
+// D-20's specified proof is an INJECTION-level assertion -- exactly what the
+// two tests below author -- with the arrival-to-queue link covered instead by
+// the structural gate below plus enqueueAcquire()'s own single
+// append-to-back implementation.
+// ============================================================================
+
+test("drainPendingAcquires: injecting 5 entries in a known order returns them in that same order (D-08/D-20 direct FIFO proof)", async () => {
+  const queue: PendingAcquireQueue = [];
+  const observedOrder: string[] = [];
+  const ids = ["req-1", "req-2", "req-3", "req-4", "req-5"];
+  for (const id of ids) {
+    enqueueAcquire(queue, {
+      requestId: id,
+      attempt: () => {
+        observedOrder.push(id);
+        return Promise.resolve(true); // settled immediately
+      },
+    });
+  }
+  await drainPendingAcquires(queue);
+  assert.deepEqual(observedOrder, ids, "the observed attempt order must equal the injection order exactly");
+  assert.equal(queue.length, 0, "every entry settled and none remains queued");
+});
+
+test("drainPendingAcquires: a requeued entry is not overtaken by an entry that arrives during the SAME drain that requeued it", async () => {
+  const queue: PendingAcquireQueue = [];
+  let currentLog: string[] = [];
+  let newcomerInjected = false;
+
+  function makeEntry(id: string, opts: { unsettleOnce?: boolean; injectNewcomerAfter?: boolean } = {}): PendingAcquireEntry {
+    let unsettled = !!opts.unsettleOnce;
+    return {
+      requestId: id,
+      attempt: (): Promise<boolean> => {
+        currentLog.push(id);
+        // Simulates a genuinely later-arriving acquire landing DURING this
+        // same drain pass -- injected from a LATER entry's own attempt
+        // (req-4, which the snapshot only reaches AFTER req-B has already
+        // been requeued by the loop), so the newcomer's own arrival is
+        // chronologically after req-B's requeue, exactly the scenario
+        // drainPendingAcquires()'s own comment describes.
+        if (opts.injectNewcomerAfter && !newcomerInjected) {
+          newcomerInjected = true;
+          enqueueAcquire(queue, makeEntry("req-newcomer"));
+        }
+        if (unsettled) {
+          unsettled = false; // unsettled only on its OWN first attempt
+          return Promise.resolve(false);
+        }
+        return Promise.resolve(true);
+      },
+    };
+  }
+
+  const ids = ["req-1", "req-2", "req-B", "req-4", "req-5"];
+  for (const id of ids) {
+    enqueueAcquire(queue, makeEntry(id, { unsettleOnce: id === "req-B", injectNewcomerAfter: id === "req-4" }));
+  }
+
+  const pass1Log: string[] = [];
+  currentLog = pass1Log;
+  await drainPendingAcquires(queue); // pass 1
+  assert.deepEqual(pass1Log, ids, "pass 1 must attempt every original entry once, in injection order");
+  assert.deepEqual(
+    queue.map((e) => e.requestId),
+    ["req-B", "req-newcomer"],
+    "after pass 1, the requeued entry (req-B) must precede the newcomer that arrived later in the same pass",
+  );
+
+  const pass2Log: string[] = [];
+  currentLog = pass2Log;
+  await drainPendingAcquires(queue); // pass 2
+  assert.deepEqual(
+    pass2Log,
+    ["req-B", "req-newcomer"],
+    "on the following drain, the requeued entry is attempted BEFORE the newcomer -- it was not overtaken",
+  );
+  assert.equal(queue.length, 0);
+});
+
+test("structural: broker-control.mts's pending-acquire queue region contains no order-mutating construct (sort/reverse/mid-array splice), comment-stripped and scoped to the region itself (D-08)", () => {
+  const source = readFileSync(join(HERE, "broker-control.mts"), "utf8");
+  const region = stripCommentsForStructuralGate(
+    extractSourceRegion(source, "Arrival-ordered pending-acquire structure", "export interface BoundListener"),
+  );
+
+  const sortCount = (region.match(/\.sort\(/g) ?? []).length;
+  assert.equal(sortCount, 0, `expected zero comment-stripped .sort( calls in the pending-acquire queue region, found ${sortCount}`);
+
+  const reverseCount = (region.match(/\.reverse\(/g) ?? []).length;
+  assert.equal(reverseCount, 0, `expected zero comment-stripped .reverse( calls in the pending-acquire queue region, found ${reverseCount}`);
+
+  // The ONLY splice call this region may contain is the documented
+  // front-drain snapshot -- queue.splice(0, queue.length) -- which takes
+  // EVERYTHING from the front in one call and performs no re-ordering. Any
+  // splice call with different arguments (an index-shuffling splice) would
+  // be exactly the re-ordering construct this gate exists to catch.
+  const spliceCalls = region.match(/\w+\.splice\([^)]*\)/g) ?? [];
+  assert.equal(
+    spliceCalls.length,
+    1,
+    `expected exactly one splice( call (the documented front-drain snapshot) in the queue region, found ${spliceCalls.length}: ${JSON.stringify(spliceCalls)}`,
+  );
+  assert.match(
+    spliceCalls[0],
+    /\.splice\(0,\s*queue\.length\)/,
+    `the one permitted splice call must be the front-drain snapshot (queue.splice(0, queue.length)), got: ${spliceCalls[0]}`,
+  );
 });
 
 // ============================================================================

@@ -489,8 +489,49 @@ test("maintainWarmFloor: a pass overlapping an in-flight launch produces no seco
   assert.equal(spawnCalls2.length, 1, "warming proceeds once the earlier launch is no longer in flight");
 });
 
+// D-06/D-20 (01.6.2.1-03-PLAN.md, Task 1): the warm floor's default dropped
+// from 3 to 1. This test is the specified proof, and it is written to READ
+// the default rather than inject one -- makeWarmFloorDeps() below is called
+// with NO `warmFloor` key in its overrides at all, so resolveWarmFloor()
+// falls through to whatever the CODE's own default is (via
+// VICE_BROKER_SPARES, guarded to absent for this test's own integrity). A
+// floor of 3 would fail this test (demonstrated live during this task's
+// execution and recorded in the plan's own SUMMARY, not asserted here as a
+// separate red-then-green step -- this test asserts only the CORRECT,
+// landed behaviour).
+test("maintainWarmFloor: with no floor override, an idle broker settles at exactly one warm instance -- reading the default (D-06/D-20)", async () => {
+  const savedFloorEnv = process.env.VICE_BROKER_SPARES;
+  delete process.env.VICE_BROKER_SPARES;
+  try {
+    const state = createBrokerState();
+    // No `warmFloor` key anywhere in this overrides object -- resolveWarmFloor()
+    // must fall through to the code's own default.
+    const { deps, spawnCalls } = makeWarmFloorDeps(state, {
+      probe: () => Promise.resolve(true), // promotes immediately, so a second pass can observe the settled state
+    });
+
+    await maintainWarmFloor(deps); // pass 1: nothing ready yet, launches the first (and, at floor 1, only) instance
+    await maintainWarmFloor(deps); // pass 2: promotes it to ready; ready(1) is no longer < floor(1) -- no further spawn
+    await maintainWarmFloor(deps); // pass 3: still settled -- no further spawn
+
+    assert.equal(spawnCalls.length, 1, `exactly one spawn total with the default floor -- an idle broker must settle at exactly one warm instance, got ${spawnCalls.length}`);
+    assert.equal(countReadyInstances(state), 1, "exactly one ready instance once settled");
+    assert.equal(countInstances(state), 1, "no extra instance record of any kind exists beyond the one settled warm instance");
+  } finally {
+    if (savedFloorEnv === undefined) {
+      delete process.env.VICE_BROKER_SPARES;
+    } else {
+      process.env.VICE_BROKER_SPARES = savedFloorEnv;
+    }
+  }
+});
+
 function countInstances(state: BrokerState): number {
   return state.instances.size;
+}
+
+function countReadyInstances(state: BrokerState): number {
+  return Array.from(state.instances.values()).filter((r) => r.state === "ready").length;
 }
 
 // ------------------------------------------------------------- runBrokerPass
@@ -685,6 +726,169 @@ test("criterion C: a warming pass overlapping a cold acquire's still-in-flight l
 // remains in the committed source. This mirrors Phase 01.6.1's own
 // practice of proving a guard's tests against an injected regression
 // before trusting them.
+
+// ===========================================================================
+// 01.6.2.1-03-PLAN.md, Task 2: D-07 -- non-preemptive launch priority,
+// layered on the SAME single in-flight owner criterion C's two tests above
+// already prove (re-confirmed passing immediately before this task's own
+// implementation began, per this task's own stated prerequisite --
+// 01.6.2-VERIFICATION.md observable truth #9, sealed at a full-suite re-run
+// of 390 tests / 385 pass / 0 fail / 5 todo).
+//
+// Read against the landed code before writing anything, per this task's own
+// instruction to determine (not assume) what already holds: the fixed pass
+// order (runBrokerPass(): serve acquires, then maintain the warm floor)
+// already existed: TRUE. The single in-flight owner already prevents a
+// second spawn: TRUE (criterion C, above). Plan 01's warm-instance selector
+// (vice-broker.mts's selectWarmInstance()) already lets a waiting request
+// take a ready instance whichever reason booted it -- performing no
+// `reason` check anywhere in its own body, and already proven end-to-end by
+// vice-broker-acquire.test.ts's own passing "an acquire arriving with one
+// probe-live ready instance available is served from it" test: TRUE. All
+// three held already. D-07's own remaining deliverable, per this task's own
+// text, is therefore exactly what the two tests below add: the
+// non-preemption proof, the priority proof, and the launch-slot decision
+// log line -- none of which existed before this task.
+// ===========================================================================
+
+test("D-07: an in-flight boot is never preempted -- no kill of any kind is issued, no second spawn occurs, and the in-flight boot runs to completion", async () => {
+  const state = createBrokerState();
+  let spawnCallCount = 0;
+  let killCallCount = 0;
+  const stubSpawn = (_cmd: string, _args: string[]) => {
+    spawnCallCount++;
+    const child = { pid: 8000 + spawnCallCount, kill: () => { killCallCount++; } };
+    return child as unknown as ChildProcess;
+  };
+  const dynamicAllocatePort = async (s: BrokerState): Promise<PortAllocationResult> => {
+    let port = 6600;
+    while (s.instances.has(port)) port++;
+    return { ok: true, port };
+  };
+
+  let releaseGate: () => void;
+  const gate = new Promise<void>((resolve) => {
+    releaseGate = resolve;
+  });
+  const deferredAllocatePort = async (s: BrokerState): Promise<PortAllocationResult> => {
+    await gate;
+    return dynamicAllocatePort(s);
+  };
+
+  // A warming launch starts and is now genuinely IN FLIGHT, blocked on the
+  // deferred allocator -- the criterion-C tests' own technique for making
+  // the overlap real rather than nominal.
+  const inFlightLaunch = acquirePortAndLaunch("spare", {
+    state,
+    stateDir: "/tmp/d07-nopreempt-inflight",
+    allocatePort: deferredAllocatePort,
+    spawn: stubSpawn,
+  });
+
+  // An acquire arrives WHILE that boot is still in flight.
+  const arriving = await acquirePortAndLaunch("acquire", {
+    state,
+    stateDir: "/tmp/d07-nopreempt-arriving",
+    allocatePort: dynamicAllocatePort,
+    spawn: stubSpawn,
+  });
+  assert.equal(arriving.ok, false, "an acquire arriving while a boot is in flight must be refused (queued elsewhere), never preempt it");
+  assert.equal((arriving as { ok: false; reason: string }).reason, "launch_in_flight");
+  assert.equal(killCallCount, 0, "no kill of any kind must be issued against the in-flight instance while an acquire arrives -- this is the assertion that would catch someone implementing priority by preemption");
+  assert.equal(spawnCallCount, 0, "no second spawn must occur while the first boot is still in flight");
+
+  releaseGate!();
+  const inFlightResult = await inFlightLaunch;
+  assert.ok(inFlightResult.ok, "the in-flight boot must run to completion rather than being aborted");
+  assert.equal(spawnCallCount, 1, "exactly one spawn total -- the in-flight boot's own");
+  assert.equal(killCallCount, 0, "no kill occurred even after the in-flight boot completed -- it was never preempted");
+
+  // "The arriving acquire is then served by that completed instance" --
+  // once this boot reaches `ready`, vice-broker.mts's selectWarmInstance()
+  // is what serves a waiting request from it, and it performs no `reason`
+  // check at all (read directly in its own source, and already proven
+  // end-to-end by vice-broker-acquire.test.ts, cited in this task's own
+  // pre-implementation determination above). What THIS test proves, at
+  // this module's own level, is the half selectWarmInstance() depends on:
+  // the boot this acquire will eventually be served by is never killed and
+  // never a duplicate, and reaches a normal, granted-able completion.
+  const completedPort = (inFlightResult as { ok: true; record: InstanceRecord }).record.port;
+  assert.equal(state.instances.get(completedPort)!.state, "launching", "the completed boot's record remains in place, untouched by the arriving acquire's own refusal");
+  assert.equal(state.instances.get(completedPort)!.reason, "spare", "the record's own reason is unchanged -- eligibility for a later grant never depends on which reason booted it");
+});
+
+test("D-07: a request-driven launch wins the freed slot over a warming launch in the same pass, and the decision is logged naming both reasons", async () => {
+  const state = createBrokerState();
+  const logs: string[] = [];
+  let spawnCallCount = 0;
+  const stubSpawn = (_cmd: string, _args: string[]) => {
+    spawnCallCount++;
+    return stubChild(7000 + spawnCallCount);
+  };
+  const dynamicAllocatePort = async (s: BrokerState): Promise<PortAllocationResult> => {
+    let port = 6600;
+    while (s.instances.has(port)) port++;
+    return { ok: true, port };
+  };
+
+  let acquireOk = false;
+  let warmSpawnCountBefore = 0;
+  let warmSpawnCountAfter = 0;
+
+  await runBrokerPass({
+    serveAcquires: async () => {
+      const result = await acquirePortAndLaunch("acquire", {
+        state,
+        stateDir: "/tmp/d07-priority-acquire",
+        allocatePort: dynamicAllocatePort,
+        spawn: stubSpawn,
+        log: (l: string) => logs.push(l),
+      });
+      acquireOk = result.ok;
+    },
+    maintainWarmFloor: async () => {
+      warmSpawnCountBefore = spawnCallCount;
+      const { deps } = makeWarmFloorDeps(state, {
+        warmFloor: 3,
+        ceiling: 16,
+        spawn: stubSpawn,
+        // Still booting within THIS pass -- realistic (a real emulator
+        // takes real time to boot), and the same idiom the landed
+        // "overlapping an in-flight launch" test above already uses for
+        // this exact scenario.
+        probe: () => Promise.resolve(false),
+        log: (l: string) => logs.push(l),
+      });
+      await maintainWarmFloor(deps);
+      warmSpawnCountAfter = spawnCallCount;
+    },
+  });
+
+  assert.equal(acquireOk, true, "the request-driven launch must succeed and take the slot");
+  assert.equal(spawnCallCount, 1, "exactly one spawn in this pass -- the acquire's own");
+  assert.equal(warmSpawnCountAfter, warmSpawnCountBefore, "the warming launch must NOT occur in the same pass -- the acquire already holds the boot in flight");
+
+  const decisionLine = logs.find((l) => /launch-slot decision/.test(l));
+  assert.ok(decisionLine, `expected a launch-slot decision log line naming both reasons, got: ${JSON.stringify(logs)}`);
+  assert.match(decisionLine!, /acquire/, "the winning reason (acquire) must be named");
+  assert.match(decisionLine!, /spare/, "the waiting reason (spare) must be named");
+});
+
+// DISCRIMINATING-POWER CHECK (performed during Task 2's execution, recorded
+// here and in the plan's own SUMMARY rather than left implicit): runBrokerPass()'s
+// own body was temporarily inverted (`await deps.maintainWarmFloor(); await
+// deps.serveAcquires();`, warming before acquires). Against that inversion, the
+// priority test immediately above went RED: with warming running first, its own
+// acquirePortAndLaunch("spare", ...) call takes the slot before the acquire ever
+// gets a turn, and by the time the acquire's own call runs the slot has already
+// freed again (maintainWarmFloor()'s own call to acquirePortAndLaunch() fully
+// resolves, releasing `inFlight`, before maintainWarmFloor() itself returns) --
+// so BOTH launches proceed (spawnCallCount observed as 2, and
+// warmSpawnCountAfter > warmSpawnCountBefore), failing both assertions that
+// exactly one spawn occurs and that warming did not also launch. Restoring the
+// original order returned the test to GREEN. This proves the test has real
+// discriminating power against the exact regression D-07's priority guarantee
+// exists to prevent, rather than passing vacuously regardless of pass order.
 
 // ===========================================================================
 // Plan 03, Task 2: superviseChild() -- the per-child supervisor absorbed
