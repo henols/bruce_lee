@@ -2492,3 +2492,34 @@ Saves the detour: inside a worktree, never trust an absolute `/workspaces/<repo>
 handed down verbatim by a plan or an earlier session — resolve the worktree's own root first
 (`git rev-parse --show-toplevel`) and build absolute paths from that, or use paths relative to
 the current working directory instead.
+
+### 2026-08-04 — PROMOTION to HIGH: the vector-table method reproduces the live `$1103` IRQ entry from a static capture, for both releases
+
+**Type:** confirmation (promotes the 2026-08-01 "vector table: six pairs, and `$01` decides which
+pair is live" entry, and the 2026-08-02 "the exact bit of `$01` … HIRAM, bit 1" entry, from
+MEDIUM to HIGH). Logged as a new entry, not as an edit to either grade in place.
+**Evidence:** mechanical derivation over `recovery/danish/dumps/danish-gameentry-run1.bin` and
+`recovery/saeger/dumps/saeger-gameentry-run1.bin` — both three-run-verified captures — using
+`.claude/skills/c64-program-recon/scripts/derive.mjs vectors`, written and run during the
+authoring of the `c64-program-recon` skill. No emulator involved. Cross-checked against the
+independently recorded live finding in the 2026-08-02 checkpoint-trap entry, which names `$1103`
+as an IRQ-handler entry with the raster-split chain `$1103 → $1574 → $152C`.
+**Confidence:** HIGH — derived, then matched against a live observation recorded separately and
+earlier, on two independent releases.
+
+Both captures return, identically:
+
+- `$01` = `$40` — LORAM 0, HIRAM 0, CHAREN 0. BASIC and KERNAL banked out.
+- HIRAM = 0 ⇒ the live vector pair is `$FFFE/$FFFF`, which holds **`$1103`**.
+- `$0314/$0315` holds `$0101` — meaningless, exactly as expected with the KERNAL banked out.
+
+**The trap this closes, and it is the practically valuable half.** `$0314` reading `$0101` looks
+like a retargeted vector and invites a hunt for a handler at `$0101`. It is uninitialised RAM. The
+HIRAM bit is what says so, and reading it *first* costs one byte and removes the whole detour.
+
+**Saves:** the entry-point and IRQ-handler question on a depacked image, answered in one read of a
+capture already on disk, with no emulator and no session risk — against re-deriving it live each
+time. It also means step 5 of the skill todo
+(`2026-08-01-collect-c64-reverse-engineering-findings-into-a-fast-re-skill`) is satisfied for the
+control-flow half: the method reproduced a known-good result cold. The chip half (VIC-II charset
+/ sprite / screen rediscovery) is still untested against the extraction work and stays MEDIUM.
