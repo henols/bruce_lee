@@ -6,7 +6,7 @@
 //
 // Standard 35-track 1541 layout: BAM at track 18 sector 0, directory chain
 // from track 18 sector 1, four sector-count zones (21/19/18/17 sectors per
-// track). Both this project's images (disks/danish.d64, disks/saeger.d64)
+// track). Plain 174848-byte, 35-track, no-error-info images are assumed
 // are plain 174848-byte, 35-track, no-error-info images -- no extended
 // (40-track) or error-byte variants to handle.
 import { readFileSync } from "node:fs";

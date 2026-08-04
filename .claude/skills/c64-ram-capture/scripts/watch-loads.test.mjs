@@ -23,6 +23,7 @@ import {
   hex4,
 } from "./watch-loads.mjs";
 import { buildChipState, buildRangeManifest } from "./dump-artifacts.mjs";
+import { firstDumpArtifact, skipUnless } from "./test-corpus.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, "..", "..", "..", "..");  // scripts -> skill -> skills -> .claude -> repo root
@@ -210,9 +211,11 @@ test("screenSignature throws for a screen matrix that is not exactly 1000 bytes"
 
 // ------------------------------------------------ real committed sidecars
 
-test("buildChipState reproduces danish-gameentry-run1.state.json's recorded vic_bank, screen_base and charset_base from that file's own raw readings", () => {
-  const statePath = join(REPO_ROOT, "recovery", "danish", "dumps", "danish-gameentry-run1.state.json");
-  const committed = JSON.parse(readFileSync(statePath, "utf8"));
+const CHIP_STATE = firstDumpArtifact("chip_state");
+
+test("buildChipState reproduces a committed sidecar's recorded derivations from that file's own raw readings",
+  { skip: skipUnless(CHIP_STATE, "a committed chip-state sidecar") }, () => {
+  const committed = JSON.parse(readFileSync(CHIP_STATE.path, "utf8"));
   const raw = {
     dd00_raw: committed.derived.dd00_raw,
     d018_raw: committed.derived.d018_raw,
@@ -229,10 +232,12 @@ test("buildChipState reproduces danish-gameentry-run1.state.json's recorded vic_
   assert.deepEqual(result.derived.sprite_data_addresses, committed.derived.sprite_data_addresses);
 });
 
-test("buildRangeManifest over the committed danish-gameentry-run1.bin produces ranges whose union covers all 65536 addresses", () => {
-  const binPath = join(REPO_ROOT, "recovery", "danish", "dumps", "danish-gameentry-run1.bin");
-  const image = readFileSync(binPath);
-  const manifest = buildRangeManifest(image, { release: "danish", label: "run1" });
+const BIN = firstDumpArtifact("bin");
+
+test("buildRangeManifest over a committed image produces ranges whose union covers all 65536 addresses",
+  { skip: skipUnless(BIN, "a committed 64K image") }, () => {
+  const image = readFileSync(BIN.path);
+  const manifest = buildRangeManifest(image, { release: BIN.release, label: BIN.label });
   assert.equal(manifest.classification_state, "ranges-only");
   let expected = 0;
   for (const r of manifest.ranges) {

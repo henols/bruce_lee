@@ -14,16 +14,16 @@ failure and it is invisible in a hex dump. Two committed modules do that byte wo
 and name the offending address when it is wrong.
 
 ```bash
-P=.claude/skills/c64-ram-capture/scripts/d64-parse.mjs      # from the repo root
-A=.claude/skills/c64-ram-capture/scripts/dump-artifacts.mjs
-C=.claude/skills/c64-ram-capture/scripts/compare.mjs
+S=.claude/skills/c64-ram-capture/scripts    # from the repo root
+P=$S/d64-parse.mjs   A=$S/dump-artifacts.mjs
+C=$S/compare.mjs     L=$S/releases.mjs
 
-node $P directory --image disks/danish.d64       # what's on the disk (--json flags faked entries)
-node $P bam       --image disks/danish.d64       # disk name, DOS type, occupied track ranges
+node $P directory --image path/to/image.d64      # what's on the disk (--json flags faked entries)
+node $P bam       --image path/to/image.d64      # disk name, DOS type, occupied track ranges
 node $A assemble  --chunks chunks.json           # size + digest, writes nothing
-node $A write-set --release danish --label gameentry-run1 \
+node $A write-set --release <id> --label <label> \
                   --chunks chunks.json --raw raw.json    # the four committed artifacts
-node .claude/skills/c64-ram-capture/scripts/releases.mjs list                     # the valid --release ids
+node $L list                                     # the valid --release ids
 
 node $C digest  dump.bin                         # sha256 + size, for the capture record
 node $C compare a.bin b.bin                      # classify every difference, exit 1 on FAIL
@@ -49,13 +49,13 @@ own `mcp__vice__*` calls. They contact nothing.
 disk whether or not the emulator is up:
 
 ```bash
-$ node $P directory --image disks/danish.d64
-PRG "BRUCE LEE   (DC)" first=17/0 blocks=178
+$ node $P directory --image demo.d64
+PRG "DEMO GAME" first=5/0 blocks=5
 
-$ node $P bam --image disks/danish.d64
-disk name: ""  id: 00  dos type: 2A
+$ node $P bam --image demo.d64
+disk name: "DEMO DISK"  id: 38  dos type: 2A
 first dir sector: 18/1
-occupied track ranges: 9-18
+occupied track ranges: 5
 ```
 
 Do not eyeball the directory for fakery — `--json` decides it. Every entry carries
@@ -64,11 +64,12 @@ first track/sector falls outside the image, or when it points into a track the B
 reports as entirely free. That last case is the signature of an entry claiming a
 file never written to disk.
 
-Both of this project's images come back `suspicious: false` — their `BRUCE LEE`
-entries are genuinely well-formed, not faked, asserted against the real images as
-committed fixture tests in `scripts/d64-parse.test.mjs`. A non-null `chain_error` is
-the separate failure: a directory chain that leaves the image or loops, reported
-instead of hanging. **Confidence: HIGH** (fixture tests over the real images).
+`scripts/d64-parse.test.mjs` proves the detector both **fires** on a synthetic
+faked entry and stays silent on a well-formed one — a guard proven only silent is
+not a guard. It also sweeps whatever real `.d64` corpus the project ships,
+skipping when there is none. A non-null `chain_error` is the separate failure: a
+directory chain that leaves the image or loops, reported instead of hanging.
+**Confidence: HIGH** (synthetic fire-and-silence tests, plus a corpus sweep).
 
 ## Boot a disk
 
@@ -99,7 +100,7 @@ If the program counter has not moved, type `LOAD"*",8,1` with
 6. Write all four artifacts in one call:
 
    ```bash
-   node $A write-set --release danish --label gameentry-run1 \
+   node $A write-set --release <id> --label <label> \
      --chunks chunks.json --raw raw.json
    ```
 
@@ -131,7 +132,7 @@ $ node $A assemble --chunks chunks.json
 ```
 
 That digest is byte-identical to the `sha256` field committed in
-`recovery/danish/dumps/danish-gameentry-run1.capture.json`, so the assembly path
+that capture's own committed `.capture.json` sidecar, so the assembly path
 reproduces a known-good artifact rather than merely producing 65536 bytes.
 **Confidence: HIGH** (reproduced against the committed sidecar).
 
@@ -200,12 +201,12 @@ Do not classify differences by hand — `scripts/compare.mjs` applies the rules
 identically every time, and exits 1 on a FAIL so a script can gate on it:
 
 ```bash
-node $C compare recovery/danish/dumps/danish-gameentry-run{2,3}.bin
+node $C compare capture-a.bin capture-b.bin
 ```
 
 ```
-A  danish-gameentry-run2.bin  sha256 741213dcd1beb548b8896737f9f07e867c718dabeb56238862b9f3020e4902d2
-B  danish-gameentry-run3.bin  sha256 ee3813322127b7bedf97abf3dd6ffcebb80c937f8b75dfe471c886fb36975573
+A  capture-a.bin  sha256 741213dcd1beb548b8896737f9f07e867c718dabeb56238862b9f3020e4902d2
+B  capture-b.bin  sha256 ee3813322127b7bedf97abf3dd6ffcebb80c937f8b75dfe471c886fb36975573
 
 volatile (excluded from the verdict): 100
   $020A  $9E %10011110  ->  $8E %10001110   1 bit
@@ -249,7 +250,7 @@ It reports each address that differed in any pairing, with the distinct values
 seen:
 
 ```bash
-node $C floor recovery/saeger/dumps/saeger-gameentry-run{1,2,3}.bin
+node $C floor run1.bin run2.bin run3.bin
 ```
 
 Capture the power-on image as the very first action against a fresh machine, then
@@ -294,7 +295,7 @@ through a GSD command (`/gsd-quick`).
 | `assembleImage: gap before address $3000 -- next chunk starts at $4000` | A `vice_memory_read` never landed. Re-read that 4096-byte window; do not pad it. |
 | `assembleImage: overlap at address $8000 -- a previous chunk already covered up to $8003` | Two chunks cover the same window, usually a duplicated call after a retry. Drop the duplicate. |
 | `assembleImage: assembled 65534 bytes ending at $FFFE, expected exactly 65536` | A read returned short. Re-read the final window. |
-| `unknown release "x" -- known releases: danish, saeger` | The `--release` id is not in `recovery/RELEASES.json`. The error names the valid ids; it throws before writing anything. |
+| `unknown release "x" -- known releases: …` | The `--release` id is not in the registry. The error names the valid ids; it throws before writing anything. |
 | A fresh `.map.json` says `classification_state: "bucketed"` | Wrong — a fresh capture is `"ranges-only"`. The provenance diff sets `"bucketed"`, nothing else. |
 | The checkpoint never fired | Most state reads pause the emulator. Resume exactly once, at the end, after every read. |
 | Two captures of the same checkpoint differ | Expected. Full-64K identity is impossible in principle; run `compare` and read the verdict rather than judging by eye. |

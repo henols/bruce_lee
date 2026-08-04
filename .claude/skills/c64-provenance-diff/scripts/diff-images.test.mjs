@@ -1,12 +1,12 @@
-// Coverage for tools/diff-images.mjs (01-05): the anchor-proven offset
+// Coverage for diff-images.mjs: the anchor-proven offset
 // search, N-way byte diff, gap-tolerant coalescing, patch counting, and the
 // generated ledger tier. Every test here runs with no emulator present --
-// small synthetic fixtures for the arithmetic and boundary cases, plus one
-// case that runs `anchorSearch` against the two real committed dumps to
-// confirm the search finds unique anchors in practice.
+// small synthetic fixtures for the arithmetic and boundary cases, plus a
+// corpus-driven case that runs `anchorSearch` against whatever real committed
+// dumps the host project has, skipping when it has none.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
@@ -25,6 +25,7 @@ import {
   enumerateManifests,
   splitRangeByManifestKind,
 } from "./diff-images.mjs";
+import { registryPath } from "../../c64-ram-capture/scripts/releases.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, "..", "..", "..", "..");  // scripts -> skill -> skills -> .claude -> repo root
@@ -363,7 +364,7 @@ test("countPatches reports zero for a release whose CRACKER-PATCH bytes fall out
 
 test("findPrintableRuns finds a run of printable-ASCII bytes at least minLength long", () => {
   const buf = Buffer.alloc(64, 0x00);
-  Buffer.from("BRUCE LEE CRACKED BY").copy(buf, 20);
+  Buffer.from("SOME GAME CRACKED BY").copy(buf, 20);
   const runs = findPrintableRuns(buf, { minLength: 8 });
   assert.equal(runs.length, 1);
   assert.equal(runs[0].start, 20);
@@ -380,14 +381,14 @@ test("findPrintableRuns ignores a printable run shorter than minLength", () => {
 
 test("findCracktroRuns matches a printable run containing a recognised crack-credit word", () => {
   const buf = Buffer.alloc(64, 0x00);
-  Buffer.from("BRUCE LEE CRACKED BY").copy(buf, 10);
+  Buffer.from("SOME GAME CRACKED BY").copy(buf, 10);
   const runs = findCracktroRuns(buf, { minLength: 8 });
   assert.equal(runs.length, 1);
 });
 
-test("findCracktroRuns does NOT match the game's own title-screen text -- a real false positive found live against the two committed dumps (DATASOFT PRESENTS / DIABOLO PRESENTS at $4771), fixed here", () => {
+test("findCracktroRuns does NOT match a game's own title-screen text -- a real false positive found live against a two-release corpus, where the title text differed between releases and a bare printable scan called it cracker credit", () => {
   const buf = Buffer.alloc(64, 0x00);
-  Buffer.from("DATASOFT PRESENTS").copy(buf, 10);
+  Buffer.from("PUBLISHER PRESENTS").copy(buf, 10);
   const runsPlain = findPrintableRuns(buf, { minLength: 8 });
   assert.equal(runsPlain.length, 1, "the plain scan does find this run -- it is genuinely printable text");
   const runsCracktro = findCracktroRuns(buf, { minLength: 8 });
@@ -547,7 +548,7 @@ test("enumerateManifests reads every dumps[] entry's range_manifest from the reg
 
 test("splitRangeByManifestKind splits a range spanning a manifest kind boundary into per-kind sub-ranges", () => {
   // A real bug found live: a coalesced diff range can span straight through
-  // a manifest's own kind boundary (e.g. danish's $033C-$4770 ORIGINAL range
+  // a manifest's own kind boundary (e.g. a wide ORIGINAL range ORIGINAL range
   // crosses its own $0340-$035E loader sub-range), and resolving kind from
   // only the range's start address silently mislabels everything past the
   // first boundary.
@@ -582,18 +583,27 @@ test("splitRangeByManifestKind returns the range unchanged (one sub-range) when 
 
 // ------------------------------------------------- real-dump integration case
 
-test("anchorSearch against the two real committed run1 dumps finds unique agreeing anchors (offset 0)", () => {
-  // Positional, never a release-id comparison (check-parameterisation scans
-  // every file under tools/, including this one): the reference is simply
-  // registry.releases[0], and "the other one" is anything that isn't it.
-  const registry = JSON.parse(readFileSync(join(REPO_ROOT, "recovery", "RELEASES.json"), "utf8"));
-  assert.ok(registry.releases.length >= 2, "this integration case needs at least two committed releases");
-  const reference = registry.releases[0];
-  const other = registry.releases.find((r) => r !== reference);
-  const referenceDump = reference.dumps.find((d) => d.label === "run1");
-  const otherDump = other.dumps.find((d) => d.label === "run1");
-  const source = readFileSync(join(REPO_ROOT, referenceDump.bin));
-  const target = readFileSync(join(REPO_ROOT, otherDump.bin));
+// Corpus-driven: needs two committed primary dumps from different releases.
+// Positional, never a release-id comparison -- the reference is simply the first
+// release, and "the other one" is anything that isn't it. Skips when the host
+// project has fewer than two releases with an existing run1 .bin.
+const PAIR = (() => {
+  let reg;
+  try {
+    reg = JSON.parse(readFileSync(registryPath, "utf8"));
+  } catch {
+    return null;
+  }
+  const withRun1 = (reg.releases ?? [])
+    .map((r) => ({ r, d: (r.dumps ?? []).find((d) => d.label === "run1") }))
+    .filter((x) => x.d && x.d.bin && existsSync(join(REPO_ROOT, x.d.bin)));
+  return withRun1.length >= 2 ? [withRun1[0], withRun1[1]] : null;
+})();
+
+test("anchorSearch against two real committed primary dumps finds unique agreeing anchors",
+  { skip: PAIR ? false : "fewer than two committed run1 dumps in this project -- integration case skipped" }, () => {
+  const source = readFileSync(join(REPO_ROOT, PAIR[0].d.bin));
+  const target = readFileSync(join(REPO_ROOT, PAIR[1].d.bin));
   assert.equal(source.length, 65536);
   assert.equal(target.length, 65536);
 

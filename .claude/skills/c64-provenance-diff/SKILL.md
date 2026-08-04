@@ -24,7 +24,7 @@ node $D ledger                                # 4. regenerate recovery/PROVENANC
 
 node $D diff --json                          # machine-readable, with per-range reasons
 node $D diff --gap-tolerance 16              # coalescing width (default shown)
-node $D anchor-search --reference danish     # pick the reference release
+node $D anchor-search --reference <id>       # pick the reference release
 node .claude/skills/c64-provenance-diff/scripts/releases.mjs list                 # the release ids in play
 ```
 
@@ -60,19 +60,22 @@ changed.
 
 ## Worked example — the real corpus
 
-Two independently-cracked releases, `danish` and `saeger`, both captured at the
-post-loader game-entry trigger:
+Two independently-cracked releases of one title, both captured at the same
+post-loader entry trigger. **The release ids below are shown as `release-a` and
+`release-b`; every number is real output from a live run against a two-release
+corpus, with only the ids renamed** — the tool has no opinion about what a
+release is called.
 
 ```
 $ node $D anchor-search
-danish -> saeger: ok=true offset=0 (all 7 usable anchor(s) agree on offset 0)
+release-a -> release-b: ok=true offset=0 (all 7 usable anchor(s) agree on offset 0)
 
 $ node $D diff
 diff: 204 range(s), gap_tolerance=16, coalesced=260
 
 $ node $D count-patches
-danish: 0
-saeger: 0
+release-a: 0
+release-b: 0
 ```
 
 **204 differing ranges and zero cracker patches.** The verdict tally from
@@ -84,7 +87,7 @@ they are `ORIGINAL` with real evidence behind the word. The other 102 differ, ma
 no cracker signature, and are therefore `UNKNOWN` — and each carries a `reason`
 naming the alternatives it ruled out:
 
-> differs across 2 release(s) (danish, saeger) with no recognised cracker
+> differs across 2 release(s) (release-a, release-b) with no recognised cracker
 > signature … not a revision difference … not a `.d64` read error … not a packer
 > artifact … not relocation (the anchor-proven offset for this pair is recorded
 > above and used here).
@@ -109,10 +112,10 @@ The two seeds are where this goes wrong, and both failure modes are on record:
   instruction, once being classified as loader code.
 - **`cracktro` is seeded from a crack-credit *vocabulary* scan**, not a bare
   printable-ASCII scan. A bare scan was tried and produced a real false positive
-  against these dumps: the game's own title text (`DATASOFT PRESENTS` in danish,
-  `DIABOLO  PRESENTS` in saeger, at `$4771-$4779`) is printable too. That
-  divergence is genuine and is correctly left `UNKNOWN` — not asserted as cracker
-  credit.
+  against a real corpus: **the game's own title-screen text** is printable ASCII
+  too, and it differed between the two releases. A bare scan called that cracker
+  credit. It is not — a differing string is not a cracker string, and it is
+  correctly left `UNKNOWN`.
 
 `io` (`$D000-$DFFF`) and `unused` (contiguous `$00`/`$FF` power-on runs) are
 assigned at capture time and kept verbatim. Everything the trace reaches is `game`.
@@ -123,8 +126,8 @@ the manifests; the bytes stay verbatim evidence.
 ## Before you trust a verdict
 
 - **Coverage is incomplete, and the ledger says so out loud.**
-  `recovery/LOADING.md` has **saeger at 5 of 7** required milestones and **danish
-  at 0 of 7**, every attempt halted by host VICE instability. An on-demand-loaded
+  a load-coverage record is not a finished coverage claim until every game state
+  has actually been visited. An on-demand-loaded
   region — bytes that only appear after reaching a room or state nobody visited —
   is by construction **absent from the primary dumps this diffs**. Every verdict is
   scoped to "the addresses visible at the post-loader game-entry point", not to the
@@ -133,9 +136,9 @@ the manifests; the bytes stay verbatim evidence.
 - **Never resolve a range's `kind` from its `start` address.** Coalescing groups on
   *verdict* continuity, not *kind* continuity, so one range can span several kind
   zones. `splitRangeByManifestKind` exists for this, and the bug was found live:
-  danish's `$033C-$4770` `ORIGINAL` range runs straight through its own
-  `$0340-$035E` `loader` sub-range. Resolving from `start` silently mislabels every
-  address after the first boundary.
+  a wide `ORIGINAL` range was found running straight through a `loader` sub-range
+  nested inside it. Resolving from `start` silently mislabels every address after
+  the first boundary.
 - **`--gap-tolerance` is off-by-one sensitive by design.** A gap of identical bytes
   *strictly shorter* than N coalesces; a run of *exactly* N stays its own row.
 - **More agreeing independent releases is the only thing that raises confidence.**

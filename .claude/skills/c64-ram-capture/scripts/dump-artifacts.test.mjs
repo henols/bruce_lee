@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
 
 import { assembleImage, sha256Buffer, buildChipState, vicBank, screenBase, buildRangeManifest } from "./dump-artifacts.mjs";
+import { allDumpArtifacts, skipUnless } from "./test-corpus.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, "..", "..", "..", "..");  // scripts -> skill -> skills -> .claude -> repo root
@@ -69,34 +70,30 @@ test("screenBase derives the screen pointer from $D018 bits 4-7 relative to the 
   assert.equal(screenBase(49, 193), 35840); // real committed values
 });
 
-test("buildChipState reproduces danish-gameentry-run1.state.json's recorded vic_bank, screen_base and charset_base", () => {
-  const statePath = join(REPO_ROOT, "recovery", "danish", "dumps", "danish-gameentry-run1.state.json");
-  const committed = JSON.parse(readFileSync(statePath, "utf8"));
-  const raw = {
-    dd00_raw: committed.derived.dd00_raw,
-    d018_raw: committed.derived.d018_raw,
-    port01_raw: committed.derived.port01.raw,
-    sprite_pointers: committed.derived.sprite_pointers,
-  };
-  const result = buildChipState(raw);
-  assert.equal(result.derived.vic_bank, committed.derived.vic_bank);
-  assert.equal(result.derived.screen_base, committed.derived.screen_base);
-  assert.equal(result.derived.charset_base, committed.derived.charset_base);
-});
+// Corpus-driven: re-derive vic_bank / screen_base / charset_base from EVERY
+// committed chip-state sidecar the registry names, and require each to match what
+// that sidecar recorded. Running it over every release is what proves the formula
+// is generic rather than tuned to one machine state -- and with no corpus it
+// skips instead of failing.
+const CHIP_STATES = allDumpArtifacts("chip_state");
 
-test("buildChipState reproduces saeger-gameentry-run1.state.json's recorded derivations too, proving the formula is generic", () => {
-  const statePath = join(REPO_ROOT, "recovery", "saeger", "dumps", "saeger-gameentry-run1.state.json");
-  const committed = JSON.parse(readFileSync(statePath, "utf8"));
-  const raw = {
-    dd00_raw: committed.derived.dd00_raw,
-    d018_raw: committed.derived.d018_raw,
-    port01_raw: committed.derived.port01.raw,
-    sprite_pointers: committed.derived.sprite_pointers,
-  };
-  const result = buildChipState(raw);
-  assert.equal(result.derived.vic_bank, committed.derived.vic_bank);
-  assert.equal(result.derived.screen_base, committed.derived.screen_base);
-  assert.equal(result.derived.charset_base, committed.derived.charset_base);
+test("buildChipState reproduces every committed sidecar's recorded vic_bank, screen_base and charset_base",
+  { skip: skipUnless(CHIP_STATES, "committed chip-state sidecars") }, () => {
+  for (const { release, label, path } of CHIP_STATES) {
+    const committed = JSON.parse(readFileSync(path, "utf8"));
+    if (!committed.derived) continue;
+    const raw = {
+      dd00_raw: committed.derived.dd00_raw,
+      d018_raw: committed.derived.d018_raw,
+      port01_raw: committed.derived.port01.raw,
+      sprite_pointers: committed.derived.sprite_pointers,
+    };
+    const result = buildChipState(raw);
+    const where = `${release}/${label}`;
+    assert.equal(result.derived.vic_bank, committed.derived.vic_bank, `${where}: vic_bank`);
+    assert.equal(result.derived.screen_base, committed.derived.screen_base, `${where}: screen_base`);
+    assert.equal(result.derived.charset_base, committed.derived.charset_base, `${where}: charset_base`);
+  }
 });
 
 test("buildRangeManifest marks a contiguous power-on-pattern run of at least 16 bytes as kind unused", () => {

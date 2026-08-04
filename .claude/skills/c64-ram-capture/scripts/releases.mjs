@@ -51,7 +51,7 @@ export function release(id) {
  * plain top-level field rather than a JSON comment (JSON has none) or a
  * per-release field (it describes the registry's shape, not any one
  * release). Rehearsed against the real validator in
- * `recovery/saeger/NOTES.md` §10.
+ * a release's own NOTES.md.
  */
 export function schemaNotes() {
   return loadRegistry().schema_notes ?? null;

@@ -1,16 +1,17 @@
 // Coverage for the direct .d64 byte parser: the track/sector offset
 // arithmetic, the directory-chain walk (including its loop guard), and the
-// suspicious-entry detector -- against both a synthetic image (so the
-// detector is proven to fire on a genuine defect, not just proven silent)
-// and the two real, committed fixtures.
+// suspicious-entry detector -- against synthetic images built in-test (so the
+// detector is proven to FIRE on a genuine defect, not merely proven silent),
+// plus an optional pass over whatever real .d64 corpus the host project ships.
+// Portable: with no corpus present the real-image checks skip, never fail.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync, existsSync } from "node:fs";
+import { join, basename } from "node:path";
 
 import { sectorsPerTrack, tsToOffset, parseBam, parseDirectory, readImage } from "./d64-parse.mjs";
+import { projectRoot } from "./project-paths.mjs";
 
-const DANISH = "disks/danish.d64";
-const SAEGER = "disks/saeger.d64";
 
 // ------------------------------------------------------------- tsToOffset
 
@@ -166,64 +167,77 @@ test("parseBam: reports free-sector counts and derives occupied ranges", () => {
   assert.equal(t7.free, 21, "an untouched track stays fully free");
 });
 
-// ---------------------------------------------------------------- real fixtures
+// ------------------------------------------------------- optional real corpus
+//
+// Everything above runs on synthetic images and passes in any project. What
+// follows exercises the parser against whatever REAL `.d64` images the host
+// project happens to ship, discovered rather than named, and SKIPS when there
+// are none -- so this file never fails just because it was installed somewhere
+// without a disk corpus.
+//
+// These assertions are deliberately properties of the parser, not facts about
+// any particular disk: a specific image's disk name, entry name or block count
+// is that project's evidence and belongs in that project's own records, not
+// hardcoded in a portable test.
 
-test("real fixture: danish.d64's BAM reports its disk name and a walkable directory chain", () => {
-  const buf = readImage(DANISH);
-  assert.equal(buf.length, 174848);
-  const bam = parseBam(buf);
-  assert.equal(bam.first_dir_track, 18);
-  assert.equal(bam.first_dir_sector, 1);
+const CORPUS = (() => {
+  const dir = process.env.C64RE_DISKS_DIR ?? join(projectRoot(), "disks");
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .filter((f) => f.toLowerCase().endsWith(".d64"))
+    .sort()
+    .map((f) => join(dir, f));
+})();
+
+const noCorpus =
+  CORPUS.length === 0
+    ? "no .d64 images found -- set C64RE_DISKS_DIR to run the real-corpus checks"
+    : false;
+
+test("real corpus: every image is a standard 174848-byte 35-track image", { skip: noCorpus }, () => {
+  for (const path of CORPUS) {
+    const buf = readImage(path);
+    assert.equal(buf.length, 174848, `${basename(path)} is ${buf.length} bytes, not a plain 35-track image`);
+  }
 });
 
-test("real fixture: saeger.d64 reports disk name XIDEX, matching PROJECT.md", () => {
-  const buf = readImage(SAEGER);
-  const bam = parseBam(buf);
-  assert.equal(bam.disk_name, "XIDEX");
+test("real corpus: every image's BAM points at a first directory sector and yields occupied ranges", { skip: noCorpus }, () => {
+  for (const path of CORPUS) {
+    const bam = parseBam(readImage(path));
+    assert.equal(bam.first_dir_track, 18, `${basename(path)}: first dir track should be 18 on a 1541 image`);
+    assert.ok(bam.first_dir_sector >= 0, `${basename(path)}: first dir sector missing`);
+    assert.ok(
+      bam.occupied_ranges.length > 0,
+      `${basename(path)}: no occupied track ranges derived -- a real image should allocate something`,
+    );
+  }
 });
 
-// This is the falsifying result the plan's TDD step exists to surface: direct
-// byte-level parsing does NOT reproduce PROJECT.md's prose claim of "0-block
-// BRUCE LEE PRG entries pointing at bogus track/sector" for either real disk.
-// Both entries are fully valid, non-zero-block CBM DOS PRG entries whose own
-// sector chains, independently walked (see recovery/*/DIRECTORY.md), terminate
-// exactly at their declared block count and land on the exact SYS-stub bytes
-// PROJECT.md's own boot-stub table already names (SYS 2073 / SYS 2161). A
-// duller explanation -- PROJECT.md's prose being imprecise or borrowed from
-// generic scene lore that does not hold for this specific pair of images -- is
-// recorded in DIRECTORY.md rather than papered over here.
-test("real fixture: danish.d64's BRUCE LEE entry is NOT flagged suspicious -- it is genuinely well-formed", () => {
-  const buf = readImage(DANISH);
-  const { entries, chain_error } = parseDirectory(buf);
-  assert.equal(chain_error, null);
-  assert.equal(entries.length, 1);
-  const e = entries[0];
-  assert.match(e.name, /BRUCE LEE/);
-  assert.equal(e.first_track, 17);
-  assert.equal(e.first_sector, 0);
-  assert.equal(e.blocks, 178, "block count is real and non-zero, contradicting the 0-block premise");
-  assert.equal(e.suspicious, false);
-  assert.deepEqual(e.suspicious_reasons, []);
+test("real corpus: every directory chain walks to a clean end, with no loop guard tripped", { skip: noCorpus }, () => {
+  for (const path of CORPUS) {
+    const { entries, chain_error } = parseDirectory(readImage(path));
+    assert.equal(chain_error, null, `${basename(path)}: directory chain failed -- ${chain_error}`);
+    assert.ok(entries.length > 0, `${basename(path)}: no directory entries found`);
+  }
 });
 
-test("real fixture: saeger.d64's BRUCE LEE entry is likewise genuinely well-formed", () => {
-  const buf = readImage(SAEGER);
-  const { entries, chain_error } = parseDirectory(buf);
-  assert.equal(chain_error, null);
-  assert.equal(entries.length, 1);
-  const e = entries[0];
-  assert.match(e.name, /BRUCE LEE/);
-  assert.equal(e.first_track, 1);
-  assert.equal(e.first_sector, 0);
-  assert.equal(e.blocks, 186);
-  assert.equal(e.suspicious, false);
-});
-
-test("real fixture: both disks' occupied track ranges are derivable, whether or not they match PROJECT.md", () => {
-  const danishBam = parseBam(readImage(DANISH));
-  const saegerBam = parseBam(readImage(SAEGER));
-  // Recorded here as evidence, not asserted equal to PROJECT.md's prose --
-  // recovery/*/DIRECTORY.md states the comparison and any disagreement.
-  assert.ok(danishBam.occupied_ranges.length > 0);
-  assert.ok(saegerBam.occupied_ranges.length > 0);
+test("real corpus: a suspicious entry always names its reasons, and a clean one never does", { skip: noCorpus }, () => {
+  for (const path of CORPUS) {
+    const { entries } = parseDirectory(readImage(path));
+    for (const e of entries) {
+      assert.equal(typeof e.suspicious, "boolean", `${basename(path)}: "${e.name}" has no suspicious flag`);
+      if (e.suspicious) {
+        assert.ok(
+          e.suspicious_reasons.length > 0,
+          `${basename(path)}: "${e.name}" is flagged suspicious with no reason given -- a bare boolean is not a finding`,
+        );
+      } else {
+        assert.deepEqual(
+          e.suspicious_reasons,
+          [],
+          `${basename(path)}: "${e.name}" is not suspicious but carries reasons`,
+        );
+      }
+    }
+  }
 });

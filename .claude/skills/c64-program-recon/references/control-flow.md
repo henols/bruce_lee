@@ -70,9 +70,9 @@ reads whichever bank happens to be mapped.
 
 ### What the widened sweep found here — 2026-08-04
 
-Run over all six committed gameentry captures (danish and saeger, runs 1-3 each):
+Run over all six committed captures of one title (two releases, runs 1-3 each):
 
-| Vector | danish | saeger | Reading |
+| Vector | release-a | release-b | Reading |
 |---|---|---|---|
 | `$FFFE/$FFFF` IRQ | `$1103` | `$1103` | Known; matches the live-established handler chain |
 | `$FFFA/$FFFB` NMI | `$1116` | `$1116` | **New.** The game installs its own NMI handler under KERNAL ROM |

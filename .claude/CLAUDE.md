@@ -193,7 +193,8 @@ the tools handle the boundary.
   rewritten.
 - Use the tools that are exposed to you, and only those. If a capability you expect is not in
   the tool list, it is not available — do not look for another way to obtain it.
-- Read a disk's directory by parsing `.d64` bytes with `tools/d64-parse.mjs`, or with
+- Read a disk's directory by parsing `.d64` bytes with the `c64-ram-capture` skill's
+  `scripts/d64-parse.mjs`, or with
   `mcp__vice__vice_disk_read_sector` when the emulated drive's own view is what matters.
 - Most state reads pause the emulator. Read state first, poll with `mcp__vice__vice_ping`, and
   resume exactly once at the end.
@@ -203,8 +204,17 @@ the tools handle the boundary.
   hand-read numbers. `mcp__vice__vice_recycle` changes the epoch by design, so it voids any run in
   flight. See the `vice-wedge-triage` skill.
 - Synchronise input on checkpoint hits and frame counts. Never on wall-clock delay.
-- `tools/` holds pure logic only — resolution, attribution, ordering, rendering — over data the
-  agent fetched through the tools and passed in. Nothing under `tools/` contacts the emulator.
+- **The skills' `scripts/` hold pure logic only** — resolution, attribution, ordering, rendering —
+  over data the agent fetched through the `mcp__vice__*` tools and passed in. Nothing there contacts
+  the emulator, and an import-purity test in each pipeline skill enforces it mechanically: every
+  import must be a `node:` built-in or a module inside the skills bundle, so a transport module
+  cannot be pulled in even by accident.
+- **The skills are portable and carry their own code.** They resolve the project root by walking up
+  for `.git`, never by counting directory hops, and every data location is overridable
+  (`C64RE_PROJECT_ROOT`, `C64RE_DATA_DIR`, `C64RE_DISKS_ROOT`, `C64RE_REGISTRY`). Project-specific
+  narrative lives in project files — `recovery/PROVENANCE.prose.md` for the ledger — never hardcoded
+  in a module. Corpus-dependent tests skip when a project has no corpus rather than failing. Keep it
+  that way: a skill that names this game's releases or disk images has stopped being reusable.
 - Log VICE MCP quirks observed while driving the emulator as a file in `.planning/todos/pending/`
   rather than fixing them inline — a triage rule about not derailing a plan, not a ban on
   maintaining the implementation.
@@ -218,8 +228,9 @@ the tools handle the boundary.
   identical to a fresh one until you diff it (`resources-sync.test.ts` does that diff on every
   test run). The one exception is `resources/vice-launcher.sh`, which stays hand-authored — it is
   not generated, and lives there only because the installer deploys the whole directory as a unit.
-  **`tools/` remains generated and gitignored**, exactly as before — a disposable host deployment
-  target, copied from `resources/` by the existing deployment mechanism, never hand-edited either.
+  **`tools/` is now purely a generated, gitignored deployment target** — the broker copies the
+  installer places there, copied from `resources/`, never hand-edited. No authored project code
+  lives in `tools/` any more; the recovery pipeline moved into the skills that use it.
 - `.vice-supervisor/` is runtime state written by the running broker/supervisor/pool; nobody
   hand-edits it, in either mode of work.
 

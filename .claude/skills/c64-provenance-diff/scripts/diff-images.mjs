@@ -290,20 +290,19 @@ export function findPrintableRuns(buffer, { minLength = 8 } = {}) {
   return runs;
 }
 
-// A short, explicitly-sourced vocabulary of crack-credit vocabulary, drawn
-// from what BOTH releases' own already-verified `tier1_evidence` in
-// recovery/RELEASES.json actually record as cracktro-specific text (the
-// bullets that do NOT describe the confirmed-original title screen):
-// danish's "Danish Crackers Presents...", "DC-011/P" release id, and
-// "DC - They make'em, We break'em."; saeger's "cracked in oktober 1984 by
-// SAEGER SOFT GROUP". Deliberately does NOT include a literal release id or
-// company name as a bare word (so it stays release-agnostic vocabulary, not
-// an id comparison) -- a real live capture (see below) proved this
-// distinction matters: a blind "any printable run" scan misclassifies the
-// GAME's OWN title text ("DATASOFT PRESENTS" / "DIABOLO PRESENTS", found to
-// genuinely differ between the two releases at $4771-$4779) as cracktro
-// content, which it is not.
-export const CRACKTRO_SIGNATURE_WORDS = ["CRACKED", "CRACKERS", "SOFT GROUP", "DC-011", "BREAK'EM", "MAKE'EM", "PRESENTS BY", "CRACKED BY"];
+// A DEFAULT vocabulary of crack-scene credit phrasing. Deliberately generic
+// words rather than any particular group's name or release id, so this stays
+// vocabulary matching and never becomes an id comparison. Override it per call
+// via `findCracktroRuns(buf, { signatures })` when a corpus uses different
+// phrasing; a project should seed it from evidence it has actually verified.
+//
+// Why a vocabulary at all, instead of scanning for any printable run: a blind
+// "any printable ASCII run" scan misclassifies a GAME'S OWN title-screen text
+// as cracktro content. That is not hypothetical -- it was observed against a
+// real two-release corpus, where the title text differed between releases and a
+// bare scan called it cracker credit. A differing string is not a cracker
+// string. Keep the bar at recognised credit vocabulary.
+export const CRACKTRO_SIGNATURE_WORDS = ["CRACKED", "CRACKERS", "SOFT GROUP", "BREAK'EM", "MAKE'EM", "PRESENTS BY", "CRACKED BY"];
 
 /**
  * The actual seed for the cracktro bucket: printable-ASCII runs whose
@@ -322,12 +321,16 @@ export function findCracktroRuns(buffer, { minLength = 8, signatures = CRACKTRO_
 
 // ------------------------------------------------------------- diffRanges
 
+// The four alternatives an UNKNOWN verdict must have ruled out before it is
+// honest. Stated generically: each clause names the precondition the pipeline
+// itself enforces, so the sentence is true for any corpus this runs against
+// rather than describing one project's dumps.
 const RULED_OUT_ALTERNATIVES =
-  "Alternatives checked and ruled out per Pitfall 4: not a revision difference (this is the same original " +
-  "Datasoft game-entry dispatcher at $08B1, disassembly-identical across both releases per NOTES.md); not a " +
-  ".d64 read error (each release's own three-run reproducibility verdict already passed, see 01-04); not a " +
-  "packer artifact (both images are captured post-load, at the same fully-loaded game-entry trigger, per D-18's " +
-  "normalisation requirement); not relocation (the anchor-proven offset for this pair is recorded above and used here).";
+  "Alternatives checked and ruled out: not a revision difference (all releases were captured at the same " +
+  "recorded trigger, so they are the same build state); not a read error (each release's own multi-run " +
+  "reproducibility verdict passed before its primary dump was accepted); not a packer artifact (every image " +
+  "is captured post-load at that same fully-loaded trigger, which is the normalisation requirement); not " +
+  "relocation (the anchor-proven offset for this pair is recorded above and used here).";
 
 /**
  * N-way per-address comparison, aligned via each image's own anchor-proven
@@ -580,7 +583,7 @@ function lookupKind(sortedRanges, address) {
  * then `loader`) since coalescing groups on VERDICT continuity, not kind
  * continuity. Resolving kind from `start` alone silently mislabels every
  * address after the first kind boundary inside the range; found live
- * against the real dumps (danish's $033C-$4770 ORIGINAL range spans
+ * against a real corpus (a wide ORIGINAL range was found spannings
  * straight through its own $0340-$035E `loader` sub-range).
  */
 export function splitRangeByManifestKind(range, manifestRanges) {
@@ -851,7 +854,23 @@ const VERBS = {
     // fixes).
     const generatedRanges = diffResult.ranges.flatMap((r) => splitRangeByManifestKind(r, referenceManifest.ranges));
 
-    const prose = buildProse({ reg, images, gapTolerance, referenceId });
+    // Project narrative is read from a file the project owns, never hardcoded
+    // here -- that is what lets this module run against someone else's corpus.
+    const prosePath = resolve(optValue(rest, "prose") ?? defaultProsePath());
+    let projectProse = null;
+    if (existsSync(prosePath)) {
+      projectProse = readFileSync(prosePath, "utf8")
+        .replace(/^<!--[\s\S]*?-->\s*/, "")            // drop the file's own maintainer header
+        .replace(/\{\{gapTolerance\}\}/g, String(gapTolerance))
+        .trim();
+    } else {
+      console.error(
+        `ledger: no project prose at ${rel(prosePath)} -- emitting the derived prose only. ` +
+          `Create that file (or pass --prose <path>) to add project-specific narrative.`,
+      );
+    }
+
+    const prose = buildProse({ reg, images, gapTolerance, referenceId, projectProse });
     let markdown;
     try {
       markdown = renderLedger({ generatedRanges, gapTolerance, prose });
@@ -874,7 +893,23 @@ const VERBS = {
   },
 };
 
-function buildProse({ reg, images, gapTolerance, referenceId }) {
+/** Where the hand-maintained project narrative lives. Overridable per run. */
+export function defaultProsePath() {
+  return join(dataRoot(), "PROVENANCE.prose.md");
+}
+
+/**
+ * The prose tier, in two parts. Everything this function generates is derived
+ * from the registry and is true of ANY project using the tool -- the method, the
+ * per-release offsets, the coalescing mechanics, the seeding rules. Anything
+ * specific to one project's evidence (decision numbers, particular addresses,
+ * coverage caveats) belongs in the project's own prose file, which is appended
+ * verbatim. Keeping the two apart is what lets this module ship to another
+ * project without carrying someone else's findings.
+ */
+function buildProse({ reg, images, gapTolerance, referenceId, projectProse }) {
+  const registryName = relative(projectRoot(), registryPath);
+
   const offsetLines = images
     .map((img) => {
       const entry = reg.releases.find((r) => r.id === img.id);
@@ -883,104 +918,57 @@ function buildProse({ reg, images, gapTolerance, referenceId }) {
         return `- **${img.id}** (reference release): offset 0 by definition -- every other release's offset is proven against this one's primary dump.`;
       }
       if (!po) {
-        return `- **${img.id}**: no provenance_offset recorded yet -- run \`node .claude/skills/c64-provenance-diff/scripts/diff-images.mjs anchor-search\` first.`;
+        return `- **${img.id}**: no provenance_offset recorded yet -- run the \`anchor-search\` verb first.`;
       }
-      return `- **${img.id}**: proven offset **${po.offset}**, from ${po.anchor_count} anchor(s), all agreeing (see \`recovery/${img.id}/NOTES.md\` for the full narrative and \`recovery/RELEASES.json\`'s \`provenance_offset\` field for the machine record). Proven ${po.proven_at}.`;
+      return `- **${img.id}**: proven offset **${po.offset}**, from ${po.anchor_count} anchor(s), all agreeing. Machine record in \`${registryName}\`'s \`provenance_offset\` field. Proven ${po.proven_at}.`;
     })
     .join("\n");
 
   const dumpTriggerLines = reg.releases
-    .map((r) => `- **${r.id}**: dump trigger \`${r.trigger?.address ?? "unrecorded"}\` (\`${r.trigger?.kind ?? "unrecorded"}\`) -- the title-screen input dispatcher, reached only after the loader has handed off. Both releases' captures were taken at this same post-loader game-entry point (see \`recovery/${r.id}/NOTES.md\` §1 and §5).`)
+    .map((r) => `- **${r.id}**: dump trigger \`${r.trigger?.address ?? "unrecorded"}\` (\`${r.trigger?.kind ?? "unrecorded"}\`). All releases' captures were taken at this same trigger, so the images are directly comparable.`)
     .join("\n");
 
-  return (
+  const method =
 `### The offset used, and how it was proven
 
-The diff above runs at an **anchor-proven** offset per release (D-17), never an assumed one. Several
-long, distinctive byte runs were selected from the reference release's primary dump, located in each
-other release's primary dump with \`Buffer.indexOf\`, and a global offset was accepted only when every
-anchor's computed delta agreed -- see \`.claude/skills/c64-provenance-diff/scripts/diff-images.mjs\`'s \`proveOffset\`. The neighbour bytes at
-each anchor's resolved position (one before, at, and one after) were inspected so an off-by-one would be
-visible rather than assumed; none was found.
+The diff above runs at an **anchor-proven** offset per release, never an assumed one. Long,
+distinctive byte runs were selected from the reference release's primary dump, located in each other
+release's primary dump with \`Buffer.indexOf\`, and a global offset was accepted only when **every**
+usable anchor's computed delta agreed -- a majority is refused. The neighbour bytes at each anchor's
+resolved position (one before, at, and one after) were inspected so an off-by-one would be visible
+rather than assumed.
 
 ${offsetLines}
 
-### The fully-loaded state both images were normalised to
+### The state the images were normalised to
 
 ${dumpTriggerLines}
 
-Per D-01, file offset equals CPU address in every captured \`.bin\`; every read used \`bank: "ram"\`, so
-each image holds pure underlying RAM across the whole \$0000-\$FFFF map, including the windows shadowed
-by ROM/I-O at capture time. See each release's own \`NOTES.md\` §1-§3 for the full boot procedure.
-
 ### The gap-coalescing tolerance
 
-**${gapTolerance} identical bytes**, passed explicitly as \`--gap-tolerance ${gapTolerance}\` (D-14). Two
-differing ranges separated by a run of identical (ORIGINAL-verdict) bytes strictly shorter than this
-tolerance are coalesced into one row; a run of exactly ${gapTolerance} identical bytes is left as its own
-separate row. This value is CONTEXT.md's own worked example, chosen because a relocated loader would
-otherwise produce thousands of per-byte rows that bury the handful of single-byte patches this ledger
-exists to surface -- and here the anchor-proven offset is 0 for every release, so no such relocation
-inflation actually occurs, but the tolerance is retained as the stated, justified choice regardless.
+**${gapTolerance} identical bytes**, passed as \`--gap-tolerance ${gapTolerance}\`. Two differing
+ranges separated by a run of identical (ORIGINAL-verdict) bytes *strictly shorter* than this
+tolerance are coalesced into one row; a run of *exactly* ${gapTolerance} identical bytes is left as
+its own separate row.
 
-### The three-bucket partition
+### How the kinds were seeded
 
-Every range manifest named by a \`dumps[]\` entry in \`recovery/RELEASES.json\` is bucketed into D-02's
-five kinds -- \`game\`, \`loader\`, \`cracktro\`, \`io\`, \`unused\` -- by \`.claude/skills/c64-provenance-diff/scripts/diff-images.mjs\`'s
-\`bucketManifest\`:
+- **\`loader\`** comes from each release's own earned \`loader_ranges\` in \`${registryName}\`, which
+  should be live disassembly evidence -- never prose. A loader range read out of prose is how a
+  legitimate game instruction gets misclassified as loader code.
+- **\`cracktro\`** comes from printable-ASCII runs whose decoded text contains a recognised
+  crack-credit vocabulary word, not from a bare "any printable run" scan. A bare scan misclassifies
+  a game's own title-screen text as cracker credit.
+- **\`io\`** and **\`unused\`** were assigned at capture time and are kept verbatim.
+- Everything else the trace and the entry point reach is bucketed **\`game\`**.
 
-- **\`loader\`** is seeded from each release's own earned \`loader_ranges\` in \`recovery/RELEASES.json\`
-  (live disassembly evidence from plan 01-04), never from \`NOTES.md\` prose -- reading a loader range out
-  of prose is the documented root cause of a permanent joystick-poll instruction (\`$08F5\`) once being
-  misclassified as loader code (see \`recovery/danish/NOTES.md\` §1 and \`recovery/saeger/NOTES.md\`
-  "Loader-range derivation").
-- **\`cracktro\`** is seeded from printable-ASCII runs whose decoded text contains a recognised
-  crack-credit vocabulary word (\`findCracktroRuns\`), not from a bare "any printable run" scan. A bare
-  scan was tried first and found a real false positive against these exact dumps: the game's own
-  title-screen text ("DATASOFT PRESENTS" in danish / "DIABOLO  PRESENTS" in saeger, at \$4771-\$4779 --
-  itself a genuine, previously-undocumented divergence, logged in \`.planning/RE-FINDINGS.md\` and left
-  \`UNKNOWN\` below, not asserted as a cracker patch) is printable ASCII too, and a blind scan would have
-  misclassified it as cracktro credit content. The signature vocabulary is drawn from both releases'
-  own already-verified \`tier1_evidence\` in \`recovery/RELEASES.json\`.
-- **\`io\`** (\$D000-\$DFFF) and **\`unused\`** (contiguous \$00/\$FF power-on-pattern runs) were already
-  assigned at capture time (01-04 Task 1's \`buildRangeManifest\`) and are kept verbatim here.
-- Everything else that the trace and the entry point reach is bucketed **\`game\`**.
+The underlying \`.bin\` files are never edited or zeroed: classification lives in this ledger and in
+the manifests, and the bytes stay verbatim evidence.
+`;
 
-Per D-05, the \`.bin\` files themselves are never edited or zeroed -- classification lives here and in the
-manifests; the bytes stay verbatim evidence.
-
-### Coverage cross-reference to \`recovery/LOADING.md\`
-
-**This ledger rests on an INCOMPLETE completeness claim, and that is stated plainly here rather than left
-implicit.** \`recovery/LOADING.md\` (01-04's on-demand-load detection record) is not a finished coverage
-claim: as of this writing, **saeger** reached 5 of 7 required Task 3 milestones (title-screen and
-game-start-chamber1 durable from earlier attempts, plus death/game-over/restart newly earned in attempt
-4), and **danish** has not been attempted at all (0 of 7) across four attempts, each halted by host VICE
-instability before danish's play-through could begin. Concretely, this means: if a future session's
-play-through finds a genuine **on-demand-loaded region** -- bytes that only appear in RAM after reaching a
-specific room, chamber, or game state not yet visited -- that region is, by construction, **absent from
-the primary dumps this ledger diffs**, and every verdict this ledger currently assigns to that region's
-addresses would need to be re-derived once the supplementary dump exists. This ledger is regenerable
-specifically for that reason: a later, more complete \`recovery/LOADING.md\` reopens this document, not
-just the loader-detection one. Until then, treat every verdict below as scoped to "the addresses visible
-at the post-loader game-entry point reached by both releases' \`\$08B1\` triggers" -- not as a claim that
-no other addresses exist in the running game.
-
-### Direction-of-truth rule
-
-This file is the ledger. \`docs/provenance.md\` will be a short pointer/summary for readers who land in
-\`docs/\` first; inline \`; PROVENANCE:\` comments in \`src/\` will be the point-of-use copy. One direction
-of truth only -- ledger to everything else -- and no downstream copy is ever edited independently of this
-one (per ARCHITECTURE.md's "Recording confidence and provenance" and Anti-Pattern 5).
-
-### Crack-independence verdict and confidence weighting
-
-*Reserved for plan 01-06, which owns RECOVER-07 (the canonical-release designation).* Nothing about
-crack-independence or a confidence weighting beyond "more independent agreeing releases raises
-confidence" is asserted here before that plan's own evidence exists.
-`
-  );
+  return projectProse ? `${method}\n${projectProse}` : method;
 }
+
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const [cmd, ...rest] = process.argv.slice(2);

@@ -99,7 +99,8 @@ however well it is written.
 | Everything runs headless in this Linux container | No GUI, no display, no Windows runtime, no Wine. If the capability needs a desktop, the skill reports it unavailable. |
 | ACME is the only assembler | Source idioms stay ACME-compatible. |
 | No wall-clock synchronisation | Skills that drive the emulator synchronise on checkpoint hits and frame counts. Never `sleep`. |
-| `tools/` holds pure logic only | Resolution, attribution, ordering, rendering — over data the agent already fetched. Nothing there contacts the emulator. |
+| A skill's `scripts/` hold pure logic only | Resolution, attribution, ordering, rendering — over data the agent already fetched. Nothing there contacts the emulator; an import-purity test enforces it. |
+| Skills must be portable | No reference to this project's game, releases or disk images. Resolve the project root by walking up for `.git`, never by counting hops; make data locations overridable; let corpus-dependent tests skip rather than fail. |
 | `.claude/mcp/` is off-limits unless the task *is* maintaining it | A skill about using the emulator does not read or edit that tree. |
 
 Two more that apply to the skill's own content: findings that make RE faster

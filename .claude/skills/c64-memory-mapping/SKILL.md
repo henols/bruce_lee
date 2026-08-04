@@ -130,9 +130,9 @@ Weigh a comment by the region it describes:
 - **Zero page, `$0200-$07FF` and the BASIC area describe BASIC and KERNAL usage.**
   Read them as a strong hint and confirm against the program's own behaviour
   before adopting the name. A game that banks ROM out keeps its own variables
-  there: annotating Bruce Lee at `$08E6` labels `LDA $49` as `FORPNT` ("value of
-  current variable during LET"), while `$49` is really one of the game's own
-  variables. Take the address, verify the meaning.
+  there. A real case: at `$08E6` a game's `LDA $49` gets labelled `FORPNT`
+  ("value of current variable during LET"), when `$49` is really one of that
+  game's own variables. Take the address, verify the meaning.
 - **A region-only answer is not an error.** An address that no source names
   specifically prints only the wider regions enclosing it — no error, no
   not-found line. `node $D lookup '$1234'` prints:
@@ -143,7 +143,7 @@ Weigh a comment by the region it describes:
   $0800-$9FFF  [C64 memory map (labelled)]  <zim>
     Normal BASIC Program space.
   ```
-  This is the dominant case for Bruce Lee's own code: a region-only answer
+  This is the dominant case for any game's own code: a region-only answer
   means "the four tables do not name this exact address", not "this address is
   unmapped". It differs from the genuine zero-hit case, where `lookup` prints
   `(not in memory map)` because nothing at all covers the address

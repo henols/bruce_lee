@@ -62,9 +62,9 @@ per-session decision.
   dead after first run. A bare printable-ASCII scan classified **the game's own title text** as
   cracktro credit and would have shipped a confidently-wrong `CRACKER-PATCH` verdict.
 - Absence of evidence records `UNKNOWN` and **keeps the bytes**. The
-  `DATASOFT PRESENTS` / `DIABOLO  PRESENTS` divergence at `$4771-$4779` sits in a region that is
-  neither loader nor cracktro — a cracker edit inside the game's own data. Stripping only the
-  obvious intro screen leaves crack residue behind.
+  a real title-screen text divergence was found sitting in a region that is neither loader nor
+  cracktro — a cracker edit inside the game's own data. Stripping only the obvious intro screen
+  leaves crack residue behind.
 
 `c64-provenance-diff` owns the machinery and the five kinds; do not re-derive them here. What
 belongs here is the ordering: **bucket first, then trace only what survives.**
@@ -81,7 +81,7 @@ reading the listing.
 ## Worked example — a real capture
 
 ```
-$ node $D vectors recovery/danish/dumps/danish-gameentry-run1.bin
+$ node $D vectors capture.bin
 $01 = $40 %01000000
   bit 0 LORAM  = 0  BASIC ROM  out (RAM at $A000-$BFFF)
   bit 1 HIRAM  = 0  KERNAL ROM out (RAM at $E000-$FFFF)

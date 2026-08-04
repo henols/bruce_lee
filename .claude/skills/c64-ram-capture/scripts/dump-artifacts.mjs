@@ -67,7 +67,7 @@ export function sha256Buffer(buf) {
  * stored value is the INVERSE of the bank number (c64-memory-mapping skill
  * memmap: raw value %00 = "Bank #3" $C000-$FFFF ... %11 = "Bank #0"
  * $0000-$3FFF), so bank = 3 - (raw & 3). Verified against
- * recovery/danish/dumps/danish-gameentry-run1.state.json's own committed
+ * a committed chip-state sidecar's own recorded
  * dd00_raw=193 (0xC1, low bits %01) -> vic_bank=2, which this formula
  * reproduces exactly.
  */

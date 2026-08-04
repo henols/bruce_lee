@@ -12,7 +12,7 @@ different machine.
 | size | `65536` bytes | must be exact; anything else is not a full image |
 | sha256 | `<64 hex chars>` | `node scripts/compare.mjs digest <name>.bin` |
 | checkpoint / trigger address | `$____` | the address armed for this capture |
-| release | `danish` \| `saeger` | — |
+| release | the registry id this capture belongs to | — |
 | run | `<N>` of `<total>` | three runs is this project's minimum for a verified capture |
 
 ## Machine state at the capture instant

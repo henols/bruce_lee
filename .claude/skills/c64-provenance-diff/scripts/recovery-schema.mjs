@@ -151,14 +151,31 @@ function runBaseChecks(registry) {
     }
   }
 
-  // -- recovery/clean/bruce-lee.bin, when it exists, is a PROJECTION: exactly --
-  // -- one canonical release, and the file is byte-identical to that --
-  // -- release's primary dump --
-  const cleanBinPath = join(RECOVERY_DIR, "clean", "bruce-lee.bin");
-  if (existsSync(cleanBinPath)) {
+  // -- `<data root>/clean/*.bin`, when present, is a PROJECTION: exactly one --
+  // -- canonical release, and the file byte-identical to that release's --
+  // -- primary dump. --
+  //
+  // The clean copy is DISCOVERED rather than named, so this works whatever a
+  // project calls its projection. Naming one specific file meant the check
+  // silently passed for every project that named it anything else -- a guard
+  // that quietly stops guarding is worse than one that fails.
+  const cleanDir = join(RECOVERY_DIR, "clean");
+  const cleanBins = existsSync(cleanDir)
+    ? readdirSync(cleanDir).filter((f) => f.toLowerCase().endsWith(".bin")).sort()
+    : [];
+
+  if (cleanBins.length > 1) {
+    errors.push(
+      `${rel(cleanDir)} holds ${cleanBins.length} .bin files (${cleanBins.join(", ")}) -- ` +
+        `the clean projection must be a single file, otherwise there is no way to tell which one ` +
+        `is the projection of the canonical release`
+    );
+  } else if (cleanBins.length === 1) {
+    const cleanBinPath = join(cleanDir, cleanBins[0]);
+    const cleanName = rel(cleanBinPath);
     if (canonicalReleases.length !== 1) {
       errors.push(
-        `recovery/clean/bruce-lee.bin exists, but ${canonicalReleases.length} releases carry canonical:true ` +
+        `${cleanName} exists, but ${canonicalReleases.length} releases carry canonical:true ` +
           `(expected exactly 1) -- the projection has no single source to be a projection OF`
       );
     } else {
@@ -166,7 +183,7 @@ function runBaseChecks(registry) {
       const primaryDump = (canonicalRelease.dumps ?? [])[0];
       if (!primaryDump || !primaryDump.bin || !existsSync(join(REPO_ROOT, primaryDump.bin))) {
         errors.push(
-          `recovery/clean/bruce-lee.bin exists, but canonical release "${canonicalRelease.id}" has no ` +
+          `${cleanName} exists, but canonical release "${canonicalRelease.id}" has no ` +
             `primary dump with an existing .bin to compare against`
         );
       } else {
@@ -174,7 +191,7 @@ function runBaseChecks(registry) {
         const primaryHash = sha256File(join(REPO_ROOT, primaryDump.bin));
         if (cleanHash !== primaryHash) {
           errors.push(
-            `recovery/clean/bruce-lee.bin (sha256 ${cleanHash}) is NOT byte-identical to canonical release ` +
+            `${cleanName} (sha256 ${cleanHash}) is NOT byte-identical to canonical release ` +
               `"${canonicalRelease.id}"'s primary dump ${primaryDump.bin} (sha256 ${primaryHash}) -- ` +
               `the clean copy must be an exact projection, never an independent artifact`
           );
