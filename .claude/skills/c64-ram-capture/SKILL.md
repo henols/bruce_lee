@@ -190,8 +190,9 @@ stops answering.
 **Void a run** whose machine identity you could not prove unchanged:
 
 1. Rename each artifact to `<name>.VOID-<UTC timestamp>`.
-2. Write a sibling note recording the reason, both epoch values, and the time.
-   Keep the voided artifacts on disk.
+2. Write a sibling note recording the reason, the time, and — if a drift error is
+   what voided it — the two epoch values quoted from that error. Do not go looking
+   for them; nothing reads the epoch on demand. Keep the voided artifacts on disk.
 
 ## Compare two captures
 

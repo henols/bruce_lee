@@ -144,6 +144,6 @@ others carry.
 | The checkpoint never fired | Most state reads pause the emulator. Resume exactly once after every read |
 | Zero cycles, and a checkpoint is armed on the IRQ handler | `checkpoint_trap`, not a wedge. Do not recycle |
 | Zero cycles, nothing armed, epoch unchanged | A wedge. `vice_recycle` with a reason that names the evidence |
-| A run "survived a reset" | Check the epoch first. An unintended respawn inside the bracket reads exactly like survival |
+| A run "survived a reset" | Distrust it. You cannot read the epoch to confirm — but an unintended respawn inside the bracket would have raised a drift error on the next forwarded call, so absence of that error is the only evidence available |
 | `vice_recycle` refused for a missing reason | It is required, by design — the reason *is* the incident record |
 </content>
