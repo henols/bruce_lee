@@ -328,6 +328,34 @@ test("maintainWarmFloor: a launching instance whose probe succeeds is promoted t
   assert.equal(record.readyAt, 1500);
 });
 
+// 01.6.2-10-PLAN.md ledger row 27 (RE-OBSERVED): the retiring bash suite's
+// "maintain_spares boot-time log" test asserted the promotion log line
+// carried an elapsed-ms figure. maintainWarmFloor()'s own promotion log line
+// (broker-launch.mts) still names the elapsed time -- this was the one
+// surviving half of that retiring test with no dedicated assertion in this
+// file until now; the retiring test's OTHER half (a poll-interval caveat
+// reading VICE_BROKER_POLL_MS) has no equivalent, since this design is not
+// discrete-poll-interval based (ledger row 27's own DELETED-adjacent note).
+test("maintainWarmFloor: promoting a launching instance to ready logs the elapsed time in milliseconds", async () => {
+  const state = createBrokerState();
+  state.instances.set(6600, makeInstance({ port: 6600, state: "launching", launchedAt: 1000 }));
+  const logs: string[] = [];
+  const { deps } = makeWarmFloorDeps(state, {
+    warmFloor: 0, // nothing more to warm -- isolates the promotion log line
+    now: () => 1250,
+    probe: () => Promise.resolve({ ready: true, mechanism: "http" as const }),
+    log: (l: string) => logs.push(l),
+  });
+  await maintainWarmFloor(deps);
+  const promotionLine = logs.find((l) => /launching -> ready/.test(l));
+  assert.ok(promotionLine, `expected a promotion log line, got: ${JSON.stringify(logs)}`);
+  assert.match(
+    promotionLine!,
+    /port 6600 launching -> ready \(250ms\)/,
+    `expected the elapsed-ms figure in the promotion line, got: ${promotionLine}`
+  );
+});
+
 test("maintainWarmFloor: a launching instance whose probe fails stays launching and is not promoted", async () => {
   const state = createBrokerState();
   state.instances.set(6600, makeInstance({ port: 6600, state: "launching" }));
