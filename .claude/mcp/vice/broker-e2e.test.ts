@@ -11,7 +11,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { mkdtempSync, rmSync, existsSync, readFileSync, readdirSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, readFileSync, readdirSync, writeFileSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -233,6 +233,124 @@ test(
     } finally {
       await stopBroker(handle);
       rmSync(stateDir, { recursive: true, force: true });
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// 01.6.2-12-PLAN.md, Task 2: expands the proven slice to the warm-floor
+// launch path. maintainWarmFloor()'s own no-mechanism branch warms ZERO
+// speculative spares by design (broker-launch.mts's own comment), so this
+// test supplies a trivial always-succeeding executable as
+// VICE_BROKER_PROBE_CMD -- without a readiness mechanism, this test would
+// observe no spare and prove nothing about the warm-floor wiring. The warm
+// floor is configured to 1 via VICE_BROKER_SPARES so the instance-directory
+// count assertions below are unambiguous (recorded here and in the plan's
+// own SUMMARY for reproducibility).
+// ---------------------------------------------------------------------------
+
+test(
+  "wired supervision: a warm-floor stub child killed out from under the real broker is respawned on the same port by the same wrapper",
+  { timeout: 20000 },
+  async () => {
+    build();
+    const WARM_FLOOR = 1;
+    const stateDir = mkdtempSync(join(tmpdir(), "broker-e2e-supervise-warm-"));
+    const probeDir = mkdtempSync(join(tmpdir(), "broker-e2e-probe-"));
+    const probeScript = join(probeDir, "always-ready.sh");
+    writeFileSync(probeScript, "#!/bin/sh\nexit 0\n");
+    chmodSync(probeScript, 0o755);
+    const handle = startBroker(stateDir, {
+      VICE_RESTART_BACKOFF_S: "0",
+      VICE_BROKER_PROBE_CMD: probeScript,
+      VICE_BROKER_SPARES: String(WARM_FLOOR),
+    });
+    try {
+      await waitForBrokerJson(stateDir);
+
+      // The periodic evaluation pass, not this test, decides when the spare
+      // actually launches -- poll for its instance directory to appear
+      // rather than assuming a fixed number of poll intervals have elapsed.
+      const warmInstanceAppeared = await waitFor(() => {
+        const dirs = readdirSync(stateDir, { withFileTypes: true }).filter((d) => d.isDirectory() && /^\d+$/.test(d.name));
+        return dirs.length >= 1;
+      }, 10000);
+      assert.ok(warmInstanceAppeared, "a warm spare must be launched by the periodic evaluation pass within the deadline");
+
+      const portDirsBefore = readdirSync(stateDir, { withFileTypes: true }).filter((d) => d.isDirectory() && /^\d+$/.test(d.name));
+      assert.equal(
+        portDirsBefore.length,
+        WARM_FLOOR,
+        `exactly the configured warm floor (${WARM_FLOOR}) of instance directories must exist, found ${JSON.stringify(portDirsBefore.map((d) => d.name))}`,
+      );
+      const warmPort = Number(portDirsBefore[0].name);
+      const epochPath = join(stateDir, portDirsBefore[0].name, "epoch.json");
+
+      const epochAppeared = await waitFor(() => {
+        try {
+          const parsed = JSON.parse(readFileSync(epochPath, "utf8"));
+          return typeof parsed.pid === "number";
+        } catch {
+          return false;
+        }
+      }, 5000);
+      assert.ok(epochAppeared, "the warm spare's epoch.json must carry a pid within the deadline");
+
+      const epochBefore = JSON.parse(readFileSync(epochPath, "utf8"));
+      const pidBefore: number = epochBefore.pid;
+      assert.ok(isAlive(pidBefore), `warm spare pid ${pidBefore} must be alive before the kill`);
+
+      // Kill the warm spare from OUTSIDE the broker, exactly like the
+      // cold-acquire proof above -- the SAME wrapper must observe this exit
+      // regardless of which launch path produced the child.
+      process.kill(pidBefore, "SIGKILL");
+      const killedGone = await waitFor(() => !isAlive(pidBefore), 5000);
+      assert.ok(killedGone, `killed warm spare pid ${pidBefore} must actually exit before a respawn can be observed`);
+
+      const respawned = await waitFor(() => {
+        let epoch: Record<string, unknown>;
+        try {
+          epoch = JSON.parse(readFileSync(epochPath, "utf8"));
+        } catch {
+          return false;
+        }
+        return (
+          typeof epoch.epoch === "number" &&
+          epoch.epoch > epochBefore.epoch &&
+          typeof epoch.pid === "number" &&
+          epoch.pid !== pidBefore &&
+          isAlive(epoch.pid as number)
+        );
+      }, 10000);
+      assert.ok(respawned, "the killed warm spare must be respawned on the same port with an advanced epoch and a new, live pid within the deadline");
+
+      const epochAfter = JSON.parse(readFileSync(epochPath, "utf8"));
+      assert.equal(epochAfter.epoch, epochBefore.epoch + 1, "the epoch integer must advance by exactly one on respawn");
+
+      // The respawn must not be double-counted as an additional spare --
+      // poll for the ABSENCE of a second instance directory within a
+      // bounded deadline, using the SAME predicate-polling helper (inverted)
+      // rather than sleeping a fixed duration and hoping nothing appeared.
+      const extraSpareAppeared = await waitFor(() => {
+        const dirs = readdirSync(stateDir, { withFileTypes: true }).filter((d) => d.isDirectory() && /^\d+$/.test(d.name));
+        return dirs.length > WARM_FLOOR;
+      }, 1500);
+      assert.equal(extraSpareAppeared, false, "the respawn must not be read as an additional spare, warming a second one on top of it");
+
+      const portDirsAfter = readdirSync(stateDir, { withFileTypes: true }).filter((d) => d.isDirectory() && /^\d+$/.test(d.name));
+      assert.equal(
+        portDirsAfter.length,
+        WARM_FLOOR,
+        `exactly the configured warm floor (${WARM_FLOOR}) of instance directories must remain after the respawn, found ${JSON.stringify(portDirsAfter.map((d) => d.name))}`,
+      );
+      assert.equal(Number(portDirsAfter[0].name), warmPort, "the respawned instance must occupy the SAME port the warm spare originally held");
+
+      assert.equal(handle.child.exitCode, null, "the broker process itself must still be running after the respawn");
+      assert.equal(handle.child.signalCode, null, "the broker process itself must not have been signalled");
+    } finally {
+      await stopBroker(handle);
+      rmSync(stateDir, { recursive: true, force: true });
+      rmSync(probeDir, { recursive: true, force: true });
     }
   },
 );

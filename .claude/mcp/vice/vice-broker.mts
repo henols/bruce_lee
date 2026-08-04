@@ -441,15 +441,19 @@ function maintainWarmFloorForRealBroker(stateDir: string, state: BrokerState): P
     spawnFactory: (port: number) => {
       const supervisorDir = join(stateDir, String(port));
       const { spawn, logRelPath } = makeLoggingSpawn(join(supervisorDir, "logs"));
-      return (cmd: string, args: string[]) => {
+      const stashingSpawn = (cmd: string, args: string[]): ChildProcess => {
         const child = spawn(cmd, args);
         // Stash the log path where onLaunched (fired synchronously right
         // after this returns, still within the SAME maintainWarmFloor()
         // call -- at most one launch per call, per the serialised-warming
-        // invariant) can find it.
+        // invariant) can find it. withCrashSupervision() below composes
+        // AROUND this function, so the stash still runs (and still
+        // completes before onLaunched reads it) before the exit listener
+        // is ever attached.
         lastWarmLaunchLogRelPath = logRelPath;
         return child;
       };
+      return withCrashSupervision("spare", port, stashingSpawn, superviseDepsFor(stateDir, state));
     },
     probe: (port: number) => probeReady(port),
     allocatePort: nextFreePort,
