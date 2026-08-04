@@ -3078,3 +3078,51 @@ once" into "this is a pattern this subsystem produces, and here are the two tech
 it every time" — the generalised wiring-assertion technique already logged above (2026-08-04,
 "the wiring-assertion technique") is the same move this entry's own structural gate applies a
 second time.
+
+### 2026-08-04 — a liveness check that only proves a port is bound is not a readiness check
+
+**Type:** hazard
+**Evidence:** the landed probe code's own comment stated the failure mode directly — "a bare TCP
+accept is explicitly not sufficient (a C64 can accept a connection before it has finished
+booting)" — and this phase amended a locked decision on that basis (D-05, amended by P-05 in
+`01.6.2.1-02-PLAN.md`): the ping-shaped request body (requiring both the "version" and "machine"
+substrings a real `vice_ping` reply carries) stays in `probeReady()` precisely because a bare
+accept is not evidence the emulator answered, only that a socket exists. This is **not reproduced
+against a real emulator in this container** — the reasoning is doc-and-code-derived (the amendment
+record in `broker-launch.mts`'s own header comment, and the plan text it mirrors), not observed
+live against a booting `x64sc`.
+**Confidence:** MEDIUM — doc-and-code-derived, not observed live. This is a hypothesis a later
+phase can confirm in minutes on a real host (Phase 01.4's own territory): boot a real `x64sc`,
+attempt a bare TCP connect the instant the monitor port accepts, and confirm the MCP server has
+not yet answered at that exact moment. Logging it now, at MEDIUM, is the point — an unrun method
+with the exact addresses and reasoning attached costs nothing to record and saves the next session
+from re-deriving why the ping-shaped body is load-bearing rather than decorative.
+**Saves:** the next reader of `probeReady()` from re-deriving, from scratch, why a plain
+"is anything listening" check would silently reintroduce Defect 3's failure shape (a booting
+machine promoted to ready) at the shortened ~1s timeout this same phase just introduced on the
+acquire hot path.
+
+### 2026-08-04 — a degenerate no-mechanism fallback branch was the defect, not the mitigation
+
+**Type:** dead end (negative finding)
+**Evidence:** derived from D-05's own recorded reasoning (`01.6.2-CONTEXT.md`) and the branch as it
+landed in `broker-launch.mts` before this phase's own collapse (`01.6.2.1-02-PLAN.md`, Task 1): a
+degenerate "no mechanism available" branch was added so a host with no readiness tool configured
+could still function, reporting every instance ready unconditionally and logging why. That branch
+made a DELIBERATELY-ZERO warm floor and a genuinely BROKEN host indistinguishable in the logs — both
+read as "no readiness probe available" — and it kept an unconditional report-ready path alive on
+the exact code path a grant now depends on (plan 01's warm-instance selector re-probes through the
+same `probeReady()`). The ambiguity itself was observed directly in the landed code (reading the
+branch, not inferred from an outage report); no incident triggered this finding.
+**Confidence:** HIGH for the container-side reasoning — the ambiguity is a direct, mechanical
+consequence of the branch's own logic (two different real-world conditions producing the identical
+log line and the identical "ready: true" answer), verifiable by reading the retired branch alone,
+with no live host needed to see it.
+**Saves:** the next design pass in this subsystem from re-adding a "no mechanism -> succeed
+anyway" compatibility fallback as an apparent kindness to an unconfigured host. Recording that the
+fallback WAS the defect, not merely an imperfect mitigation of a real gap, is what a future patch
+reviewing "should we bring back a degenerate case for hosts with no readiness tool" needs to see
+before repeating it: removing the branch entirely — leaving no broken-host branch for a
+deliberate zero floor to be confused with — is what dissolved the ambiguity, and improving the
+branch's own log line (which an earlier, more cautious fix might have reached for instead) would
+not have.
