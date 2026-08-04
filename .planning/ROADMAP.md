@@ -888,7 +888,7 @@ Plans:
 
 **Risks**: **The split's whole value is the seal boundary, and it is only real if this phase actually verifies** — a phase that seals on "the five tasks exist" rather than "each has a passing test" gives back exactly what the split bought. **Nothing here is live-verifiable either**, so criterion E's carry-forward list is this phase's most load-bearing deliverable, not its cleanup step. **The cross-phase ordering constraint is easy to lose across a phase boundary**: D-07 depends on a test that lives in 01.6.2's plans, so it must be a stated prerequisite in this phase's plan text and not an assumption that 01.6.2 sealed green. **Criterion M is where a defect gets silently lost if the disposition is treated as paperwork** — the two unsettled items above are the specific place that happens, and both arrive with a proposed answer precisely so "not settled" cannot quietly become "not addressed".
 
-**Plans:** 1/6 plans executed
+**Plans:** 2/6 plans executed
 
 Plans:
 **Wave 1**
@@ -897,7 +897,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1)*
 
-- [ ] 01.6.2.1-02-PLAN.md — The probe collapsed to exactly one in-process mechanism whose answer requires evidence the emulator replied; the mechanism union, resolver, external-command branch, its env var, the unconditional-ready branch and the warm-zero conditional all deleted; timeout default 5 s → ~1 s; four retiring tests named with reasons; the e2e suite migrated onto a probe-answering stub emulator; **the P-05 amendment to locked decision D-05 on the record** (criterion L, D-05, P-05…P-07)
+- [x] 01.6.2.1-02-PLAN.md — The probe collapsed to exactly one in-process mechanism whose answer requires evidence the emulator replied; the mechanism union, resolver, external-command branch, its env var, the unconditional-ready branch and the warm-zero conditional all deleted; timeout default 5 s → ~1 s; four retiring tests named with reasons; the e2e suite migrated onto a probe-answering stub emulator; **the P-05 amendment to locked decision D-05 on the record** (criterion L, D-05, P-05…P-07)
 
 **Wave 3** *(blocked on Wave 2)*
 
