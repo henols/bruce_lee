@@ -41,11 +41,35 @@ export interface InstanceRecord {
    * epoch.json record broker-epoch.mts writes (D-04). */
   epoch?: number;
   /** Set BEFORE any signal is sent to this instance's child (T-01.6.2-21)
-   * -- the exit handler reads this to distinguish a deliberate teardown
-   * (no respawn, dropped) from a crash (respawn). Without this
-   * distinction every deliberate teardown would respawn exactly what it
-   * just killed, silently breaking kill-never-recycle. */
+   * -- the exit handler reads this to distinguish a broker-ordered death
+   * from a crash (respawn). NARROWED (plan 13): this field alone no longer
+   * decides whether a replacement follows -- it answers only "did the
+   * broker order this death," never "should a replacement follow." That
+   * second, separate question is respawnAfterKill below. Before plan 13
+   * there was exactly one kind of broker-ordered death (a release, which
+   * never respawns), so one boolean silently answered both questions; a
+   * recycle introduces a second kind whose answer to the second question
+   * differs, which is why the two are split here. The name is kept
+   * unchanged even though its meaning narrowed: five rows of
+   * 01.6.2-VALIDATION.md's disposition ledger cite, by exact test name, the
+   * shutdown test whose title contains it, and renaming would force
+   * cosmetic edits to the artifact whose honesty is this gap closure's own
+   * first failed truth. Without this field, EVERY broker-ordered death
+   * would be misread as a crash and respawned, silently breaking
+   * kill-never-recycle. */
   deliberateKill?: boolean;
+  /** The answer to a question separate from deliberateKill's own: whether a
+   * replacement follows this broker-ordered death, on the SAME port. Set
+   * TOGETHER with deliberateKill, before any signal is sent (same ordering
+   * requirement, same reason) -- vice-broker.mts's shared marker-and-intent
+   * setter is the one place that sets both together, so no call site can
+   * set one and forget the other. Absent or false means the death is final
+   * (a release); true means the exit handler relaunches on the same port,
+   * carrying the pre-kill crash history and backoff forward UNCHANGED and
+   * restoring a granted pre-kill state (a recycle). Meaningless when
+   * deliberateKill is not also set -- an unexplained crash never consults
+   * this field. */
+  respawnAfterKill?: boolean;
   /** Timestamps (ms, per the injected clock) of this instance's recent
    * crashes still inside the crash window -- carried FORWARD across
    * respawns (a fresh InstanceRecord is created on every relaunch) so the
