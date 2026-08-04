@@ -42,7 +42,6 @@ import {
   runBrokerPass,
   withCrashSupervision,
   type SuperviseChildDeps,
-  type ProbeOutcome,
 } from "./broker-launch.mjs";
 import { verifiedKill, registerShutdownHandlers, startupBanner, reapOrphanedInstances, type KillStage } from "./broker-kill.mjs";
 import { writeEpochRecord, epochPathFor, nextEpochFor, instanceLogDirFor, type EpochRecord } from "./broker-epoch.mjs";
@@ -324,7 +323,7 @@ function markDeliberateDeath(instance: InstanceRecord, respawnAfterKill: boolean
 export interface HandleAcquireDeps {
   /** Overrides the grant-time re-probe (P-02) -- defaults to a thin call
    * into broker-launch.mjs's real probeReady(). */
-  probe?: (port: number) => Promise<ProbeOutcome>;
+  probe?: (port: number) => Promise<boolean>;
   /** Overrides the identity-verified kill on a failed grant-time probe --
    * defaults to broker-kill.mjs's real verifiedKill(), reused unchanged
    * (Phase 01.6.2 criterion 6), never re-derived. */
@@ -367,7 +366,7 @@ export interface HandleAcquireDeps {
 async function selectWarmInstance(
   state: BrokerState,
   deps: {
-    probe: (port: number) => Promise<ProbeOutcome>;
+    probe: (port: number) => Promise<boolean>;
     kill: (opts: { pid: number | null; expectedIdentity: string }) => Promise<KillStage>;
     log: (line: string) => void;
   },
@@ -375,13 +374,13 @@ async function selectWarmInstance(
   for (const record of Array.from(state.instances.values())) {
     if (record.state !== "ready") continue;
 
-    const outcome = await deps.probe(record.port);
+    const isReady = await deps.probe(record.port);
 
     // Claimed by a concurrent acquire while this probe was in flight -- not
     // a candidate any more, and never a failure to log or kill over.
     if (record.state !== "ready") continue;
 
-    if (outcome.ready) {
+    if (isReady) {
       return record;
     }
 
@@ -808,8 +807,8 @@ async function run(args: ParsedArgs): Promise<void> {
   // flight is retried here, on the SAME pass that also maintains the warm
   // floor, so a stalled pass shows up as a stale record rather than a
   // silently wrong one. Re-entrancy guarded: a pass that is still running
-  // (e.g. a slow external VICE_BROKER_PROBE_CMD) is never overlapped by the
-  // next tick.
+  // (e.g. a slow readiness probe against a genuinely slow host) is never
+  // overlapped by the next tick.
   let passInFlight = false;
   setInterval(() => {
     if (passInFlight) return;

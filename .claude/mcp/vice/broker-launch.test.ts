@@ -10,7 +10,7 @@
 // no real x64sc runs anywhere in this file.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { writeFileSync, mkdtempSync, rmSync, existsSync, readFileSync, chmodSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -291,44 +291,46 @@ test("tryLaunchOne: a launch that rejects still clears the in-flight owner so a 
 });
 
 // ---------------------------------------------------------------- probeReady
+//
+// D-05 as amended by P-05/P-06 (01.6.2.1-02-PLAN.md, Task 1): the probe
+// collapses to exactly one in-process mechanism. Four tests that exercised
+// the retiring branches are gone, named here with their reasons per P-06's
+// no-silent-deletion rule (all four were in this file, immediately below
+// this comment before this task):
+//
+// 1. "probeReady: prefers the external command when named, passing the
+//    port as its own argv element" -- DELETED. Exercised the
+//    external-command branch, which no longer exists; its no-shell-
+//    interpolation care is moot once no command is ever executed.
+// 2. "probeReady: external command failure (non-zero exit) reports not
+//    ready" -- DELETED. Same branch, same reason.
+// 3. "probeReady: with neither mechanism available, reports success
+//    unconditionally and logs the reason" -- DELETED. Asserted the
+//    report-ready-without-evidence behaviour P-06 removes -- the test that
+//    encoded the "pair of indistinguishable states" D-05 set out to
+//    dissolve; deleting it is the dissolution landing, not a coverage loss.
+// 4. "maintainWarmFloor: a pass with no readiness mechanism at all warms
+//    zero instances and logs exactly one line naming why" (with its own
+//    retired-probe-command-variable save/delete/restore dance) -- DELETED,
+//    further down this file where it used to sit, immediately after
+//    makeWarmFloorDeps().
+//
+// SURVIVING, AMENDED: "probeReady: with no external command named, issues
+// an HTTP readiness request and succeeds only when BOTH substrings are
+// present" -- kept and renamed below (its substance is precisely what P-05
+// preserves and it is now the probe's only mechanism, so its name must stop
+// implying a choice was made between mechanisms); the both-substrings
+// assertion itself is untouched.
+//
+// Every OTHER maintainWarmFloor test in this file injects its floor
+// explicitly through the options bag rather than depending on the default,
+// and every one of them was read while making this change: none references
+// the retired mechanism union, the retired environment variable, or the
+// no-mechanism branch, so none is affected by this collapse beyond the
+// `{ ready, mechanism }` -> plain-boolean return-shape update every stubbed
+// `probe` callback in this file needed regardless.
 
-test("probeReady: prefers the external command when named, passing the port as its own argv element", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "probe-argv-"));
-  try {
-    const argvFile = join(dir, "argv.json");
-    const stubScript = join(dir, "stub-probe.sh");
-    writeFileSync(
-      stubScript,
-      `#!/bin/sh\nprintf '%s\\n' "$@" > "${argvFile}"\nexit 0\n`
-    );
-    chmodSync(stubScript, 0o755);
-
-    const outcome = await probeReady(6600, { probeCmdEnv: stubScript });
-    assert.equal(outcome.mechanism, "external_command");
-    assert.equal(outcome.ready, true);
-    assert.ok(existsSync(argvFile));
-    assert.equal(readFileSync(argvFile, "utf8").trim(), "6600");
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("probeReady: external command failure (non-zero exit) reports not ready", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "probe-fail-"));
-  try {
-    const stubScript = join(dir, "stub-fail.sh");
-    writeFileSync(stubScript, `#!/bin/sh\nexit 1\n`);
-    chmodSync(stubScript, 0o755);
-
-    const outcome = await probeReady(6600, { probeCmdEnv: stubScript });
-    assert.equal(outcome.mechanism, "external_command");
-    assert.equal(outcome.ready, false);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("probeReady: with no external command named, issues an HTTP readiness request and succeeds only when BOTH substrings are present", async () => {
+test("probeReady: issues an HTTP readiness request and succeeds only when BOTH substrings are present", async () => {
   const calls: Array<{ port: number; timeoutMs: number }> = [];
   const bothPresent = await probeReady(6600, {
     httpProbe: (port, timeoutMs) => {
@@ -336,22 +338,32 @@ test("probeReady: with no external command named, issues an HTTP readiness reque
       return Promise.resolve(true);
     },
   });
-  assert.deepEqual(bothPresent, { ready: true, mechanism: "http" });
+  assert.equal(bothPresent, true);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].port, 6600);
 
   const onlyOnePresent = await probeReady(6601, {
     httpProbe: () => Promise.resolve(false),
   });
-  assert.deepEqual(onlyOnePresent, { ready: false, mechanism: "http" });
+  assert.equal(onlyOnePresent, false);
 });
 
-test("probeReady: with neither mechanism available, reports success unconditionally and logs the reason", async () => {
-  const logs: string[] = [];
-  const outcome = await probeReady(6600, { httpProbe: null, log: (l) => logs.push(l) });
-  assert.deepEqual(outcome, { ready: true, mechanism: "no_mechanism" });
-  assert.equal(logs.length, 1);
-  assert.match(logs[0], /no readiness probe available/);
+// P-07: the probe timeout default shortens from 5s to ~1s, and the
+// seconds-valued environment knob (VICE_BROKER_PROBE_TIMEOUT_S) must still
+// honour any value an operator on a slow host sets it to. No test asserted
+// either half before this task.
+test("probeReady: the timeout default is 1000ms, and the seconds-valued knob still honours a non-default value", async () => {
+  const timeoutsMs: number[] = [];
+  const stub = (_port: number, timeoutMs: number): Promise<boolean> => {
+    timeoutsMs.push(timeoutMs);
+    return Promise.resolve(true);
+  };
+
+  await probeReady(6600, { httpProbe: stub });
+  assert.equal(timeoutsMs[0], 1000, "the default probe timeout must be 1000ms (1s), down from the retired 5s default");
+
+  await probeReady(6600, { httpProbe: stub, probeTimeoutSEnv: "7" });
+  assert.equal(timeoutsMs[1], 7000, "the seconds-valued timeout knob must still be honoured for a non-default value");
 });
 
 // ----------------------------------------------------------- maintainWarmFloor
@@ -367,7 +379,7 @@ function makeWarmFloorDeps(state: BrokerState, overrides: Partial<Parameters<typ
         return stubChild(1000 + spawnCalls.length);
       },
       now: () => 5000,
-      probe: () => Promise.resolve({ ready: true, mechanism: "http" as const }),
+      probe: () => Promise.resolve(true),
       allocatePort: (async (s: BrokerState): Promise<PortAllocationResult> => {
         let port = 6600;
         while (s.instances.has(port)) port++;
@@ -401,45 +413,13 @@ test("maintainWarmFloor: three consecutive passes with a floor of 3 launch exact
   assert.equal(countInstances(state), 3);
 });
 
-test("maintainWarmFloor: a pass with no readiness mechanism at all warms zero instances and logs exactly one line naming why", async () => {
-  const state = createBrokerState();
-  const logs: string[] = [];
-  const { deps, spawnCalls } = makeWarmFloorDeps(state, {
-    warmFloor: 3,
-    probe: () => Promise.resolve({ ready: true, mechanism: "no_mechanism" as const }),
-    log: (l: string) => logs.push(l),
-  });
-  // Force the module's own mechanism resolution (not the injected `probe`
-  // callback, which only governs promotion) to see "no mechanism" too --
-  // achieved by not naming a probe command and stubbing httpProbe out via
-  // the environment being clean of VICE_BROKER_PROBE_CMD in this test
-  // process, combined with overriding global fetch detection is not
-  // available here, so exercise the real no-mechanism path by asserting
-  // against the actual env-driven resolution instead.
-  const savedProbeCmd = process.env.VICE_BROKER_PROBE_CMD;
-  const savedFetch = globalThis.fetch;
-  delete process.env.VICE_BROKER_PROBE_CMD;
-  // @ts-expect-error -- deliberately removing the global to simulate "no
-  // HTTP mechanism available" for this one test, restored in `finally`.
-  delete globalThis.fetch;
-  try {
-    await maintainWarmFloor(deps);
-  } finally {
-    if (savedProbeCmd !== undefined) process.env.VICE_BROKER_PROBE_CMD = savedProbeCmd;
-    globalThis.fetch = savedFetch;
-  }
-  assert.equal(spawnCalls.length, 0);
-  assert.equal(logs.length, 1);
-  assert.match(logs[0], /warming ZERO speculative spares/);
-});
-
 test("maintainWarmFloor: a launching instance whose probe succeeds is promoted to ready with a readiness timestamp", async () => {
   const state = createBrokerState();
   state.instances.set(6600, makeInstance({ port: 6600, state: "launching", launchedAt: 1000 }));
   const { deps } = makeWarmFloorDeps(state, {
     warmFloor: 0, // nothing more to warm -- isolates the promotion behaviour
     now: () => 1500,
-    probe: () => Promise.resolve({ ready: true, mechanism: "http" as const }),
+    probe: () => Promise.resolve(true),
   });
   await maintainWarmFloor(deps);
   const record = state.instances.get(6600)!;
@@ -462,7 +442,7 @@ test("maintainWarmFloor: promoting a launching instance to ready logs the elapse
   const { deps } = makeWarmFloorDeps(state, {
     warmFloor: 0, // nothing more to warm -- isolates the promotion log line
     now: () => 1250,
-    probe: () => Promise.resolve({ ready: true, mechanism: "http" as const }),
+    probe: () => Promise.resolve(true),
     log: (l: string) => logs.push(l),
   });
   await maintainWarmFloor(deps);
@@ -480,7 +460,7 @@ test("maintainWarmFloor: a launching instance whose probe fails stays launching 
   state.instances.set(6600, makeInstance({ port: 6600, state: "launching" }));
   const { deps } = makeWarmFloorDeps(state, {
     warmFloor: 0,
-    probe: () => Promise.resolve({ ready: false, mechanism: "http" as const }),
+    probe: () => Promise.resolve(false),
   });
   await maintainWarmFloor(deps);
   assert.equal(state.instances.get(6600)!.state, "launching");
@@ -494,7 +474,7 @@ test("maintainWarmFloor: a pass overlapping an in-flight launch produces no seco
   state.instances.set(6600, makeInstance({ port: 6600, state: "launching" }));
   const { deps, spawnCalls } = makeWarmFloorDeps(state, {
     warmFloor: 3,
-    probe: () => Promise.resolve({ ready: false, mechanism: "http" as const }), // stays launching
+    probe: () => Promise.resolve(false), // stays launching
   });
   await maintainWarmFloor(deps);
   assert.equal(spawnCalls.length, 0, "no new spawn while one instance is still launching");
@@ -503,7 +483,7 @@ test("maintainWarmFloor: a pass overlapping an in-flight launch produces no seco
   // should proceed on this LATER pass.
   const { deps: deps2, spawnCalls: spawnCalls2 } = makeWarmFloorDeps(state, {
     warmFloor: 3,
-    probe: () => Promise.resolve({ ready: true, mechanism: "http" as const }),
+    probe: () => Promise.resolve(true),
   });
   await maintainWarmFloor(deps2);
   assert.equal(spawnCalls2.length, 1, "warming proceeds once the earlier launch is no longer in flight");
@@ -655,7 +635,7 @@ test("criterion C: a warming pass overlapping a cold acquire's still-in-flight l
 
   const { deps, spawnCalls } = makeWarmFloorDeps(state, {
     warmFloor: 3,
-    probe: () => Promise.resolve({ ready: false, mechanism: "http" as const }), // still not ready
+    probe: () => Promise.resolve(false), // still not ready
   });
   await maintainWarmFloor(deps);
   assert.equal(spawnCalls.length, 0, "no second spawn while the cold acquire's launch is still in flight");
@@ -665,7 +645,7 @@ test("criterion C: a warming pass overlapping a cold acquire's still-in-flight l
   // ready, sees countLaunching()===0, and warming may proceed.
   const { deps: deps2, spawnCalls: spawnCalls2 } = makeWarmFloorDeps(state, {
     warmFloor: 3,
-    probe: () => Promise.resolve({ ready: true, mechanism: "http" as const }),
+    probe: () => Promise.resolve(true),
   });
   await maintainWarmFloor(deps2);
   assert.equal(state.instances.get(6600)!.state, "ready", "the earlier cold instance must now be promoted");

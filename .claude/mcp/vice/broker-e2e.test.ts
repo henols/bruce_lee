@@ -52,17 +52,30 @@ interface BrokerHandle {
  * TypeScript source -- with VICE_BIN/VICE_ARGS stubbed to a real,
  * harmless, long-lived process (/bin/sleep) so a spawned "instance" is a
  * real pid without ever touching x64sc. VICE_BROKER_CONTROL_PORT=0 lets
- * the kernel pick a free port so parallel test runs never collide. */
-function startBroker(stateDir: string, extraEnv: Record<string, string> = {}): BrokerHandle {
+ * the kernel pick a free port so parallel test runs never collide.
+ *
+ * `extraEnv` accepts `undefined` for a key (not merely omitting the key)
+ * to UNSET it rather than merely leave the default -- needed by the
+ * probe-answering-stub tests below, which must leave VICE_ARGS unset (see
+ * writeProbeAnsweringStub()'s own header comment for why) even though this
+ * function's own base env always sets it. A plain omitted key keeps the
+ * default; `SOME_VAR: undefined` removes it from the spawned child's
+ * environment entirely. */
+function startBroker(stateDir: string, extraEnv: Record<string, string | undefined> = {}): BrokerHandle {
+  const merged: Record<string, string | undefined> = {
+    ...process.env,
+    VICE_SUPERVISOR_ALLOW_CONTAINER: "1",
+    VICE_BIN: "/bin/sleep",
+    VICE_ARGS: "600",
+    VICE_BROKER_CONTROL_PORT: "0",
+    ...extraEnv,
+  };
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(merged)) {
+    if (value !== undefined) env[key] = value;
+  }
   const child = spawn(process.execPath, [BROKER_ARTIFACT, "--repo-root", "/tmp/fake-repo-root-e2e", "--state-dir", stateDir], {
-    env: {
-      ...process.env,
-      VICE_SUPERVISOR_ALLOW_CONTAINER: "1",
-      VICE_BIN: "/bin/sleep",
-      VICE_ARGS: "600",
-      VICE_BROKER_CONTROL_PORT: "0",
-      ...extraEnv,
-    },
+    env,
   }) as ChildProcessWithoutNullStreams;
 
   const handle: BrokerHandle = { child, stateDir, stderr: "" };
@@ -86,6 +99,86 @@ async function waitForBrokerJson(stateDir: string, deadlineMs = 5000): Promise<R
   const appeared = await waitFor(() => existsSync(path) && typeof JSON.parse(readFileSync(path, "utf8")).control_port === "number", deadlineMs);
   assert.ok(appeared, "broker.json with a control_port did not appear within deadline");
   return JSON.parse(readFileSync(path, "utf8"));
+}
+
+// ---------------------------------------------------------------------------
+// 01.6.2.1-02-PLAN.md, Task 2: D-05/P-05/P-06 (plan 02's own probe collapse)
+// retire the external-command probe mechanism the two tests below used to
+// reach `ready` through (the retired env var named an always-succeeding
+// shell script). Both tests now reach `ready` through the surviving
+// in-process HTTP mechanism instead, via the fixture below.
+// ---------------------------------------------------------------------------
+
+/** Writes a probe-answering stub emulator to `dir` -- a small executable
+ * script standing in for x64sc in the two tests below that need an
+ * instance to actually reach `ready` through the surviving probe mechanism,
+ * rather than merely existing as a long-lived pid the way /bin/sleep does
+ * for every other test in this file.
+ *
+ * It is a Node-shebang script (mode 0755) so the broker's own
+ * `spawn(viceBin, viceArgs)` runs it directly, and verifiedKill()'s
+ * (broker-kill.mts) identity check sees its own path in the target
+ * process's own argument list -- the recorded expectedIdentity need only
+ * appear SOMEWHERE in the running process's argv, which it does here as
+ * this script's own absolute path (the node interpreter's second argv
+ * element).
+ *
+ * It reads its own allocated port out of its OWN argument vector -- the
+ * named `-mcpserverport <port>` flag buildViceArgs() (broker-launch.mts)
+ * constructs. THE ONE NON-OBVIOUS COUPLING, stated here per this task's
+ * own instruction: a test using this stub must leave VICE_ARGS UNSET in
+ * its own startBroker() call. buildViceArgs() takes its AS-IS branch
+ * (using VICE_ARGS verbatim, WITHOUT ever appending a port) whenever
+ * VICE_ARGS is set in the environment, and only takes its CONSTRUCTING
+ * branch (which builds the `-mcpserverport <port>` flag from the actually
+ * allocated port) when VICE_ARGS is unset -- if VICE_ARGS stayed set (as
+ * every other test in this file leaves it, at "600" for /bin/sleep), this
+ * stub would receive "600" as its sole argument and have no port to read.
+ *
+ * It binds a LOOPBACK HTTP listener on that port and answers every request
+ * with a JSON body carrying both substrings defaultHttpProbe()
+ * (broker-launch.mts) requires ("version" and "machine"), then stays alive
+ * indefinitely -- exactly like /bin/sleep did for the retiring
+ * probe-command fixture this replaces. Rebinding after a kill relies on
+ * the OS's own default listen-socket reuse behaviour for a fresh process;
+ * the tests using this stub POLL for the respawned instance (this file's
+ * own waitFor() idiom) rather than assuming an instant rebind, per the
+ * project's no-wall-clock-sleep rule.
+ *
+ * Written as `.cjs` deliberately -- this package's nearest package.json
+ * sets `"type": "module"`, which would force a same-named `.js` file into
+ * ESM (breaking the plain `require("node:http")` below); `.cjs` is always
+ * CommonJS regardless of the nearest package.json.
+ *
+ * NOT a rule violation, stated explicitly per this task's own instruction:
+ * the project rule is that nothing may open its own connection to THE HOST
+ * VICE. This stub is not VICE -- it is a fake local responder this test
+ * itself creates, on a port the broker allocated in its own band, inside
+ * this container. No `x64sc` runs anywhere. The connection the broker's
+ * probe makes to it is host-side broker code probing its own child,
+ * exactly D-05's permitted-route note -- the same posture every OTHER test
+ * in this file already takes binding real TCP ports for the control
+ * plane. */
+function writeProbeAnsweringStub(dir: string): string {
+  const stubPath = join(dir, "probe-answering-stub.cjs");
+  writeFileSync(
+    stubPath,
+    [
+      "#!/usr/bin/env node",
+      'const http = require("node:http");',
+      "const args = process.argv.slice(2);",
+      'const idx = args.indexOf("-mcpserverport");',
+      "const port = Number(args[idx + 1]);",
+      "const server = http.createServer((_req, res) => {",
+      '  res.setHeader("Content-Type", "application/json");',
+      '  res.end(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { version: "stub-emulator", machine: "stub-emulator" } }));',
+      "});",
+      'server.listen(port, "127.0.0.1");',
+      "",
+    ].join("\n"),
+  );
+  chmodSync(stubPath, 0o755);
+  return stubPath;
 }
 
 /** Sends one raw acquire request, bypassing acquireOverControlPlane() --
@@ -239,14 +332,14 @@ test(
 
 // ---------------------------------------------------------------------------
 // 01.6.2-12-PLAN.md, Task 2: expands the proven slice to the warm-floor
-// launch path. maintainWarmFloor()'s own no-mechanism branch warms ZERO
-// speculative spares by design (broker-launch.mts's own comment), so this
-// test supplies a trivial always-succeeding executable as
-// VICE_BROKER_PROBE_CMD -- without a readiness mechanism, this test would
-// observe no spare and prove nothing about the warm-floor wiring. The warm
-// floor is configured to 1 via VICE_BROKER_SPARES so the instance-directory
-// count assertions below are unambiguous (recorded here and in the plan's
-// own SUMMARY for reproducibility).
+// launch path. This test needs a real readiness mechanism to observe a
+// spare at all, so it spawns the probe-answering stub emulator above in
+// place of /bin/sleep (MIGRATED off the retiring external-command probe
+// fixture by 01.6.2.1-02-PLAN.md, Task 2 -- see writeProbeAnsweringStub()'s
+// own header comment). The warm floor is configured to 1 via
+// VICE_BROKER_SPARES so the instance-directory count assertions below are
+// unambiguous (recorded here and in the plan's own SUMMARY for
+// reproducibility).
 // ---------------------------------------------------------------------------
 
 test(
@@ -257,12 +350,14 @@ test(
     const WARM_FLOOR = 1;
     const stateDir = mkdtempSync(join(tmpdir(), "broker-e2e-supervise-warm-"));
     const probeDir = mkdtempSync(join(tmpdir(), "broker-e2e-probe-"));
-    const probeScript = join(probeDir, "always-ready.sh");
-    writeFileSync(probeScript, "#!/bin/sh\nexit 0\n");
-    chmodSync(probeScript, 0o755);
+    const stubPath = writeProbeAnsweringStub(probeDir);
+    // VICE_ARGS deliberately UNSET (not merely omitted) -- see
+    // writeProbeAnsweringStub()'s own header comment for why the stub
+    // depends on buildViceArgs()'s CONSTRUCTING branch running.
     const handle = startBroker(stateDir, {
       VICE_RESTART_BACKOFF_S: "0",
-      VICE_BROKER_PROBE_CMD: probeScript,
+      VICE_BIN: stubPath,
+      VICE_ARGS: undefined,
       VICE_BROKER_SPARES: String(WARM_FLOOR),
     });
     try {
@@ -364,12 +459,15 @@ test(
 // it -- exactly 01.6.2's own crash-supervisor gap, and this plan's own
 // Defect 5); this is the proof a fully-controlled stub cannot give.
 //
-// BOTH fixtures below are pre-rename and pre-collapse ON PURPOSE, matching
-// the landed warm-floor supervision test above: VICE_BROKER_PROBE_CMD (the
-// external-command probe branch) retires in plan 02, and VICE_BROKER_SPARES
-// (this env var) renames to VICE_BROKER_WARM_FLOOR in plan 05 -- each of
-// those plans owns migrating THIS test in its own commit, not a pre-emptive
-// rename here.
+// This fixture is pre-rename ON PURPOSE, matching the landed warm-floor
+// supervision test above: VICE_BROKER_SPARES (this env var) renames to
+// VICE_BROKER_WARM_FLOOR in plan 05, which owns migrating THIS test in its
+// own commit, not a pre-emptive rename here. The OTHER retiring fixture
+// this test used to depend on (the external-command probe env var) is
+// MIGRATED as of 01.6.2.1-02-PLAN.md, Task 2 -- this test now reaches
+// `ready` through the surviving in-process HTTP mechanism via the
+// probe-answering stub emulator above, the same fixture the landed
+// supervision test just above was migrated onto.
 // ---------------------------------------------------------------------------
 
 test(
@@ -380,11 +478,13 @@ test(
     const WARM_FLOOR = 1;
     const stateDir = mkdtempSync(join(tmpdir(), "broker-e2e-warm-acquire-"));
     const probeDir = mkdtempSync(join(tmpdir(), "broker-e2e-warm-acquire-probe-"));
-    const probeScript = join(probeDir, "always-ready.sh");
-    writeFileSync(probeScript, "#!/bin/sh\nexit 0\n");
-    chmodSync(probeScript, 0o755);
+    const stubPath = writeProbeAnsweringStub(probeDir);
+    // VICE_ARGS deliberately UNSET (not merely omitted) -- see
+    // writeProbeAnsweringStub()'s own header comment for why the stub
+    // depends on buildViceArgs()'s CONSTRUCTING branch running.
     const handle = startBroker(stateDir, {
-      VICE_BROKER_PROBE_CMD: probeScript,
+      VICE_BIN: stubPath,
+      VICE_ARGS: undefined,
       VICE_BROKER_SPARES: String(WARM_FLOOR),
     });
     try {
