@@ -44,16 +44,28 @@ moved.** The strongest single tell: in one incident `vice_checkpoint_list` repor
 at `hit_count: 0` after multiple resume/poll cycles, on an IRQ-driven screen where its address
 *must* execute every frame.
 
-**Check for it in two reads, before running any bracket:** enumerate armed checkpoints with
-`vice_checkpoint_list`, then resolve the live IRQ handler (`$0314/$0315`, or `$FFFE/$FFFF` when
-`$01` has the ROMs banked out). An armed *stopping* checkpoint at or inside the live IRQ path,
-with the PC pinned at or just past it, is the signature. **No `vice_execution_run` is needed to
-reach this verdict**, which matters because `vice_execution_run` is this project's leading crash
-suspect.
+**`mcp__vice__vice_diagnose` now performs this check for you** (2026-08-04): it enumerates armed
+checkpoints, reads the PC, resolves the live IRQ handler through `$01`, and returns a
+`checkpoint_trap` verdict — with **no resume and no stopwatch call**, which matters because
+`vice_execution_run` is this project's leading crash suspect. Call it before anything else. The
+triage decision tree around it is `vice-wedge-triage`.
+
+**Know the two shapes it matches, because a trap outside them reads as a wedge.** It fires when an
+enabled stopping exec checkpoint sits *exactly* at the current PC, or at the resolved handler
+entry with `hit_count` exactly `0`. This hazard's own evidence describes the PC as pinned "at or
+just past" the checkpoint — *just past* is not *exactly at*. A checkpoint armed mid-handler rather
+than at its entry, with a non-zero hit count, matches neither shape, falls through to the cycle
+bracket, and comes back `wedged`. **The response to `wedged` is recycle, and recycling a healthy
+instance is the exact loss both the tool and this hazard exist to prevent.** So when a `wedged`
+verdict arrives with any checkpoint still armed, do the two reads by hand before recycling:
+`vice_checkpoint_list`, then resolve the live handler (`$0314/$0315`, or `$FFFE/$FFFF` when `$01`
+has the ROMs banked out). Filed as
+`.planning/todos/pending/2026-08-04-vice-diagnose-checkpoint-trap-shapes-miss-mid-handler-arming.md`.
 
 **Counter-evidence, and why this is MEDIUM:** in one incident, deleting the checkpoint did *not*
 unfreeze the machine, and neither did a soft reset, a hard reset, nor a single step. A checkpoint
 trap may be the *onset* without being the whole story. Do not assume delete-and-resume recovers it.
+`vice_diagnose`'s own `checkpoint_trap` report states this too, and cites the same incident.
 
 **This is not a reason to stop arming checkpoints on IRQ handlers** — that is core technique. It
 is a reason to enumerate what you armed *first* whenever the machine looks frozen, before
@@ -85,9 +97,18 @@ bracket.
 
 ## 6. The machine can be replaced under you
 
-Compare the restart epoch across any bracket. A changed epoch means a crash-and-respawn happened
-mid-session and the run is void — `c64-ram-capture` § Void a run gives the procedure. A successful
-retry after an auto-restart may be talking to a blank machine.
+A crash-and-respawn mid-session means the run is void — `c64-ram-capture` § Void a run gives the
+procedure. A successful retry after an auto-restart may be talking to a blank machine.
+
+**You do not poll for this, and no exposed tool reads the epoch.** The proxy compares it before and
+*after* every forwarded call and raises a loud error naming both values, then re-baselines so the
+session stays usable. The two recorded incidents surfaced exactly that way and self-healed on the
+next call. Where an epoch value is needed for a record, it comes from that error text or from
+`vice_diagnose`'s `restarted` report — there is no `vice_epoch_get`.
+
+What is still yours to do: **treat every post-drift read as a fresh machine, never as a resume
+point.** Reboot from `vice_disk_attach`. Two crashes in ~20 minutes of continuous live work is a
+real measured rate, so plan a live session to tolerate re-deriving a boot sequence more than once.
 
 ## 7. Full-64K byte-identity is impossible in principle
 

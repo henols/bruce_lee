@@ -167,8 +167,25 @@ with the batches spent; never extend the ceiling silently.
 
 ## Prove the machine did not change under you
 
-Read the restart epoch at the start of a capture and again at the end. Report the
-same epoch to accept the capture. Report a changed epoch to void it.
+**Corrected 2026-08-04: there is no exposed tool that reads the epoch, and you do
+not have to poll for one.** The proxy compares the restart epoch before *and*
+after every forwarded call, and refuses the call — or discards its result, if the
+change happened mid-call — with a loud error naming both epoch values. So the
+capture's identity is guarded continuously, not at two sampled points.
+
+What that leaves you:
+
+- **A clean capture is one during which no epoch-drift error appeared.** Record
+  that, not a pair of hand-read numbers.
+- **When you need the numbers,** they come from the drift error's own text, or
+  from `mcp__vice__vice_diagnose`'s `restarted` report. Both name the before and
+  after value.
+- **A drift error voids the run** even if the very next call succeeds. It will —
+  the proxy re-baselines so the session stays usable — and a successful retry
+  after a respawn is talking to a freshly-booted machine.
+
+`vice-wedge-triage` carries the decision tree for the other three ways a machine
+stops answering.
 
 **Void a run** whose machine identity you could not prove unchanged:
 
@@ -249,6 +266,7 @@ This one owns the image and its identity. It does not restate what the others ca
 | What a specific address or bit means | `c64-memory-mapping` — `node … lookup '$D018'` |
 | Assembling, or a first-pass dead listing | `acme-build` |
 | Whether a byte is original or cracker-changed, and what `bucketed` means | `c64-provenance-diff` |
+| Whether the emulator is wedged, and whether it is safe to recycle | `vice-wedge-triage` |
 | **A verified 64K image, or proving two captures equivalent** | here |
 
 ## References
@@ -282,5 +300,5 @@ through a GSD command (`/gsd-quick`).
 | `compare` fails on an address in `$D000`-`$DFFF` | It cannot — that range is volatile. If you are seeing this, you applied the rules by hand; use `scripts/compare.mjs`. |
 | `compare` fails on `$FAD8` or `$FC51` only | Known and unexplained: RAM under KERNAL ROM, two addresses out of 8192. Record it with the capture rather than voiding a set that is otherwise clean. |
 | `--limit 0` printed nothing | Fixed 2026-08-04 — it now means unlimited. Re-pull the script if you see the old behaviour. |
-| The epoch changed mid-capture | The machine restarted under you. Void the run; do not salvage the artifacts. |
-| The emulator looks dead | Enumerate armed checkpoints before anything else — see `c64-program-recon`'s hazards. |
+| An epoch-drift error appeared mid-capture | The machine restarted under you. Void the run; do not salvage the artifacts. The next call succeeding does not undo it. |
+| The emulator looks dead | `vice-wedge-triage` — and enumerate your own armed checkpoints before concluding anything. |
