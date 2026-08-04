@@ -6,13 +6,16 @@
 // rebuild.
 // broker-launch.mts
 //
-// C (complete, plan 02): the single `in_flight` launch-guard owner (plan 01,
-// unchanged -- every launch call site in the whole broker goes through
-// tryLaunchOne(), which is what makes the single-owner guarantee mechanical
-// rather than a convention plan 02's own concurrency race test can silently
-// violate), PLUS the readiness probe's full three-way branch, serialised
-// warm-floor maintenance (one launch per pass, never more), and the
-// fixed-order evaluation pass both surviving concerns run through.
+// C (complete, plan 02 of Phase 01.6.2): the single `in_flight` launch-guard
+// owner (plan 01, unchanged -- every launch call site in the whole broker
+// goes through tryLaunchOne(), which is what makes the single-owner
+// guarantee mechanical rather than a convention plan 02's own concurrency
+// race test can silently violate), PLUS the readiness probe's single
+// in-process mechanism (collapsed from a three-way branch by Phase
+// 01.6.2.1's own plan 02 -- D-05 as amended by P-05/P-06/P-07; see
+// probeReady()'s own header comment below for the amendment's record),
+// serialised warm-floor maintenance (one launch per pass, never more), and
+// the fixed-order evaluation pass both surviving concerns run through.
 //
 // Plan 03, Task 2 grows this module into a real per-child supervisor
 // (C2/D-23), absorbing resources/vice-supervisor.sh wholesale: superviseChild()
@@ -22,11 +25,9 @@
 // cleanly after too many crashes inside a window, never respawns a
 // deliberately-killed instance, and writes the per-instance boot/crash log
 // D-23 preserves at the exact path shape the retiring bash supervisor used.
-import { spawn as nodeSpawn, execFile } from "node:child_process";
+import { spawn as nodeSpawn } from "node:child_process";
 import { mkdirSync, openSync, closeSync, existsSync } from "node:fs";
 import { join, basename } from "node:path";
-import { promisify } from "node:util";
-const execFileAsync = promisify(execFile);
 // Module-level: this file, not the caller, owns the single boolean --
 // synchronous check, synchronous set, released in a finally, with no
 // `await` between the check and the set.
@@ -170,23 +171,9 @@ export async function acquirePortAndLaunch(reason, deps) {
         inFlight = false;
     }
 }
-const DEFAULT_PROBE_TIMEOUT_S = 5;
+const DEFAULT_PROBE_TIMEOUT_S = 1;
 function defaultLog(line) {
     process.stderr.write(`${line}\n`);
-}
-/** Runs `cmd` with the port as a SEPARATE argv element -- e.g.
- * execFile("check-ready", ["6600"]), never execFile(`check-ready ${port}`)
- * or any shell-string interpolation -- so there is no injection surface
- * regardless of what the port value happens to be. Exit 0 means ready,
- * matching the bash version's own `"$VICE_BROKER_PROBE_CMD" "$port"`. */
-async function defaultRunProbeCmd(cmd, port, timeoutMs) {
-    try {
-        await execFileAsync(cmd, [String(port)], { timeout: timeoutMs });
-        return true;
-    }
-    catch {
-        return false;
-    }
 }
 /** A single POST of a tools/call for vice_ping at the instance's own URL,
  * bounded by the probe timeout -- matching the exact single-POST curl form
@@ -220,57 +207,45 @@ async function defaultHttpProbe(port, timeoutMs) {
         clearTimeout(timer);
     }
 }
-/** Which of the three branches probeReady() will take, WITHOUT actually
- * running the probe -- shared by probeReady() itself and maintainWarmFloor()
- * (which needs to know, once per pass, whether ANY mechanism exists at all,
- * separately from whether any individual instance's probe currently
- * succeeds). */
-function resolveProbeMechanism(deps) {
-    const probeCmd = deps.probeCmdEnv ?? process.env.VICE_BROKER_PROBE_CMD;
-    if (typeof probeCmd === "string" && probeCmd !== "")
-        return "external_command";
-    if (deps.httpProbe === null)
-        return "no_mechanism";
-    if (deps.httpProbe !== undefined)
-        return "http";
-    if (typeof fetch === "function")
-        return "http";
-    return "no_mechanism";
-}
-/** The three-way branch, ported in order and in full (D-05's permitted-
- * route note; the exact seam RESEARCH.md names as one that must survive
- * unchanged in env var name, timeout var name and ordering):
+/** D-05, AS AMENDED BY P-05 -- this comment is the amendment's record, kept
+ * in the exact place a three-branch description used to sit, per this
+ * plan's own instruction that a code reader must meet the amendment here,
+ * not merely in the plan text (`01.6.2.1-02-PLAN.md`) or the validation
+ * ledger (`01.6.2-VALIDATION.md`, consolidated by plan 06).
  *
- * 1. VICE_BROKER_PROBE_CMD named -> run it, port as its own argv element.
- * 2. Otherwise -> an HTTP readiness POST requiring both substrings.
- * 3. Neither available -> report ready unconditionally, log why.
+ * D-05 (locked, `01.6.2-CONTEXT.md`) originally specified the probe as a
+ * bare in-process TCP connect to the instance's own monitor port, with a
+ * short timeout. The code that landed instead argued against that wording,
+ * in its OWN comment: "a bare TCP accept is explicitly not sufficient (a
+ * C64 can accept a connection before it has finished booting)" -- a
+ * booting emulator promoted to ready on nothing more than an accepted
+ * connection is exactly Defect 3's failure shape reappearing, here on the
+ * plan-01 acquire hot path.
  *
- * Branch 3 exists because there is genuinely nothing else to check: a COLD
- * instance launched for an already-pending real request must eventually be
- * usable even on a host with no readiness mechanism at all -- refusing to
- * ever promote it would mean the host could never satisfy any request,
- * strictly worse than trusting the launch itself. maintainWarmFloor() below
- * treats this same condition very differently for NEW speculative
- * launches: it warms zero rather than guessing (see its own comment). */
+ * P-05 amends D-05: the ping-shaped request body stays -- it is what
+ * proves the emulator ANSWERS, not merely that a port is bound, which is
+ * the whole difference between a liveness check and a readiness check. The
+ * two OTHER branches the landed code carried (an external-command
+ * mechanism, and a "neither mechanism available -> report ready
+ * unconditionally" fallback) retire outright, per P-06: with no second
+ * mechanism to prefer and no "no mechanism" state left to report, there is
+ * no longer a pair of indistinguishable states (a deliberately-zero warm
+ * floor and a broken host) for an operator to confuse in the logs. D-05's
+ * own intent -- exactly one check, no external command, no ambiguity -- is
+ * fully honoured by this collapse, not reversed by it.
+ *
+ * No retry loop, deliberately: a still-booting instance simply fails THIS
+ * pass and is re-probed on the next one (maintainWarmFloor()'s own per-pass
+ * cadence, or a later grant-time re-probe) -- this is what makes the
+ * shortened ~1s default below safe rather than reckless: a slow host is
+ * re-probed, never starved, and the seconds-valued timeout knob
+ * (VICE_BROKER_PROBE_TIMEOUT_S) still lets an operator on a slow host raise
+ * it. */
 export async function probeReady(port, deps = {}) {
-    const mechanism = resolveProbeMechanism(deps);
     const timeoutS = Number(deps.probeTimeoutSEnv ?? process.env.VICE_BROKER_PROBE_TIMEOUT_S) || DEFAULT_PROBE_TIMEOUT_S;
     const timeoutMs = timeoutS * 1000;
-    const log = deps.log ?? defaultLog;
-    if (mechanism === "external_command") {
-        const probeCmd = (deps.probeCmdEnv ?? process.env.VICE_BROKER_PROBE_CMD);
-        const runProbeCmd = deps.runProbeCmd ?? defaultRunProbeCmd;
-        const ready = await runProbeCmd(probeCmd, port, timeoutMs);
-        return { ready, mechanism };
-    }
-    if (mechanism === "http") {
-        const httpProbe = deps.httpProbe ?? defaultHttpProbe;
-        const ready = await httpProbe(port, timeoutMs);
-        return { ready, mechanism };
-    }
-    log(`vice-broker: no readiness probe available (VICE_BROKER_PROBE_CMD is unset and no HTTP mechanism is available) -- ` +
-        `reporting port ${port} ready unconditionally; there is nothing else this probe could check`);
-    return { ready: true, mechanism };
+    const httpProbe = deps.httpProbe ?? defaultHttpProbe;
+    return httpProbe(port, timeoutMs);
 }
 // ---------------------------------------------------------------------------
 // Serialised warm-floor maintenance
@@ -293,10 +268,10 @@ function resolveCeiling(override) {
     const n = Number(raw);
     return Number.isFinite(n) ? n : 16;
 }
-/** Promotes launching instances via probe, then -- unless no readiness
- * mechanism exists at all, or a launch is already in flight -- launches AT
- * MOST ONE instance toward the warm floor and returns. Never loops to reach
- * the floor in one call: reaching VICE_BROKER_SPARES this way costs one
+/** Promotes launching instances via probe, then -- unless a launch is
+ * already in flight -- launches AT MOST ONE instance toward the warm floor
+ * and returns. Never loops to reach the floor in one call: reaching
+ * VICE_BROKER_SPARES this way costs one
  * additional CALL per spare instead of one call total, which is the exact
  * trade the 2026-08-01 outage made non-negotiable (three simultaneous
  * x64sc launches: one SEGV, one exit 1, one exit 0 at the identical spawn
@@ -319,16 +294,15 @@ export async function maintainWarmFloor(deps) {
     const now = deps.now ?? (() => Date.now());
     const probe = deps.probe ?? ((port) => probeReady(port));
     // Step 1: promote every "launching" instance whose probe now succeeds.
-    // Runs regardless of whether a launch is in flight or a mechanism exists
-    // at all -- see probeReady()'s own header comment for why an
-    // ALREADY-launched cold instance still gets promoted (trust-the-launch)
-    // even in the no-mechanism case; step 2 below treats that same condition
-    // very differently for NEW speculative launches.
+    // Runs regardless of whether a launch is in flight -- promotion and
+    // speculative warming are independent concerns; an already-launched
+    // instance becomes usable the moment it answers, whether or not this
+    // pass goes on to warm anything further.
     for (const record of deps.state.instances.values()) {
         if (record.state !== "launching")
             continue;
-        const outcome = await probe(record.port);
-        if (outcome.ready) {
+        const isReady = await probe(record.port);
+        if (isReady) {
             const readyAt = now();
             const elapsedMs = readyAt - record.launchedAt;
             record.state = "ready";
@@ -336,20 +310,11 @@ export async function maintainWarmFloor(deps) {
             log(`vice-broker: port ${record.port} launching -> ready (${elapsedMs}ms)`);
         }
     }
-    // Step 2: with no readiness mechanism whatsoever, warm ZERO speculative
-    // spares and log exactly one line naming what is missing and the
-    // consequence -- spares are a latency optimisation, never a correctness
-    // requirement, so guessing here trades a real hazard for a marginal
-    // latency win.
-    const mechanism = resolveProbeMechanism({});
-    if (mechanism === "no_mechanism") {
-        log("vice-broker: no readiness probe available (VICE_BROKER_PROBE_CMD is unset and no HTTP mechanism is available) -- " +
-            "warming ZERO speculative spares; every acquisition will pay a cold launch until this is fixed " +
-            "(set VICE_BROKER_PROBE_CMD to an executable readiness check)");
-        return;
-    }
-    // Step 3: no new boot starts while one is already under way -- THE
-    // single in-flight counter (countLaunching) both this function and a
+    // Step 2 (P-06: the warm-zero "no readiness mechanism" branch that used
+    // to sit here is GONE -- the surviving probe mechanism is in-process and
+    // always available, so there is no "no mechanism" state left to warm
+    // zero against). No new boot starts while one is already under way --
+    // THE single in-flight counter (countLaunching) both this function and a
     // cold acquire (vice-broker.mts's handleAcquire) consult.
     if (deps.countLaunching(deps.state) > 0) {
         log("vice-broker: spare warming waits -- a boot is already in flight this pass");

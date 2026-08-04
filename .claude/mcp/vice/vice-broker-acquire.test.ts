@@ -28,7 +28,6 @@ import type { BrokerState, InstanceRecord } from "./broker-state.mts";
 import type { HandleAcquireDeps } from "./vice-broker.mts";
 import type { AcquireOutcome } from "./broker-control.mts";
 import type { KillStage } from "./broker-kill.mts";
-import type { ProbeOutcome } from "./broker-launch.mts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BROKER_ARTIFACT_URL = new URL("./resources/vice-broker.mjs", import.meta.url).href;
@@ -83,8 +82,8 @@ function stubColdSpawnFactory(spawnCalls: number[]): (port: number) => (command:
   };
 }
 
-function alwaysReadyProbe(): (port: number) => Promise<ProbeOutcome> {
-  return () => Promise.resolve({ ready: true, mechanism: "http" as const });
+function alwaysReadyProbe(): (port: number) => Promise<boolean> {
+  return () => Promise.resolve(true);
 }
 
 // ---------------------------------------------------------------------------
@@ -131,7 +130,7 @@ test("handleAcquire: a failed grant-time probe on the first of two ready records
   const spawnCalls: number[] = [];
   const killCalls: Array<{ pid: number | null; expectedIdentity: string }> = [];
   const outcome = await handleAcquire("req-2", "/tmp/vice-broker-acquire-test", state, {
-    probe: (port: number) => Promise.resolve({ ready: port !== 6600, mechanism: "http" as const }),
+    probe: (port: number) => Promise.resolve(port !== 6600),
     kill: (opts) => {
       killCalls.push(opts);
       return Promise.resolve("sigterm" as KillStage);
@@ -157,7 +156,7 @@ test("handleAcquire: a failed grant-time probe with no other ready record drops+
   const spawnCalls: number[] = [];
   const killCalls: Array<{ pid: number | null; expectedIdentity: string }> = [];
   const outcome = await handleAcquire("req-3", "/tmp/vice-broker-acquire-test", state, {
-    probe: () => Promise.resolve({ ready: false, mechanism: "http" as const }),
+    probe: () => Promise.resolve(false),
     kill: (opts) => {
       killCalls.push(opts);
       return Promise.resolve("sigterm" as KillStage);
@@ -228,7 +227,7 @@ test("handleAcquire: the grant-time-probe-failure log line is distinct from brok
 
   const logs: string[] = [];
   const outcome = await handleAcquire("req-6", "/tmp/vice-broker-acquire-test", state, {
-    probe: () => Promise.resolve({ ready: false, mechanism: "http" as const }),
+    probe: () => Promise.resolve(false),
     kill: () => Promise.resolve("sigterm" as KillStage),
     buildColdSpawnFactory: stubColdSpawnFactory([]),
     log: (line: string) => logs.push(line),

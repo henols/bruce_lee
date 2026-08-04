@@ -274,12 +274,12 @@ async function selectWarmInstance(state, deps) {
     for (const record of Array.from(state.instances.values())) {
         if (record.state !== "ready")
             continue;
-        const outcome = await deps.probe(record.port);
+        const isReady = await deps.probe(record.port);
         // Claimed by a concurrent acquire while this probe was in flight -- not
         // a candidate any more, and never a failure to log or kill over.
         if (record.state !== "ready")
             continue;
-        if (outcome.ready) {
+        if (isReady) {
             return record;
         }
         markDeliberateDeath(record, false);
@@ -678,8 +678,8 @@ async function run(args) {
     // flight is retried here, on the SAME pass that also maintains the warm
     // floor, so a stalled pass shows up as a stale record rather than a
     // silently wrong one. Re-entrancy guarded: a pass that is still running
-    // (e.g. a slow external VICE_BROKER_PROBE_CMD) is never overlapped by the
-    // next tick.
+    // (e.g. a slow readiness probe against a genuinely slow host) is never
+    // overlapped by the next tick.
     let passInFlight = false;
     setInterval(() => {
         if (passInFlight)
