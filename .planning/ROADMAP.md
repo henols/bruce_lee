@@ -888,7 +888,7 @@ Plans:
 
 **Risks**: **The split's whole value is the seal boundary, and it is only real if this phase actually verifies** — a phase that seals on "the five tasks exist" rather than "each has a passing test" gives back exactly what the split bought. **Nothing here is live-verifiable either**, so criterion E's carry-forward list is this phase's most load-bearing deliverable, not its cleanup step. **The cross-phase ordering constraint is easy to lose across a phase boundary**: D-07 depends on a test that lives in 01.6.2's plans, so it must be a stated prerequisite in this phase's plan text and not an assumption that 01.6.2 sealed green. **Criterion M is where a defect gets silently lost if the disposition is treated as paperwork** — the two unsettled items above are the specific place that happens, and both arrive with a proposed answer precisely so "not settled" cannot quietly become "not addressed".
 
-**Plans:** 4/6 plans executed
+**Plans:** 5/6 plans executed
 
 Plans:
 **Wave 1**
@@ -909,7 +909,7 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4)*
 
-- [ ] 01.6.2.1-05-PLAN.md — **The rename, one commit, the phase's last code commit.** `spares` → `warm floor` on every remaining surface including the on-disk `spares_target` → `warm_floor`; `VICE_BROKER_SPARES` → `VICE_BROKER_WARM_FLOOR` as a clean break with no alias or fallback; the D-25 banner naming the retired variable as set-and-ignored; a structural gate keeping the break clean (criterion L, D-10, D-11, D-25, P-11…P-13)
+- [x] 01.6.2.1-05-PLAN.md — **The rename, one commit, the phase's last code commit.** `spares` → `warm floor` on every remaining surface including the on-disk `spares_target` → `warm_floor`; `VICE_BROKER_SPARES` → `VICE_BROKER_WARM_FLOOR` as a clean break with no alias or fallback; the D-25 banner naming the retired variable as set-and-ignored; a structural gate keeping the break clean (criterion L, D-10, D-11, D-25, P-11…P-13)
 
 **Wave 6** *(blocked on Wave 5)*
 
