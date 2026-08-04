@@ -187,6 +187,48 @@ test("a control request with no token, and one with a wrong token, both return t
 });
 
 // ---------------------------------------------------------------------------
+// 01.6.2-10-PLAN.md ledger row 35 (RE-OBSERVED): the retiring bash suite's
+// "bash -n exits 0; start still refuses in-container with exit 2;
+// --check-container still exits 3" structural test asserted the container
+// guard's exit-code contract directly against resources/vice-broker.sh. The
+// new broker wires the SAME container-guard.mts functions
+// (containerGuardEnforce()/containerGuardReport(), pre-existing and unchanged
+// -- vice-broker.mts:650/654) but no test spawned the real emitted artifact
+// to prove the wiring itself (as opposed to the guard functions in
+// isolation, which container-guard.test.ts already covers). This container
+// genuinely fires container signals (the retiring test's own comment already
+// establishes that), so this is a real, not simulated, in-container run.
+// ---------------------------------------------------------------------------
+
+test("the emitted broker artifact refuses to start in-container without the escape hatch (exit 2), and --check-container reports the same verdict without refusing (exit 3)", { timeout: 20000 }, async () => {
+  build();
+  const stateDir = mkdtempSync(join(tmpdir(), "broker-e2e-guard-"));
+  try {
+    // No VICE_SUPERVISOR_ALLOW_CONTAINER escape hatch here -- deliberately
+    // the opposite of every other test in this file, which sets it via
+    // startBroker()'s own env block.
+    const refused = spawn(process.execPath, [BROKER_ARTIFACT, "--repo-root", "/tmp/fake-repo-root-e2e", "--state-dir", stateDir], {
+      env: { ...process.env, VICE_SUPERVISOR_ALLOW_CONTAINER: "", VICE_BIN: "/bin/sleep", VICE_ARGS: "600" },
+    });
+    const refusedCode = await new Promise<number | null>((resolvePromise) => {
+      refused.once("exit", (code) => resolvePromise(code));
+    });
+    assert.equal(refusedCode, 2, "starting in-container with no escape hatch must exit 2");
+    assert.equal(existsSync(join(stateDir, "broker.json")), false, "a refused start must never write broker.json");
+
+    const reported = spawn(process.execPath, [BROKER_ARTIFACT, "--check-container"], {
+      env: { ...process.env, VICE_SUPERVISOR_ALLOW_CONTAINER: "" },
+    });
+    const reportedCode = await new Promise<number | null>((resolvePromise) => {
+      reported.once("exit", (code) => resolvePromise(code));
+    });
+    assert.equal(reportedCode, 3, "--check-container must report the container verdict (exit 3) without refusing outright");
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // verifiedKill() (broker-kill.mts): the identity-verified kill discipline,
 // exercised directly (in-process) against a real stub child -- this is the
 // one test in this task's scope asserting it refuses to signal a mismatched

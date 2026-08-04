@@ -1,11 +1,14 @@
 ---
 created: 2026-08-01T18:40:00.000Z
-title: Four VICE broker/proxy defects found while unblocking plan 01-04 — parallel spare warming kills x64sc, grants outlive their process, proxy caches a dead grant for the session's life
+updated: 2026-08-04T00:00:00.000Z
+title: Five VICE broker/proxy defects — parallel spare warming kills x64sc, grants outlive their process, proxy caches a dead grant for the session's life, and (found 2026-08-04) the new TypeScript broker never grants from its own warm floor at all
 area: tooling
 severity: major
 files:
   - tools/vice-broker.sh
   - tools/vice-supervisor.sh
+  - .claude/mcp/vice/vice-broker.mts
+  - .claude/mcp/vice/broker-launch.mts
 ---
 
 ## Context
@@ -66,6 +69,40 @@ Recovery required moving `grants/`, `requests/`, `leases/`, `spares/` and
 **Suggested fix:** validate a grant's liveness before honouring it — the epoch record already
 carries the pid; a `kill -0` or a port probe at load time would catch it. Relatedly, a "ready"
 spare should never be grantable without a successful readiness probe.
+
+## Defect 5 — the new TypeScript broker never grants from its own warm floor (found 2026-08-04, `01.6.2-10-PLAN.md`)
+
+Found while building `01.6.2`'s test disposition ledger (plan 10), not by live host debugging like
+Defects 1–4 above — but it belongs in this file because it is squarely inside "spare warming and
+stale grants," and Phase 01.6.2.1's criterion M already tracks this file as its four-defect list.
+
+`vice-broker.mts`'s `handleAcquire()` — the function every `acquire` control-plane request
+resolves through — never consults `maintainWarmFloor()`'s own warm pool at all. Confirmed by
+reading `handleAcquire()`'s full body and by grepping every `state.grants.set()` call site in the
+module (exactly one hit, immediately following a freshly-spawned `acquirePortAndLaunch()` result,
+with no branch that promotes an existing `state.instances` entry in state `ready` into a grant).
+`maintainWarmFloor()` itself is correctly built and tested (`broker-launch.test.ts`) — it launches
+and promotes instances to `ready` exactly as designed — but nothing ever consumes them. Every
+acquisition is a fresh cold launch, every time, regardless of how many warm instances are sitting
+ready.
+
+**Consequence:** the whole latency optimisation the warm floor exists to provide (an acquire
+served instantly from a pre-warmed instance, avoiding the emulator's own boot time) does not
+happen in the current implementation. This is a distinct issue from Defects 1–3 above (which are
+about a stale/dead record being wrongly trusted); this is the pool never being read from at all.
+
+**Not fixed by `01.6.2-10-PLAN.md`:** that plan's own declared scope is a test-file ledger plus the
+`.planning/phases/01.6.2-the-one-process-host-broker/01.6.2-VALIDATION.md` artifact — wiring
+`handleAcquire()` onto the warm floor is a change to broker acquire logic, outside that scope, and
+arguably an architectural decision (which instance to hand out, and what happens if none is ready)
+rather than a mechanical port. Recorded in that plan's own test disposition ledger, Class H, against
+the retiring `grant_from_spare()`-specific tests (`vice-broker.test.mjs` rows 24, 39, 44, 45).
+
+**Suggested fix:** `handleAcquire()` should check `state.instances` for an entry in state `ready`
+before calling `acquirePortAndLaunch()`, re-probing it live at grant time (matching the bash
+original's `grant_from_spare()` — read-a-record-is-bookkeeping, a probe-that-answers-now is
+evidence, per the 2026-08-01 incident this file's own Defect 3 already documents) rather than
+trusting the recorded `ready` state alone.
 
 ## Defect 4 — the proxy caches a dead grant for the whole session, with no re-request path
 
