@@ -2153,6 +2153,21 @@ test("teardown region: no promise-awaiting construct, and the control session's 
 // instant the broker is up (C11).
 // -----------------------------------------------------------------------
 
+// P-08 (01.6.2.1-04-PLAN.md): this bound used to be expressed as a FRACTION
+// of ACQUIRE_TIMEOUT_MS (half the acquire deadline). That self-loosens: the
+// deadline's own default just moved 25000 -> 120000, so a fraction-of-the-
+// deadline bound would have silently jumped from 12500ms to 60000ms with no
+// change to this test's own text -- and 60000ms sits well past the 10000ms
+// message-read deadline the `await proxy1.nextMessage(10000)` call below
+// enforces, so a genuine regression would hit THAT timeout (an opaque
+// promise rejection) before this assertion ever got a chance to fire with
+// its own informative message, making the assertion unfalsifiable in
+// practice. Anchored instead to a fixed absolute value: at most 12500ms (at
+// least as strict as the old expression's effective value) and comfortably
+// below the 10000ms message-read deadline, so this assertion -- not the
+// read -- is what fails on a regression.
+const NEVER_STARTED_FAILFAST_BOUND_MS = 5000;
+
 test("broker three states: each broker-absent shape gets its own message and fix", async () => {
   const dir = mkdtempSync(join(tmpdir(), "vice-proxy-broker3states-"));
 
@@ -2169,8 +2184,8 @@ test("broker three states: each broker-absent shape gets its own message and fix
     neverStartedText = resp.result.content[0].text;
     assert.match(neverStartedText, /never.*started/i, "the never-started shape must say the broker was never started");
     assert.ok(
-      elapsedMs < ACQUIRE_TIMEOUT_MS / 2,
-      `the never-started diagnosis must be fail-fast, well under half the acquire deadline (${ACQUIRE_TIMEOUT_MS}ms) -- took ${elapsedMs}ms`
+      elapsedMs < NEVER_STARTED_FAILFAST_BOUND_MS,
+      `the never-started diagnosis must be fail-fast, well under the fixed bound (${NEVER_STARTED_FAILFAST_BOUND_MS}ms) -- took ${elapsedMs}ms`
     );
     assert.equal(existsSync(join(dir, "requests")), false, "never-started must write no request file");
     assert.equal(existsSync(join(dir, "leases")), false, "never-started must write no lease file");

@@ -3,7 +3,7 @@
     "vice": {
       "command": "node",
       "args": [".claude/mcp/vice/vice-proxy.ts"],
-      "timeout": 60000
+      "timeout": 150000
     }
   }
 }
