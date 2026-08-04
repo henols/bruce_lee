@@ -8,13 +8,17 @@ description: Assemble Commodore 64 6510 assembly with the ACME cross assembler. 
 Source in, `.prg` out. Everything goes through one script:
 
 ```bash
-A=.claude/skills/acme-build/scripts/acme.mjs
+A=.claude/skills/acme-build/scripts/acme.mjs   # from the repo root
 
 node $A new game.asm          # scaffold a C64 program
 node $A build game.asm        # assemble -> .prg .sym .vs .rep
 node $A sym game.asm          # the symbols the program uses
 node $A disasm game.prg       # object code back into ACME source
 ```
+
+The script wraps `acme` and `toacme` and nothing else — **assembling only**. Running
+the result on a C64 belongs to the emulator skills (`acme.mjs:3-4` says so, and the
+absent `run` verb is not an omission). It contacts nothing.
 
 Options: `-o FILE` `--out-dir DIR` `-f FORMAT` `--setpc ADDR` `-DSYM=VAL`
 `-I DIR` `--no-report` `--json`.
@@ -178,10 +182,34 @@ Put `acme` and `toacme` on `$PATH`. The wrapper auto-probes `$ACME`,
 so `$ACME` only needs setting by hand when calling `acme` directly. Verified live
 in this container on 2026-08-04: the library resolves to `/usr/local/share/acme`
 (`/usr/share/acme` doesn't exist), ACME release 0.97 "Zem" (31 Jan 2021) at
-`/usr/bin/acme`.
+`/usr/bin/acme`. **Confidence: HIGH** — read off `acme --version` and the probe
+result, not off a package manifest.
 
 Copy `acme.mjs` into any project's `.claude/skills/acme-build/scripts/`, and
 `template.a` into `.claude/skills/acme-build/`, to use this elsewhere.
+
+## Which skill does what
+
+This one turns source into bytes. It does not restate what the others carry.
+
+| Need | Go to |
+|---|---|
+| Where to start on an unknown program, and which address to read next | `c64-program-recon` |
+| What a specific address or bit means, or annotating a listing | `c64-memory-mapping` — `node … lookup '$D018'` |
+| A verified 64K image, or comparing two captures | `c64-ram-capture` |
+| **Source in, `.prg` out — and a first-pass dead listing back** | here |
+
+## References
+
+| File | Covers |
+|---|---|
+| `scripts/acme.mjs` | The driver. Its comments are the contract for every flag above |
+| `template.a` | The scaffold `new` writes: BASIC stub with a computed `SYS`, the three `!source` libraries, no `!to` |
+
+Findings that make RE faster go in `.planning/RE-FINDINGS.md` **at the moment you
+find them**, graded with `Evidence:` and `Confidence:`. Promote by re-logging with
+the new evidence, never by editing a grade in place. File-changing work enters
+through a GSD command (`/gsd-quick`).
 
 ## Troubleshooting
 
