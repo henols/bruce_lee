@@ -4,15 +4,15 @@ milestone: v1.1
 milestone_name: insertion note
 current_phase: 01.6.2.1
 current_phase_name: Broker Lifecycle Policy
-status: planning
-stopped_at: Phase 01.6.2.1 context gathered
-last_updated: "2026-08-04T10:55:42.318Z"
+status: executing
+stopped_at: Phase 01.6.2.1 planned — 6 plans, verified, ready to execute
+last_updated: "2026-08-04T13:20:04.779Z"
 last_activity: 2026-08-04
-last_activity_desc: Phase 01.6.2 complete, transitioned to Phase 01.6.2.1; alongside it, quick tasks 260804-brt/bux/dbf/dih/elq worked the skill queue (see Quick Tasks Completed) — `c64-ram-capture` rewired and corrected, `c64-provenance-diff` added as the seventh skill, and the RE-skill todo closed as already-built
+last_activity_desc: "Phase 01.6.2.1 planned — 6 plans in 6 sequential waves, `gsd-plan-checker` returned VERIFICATION PASSED; research, pattern-mapping and a new VALIDATION.md were deliberately skipped because the phase shares 01.6.2's four artifacts, and the blocking decision-coverage gate was overridden on a parser mismatch (P-NN numbering) after coverage was verified by hand at 13/13 + 12/12. Phase 01.6.2 complete and sealed before it; alongside both, quick tasks 260804-brt/bux/dbf/dih/elq/eu6 worked the skill queue (see Quick Tasks Completed) — `c64-ram-capture` rewired and corrected, `c64-provenance-diff` added as the seventh skill, the RE-skill todo closed as already-built, and `vice-wedge-triage` added as the eighth, clearing the last outstanding skill and dropping its `blocker` todo to `minor`. 260804-eu6 also reconciled the skills' crash content against the rewritten MCP: two defects filed (`vice_diagnose`'s `checkpoint_trap` shapes may miss a mid-handler arming and fall through to the destructive `wedged` response; no exposed tool reads the restart epoch, which made a standing `c64-ram-capture` instruction unperformable) and the widened vector sweep found the game's own NMI **and** RESET handlers sharing `$1116` in both releases"
 progress:
   total_phases: 11
   completed_phases: 5
-  total_plans: 48
+  total_plans: 54
   completed_plans: 44
   percent: 45
 ---
@@ -25,13 +25,17 @@ See: .planning/PROJECT.md (updated 2026-07-31)
 
 **Core value:** An ACME source tree that rebuilds a Bruce Lee which plays identically to the original, where every gameplay system is explained well enough that someone could change it.
 **Current milestone:** v1.1 — Emulator Access Hardened (Phases 01.3–01.7, 0 requirements — tooling)
-**Current focus:** Phase 01.6.2 — the-one-process-host-broker
+**Current focus:** Phase 01.6.2.1 — broker-lifecycle-policy
 
 ## Current Position
 
 Milestone: **v1.1 — Emulator Access Hardened** *(inserted 2026-08-02, ahead of the rest of v1.0)*
 Phase: 01.6.2.1 — Broker Lifecycle Policy
-Next: **`/gsd-plan-phase 01.6.2 --gaps`** — four gaps in `01.6.2-VERIFICATION.md`, structured in its YAML frontmatter. Then 01.6.2.1, which still needs planning.
+Next: **`/gsd-execute-phase 01.6.2.1`** — six plans in six sequential waves, planned 2026-08-04 and verified by `gsd-plan-checker`.
+
+> **Phase 01.6.2's four gaps are closed.** They were closed by its own gap-closure plan 15 on
+> 2026-08-04; `01.6.2-VERIFICATION.md` reads 20/20 at seal. The block below is retained as the
+> evidence record of what the hazard looked like when it arrived, not as outstanding work.
 
 **The four gaps share one root and one shape.** `superviseChild()` — the crash-respawn supervisor
 with backoff and give-up — was built and unit-tested in plan 03, but `vice-broker.mts` was outside
@@ -174,7 +178,7 @@ re-surfacing on 01.6.2 would be new, not inherited.
 (`/gsd-extract-learnings 01.6.1` — the TypeScript closure-narrowing hazard, the negated-clause gate
 false positives, and the tracer-vs-daemon distinction are all worth harvesting).
 
-Status: Ready to plan
+Status: Ready to execute
 
 > **2026-08-03 run:** `gsd-tools query state.planned-phase` returned `updated: []` and changed nothing
 > here, so this line and the Last-activity line below were written by hand. Same family as the
@@ -190,12 +194,30 @@ Status: Ready to plan
 > overwrites-curated-activity.md`. `roadmap.annotate-dependencies` was correctly a no-op
 > (`updated: false`) on both runs: the planner had already written the wave headers and the per-plan
 > list into § Phase 01.6.2.
+>
+> **2026-08-04 plan-phase run (01.6.2.1):** `state.planned-phase` again returned `updated: ["Status"]`
+> and this time did **not** corrupt the frontmatter — `last_activity_desc` survived intact, so the
+> defect filed above is intermittent rather than deterministic. `roadmap.annotate-dependencies`
+> returned `updated: false` legitimately: six waves of exactly one plan each means there are no wave
+> *groups* to head, and it reported 0 cross-cutting constraints. `**Current focus**` and the `Next:`
+> line were stale (still pointing at 01.6.2's four gaps, closed on 2026-08-04) and were corrected by
+> hand — `state.planned-phase` does not touch either.
+>
+> **Decision-coverage gate override, 2026-08-04, recorded so `/gsd-verify-phase` can re-surface it.**
+> `check.decision-coverage-plan` is a blocking gate and it returned `passed: false` with
+> `reason: "could-not-parse"` — **not** an uncovered decision. `01.6.2.1-CONTEXT.md` numbers its
+> decisions **P-01…P-13** deliberately (*"so they can never be confused with 01.6.2's D-numbers"*) and
+> the parser only extracts `- **D-NN:**` bullets, so it found 0 of 13. Coverage was instead verified
+> mechanically against the six plans: **all 13 P-decisions and all 12 governing D-numbers this phase
+> owns (D-02, D-05…D-08, D-10, D-11, D-19…D-22, D-25) are cited by at least one plan — none dropped.**
+> The override is the parser mismatch, not an accepted gap. Any future phase numbering its decisions
+> with a non-`D` prefix will trip the same false block.
 
 **Known-failing check, carried forward for whoever resumes 01-04:** the plan's own Task 3 automated verification fails today — `saeger`'s `death` milestone is recorded `reached: true` with `cycles_advanced: null` and an explicit `evidentiary_gap` (no screen-matrix SHA-256 captured, attempt 4). Attempt 6 must re-capture that signature, not merely reach the two remaining milestones. danish's five milestones all carry full mechanical proof and pass.
 
-Last activity: 2026-08-04 — Phase 01.6.2 complete, transitioned to Phase 01.6.2.1; alongside it, quick tasks 260804-brt/bux/dbf/dih/elq/eu6 worked the skill queue (see Quick Tasks Completed) — `c64-ram-capture` rewired and corrected, `c64-provenance-diff` added as the seventh skill, the RE-skill todo closed as already-built, and `vice-wedge-triage` added as the eighth, clearing the last outstanding skill and dropping its `blocker` todo to `minor`. 260804-eu6 also reconciled the skills' crash content against the rewritten MCP: two defects filed (`vice_diagnose`'s `checkpoint_trap` shapes may miss a mid-handler arming and fall through to the destructive `wedged` response; no exposed tool reads the restart epoch, which made a standing `c64-ram-capture` instruction unperformable) and the widened vector sweep found the game's own NMI **and** RESET handlers sharing `$1116` in both releases
+Last activity: 2026-08-04 — Phase 01.6.2.1 planned — 6 plans in 6 sequential waves, `gsd-plan-checker` returned VERIFICATION PASSED; research, pattern-mapping and a new VALIDATION.md were deliberately skipped because the phase shares 01.6.2's four artifacts, and the blocking decision-coverage gate was overridden on a parser mismatch (P-NN numbering) after coverage was verified by hand at 13/13 + 12/12. Phase 01.6.2 complete and sealed before it; alongside both, quick tasks 260804-brt/bux/dbf/dih/elq/eu6 worked the skill queue (see Quick Tasks Completed) — `c64-ram-capture` rewired and corrected, `c64-provenance-diff` added as the seventh skill, the RE-skill todo closed as already-built, and `vice-wedge-triage` added as the eighth, clearing the last outstanding skill and dropping its `blocker` todo to `minor`. 260804-eu6 also reconciled the skills' crash content against the rewritten MCP: two defects filed (`vice_diagnose`'s `checkpoint_trap` shapes may miss a mid-handler arming and fall through to the destructive `wedged` response; no exposed tool reads the restart epoch, which made a standing `c64-ram-capture` instruction unperformable) and the widened vector sweep found the game's own NMI **and** RESET handlers sharing `$1116` in both releases
 
-Progress (v1.1): 28 of 33 authored plans done — 01.6 complete (4/4), 01.6.1 complete (8/8), 01.3 paused at 5/6 (01.3-06 outstanding), **01.6.2 executed 11/15 — the four gap-closure plans (12–15) are authored and unexecuted, and the phase is NOT sealed.** **No percentage given on purpose:** 01.6.2.1, 01.6.3 and 01.4 are not yet broken into plans, so the denominator is still not knowable and any bar here would overstate progress. (01.5 and 01.7 are `ABSORBED` and contribute no plans.)
+Progress (v1.1): 32 of 39 authored plans done — 01.6 complete (4/4), 01.6.1 complete (8/8), 01.3 paused at 5/6 (01.3-06 outstanding), **01.6.2 complete and sealed 15/15 (20/20 verified, 2026-08-04)**, **01.6.2.1 planned 0/6 — six plans in six sequential waves, authored and unexecuted.** **No percentage given on purpose:** 01.6.3 and 01.4 are not yet broken into plans, so the denominator is still not knowable and any bar here would overstate progress. (01.5 and 01.7 are `ABSORBED` and contribute no plans.)
 Progress (v1.0, paused): [████░░░░░░] 40% — 8/20 plans
 Progress (overall): [██░░░░░░░░] 23% — 8/35 plans
 
