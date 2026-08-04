@@ -31,12 +31,11 @@
 // this file was altered by this change.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { spawn, execFile } from "node:child_process";
+import { spawn } from "node:child_process";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
-import { promisify } from "node:util";
 import { createServer } from "node:http";
 import type { Server } from "node:http";
-import type { AddressInfo } from "node:net";
+import type { AddressInfo, Socket, Server as NetServer } from "node:net";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, readdirSync, existsSync, statSync } from "node:fs";
@@ -44,14 +43,22 @@ import { tmpdir, networkInterfaces } from "node:os";
 import { hostPath } from "./hostpath.ts";
 import { repoRoot } from "./repo-root.ts";
 // Read-only import for test assertions only -- this test file does not
-// modify vice-broker-client.ts's own content; GRANT_POLL_TIMEOUT_MS is
-// already exported for exactly this purpose.
-import { GRANT_POLL_TIMEOUT_MS } from "./vice-broker-client.ts";
+// modify vice-broker-client.ts's own content; ACQUIRE_TIMEOUT_MS (the
+// control-plane client's own acquire deadline, replacing the retiring
+// pollGrant()'s ACQUIRE_TIMEOUT_MS in this role) is already exported for
+// exactly this purpose.
+import { ACQUIRE_TIMEOUT_MS } from "./vice-broker-client.ts";
+// Plan 01.6.2-07: the proxy's acquisition/release/recycle paths now run over
+// the TCP control plane instead of the file protocol, so this file drives a
+// REAL control listener (broker-control.mts's own startControlListener(),
+// the exact module the proxy's client speaks to) instead of writing
+// request/grant/denial/lease/ack files -- matching the idiom
+// vice-broker-client.test.ts's own startFullBrokerListener() already
+// established for the client side.
+import { startControlListener, newControlToken, type AcquireOutcome, type RecycleOutcome } from "./broker-control.mts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PROXY_PATH = join(HERE, "vice-proxy.ts");
-const BROKER_SCRIPT = join(HERE, "resources", "vice-broker.sh");
-const execFileP = promisify(execFile);
 
 // ---------------------------------------------------------------------------
 // Shared test-local types. vice-proxy.ts exports nothing (it is a stdio
@@ -1650,30 +1657,20 @@ test("path translation: a lexical .. cannot escape the workspace, and one that r
 });
 
 // -----------------------------------------------------------------------
-// Plan 01.2-01 task 2: every session-ending path releases the lease, an
-// idle session keeps it alive via the unref'd heartbeat, and the deferred-
-// acquisition property (C3) has its own dedicated regression guard. Every
-// test in this section that needs a REAL lease drives one forwarded
-// tools/call through the full broker round trip (request -> grant ->
-// forward) via acquireLeaseViaBroker() below, since ensureBrokerLease()
-// only creates a lease on the FIRST forwarded call.
+// Plan 01.2-01 task 2 / Plan 01.6.2-07: every session-ending path releases
+// the lease, and the deferred-acquisition property (C3) has its own
+// dedicated regression guard. Plan 01.6.2-07 swaps acquisition and release
+// onto the TCP control connection (openBrokerControl()/BrokerControlSession,
+// plan 06's completed client) -- the lease IS the connection now, so a REAL
+// control listener (startControlBroker() below) replaces the retiring
+// write-a-request-then-run-the-broker-then-poll-for-a-grant dance, and
+// "released" is observed as the listener's own connection closing, not a
+// lease file disappearing. There is no heartbeat any more: nothing needs
+// touching to prove a TCP connection is alive.
 // -----------------------------------------------------------------------
 
-function runBrokerOnceDryRun(dir: string, basePort: number, extraEnv: Record<string, string> = {}) {
-  return execFileP("bash", [BROKER_SCRIPT, "--once", "--dry-run"], {
-    env: {
-      ...process.env,
-      VICE_SUPERVISOR_ALLOW_CONTAINER: "1",
-      VICE_POOL_DIR: dir,
-      VICE_BROKER_BASE_PORT: String(basePort),
-      VICE_BROKER_SPARES: "0",
-      ...extraEnv,
-    },
-  });
-}
-
 /** Poll `predicate` to a bounded deadline rather than sleeping a fixed
- * duration -- this task's own convention for waiting on a filesystem
+ * duration -- this task's own convention for waiting on an asynchronous
  * effect. Returns predicate()'s truthy result, or null on timeout. */
 async function waitForCondition<T>(
   predicate: () => T,
@@ -1699,112 +1696,110 @@ async function handshake(proxy: ProxyHandle): Promise<void> {
   await proxy.nextMessage();
 }
 
-/** Drives ONE forwarded tools/call through the full request -> grant ->
- * forward round trip, returning the request/lease id and its lease path
- * once the call has resolved. Shared by every test below that needs a REAL
- * lease held before it can meaningfully assert that ending the session
- * releases it. */
-async function acquireLeaseViaBroker(proxy: ProxyHandle, dir: string, port: number, callId: number) {
-  // Plan 01.2-03 task 1: ensureBrokerLease() now classifies broker liveness
-  // BEFORE writing any request (C10) -- never_started returns immediately
-  // with no request written at all. A broker.json with a fresh heartbeat
-  // must therefore already exist for this helper's request-then-grant flow
-  // to reach the request-writing step -- runBrokerOnceDryRun() below would
-  // write one too, but only AFTER the broker has run a pass, which is too
-  // late for a request to have been written in the first place. Written
-  // directly (not via the real script) so this helper stays independent of
-  // needing the broker to have run first.
-  writeFileSync(join(dir, "broker.json"), JSON.stringify({ version: 1, pid: process.pid, heartbeat_at: new Date().toISOString() }), "utf8");
+interface StubBrokerDeps {
+  onAcquire?: () => Promise<AcquireOutcome>;
+  onRecycle?: (targetId: string) => Promise<RecycleOutcome>;
+}
 
-  proxy.send({ jsonrpc: "2.0", id: callId, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
-
-  const reqDir = join(dir, "requests");
-  const reqFiles = await waitForCondition(() => {
-    if (!existsSync(reqDir)) return null;
-    const files = readdirSync(reqDir).filter((f) => f.endsWith(".json"));
-    return files.length > 0 ? files : null;
+/** Starts a REAL control listener (broker-control.mts's own
+ * startControlListener(), the exact module the proxy's control-plane client
+ * speaks to) bound on a kernel-chosen port, with injectable acquire/recycle
+ * stubs, and writes dir/broker.json naming it as the control endpoint with a
+ * fresh heartbeat -- matching the idiom vice-broker-client.test.ts's own
+ * startFullBrokerListener() already established for the client side. This is
+ * the TCP-control-plane replacement for the retiring
+ * writeFreshBrokerJson()/grantDirectly()/waitForRequestId() file-based
+ * fixture trio: nothing under `dir` is written except broker.json itself. */
+async function startControlBroker(dir: string, deps: StubBrokerDeps = {}) {
+  const token = newControlToken();
+  const listener = await startControlListener({
+    host: "127.0.0.1",
+    port: 0,
+    token,
+    onAcquire: deps.onAcquire ?? (async () => ({ ok: false, reason: "internal" }) as AcquireOutcome),
+    onRelease: () => {},
+    onRecycle:
+      deps.onRecycle ??
+      (async () => ({
+        port: null,
+        pid: null,
+        viceBin: null,
+        killStage: "no_signal",
+        epochBefore: null,
+        outcome: "grant_lookup_failed",
+        reason: "no stub configured",
+      })),
+    onStatus: () => [],
+    onHostState: () => ({
+      pid: process.pid,
+      startedAt: new Date().toISOString(),
+      nodeVersion: process.version,
+      viceBin: "x64sc",
+      warmFloor: 0,
+      maxInstances: 1,
+      basePort: 0,
+    }),
   });
-  assert.ok(reqFiles, "a request file must appear before the broker has run");
-  const id = reqFiles[0].replace(/\.json$/, "");
-
-  // Plan 01.2-04 task 2: a request that finds ZERO ready spares triggers a
-  // cold launch and the pass writes NEITHER a grant nor a denial -- the
-  // request stays pending for a LATER pass, once maintain_spares()'s
-  // probe_ready() has promoted the new instance from `launching` to `ready`.
-  // This helper runs the broker exactly once and then awaits the forwarded
-  // call, which was true while one pass always granted, and is false now.
-  // Pre-plant an already-`ready` spare at the target port so
-  // grant_from_spare() hands it out on the FIRST pass, which is what this
-  // helper's single-pass shape expects. Record shape mirrors
-  // writeSpareFile() in vice-broker.test.mjs; readiness is pre-proven here
-  // precisely so no real x64sc or probe round-trip is involved.
-  mkdirSync(join(dir, "spares"), { recursive: true });
-  writeFileSync(
-    join(dir, "spares", `${port}.json`),
-    JSON.stringify(
-      {
-        version: 1,
-        port,
-        url: `http://127.0.0.1:${port}/mcp`,
-        epoch_file: join(dir, String(port), "epoch.json"),
-        supervisor_dir: join(dir, String(port)),
-        supervisor_pid: null,
-        launched_at: Date.now() * 1e6,
-        ready_at: Date.now() * 1e6,
-        state: "ready",
-        reason: "spare",
-        dry_run: true,
-      },
-      null,
-      2
-    ) + "\n"
-  );
-
-  await runBrokerOnceDryRun(dir, port);
-  await proxy.nextMessage(); // the forwarded call's own response
-
-  const leasePath = join(dir, "leases", id);
-  assert.ok(existsSync(leasePath), "a lease file must exist once the call has resolved");
-  return { id, leasePath };
-}
-
-/**
- * Quick task 260801-ccn (task 2): writes grants/<id>.json DIRECTLY, bypassing
- * the real broker script entirely -- the whole point is to reproduce a
- * captured host-shaped grant VERBATIM, with every field under the test's own
- * control, rather than depend on grant_from_spare()'s own field derivation.
- * `waitForRequest(dir)` must have already resolved before calling this (a
- * request file, not necessarily this one specifically) -- callers pass the
- * SAME id waitForCondition() found.
- */
-function grantDirectly(dir: string, id: string, fields: Record<string, unknown>) {
-  const dirPath = join(dir, "grants");
-  mkdirSync(dirPath, { recursive: true });
-  const record = { version: 1, id, granted_at: new Date().toISOString(), ...fields };
-  writeFileSync(join(dirPath, `${id}.json`), JSON.stringify(record, null, 2) + "\n", "utf8");
-  return record;
-}
-
-/** Waits for a request file to appear under dir/requests and returns its id
- * (the basename minus ".json"). Shared by every containerization test below
- * that plants its own grant directly rather than via acquireLeaseViaBroker(). */
-async function waitForRequestId(dir: string): Promise<string> {
-  const reqDir = join(dir, "requests");
-  const reqFiles = await waitForCondition(() => {
-    if (!existsSync(reqDir)) return null;
-    const files = readdirSync(reqDir).filter((f) => f.endsWith(".json"));
-    return files.length > 0 ? files : null;
+  // Every accepted connection is captured as it arrives -- attached BEFORE
+  // any caller has a chance to trigger one, so a later "which socket did
+  // MY acquire open" question (e.g. observing it close) has an answer that
+  // was recorded at connection time, not raced against after the fact.
+  const sockets: Socket[] = [];
+  listener.server.on("connection", (socket: Socket) => {
+    sockets.push(socket);
   });
-  assert.ok(reqFiles, "a request file must appear before a grant is planted");
-  return reqFiles[0].replace(/\.json$/, "");
-}
-
-function writeFreshBrokerJson(dir: string): void {
+  mkdirSync(dir, { recursive: true });
   writeFileSync(
     join(dir, "broker.json"),
-    JSON.stringify({ version: 1, pid: process.pid, heartbeat_at: new Date().toISOString() }),
+    JSON.stringify({
+      version: 1,
+      pid: process.pid,
+      heartbeat_at: new Date().toISOString(),
+      control_host: "127.0.0.1",
+      control_port: listener.port,
+      control_token: token,
+    }),
     "utf8"
   );
+  return { server: listener.server, port: listener.port, token, sockets };
+}
+
+/** Drives ONE forwarded tools/call through the full acquire-over-the-
+ * control-connection round trip, granting an instance at `targetPort` (the
+ * caller's own stand-in host, unrelated to the control listener's own
+ * port). Returns once the call has resolved, alongside the control
+ * listener's own server and the one socket it accepted (so a caller can
+ * observe the connection closing). Shared by every test below that needs a
+ * REAL session held before it can meaningfully assert that ending it
+ * releases the connection. `onRecycle`, if given, wires the SAME listener's
+ * recycle stub -- so a test needing both an acquired session and control
+ * over its later recycle acknowledgement (e.g. via
+ * makeControllableRecycle()) does not need a second listener. */
+async function acquireLeaseViaBroker(
+  proxy: ProxyHandle,
+  dir: string,
+  targetPort: number,
+  callId: number,
+  onRecycle?: (targetId: string) => Promise<RecycleOutcome>
+) {
+  const { server, sockets } = await startControlBroker(dir, {
+    onAcquire: async () => ({
+      ok: true,
+      grant: {
+        port: targetPort,
+        url: `http://127.0.0.1:${targetPort}/mcp`,
+        epochFile: join(dir, String(targetPort), "epoch.json"),
+        supervisorDir: join(dir, String(targetPort)),
+      },
+    }),
+    onRecycle,
+  });
+
+  proxy.send({ jsonrpc: "2.0", id: callId, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
+  await proxy.nextMessage(); // the forwarded call's own response
+
+  assert.equal(sockets.length, 1, "exactly one control connection must have been accepted by the time acquisition resolves");
+  return { controlServer: server, controlSocket: sockets[0] };
 }
 
 const ENDING_TRIGGERS = [
@@ -1822,7 +1817,6 @@ for (const trigger of ENDING_TRIGGERS) {
     const port = await listen(server);
     const proxy = startProxy({
       VICE_POOL_DIR: dir,
-      VICE_BROKER_BASE_PORT: String(port),
       VICE_EPOCH_FILE: join(dir, "epoch.json"),
       // The host alias set to loopback: this test's grant carries a loopback
       // url for a stub that really does live on THIS side of the boundary,
@@ -1831,81 +1825,234 @@ for (const trigger of ENDING_TRIGGERS) {
       // unreachable).
       VICE_MCP_HOST: "127.0.0.1",
     });
+    let controlServer: NetServer | null = null;
     try {
       await handshake(proxy);
-      const { leasePath } = await acquireLeaseViaBroker(proxy, dir, port, 3);
+      const acquired = await acquireLeaseViaBroker(proxy, dir, port, 3);
+      controlServer = acquired.controlServer;
+
+      // The control socket accepted for THIS session's own acquire -- there
+      // is exactly one (acquireLeaseViaBroker() already asserted that), so
+      // observing it close is the connection-based equivalent of the
+      // retiring lease file disappearing.
+      let sawSocketClose = false;
+      acquired.controlSocket.once("close", () => {
+        sawSocketClose = true;
+      });
 
       trigger.end(proxy);
 
-      const gone = await waitForCondition(() => !existsSync(leasePath));
-      assert.ok(gone, `${trigger.name} must release the lease`);
+      const gone = await waitForCondition(() => sawSocketClose);
+      assert.ok(gone, `${trigger.name} must close the control connection (the lease)`);
     } finally {
       proxy.child.kill("SIGKILL");
       await new Promise((resolve) => server.close(resolve));
+      if (controlServer) await new Promise((resolve) => controlServer!.close(resolve));
       rmSync(dir, { recursive: true, force: true });
     }
   });
 }
 
-test("idempotency: SIGINT followed by SIGTERM ~50ms later releases exactly once", async () => {
+test("a full acquire-forward-release cycle creates no file under the broker state directory", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vice-proxy-nofile-"));
+  const { server } = startStandInServer();
+  const port = await listen(server);
+  const proxy = startProxy({
+    VICE_POOL_DIR: dir,
+    VICE_EPOCH_FILE: join(dir, "epoch.json"),
+    VICE_MCP_HOST: "127.0.0.1",
+  });
+  let controlServer: NetServer | null = null;
+  try {
+    await handshake(proxy);
+
+    // startControlBroker() writes broker.json ITSELF, standing in for what a
+    // human would already have started on the host BEFORE this session ever
+    // began -- so the "before" snapshot is taken after that fixture write,
+    // and the assertion below is about what the PROXY itself creates from
+    // here on, not about the test's own setup.
+    const acquired = await startControlBroker(dir, {
+      onAcquire: async () => ({
+        ok: true,
+        grant: {
+          port,
+          url: `http://127.0.0.1:${port}/mcp`,
+          epochFile: join(dir, String(port), "epoch.json"),
+          supervisorDir: join(dir, String(port)),
+        },
+      }),
+    });
+    controlServer = acquired.server;
+    const before = new Set(readdirSync(dir));
+
+    proxy.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
+    await proxy.nextMessage();
+    proxy.send({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
+    await proxy.nextMessage();
+
+    assert.equal(acquired.sockets.length, 1, "exactly one control connection must have been accepted");
+    const socket = acquired.sockets[0];
+    let sawClose = false;
+    socket.once("close", () => {
+      sawClose = true;
+    });
+    proxy.child.kill("SIGINT");
+    await waitForCondition(() => sawClose);
+
+    const after = new Set(readdirSync(dir));
+    const created = [...after].filter((f) => !before.has(f));
+    assert.deepEqual(created, [], `the proxy must create no new entry under the broker state directory: saw ${created.join(", ")}`);
+  } finally {
+    proxy.child.kill("SIGKILL");
+    await new Promise((resolve) => server.close(resolve));
+    if (controlServer) await new Promise((resolve) => controlServer!.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("acquiring twice sends exactly one acquire request, asserted by a test listener counting received requests", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vice-proxy-acquireonce-"));
+  const { server } = startStandInServer();
+  const port = await listen(server);
+  const proxy = startProxy({
+    VICE_POOL_DIR: dir,
+    VICE_EPOCH_FILE: join(dir, "epoch.json"),
+    VICE_MCP_HOST: "127.0.0.1",
+  });
+  let acquireCount = 0;
+  const acquired = await startControlBroker(dir, {
+    onAcquire: async () => {
+      acquireCount++;
+      return {
+        ok: true,
+        grant: {
+          port,
+          url: `http://127.0.0.1:${port}/mcp`,
+          epochFile: join(dir, String(port), "epoch.json"),
+          supervisorDir: join(dir, String(port)),
+        },
+      };
+    },
+  });
+  try {
+    await handshake(proxy);
+    proxy.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
+    await proxy.nextMessage();
+    proxy.send({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
+    await proxy.nextMessage();
+    proxy.send({ jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
+    await proxy.nextMessage();
+
+    assert.equal(acquireCount, 1, "a session already holding a connection must send no further acquire request");
+  } finally {
+    proxy.child.kill("SIGKILL");
+    await new Promise((resolve) => server.close(resolve));
+    await new Promise((resolve) => acquired.server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("with an explicit endpoint override set, the control listener receives no connection at all", async () => {
+  const { server } = startStandInServer();
+  const port = await listen(server);
+  let acquireCount = 0;
+  const dir = mkdtempSync(join(tmpdir(), "vice-proxy-override-noconn-"));
+  const acquired = await startControlBroker(dir, {
+    onAcquire: async () => {
+      acquireCount++;
+      return { ok: false, reason: "internal" };
+    },
+  });
+  const proxy = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${port}/mcp`, VICE_POOL_DIR: dir });
+  try {
+    await handshake(proxy);
+    proxy.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
+    const resp = await proxy.nextMessage();
+    assert.equal(resp.result.isError, false, "the override endpoint must still be usable");
+    assert.equal(acquireCount, 0, "an explicit VICE_MCP_URL override must never contact the control listener");
+  } finally {
+    proxy.child.kill("SIGKILL");
+    await new Promise((resolve) => server.close(resolve));
+    await new Promise((resolve) => acquired.server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("idempotency: SIGINT followed by SIGTERM ~50ms later is a complete no-op the second time, and the process stays alive", async () => {
+  // Plan 01.6.2-07 note: the retiring file protocol's own version of this
+  // test proved the SECOND trigger never even attempted a release, by
+  // planting a sentinel at the (now-removed) lease path and checking it
+  // survived a second unlinkSync attempt -- distinguishing "the guard fired,
+  // releaseLeaseNow was never called again" from "it was called again, but
+  // idempotently". That distinction does not transfer here: closing an
+  // ALREADY-DESTROYED socket a second time is unconditionally a no-op at the
+  // platform level (node:net's own Socket.destroy() guards on `destroyed`),
+  // so there is no wire-observable difference between "the onTeardown guard
+  // fired" and "it didn't, but the underlying primitive absorbed the second
+  // call anyway" -- a genuine simplification this design buys, not a gap.
+  // What remains testable, and is the property that actually matters, is
+  // that neither trigger throws or kills the process.
   const dir = mkdtempSync(join(tmpdir(), "vice-proxy-idem-"));
   const { server } = startStandInServer();
   const port = await listen(server);
   const proxy = startProxy({
     VICE_POOL_DIR: dir,
-    VICE_BROKER_BASE_PORT: String(port),
     VICE_EPOCH_FILE: join(dir, "epoch.json"),
     // The alias set to loopback -- makes the inverse an identity for a stub
     // that really lives on this side of the boundary (see the "ending path"
     // tests above for the same rationale).
     VICE_MCP_HOST: "127.0.0.1",
   });
+  let controlServer: NetServer | null = null;
   try {
     await handshake(proxy);
-    const { leasePath } = await acquireLeaseViaBroker(proxy, dir, port, 3);
+    const acquired = await acquireLeaseViaBroker(proxy, dir, port, 3);
+    controlServer = acquired.controlServer;
+
+    let sawSocketClose = false;
+    acquired.controlSocket.once("close", () => {
+      sawSocketClose = true;
+    });
 
     proxy.child.kill("SIGINT");
-    const gone = await waitForCondition(() => !existsSync(leasePath));
-    assert.ok(gone, "SIGINT must release the lease");
+    const gone = await waitForCondition(() => sawSocketClose);
+    assert.ok(gone, "SIGINT must close the control connection");
 
     await new Promise((r) => setTimeout(r, 50));
-    // A sentinel written at the SAME path a second trigger arriving after
-    // teardown has already run must NEVER touch -- onTeardown's own guard
-    // means releaseLeaseNow isn't even called a second time, not merely
-    // that a second unlink against an absent file happens to be harmless.
-    writeFileSync(leasePath, JSON.stringify({ version: 1, id: "sentinel" }));
     proxy.child.kill("SIGTERM");
     await new Promise((r) => setTimeout(r, 200));
-    assert.ok(
-      existsSync(leasePath),
-      "a second ending trigger after teardown has already run must be a complete no-op -- the sentinel must survive"
-    );
+
     assert.equal(proxy.child.exitCode, null, "the process stays alive throughout (no process.exit anywhere in the handler)");
   } finally {
     proxy.child.kill("SIGKILL");
     await new Promise((resolve) => server.close(resolve));
+    if (controlServer) await new Promise((resolve) => controlServer!.close(resolve));
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("a lease already removed out from under the proxy: teardown does not throw, process stays observable", async () => {
+test("a control connection already closed out from under the proxy: teardown does not throw, process stays observable", async () => {
   const dir = mkdtempSync(join(tmpdir(), "vice-proxy-already-removed-"));
   const { server } = startStandInServer();
   const port = await listen(server);
   const proxy = startProxy({
     VICE_POOL_DIR: dir,
-    VICE_BROKER_BASE_PORT: String(port),
     VICE_EPOCH_FILE: join(dir, "epoch.json"),
     // The alias set to loopback -- see the "ending path" tests above.
     VICE_MCP_HOST: "127.0.0.1",
   });
+  let controlServer: NetServer | null = null;
   try {
     await handshake(proxy);
-    const { leasePath } = await acquireLeaseViaBroker(proxy, dir, port, 3);
+    const acquired = await acquireLeaseViaBroker(proxy, dir, port, 3);
+    controlServer = acquired.controlServer;
 
-    // Simulate the broker's own sweep (or an operator) removing the lease
-    // out from under the still-running proxy, BEFORE any ending trigger.
-    rmSync(leasePath, { force: true });
+    // Simulate the broker itself dropping the connection out from under the
+    // still-running proxy, BEFORE any ending trigger -- the connection-based
+    // equivalent of an operator (or the broker's own sweep) removing the
+    // retiring lease file directly.
+    acquired.controlSocket.destroy();
+    await waitForCondition(() => acquired.controlSocket.destroyed);
 
     proxy.child.kill("SIGINT");
     await new Promise((r) => setTimeout(r, 300));
@@ -1913,86 +2060,24 @@ test("a lease already removed out from under the proxy: teardown does not throw,
     assert.equal(
       proxy.child.exitCode,
       null,
-      "the process must still be alive/observable after teardown against an already-gone lease"
+      "the process must still be alive/observable after teardown against an already-closed connection"
     );
   } finally {
     proxy.child.kill("SIGKILL");
     await new Promise((resolve) => server.close(resolve));
+    if (controlServer) await new Promise((resolve) => controlServer!.close(resolve));
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("heartbeat: with a short interval and no further tool calls, the lease's mtime advances at least twice", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "vice-proxy-heartbeat-"));
-  const { server } = startStandInServer();
-  const port = await listen(server);
-  const proxy = startProxy({
-    VICE_POOL_DIR: dir,
-    VICE_BROKER_BASE_PORT: String(port),
-    VICE_EPOCH_FILE: join(dir, "epoch.json"),
-    VICE_BROKER_HEARTBEAT_MS: "150",
-    // The alias set to loopback -- see the "ending path" tests above.
-    VICE_MCP_HOST: "127.0.0.1",
-  });
-  try {
-    await handshake(proxy);
-    const { leasePath } = await acquireLeaseViaBroker(proxy, dir, port, 3);
-
-    const mtime0 = statSync(leasePath).mtimeMs;
-    // No further tool calls issued from here on -- only the unref'd
-    // heartbeat timer should touch the lease.
-    const mtime1 = await waitForCondition(
-      () => {
-        const m = statSync(leasePath).mtimeMs;
-        return m > mtime0 ? m : null;
-      },
-      { timeoutMs: 4000 }
-    );
-    assert.ok(mtime1, "the lease's mtime must advance at least once via the heartbeat with no further tool calls");
-
-    const mtime2 = await waitForCondition(
-      () => {
-        const m = statSync(leasePath).mtimeMs;
-        return m > mtime1 ? m : null;
-      },
-      { timeoutMs: 4000 }
-    );
-    assert.ok(mtime2, "the lease's mtime must advance a SECOND time -- proving a repeating timer, not a one-off touch");
-  } finally {
-    proxy.child.kill("SIGKILL");
-    await new Promise((resolve) => server.close(resolve));
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("heartbeat timer is unref'd: the child exits after stdin closes, even with a lease held", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "vice-proxy-heartbeat-unref-"));
-  const { server } = startStandInServer();
-  const port = await listen(server);
-  const proxy = startProxy({
-    VICE_POOL_DIR: dir,
-    VICE_BROKER_BASE_PORT: String(port),
-    VICE_EPOCH_FILE: join(dir, "epoch.json"),
-    VICE_BROKER_HEARTBEAT_MS: "100",
-    // The alias set to loopback -- see the "ending path" tests above.
-    VICE_MCP_HOST: "127.0.0.1",
-  });
-  try {
-    await handshake(proxy);
-    await acquireLeaseViaBroker(proxy, dir, port, 3);
-
-    const exitPromise = new Promise((resolveExit) => {
-      proxy.child.once("exit", (code, signal) => resolveExit({ code, signal }));
-    });
-    proxy.child.stdin.end(); // the abrupt-ending path -- no signal, stdin closes
-    const result = await Promise.race([exitPromise, new Promise((r) => setTimeout(() => r(null), 5000))]);
-    assert.ok(result, "the child must exit naturally within 5s of stdin closing -- the heartbeat timer must not hold it open");
-  } finally {
-    proxy.child.kill("SIGKILL");
-    await new Promise((resolve) => server.close(resolve));
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
+// The two heartbeat tests that lived here (mtime advancing on a short
+// interval with no further tool calls, and the timer's unref'd-ness letting
+// the child exit after stdin closes) are DELETED, not converted: their own
+// subjects -- the lease-heartbeat interval and touchLease()'s mtime-refresh
+// convention -- are two of D-12's six explicitly retiring mechanisms.
+// Nothing needs touching to prove a TCP connection is alive; it either is,
+// or the broker's own "close" handler has already reclaimed the instance.
+// There is no successor behaviour to re-observe.
 
 test("C3 regression guard: initialize + tools/list alone write no request and no lease, ever", async () => {
   const dir = mkdtempSync(join(tmpdir(), "vice-proxy-c3-"));
@@ -2000,7 +2085,6 @@ test("C3 regression guard: initialize + tools/list alone write no request and no
   const port = await listen(server);
   const proxy = startProxy({
     VICE_POOL_DIR: dir,
-    VICE_BROKER_BASE_PORT: String(port),
     VICE_EPOCH_FILE: join(dir, "epoch.json"),
   });
   try {
@@ -2017,7 +2101,7 @@ test("C3 regression guard: initialize + tools/list alone write no request and no
   }
 });
 
-test("teardown region: no promise-awaiting construct, and releaseLease() called exactly once, between its markers", () => {
+test("teardown region: no promise-awaiting construct, and the control session's release() called exactly once, between its markers", () => {
   const source = readFileSync(PROXY_PATH, "utf8");
   const beginIdx = source.indexOf("TEARDOWN-REGION-BEGIN");
   const endIdx = source.indexOf("TEARDOWN-REGION-END");
@@ -2025,20 +2109,25 @@ test("teardown region: no promise-awaiting construct, and releaseLease() called 
   assert.ok(endIdx !== -1 && endIdx > beginIdx, "TEARDOWN-REGION-END marker must be present after the begin marker");
   const region = source.slice(beginIdx, endIdx);
 
-  // No promise-awaiting construct anywhere in the region -- scoped to this
-  // slice only, since the whole-file forwarding path (call(), pollGrant())
-  // is legitimately asynchronous and would trip a whole-file scan.
+  // No promise-AWAITING construct anywhere in the region -- scoped to this
+  // slice only, since the whole-file forwarding path (call(), the control
+  // session's own acquire()) is legitimately asynchronous and would trip a
+  // whole-file scan. `.catch(` is deliberately NOT in this denylist:
+  // BrokerControlSession.release() is declared `async`, so a synchronous
+  // throw inside it becomes a rejected promise rather than a thrown
+  // exception, and observing that failure without blocking on it is exactly
+  // what release().catch(...) does -- it is not itself an await.
   assert.doesNotMatch(region, /\bawait\b/, "the teardown region must contain no await");
   assert.doesNotMatch(region, /\.then\s*\(/, "the teardown region must contain no .then(");
   assert.doesNotMatch(region, /\basync\s+function\b|\basync\s*\(/, "the teardown region must define no async function");
 
-  // Exactly one filesystem call: releaseLease() (vice-broker-client.ts) IS
-  // that one synchronous fs operation (an attempted unlinkSync) -- this
-  // region calls INTO it rather than performing the unlink itself, so
+  // Exactly one release call: controlSession.release() IS the entire
+  // release now (a synchronous socket.destroy() under the hood) -- this
+  // region calls INTO it rather than performing the close itself, so
   // asserting the call site appears exactly once is this region's own
-  // version of "exactly one filesystem call".
-  const releaseLeaseCalls = region.match(/releaseLease\(/g) || [];
-  assert.equal(releaseLeaseCalls.length, 1, "the teardown region must call releaseLease() exactly once");
+  // version of "exactly one release".
+  const releaseCalls = region.match(/controlSession\.release\(\)/g) || [];
+  assert.equal(releaseCalls.length, 1, "the teardown region must call controlSession.release() exactly once");
 });
 
 // -----------------------------------------------------------------------
@@ -2069,8 +2158,8 @@ test("broker three states: each broker-absent shape gets its own message and fix
     neverStartedText = resp.result.content[0].text;
     assert.match(neverStartedText, /never.*started/i, "the never-started shape must say the broker was never started");
     assert.ok(
-      elapsedMs < GRANT_POLL_TIMEOUT_MS / 2,
-      `the never-started diagnosis must be fail-fast, well under half the grant-poll deadline (${GRANT_POLL_TIMEOUT_MS}ms) -- took ${elapsedMs}ms`
+      elapsedMs < ACQUIRE_TIMEOUT_MS / 2,
+      `the never-started diagnosis must be fail-fast, well under half the acquire deadline (${ACQUIRE_TIMEOUT_MS}ms) -- took ${elapsedMs}ms`
     );
     assert.equal(existsSync(join(dir, "requests")), false, "never-started must write no request file");
     assert.equal(existsSync(join(dir, "leases")), false, "never-started must write no lease file");
@@ -2098,46 +2187,27 @@ test("broker three states: each broker-absent shape gets its own message and fix
   rmSync(join(dir, "broker.json"), { force: true });
 
   // ---- Alive, but the launch itself was denied. ----
-  const freshHeartbeat = new Date().toISOString();
-  writeFileSync(join(dir, "broker.json"), JSON.stringify({ version: 1, pid: 8888, heartbeat_at: freshHeartbeat }), "utf8");
+  // Over the control plane, a denial carries broker-control.mts's own fixed
+  // AcquireOutcome vocabulary (no_free_port/at_capacity/internal), not a
+  // free-form reason string -- so "relayed verbatim" now means the outcome's
+  // own reason word appears unmodified, rather than an arbitrary marker.
+  const { server: controlServer3 } = await startControlBroker(dir, {
+    onAcquire: async () => ({ ok: false, reason: "no_free_port" }),
+  });
   const proxy3 = startProxy({ VICE_POOL_DIR: dir, VICE_EPOCH_FILE: join(dir, "epoch3.json") });
   let launchFailedText;
   try {
     await handshake(proxy3);
     proxy3.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
 
-    const reqDir = join(dir, "requests");
-    const reqFiles = await waitForCondition(() => {
-      if (!existsSync(reqDir)) return null;
-      const files = readdirSync(reqDir).filter((f) => f.endsWith(".json"));
-      return files.length > 0 ? files : null;
-    });
-    assert.ok(reqFiles, "a request file must appear before the denial is planted -- the broker is alive");
-    const deniedRequestId = reqFiles[0].replace(/\.json$/, "");
-    const deniedLeasePath = join(dir, "leases", deniedRequestId);
-    assert.ok(existsSync(deniedLeasePath), "a lease file must exist once the request has been written");
-
-    const denialsDirPath = join(dir, "denials");
-    mkdirSync(denialsDirPath, { recursive: true });
-    const marker = "MARKER-8f2c1a-no-free-ports-available";
-    writeFileSync(
-      join(denialsDirPath, `${deniedRequestId}.json`),
-      JSON.stringify({ version: 1, id: deniedRequestId, reason: marker, denied_at: new Date().toISOString() }),
-      "utf8"
-    );
-
     const resp = await proxy3.nextMessage(10000);
     assert.equal(resp.result.isError, true);
     launchFailedText = resp.result.content[0].text;
-    assert.match(launchFailedText, new RegExp(marker), "the denial's own reason must appear unmodified in the result");
+    assert.match(launchFailedText, /no_free_port/, "the denial's own reason must appear unmodified in the result");
     assert.doesNotMatch(launchFailedText, /restart/i, "the launch-failed message must NOT carry a restart instruction");
-
-    const gone = await waitForCondition(
-      () => !existsSync(deniedLeasePath) && !existsSync(join(reqDir, `${deniedRequestId}.json`))
-    );
-    assert.ok(gone, "a denied acquisition must clean up both the request file and the lease file it created");
   } finally {
     proxy3.child.kill("SIGKILL");
+    await new Promise((resolve) => controlServer3.close(resolve));
   }
 
   // ---- Cross-cutting assertions across all three shapes. ----
@@ -2159,11 +2229,11 @@ test("broker never-cache: absent-then-alive-and-granted succeeds on the SAME pro
   const port = await listen(server);
   const proxy = startProxy({
     VICE_POOL_DIR: dir,
-    VICE_BROKER_BASE_PORT: String(port),
     VICE_EPOCH_FILE: join(dir, "epoch.json"),
     // The alias set to loopback -- see the "ending path" tests above.
     VICE_MCP_HOST: "127.0.0.1",
   });
+  let controlServer: NetServer | null = null;
   try {
     await handshake(proxy);
     const pidBefore = proxy.child.pid;
@@ -2176,16 +2246,19 @@ test("broker never-cache: absent-then-alive-and-granted succeeds on the SAME pro
     assert.match(down.result.content[0].text, /never.*started/i);
     assert.equal(proxy.child.exitCode, null, "the proxy must still be running after the never-started diagnosis");
 
-    // Call 2, SAME process, no restart: runBrokerOnceDryRun() both marks the
-    // broker alive (writes broker.json) and grants the now-pending request.
-    const { leasePath } = await acquireLeaseViaBroker(proxy, dir, port, 4);
-    assert.ok(existsSync(leasePath), "the second call must succeed and hold a real lease, with no restart between calls");
+    // Call 2, SAME process, no restart: acquireLeaseViaBroker() both starts
+    // a real control listener (marking the broker alive) and grants the
+    // now-retried request.
+    const acquired = await acquireLeaseViaBroker(proxy, dir, port, 4);
+    controlServer = acquired.controlServer;
+    assert.equal(acquired.controlSocket.destroyed, false, "the second call must succeed and hold a real, open connection, with no restart between calls");
 
     assert.equal(proxy.child.pid, pidBefore, "both calls must have gone through the same child process -- no restart");
     assert.equal(proxy.child.exitCode, null);
   } finally {
     proxy.child.kill("SIGKILL");
     await new Promise((resolve) => server.close(resolve));
+    if (controlServer) await new Promise((resolve) => controlServer!.close(resolve));
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -2219,42 +2292,30 @@ test("broker: a malformed broker.json (truncated, wrong type, empty) is treated 
   }
 });
 
-test("broker warming: a poll timeout with no grant or denial is a warming-and-retry result, and cleans up after itself", async () => {
+test("broker warming: an acquire deadline with no grant or error is a warming-and-retry result, and leaves the connection closed", async () => {
   const dir = mkdtempSync(join(tmpdir(), "vice-proxy-broker-warming-"));
-  const freshHeartbeat = new Date().toISOString();
-  writeFileSync(join(dir, "broker.json"), JSON.stringify({ version: 1, pid: 9999, heartbeat_at: freshHeartbeat }), "utf8");
+  // onAcquire never resolves -- simulating a cold x64sc boot still in
+  // progress when the client's own per-request deadline elapses.
+  const { server: controlServer } = await startControlBroker(dir, {
+    onAcquire: () => new Promise(() => {}),
+  });
 
   const proxy = startProxy({
     VICE_POOL_DIR: dir,
     VICE_EPOCH_FILE: join(dir, "epoch.json"),
-    VICE_BROKER_GRANT_TIMEOUT_MS: "300", // short deadline -- nothing will ever grant or deny this request
+    VICE_BROKER_ACQUIRE_TIMEOUT_MS: "300", // short deadline -- nothing will ever grant or deny this request
   });
   try {
     await handshake(proxy);
     proxy.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
 
-    const reqDir = join(dir, "requests");
-    const reqFiles = await waitForCondition(() => {
-      if (!existsSync(reqDir)) return null;
-      const files = readdirSync(reqDir).filter((f) => f.endsWith(".json"));
-      return files.length > 0 ? files : null;
-    });
-    assert.ok(reqFiles, "a request file must appear -- the broker is alive, so an attempt is made");
-    const requestId = reqFiles[0].replace(/\.json$/, "");
-    const leasePath = join(dir, "leases", requestId);
-    assert.ok(existsSync(leasePath), "a lease file must exist once the request has been written");
-
     const resp = await proxy.nextMessage(10000);
     assert.equal(resp.result.isError, true);
-    assert.match(resp.result.content[0].text, /warming/i, "a poll timeout with neither grant nor denial must read as warming-and-retry");
+    assert.match(resp.result.content[0].text, /warming/i, "a deadline with neither grant nor error must read as warming-and-retry");
     assert.match(resp.result.content[0].text, /retry/i);
-
-    const gone = await waitForCondition(
-      () => !existsSync(leasePath) && !existsSync(join(reqDir, `${requestId}.json`))
-    );
-    assert.ok(gone, "a warming timeout must clean up both the request file and the lease file it created");
   } finally {
     proxy.child.kill("SIGKILL");
+    await new Promise((resolve) => controlServer.close(resolve));
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -2263,10 +2324,10 @@ test("broker warming: a poll timeout with no grant or denial is a warming-and-re
 // Quick task 260801-ccn task 2: a broker grant carrying HOST-local
 // coordinates (a loopback url, host-rooted epoch_file/supervisor_dir) is
 // inverted to container coordinates before useInstance() adopts it. Every
-// test below plants its grant DIRECTLY (grantDirectly()), reproducing the
-// captured host shape verbatim, rather than going through the real broker
-// script -- the point is a hand-written grant under full test control, not
-// a synthetic spare's own field derivation.
+// test below configures its own onAcquire stub (startControlBroker()) to
+// answer a grant under full test control, reproducing the captured host
+// shape verbatim, rather than going through a synthetic spare's own field
+// derivation.
 // -----------------------------------------------------------------------
 
 test("containerize: a loopback grant url is rewritten so the forwarded call actually reaches a stub bound off loopback", async () => {
@@ -2281,22 +2342,26 @@ test("containerize: a loopback grant url is rewritten so the forwarded call actu
     VICE_MCP_HOST: eth0, // the alias this test's rewrite must land on
     VICE_EPOCH_FILE: join(dir, "epoch.json"),
   });
+  let controlServer: NetServer | null = null;
   try {
     await handshake(proxy);
-    writeFreshBrokerJson(dir);
-
-    proxy.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
-    const id = await waitForRequestId(dir);
-
     // A loopback url on the stub's port -- nothing listens on loopback at
     // this port (the stub is bound ONLY to eth0), so a successful response
     // is only possible if the containerization inverse rewrote the url.
-    grantDirectly(dir, id, {
-      port: stubPort,
-      url: `http://127.0.0.1:${stubPort}/mcp`,
-      epoch_file: join(dir, "unused-epoch.json"),
-      supervisor_dir: join(dir, "unused-supervisor-dir"),
+    const acquired = await startControlBroker(dir, {
+      onAcquire: async () => ({
+        ok: true,
+        grant: {
+          port: stubPort,
+          url: `http://127.0.0.1:${stubPort}/mcp`,
+          epochFile: join(dir, "unused-epoch.json"),
+          supervisorDir: join(dir, "unused-supervisor-dir"),
+        },
+      }),
     });
+    controlServer = acquired.server;
+
+    proxy.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
 
     const resp = await proxy.nextMessage(10000);
     assert.equal(
@@ -2311,6 +2376,7 @@ test("containerize: a loopback grant url is rewritten so the forwarded call actu
   } finally {
     proxy.child.kill("SIGKILL");
     await new Promise((resolveClose) => server.close(resolveClose));
+    if (controlServer) await new Promise((resolveClose) => controlServer!.close(resolveClose));
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -2338,19 +2404,23 @@ test("containerize: a host-rooted grant epoch_file is rewritten so epoch drift i
     // Deliberately NOT setting VICE_EPOCH_FILE -- the granted epoch_file
     // must be the only path in play.
   });
+  let controlServer: NetServer | null = null;
   try {
     await handshake(proxy);
-    writeFreshBrokerJson(dir);
+    const acquired = await startControlBroker(dir, {
+      onAcquire: async () => ({
+        ok: true,
+        grant: {
+          port: stubPort,
+          url: `http://127.0.0.1:${stubPort}/mcp`,
+          epochFile: epochHostPath,
+          supervisorDir: join(dir, "unused-supervisor-dir"),
+        },
+      }),
+    });
+    controlServer = acquired.server;
 
     proxy.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
-    const id = await waitForRequestId(dir);
-
-    grantDirectly(dir, id, {
-      port: stubPort,
-      url: `http://127.0.0.1:${stubPort}/mcp`,
-      epoch_file: epochHostPath,
-      supervisor_dir: join(dir, "unused-supervisor-dir"),
-    });
 
     const first = await proxy.nextMessage(10000);
     assert.equal(first.result.isError, false, "the first forwarded call must succeed");
@@ -2377,6 +2447,7 @@ test("containerize: a host-rooted grant epoch_file is rewritten so epoch drift i
   } finally {
     proxy.child.kill("SIGKILL");
     await new Promise((resolveClose) => server.close(resolveClose));
+    if (controlServer) await new Promise((resolveClose) => controlServer!.close(resolveClose));
     rmSync(dir, { recursive: true, force: true });
     rmSync(epochContainerDir, { recursive: true, force: true });
   }
@@ -2392,10 +2463,12 @@ test("containerize: an already-container-shaped grant (tmpdir VICE_POOL_DIR) is 
     VICE_MCP_HOST: "127.0.0.1", // makes the rewrite an identity for a stub that really lives on this side
     VICE_EPOCH_FILE: join(dir, "epoch.json"),
   });
+  let controlServer: NetServer | null = null;
   try {
     await handshake(proxy);
-    const { leasePath } = await acquireLeaseViaBroker(proxy, dir, port, 3);
-    assert.ok(existsSync(leasePath));
+    const acquired = await acquireLeaseViaBroker(proxy, dir, port, 3);
+    controlServer = acquired.controlServer;
+    assert.equal(acquired.controlSocket.destroyed, false, "a real, open connection must be held once the call has resolved");
 
     const translationLines = proxy.stderr.join("").split("\n").filter((l) => l.includes("containerized grant"));
     assert.equal(translationLines.length, 1);
@@ -2405,6 +2478,7 @@ test("containerize: an already-container-shaped grant (tmpdir VICE_POOL_DIR) is 
   } finally {
     proxy.child.kill("SIGKILL");
     await new Promise((resolveClose) => server.close(resolveClose));
+    if (controlServer) await new Promise((resolveClose) => controlServer!.close(resolveClose));
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -2418,12 +2492,9 @@ test("containerize safety net: a grant whose epoch_file translates outside the w
     VICE_POOL_DIR: dir,
     VICE_MCP_HOST: "127.0.0.1",
   });
+  let controlServer: NetServer | null = null;
   try {
     await handshake(proxy);
-    writeFreshBrokerJson(dir);
-
-    proxy.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
-    const id = await waitForRequestId(dir);
 
     // A REAL host root this container recognises, with a lexical ".."
     // traversal appended -- translates to something outside the workspace
@@ -2431,12 +2502,20 @@ test("containerize safety net: a grant whose epoch_file translates outside the w
     const realHostRoot = hostPath(repoRoot());
     const escapingHostPath = `${realHostRoot}/../../../../../../etc/passwd`;
 
-    grantDirectly(dir, id, {
-      port,
-      url: `http://127.0.0.1:${port}/mcp`,
-      epoch_file: escapingHostPath,
-      supervisor_dir: join(dir, "unused-supervisor-dir"),
+    const acquired = await startControlBroker(dir, {
+      onAcquire: async () => ({
+        ok: true,
+        grant: {
+          port,
+          url: `http://127.0.0.1:${port}/mcp`,
+          epochFile: escapingHostPath,
+          supervisorDir: join(dir, "unused-supervisor-dir"),
+        },
+      }),
     });
+    controlServer = acquired.server;
+
+    proxy.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
 
     const resp = await proxy.nextMessage(10000);
     assert.equal(
@@ -2455,6 +2534,7 @@ test("containerize safety net: a grant whose epoch_file translates outside the w
   } finally {
     proxy.child.kill("SIGKILL");
     await new Promise((resolveClose) => server.close(resolveClose));
+    if (controlServer) await new Promise((resolveClose) => controlServer!.close(resolveClose));
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -2469,19 +2549,23 @@ test("containerize safety net: a grant whose url port disagrees with the granted
     VICE_POOL_DIR: dir,
     VICE_MCP_HOST: "127.0.0.1",
   });
+  let controlServer: NetServer | null = null;
   try {
     await handshake(proxy);
-    writeFreshBrokerJson(dir);
+    const acquired = await startControlBroker(dir, {
+      onAcquire: async () => ({
+        ok: true,
+        grant: {
+          port,
+          url: `http://127.0.0.1:${wrongPort}/mcp`, // disagrees with the granted port
+          epochFile: join(dir, "unused-epoch.json"),
+          supervisorDir: join(dir, "unused-supervisor-dir"),
+        },
+      }),
+    });
+    controlServer = acquired.server;
 
     proxy.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
-    const id = await waitForRequestId(dir);
-
-    grantDirectly(dir, id, {
-      port,
-      url: `http://127.0.0.1:${wrongPort}/mcp`, // disagrees with the granted port
-      epoch_file: join(dir, "unused-epoch.json"),
-      supervisor_dir: join(dir, "unused-supervisor-dir"),
-    });
 
     const resp = await proxy.nextMessage(10000);
     assert.equal(resp.result.isError, false, "the session must still be usable via the port-derived fallback url");
@@ -2498,6 +2582,7 @@ test("containerize safety net: a grant whose url port disagrees with the granted
   } finally {
     proxy.child.kill("SIGKILL");
     await new Promise((resolveClose) => server.close(resolveClose));
+    if (controlServer) await new Promise((resolveClose) => controlServer!.close(resolveClose));
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -2516,7 +2601,7 @@ test("broker-granted unreachable: names the broker launcher, carries the probe r
   // Reserve then CLOSE a port -- guarantees an ACTIVELY refused connection
   // (ECONNREFUSED), not merely "nothing has bound here yet".
   const probeServer = createServer();
-  const refusedPort = await new Promise((resolvePort, reject) => {
+  const refusedPort = await new Promise<number>((resolvePort, reject) => {
     probeServer.once("error", reject);
     probeServer.listen(0, "127.0.0.1", () => resolvePort((probeServer.address() as AddressInfo).port));
   });
@@ -2526,19 +2611,23 @@ test("broker-granted unreachable: names the broker launcher, carries the probe r
     VICE_POOL_DIR: dir,
     VICE_MCP_HOST: "127.0.0.1",
   });
+  let controlServer: NetServer | null = null;
   try {
     await handshake(proxy);
-    writeFreshBrokerJson(dir);
+    const acquired = await startControlBroker(dir, {
+      onAcquire: async () => ({
+        ok: true,
+        grant: {
+          port: refusedPort,
+          url: `http://127.0.0.1:${refusedPort}/mcp`,
+          epochFile: join(dir, "unused-epoch.json"),
+          supervisorDir: join(dir, "unused-supervisor-dir"),
+        },
+      }),
+    });
+    controlServer = acquired.server;
 
     proxy.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
-    const id = await waitForRequestId(dir);
-
-    grantDirectly(dir, id, {
-      port: refusedPort,
-      url: `http://127.0.0.1:${refusedPort}/mcp`,
-      epoch_file: join(dir, "unused-epoch.json"),
-      supervisor_dir: join(dir, "unused-supervisor-dir"),
-    });
 
     const resp = await proxy.nextMessage(10000);
     assert.equal(resp.result.isError, true);
@@ -2551,6 +2640,7 @@ test("broker-granted unreachable: names the broker launcher, carries the probe r
     assert.doesNotMatch(text, /never.*started/i, "the message must NOT carry the 01.1 never-started phrasing");
   } finally {
     proxy.child.kill("SIGKILL");
+    if (controlServer) await new Promise((resolveClose) => controlServer!.close(resolveClose));
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -2612,13 +2702,13 @@ function findWorktreeAwareRepoRoot(from: string): string {
   }
 }
 
-test("ordering: the proxy's own grant-poll deadline is strictly less than .mcp.json's timeout", () => {
+test("ordering: the proxy's own acquire deadline is strictly less than .mcp.json's timeout", () => {
   const mcpJson = JSON.parse(readFileSync(join(findWorktreeAwareRepoRoot(HERE), ".mcp.json"), "utf8"));
   const configuredTimeout = mcpJson.mcpServers.vice.timeout;
   assert.equal(typeof configuredTimeout, "number", ".mcp.json's vice entry must carry a numeric timeout");
   assert.ok(
-    GRANT_POLL_TIMEOUT_MS < configuredTimeout,
-    `the proxy's grant-poll deadline (${GRANT_POLL_TIMEOUT_MS}ms) must be strictly less than .mcp.json's ` +
+    ACQUIRE_TIMEOUT_MS < configuredTimeout,
+    `the proxy's acquire deadline (${ACQUIRE_TIMEOUT_MS}ms) must be strictly less than .mcp.json's ` +
       `timeout (${configuredTimeout}ms), so the proxy's own warming-and-retry message is always what a ` +
       `waiting caller sees rather than the client's own timeout`
   );
@@ -2723,44 +2813,70 @@ function writeEpochFileFixture(
   );
 }
 
-function writeRecycleAckFixture(dir: string, id: string, fields: Record<string, unknown>) {
-  const adir = join(dir, "recycle-acks");
-  mkdirSync(adir, { recursive: true });
-  const record = {
-    version: 1,
-    id,
-    target_id: null,
-    port: null,
-    x64sc_pid: null,
-    vice_bin: null,
-    kill_stage: null,
-    epoch_before: null,
-    outcome: null,
-    reason: null,
-    acked_at: new Date().toISOString(),
-    ...fields,
+/** A single controllable recycle stub for a control listener started via
+ * startControlBroker(): captures the targetId the FIRST time onRecycle is
+ * invoked (resolving waitForCall()), then holds the connection open until
+ * the test calls respond() with whatever RecycleOutcome it wants acked --
+ * or never calls it at all, for the timeout path. This is the TCP-control-
+ * plane replacement for the retiring writeRecycleAckFixture()'s own "plant
+ * the ack file whenever the test is ready" idiom, and for
+ * waitForRecycleRequestId()'s own "poll for the request file to appear"
+ * idiom -- onRecycle() firing IS "the request has arrived", synchronously,
+ * with no polling needed. */
+function makeControllableRecycle(): {
+  onRecycle: (targetId: string) => Promise<RecycleOutcome>;
+  waitForCall: () => Promise<string>;
+  respond: (outcome: RecycleOutcome) => void;
+} {
+  let calledResolve!: (targetId: string) => void;
+  const called = new Promise<string>((r) => {
+    calledResolve = r;
+  });
+  let respondResolve: ((outcome: RecycleOutcome) => void) | null = null;
+  const onRecycle = (targetId: string): Promise<RecycleOutcome> => {
+    calledResolve(targetId);
+    return new Promise<RecycleOutcome>((r) => {
+      respondResolve = r;
+    });
   };
-  writeFileSync(join(adir, `${id}.json`), JSON.stringify(record, null, 2) + "\n");
+  return {
+    onRecycle,
+    waitForCall: () => called,
+    respond(outcome: RecycleOutcome) {
+      assert.ok(respondResolve, "respond() called before onRecycle() was invoked by a real recycle request");
+      respondResolve!(outcome);
+    },
+  };
 }
 
-/** Waits for exactly one NEW request file (excluding the acquire lease's own
- * id, plus any additional ids named in `extraExcludeIds` -- e.g. an earlier
- * recycle's own request file, which nothing in this test harness deletes
- * since the fake ack is written directly rather than via a real broker
- * pass) to appear under dir/requests -- the recycle request handleRecycle()
- * writes. Returns its id. */
-async function waitForRecycleRequestId(dir: string, excludeId: string, extraExcludeIds: string[] = []) {
-  const reqDir = join(dir, "requests");
-  const excluded = new Set([excludeId, ...extraExcludeIds].map((id) => `${id}.json`));
-  const found = await waitForCondition(() => {
-    if (!existsSync(reqDir)) return null;
-    const files = readdirSync(reqDir)
-      .filter((f) => f.endsWith(".json"))
-      .filter((f) => !excluded.has(f));
-    return files.length > 0 ? files[0].replace(/\.json$/, "") : null;
-  });
-  assert.ok(found, "a recycle request file must appear under requests/");
-  return found;
+/** Like makeControllableRecycle() above, but supports MULTIPLE sequential
+ * recycle calls over the same connection -- each call to next() awaits the
+ * NEXT onRecycle() invocation (in arrival order) and hands back both its
+ * targetId and its own respond() function, for tests exercising more than
+ * one recycle in a single session. */
+function makeControllableRecycleSequence(): {
+  onRecycle: (targetId: string) => Promise<RecycleOutcome>;
+  next: () => Promise<{ targetId: string; respond: (outcome: RecycleOutcome) => void }>;
+} {
+  type Entry = { targetId: string; respond: (outcome: RecycleOutcome) => void };
+  const waitingConsumers: Array<(entry: Entry) => void> = [];
+  const readyEntries: Entry[] = [];
+  const onRecycle = (targetId: string): Promise<RecycleOutcome> => {
+    return new Promise<RecycleOutcome>((resolveOutcome) => {
+      const entry: Entry = { targetId, respond: resolveOutcome };
+      const consumer = waitingConsumers.shift();
+      if (consumer) consumer(entry);
+      else readyEntries.push(entry);
+    });
+  };
+  function next(): Promise<Entry> {
+    return new Promise((resolveConsumer) => {
+      const entry = readyEntries.shift();
+      if (entry) resolveConsumer(entry);
+      else waitingConsumers.push(resolveConsumer);
+    });
+  }
+  return { onRecycle, next };
 }
 
 test("vice_recycle: a missing or empty reason returns a well-formed error result naming the requirement, writes no record and no request", async () => {
@@ -2844,39 +2960,42 @@ test("vice_recycle: no broker lease held yet for this session is refused, writes
   }
 });
 
-test("vice_recycle: the incident record -- with its evidence section already complete -- exists on disk before the recycle request file does", async () => {
+test("vice_recycle: the incident record -- with its evidence section already complete -- exists on disk before the recycle request reaches the broker", async () => {
   const dir = mkdtempSync(join(tmpdir(), "vice-proxy-recycle-order-"));
   const evidenceDir = tmpWorkspaceIncidentsDir();
   const { server } = startFlexibleStandInServer(healthyEvidenceRespond({}));
   const port = await listen(server);
+  const recycle = makeControllableRecycle();
+  let controlServer: NetServer | null = null;
   const proxy = startProxy({
     VICE_POOL_DIR: dir,
-    VICE_BROKER_BASE_PORT: String(port),
     VICE_MCP_HOST: "127.0.0.1",
     VICE_INCIDENTS_DIR: evidenceDir,
   });
   try {
     await handshake(proxy);
-    const { id: leaseId } = await acquireLeaseViaBroker(proxy, dir, port, 3);
+    const acquired = await acquireLeaseViaBroker(proxy, dir, port, 3, recycle.onRecycle);
+    controlServer = acquired.controlServer;
     writeEpochFileFixture(dir, port, { epoch: 1 });
 
     proxy.send({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "vice_recycle", arguments: { reason: "ordering test" } } });
 
-    const recycleId = await waitForRecycleRequestId(dir, leaseId);
+    // onRecycle() firing IS "the request has reached the broker" -- by the
+    // time this resolves, the incident record must ALREADY be on disk,
+    // carrying its full criterion-4 evidence section -- gatherWedgeEvidence()
+    // and captureSnapshotAttempt() run, then writeIncidentRecord() runs, all
+    // with no await between the LAST of those and controlSession.recycle()
+    // (D-17's automated form, criterion 4, strengthened by plan 01.3-03 from
+    // plan 01.3-01's minimal-record form).
+    await recycle.waitForCall();
 
-    // The moment the request file exists, the incident record must ALREADY
-    // be there, carrying its full criterion-4 evidence section --
-    // gatherWedgeEvidence() and captureSnapshotAttempt() run, then
-    // writeIncidentRecord() runs, all with no await between the LAST of
-    // those and writeRecycleRequest() (D-17's automated form, criterion 4,
-    // strengthened by plan 01.3-03 from plan 01.3-01's minimal-record form).
     const incidentFiles = readdirSync(evidenceDir).filter((f) => f.endsWith(".md"));
-    assert.equal(incidentFiles.length, 1, "exactly one incident record must exist by the time the request file appears");
+    assert.equal(incidentFiles.length, 1, "exactly one incident record must exist by the time the recycle request reaches the broker");
     const contentAtRequestTime = readFileSync(join(evidenceDir, incidentFiles[0]), "utf8");
     assert.match(
       contentAtRequestTime,
       /evidence_complete: true/,
-      "the evidence section must already be COMPLETE at the moment the request file appears -- not merely present"
+      "the evidence section must already be COMPLETE at the moment the request reaches the broker -- not merely present"
     );
     assert.match(contentAtRequestTime, /cycle bracket: \d+ cycles retired/);
     assert.match(contentAtRequestTime, /pre-kill snapshot attempt: accepted \(name: /);
@@ -2884,12 +3003,13 @@ test("vice_recycle: the incident record -- with its evidence section already com
     // Bump the epoch and provide a successful ack so the pending call
     // resolves and this test can tear down cleanly.
     writeEpochFileFixture(dir, port, { epoch: 2 });
-    writeRecycleAckFixture(dir, recycleId, { target_id: leaseId, port, outcome: "ok", kill_stage: "sigterm", epoch_before: 1 });
+    recycle.respond({ port, pid: 40001, viceBin: "x64sc", killStage: "sigterm", epochBefore: 1, outcome: "ok", reason: "" });
     const resp = await proxy.nextMessage();
     assert.equal(resp.result.isError, false);
   } finally {
     proxy.child.kill("SIGKILL");
     await new Promise((resolve) => server.close(resolve));
+    if (controlServer) await new Promise((resolve) => controlServer!.close(resolve));
     rmSync(dir, { recursive: true, force: true });
     rmSync(evidenceDir, { recursive: true, force: true });
   }
@@ -2900,22 +3020,24 @@ test("vice_recycle: an ack whose kill stage is the escalated one produces a resu
   const incidentsDir = tmpIncidentsDir();
   const { server } = startStandInServer();
   const port = await listen(server);
+  const recycle = makeControllableRecycle();
+  let controlServer: NetServer | null = null;
   const proxy = startProxy({
     VICE_POOL_DIR: dir,
-    VICE_BROKER_BASE_PORT: String(port),
     VICE_MCP_HOST: "127.0.0.1",
     VICE_INCIDENTS_DIR: incidentsDir,
   });
   try {
     await handshake(proxy);
-    const { id: leaseId } = await acquireLeaseViaBroker(proxy, dir, port, 3);
+    const acquired = await acquireLeaseViaBroker(proxy, dir, port, 3, recycle.onRecycle);
+    controlServer = acquired.controlServer;
     writeEpochFileFixture(dir, port, { epoch: 1 });
 
     proxy.send({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "vice_recycle", arguments: { reason: "escalation test" } } });
-    const recycleId = await waitForRecycleRequestId(dir, leaseId);
+    await recycle.waitForCall();
 
     writeEpochFileFixture(dir, port, { epoch: 2 });
-    writeRecycleAckFixture(dir, recycleId, { target_id: leaseId, port, outcome: "ok", kill_stage: "sigkill", epoch_before: 1 });
+    recycle.respond({ port, pid: 40001, viceBin: "x64sc", killStage: "sigkill", epochBefore: 1, outcome: "ok", reason: "" });
 
     const resp = await proxy.nextMessage();
     assert.equal(resp.result.isError, false);
@@ -2927,6 +3049,7 @@ test("vice_recycle: an ack whose kill stage is the escalated one produces a resu
   } finally {
     proxy.child.kill("SIGKILL");
     await new Promise((resolve) => server.close(resolve));
+    if (controlServer) await new Promise((resolve) => controlServer!.close(resolve));
     rmSync(dir, { recursive: true, force: true });
     rmSync(incidentsDir, { recursive: true, force: true });
   }
@@ -2937,26 +3060,29 @@ test("vice_recycle: an ack with a refusal produces an error result naming the re
   const incidentsDir = tmpIncidentsDir();
   const { server } = startStandInServer();
   const port = await listen(server);
+  const recycle = makeControllableRecycle();
+  let controlServer: NetServer | null = null;
   const proxy = startProxy({
     VICE_POOL_DIR: dir,
-    VICE_BROKER_BASE_PORT: String(port),
     VICE_MCP_HOST: "127.0.0.1",
     VICE_INCIDENTS_DIR: incidentsDir,
   });
   try {
     await handshake(proxy);
-    const { id: leaseId } = await acquireLeaseViaBroker(proxy, dir, port, 3);
+    const acquired = await acquireLeaseViaBroker(proxy, dir, port, 3, recycle.onRecycle);
+    controlServer = acquired.controlServer;
     writeEpochFileFixture(dir, port, { epoch: 1 });
 
     proxy.send({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "vice_recycle", arguments: { reason: "refusal test" } } });
-    const recycleId = await waitForRecycleRequestId(dir, leaseId);
+    await recycle.waitForCall();
 
-    writeRecycleAckFixture(dir, recycleId, {
-      target_id: leaseId,
+    recycle.respond({
       port,
+      pid: null,
+      viceBin: null,
+      killStage: "identity_refused",
+      epochBefore: 1,
       outcome: "identity_refused",
-      kill_stage: "identity_refused",
-      epoch_before: 1,
       reason: "ps args did not match",
     });
 
@@ -2970,6 +3096,7 @@ test("vice_recycle: an ack with a refusal produces an error result naming the re
   } finally {
     proxy.child.kill("SIGKILL");
     await new Promise((resolve) => server.close(resolve));
+    if (controlServer) await new Promise((resolve) => controlServer!.close(resolve));
     rmSync(dir, { recursive: true, force: true });
     rmSync(incidentsDir, { recursive: true, force: true });
   }
@@ -2980,23 +3107,26 @@ test("vice_recycle: an ack that never arrives before the deadline produces a wel
   const incidentsDir = tmpIncidentsDir();
   const { server } = startStandInServer();
   const port = await listen(server);
+  // No stub configured -- startControlBroker()'s DEFAULT onRecycle never
+  // acks (matches the retiring fixture's "no ack is ever written" setup),
+  // so the client's own deadline is what must fire.
+  let controlServer: NetServer | null = null;
   const proxy = startProxy({
     VICE_POOL_DIR: dir,
-    VICE_BROKER_BASE_PORT: String(port),
     VICE_MCP_HOST: "127.0.0.1",
     VICE_INCIDENTS_DIR: incidentsDir,
     VICE_BROKER_RECYCLE_TIMEOUT_MS: "300", // keep the test fast -- no ack will ever be written
   });
   try {
     await handshake(proxy);
-    const { id: leaseId } = await acquireLeaseViaBroker(proxy, dir, port, 3);
+    const acquired = await acquireLeaseViaBroker(proxy, dir, port, 3, () => new Promise(() => {}));
+    controlServer = acquired.controlServer;
     writeEpochFileFixture(dir, port, { epoch: 1 });
 
     proxy.send({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "vice_recycle", arguments: { reason: "timeout test" } } });
-    await waitForRecycleRequestId(dir, leaseId);
 
-    // No ack is ever written -- the poll must give up at its own deadline
-    // rather than hang the proxy forever.
+    // No ack ever arrives -- the client's own per-request deadline must give
+    // up rather than hang the proxy forever.
     const resp = await proxy.nextMessage(5000);
     assert.equal(resp.result.isError, true);
     assert.match(resp.result.content[0].text, /timeout|no ack arrived/i);
@@ -3011,6 +3141,52 @@ test("vice_recycle: an ack that never arrives before the deadline produces a wel
   } finally {
     proxy.child.kill("SIGKILL");
     await new Promise((resolve) => server.close(resolve));
+    if (controlServer) await new Promise((resolve) => controlServer!.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(incidentsDir, { recursive: true, force: true });
+  }
+});
+
+test("vice_recycle: the broker dropping the connection mid-recycle is reported distinctly from a refusal acknowledgement", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vice-proxy-recycle-brokergone-"));
+  const incidentsDir = tmpIncidentsDir();
+  const { server } = startStandInServer();
+  const port = await listen(server);
+  let controlServer: NetServer | null = null;
+  let acceptedSocket: Socket | null = null;
+  const proxy = startProxy({
+    VICE_POOL_DIR: dir,
+    VICE_MCP_HOST: "127.0.0.1",
+    VICE_INCIDENTS_DIR: incidentsDir,
+  });
+  try {
+    await handshake(proxy);
+    // onRecycle destroys the connection itself rather than ever answering --
+    // the broker vanishing mid-request, as distinct from an acknowledgement
+    // that carries a refusal.
+    const acquired = await acquireLeaseViaBroker(proxy, dir, port, 3, async () => {
+      acceptedSocket!.destroy();
+      return new Promise(() => {});
+    });
+    controlServer = acquired.controlServer;
+    acceptedSocket = acquired.controlSocket;
+    writeEpochFileFixture(dir, port, { epoch: 1 });
+
+    proxy.send({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "vice_recycle", arguments: { reason: "broker-gone test" } } });
+
+    const resp = await proxy.nextMessage(5000);
+    assert.equal(resp.result.isError, true);
+    const text = resp.result.content[0].text;
+    assert.match(text, /broker/i);
+    assert.doesNotMatch(text, /identity_refused/i, "a broker-gone outcome text must not read as a refusal acknowledgement");
+
+    const incidentPath = join(incidentsDir, readdirSync(incidentsDir)[0]);
+    const incidentContent = readFileSync(incidentPath, "utf8");
+    assert.match(incidentContent, /outcome: 'broker_gone'/);
+  } finally {
+    proxy.child.kill("SIGKILL");
+    await new Promise((resolve) => server.close(resolve));
+    if (controlServer) await new Promise((resolve) => controlServer!.close(resolve));
     rmSync(dir, { recursive: true, force: true });
     rmSync(incidentsDir, { recursive: true, force: true });
   }
@@ -3021,24 +3197,26 @@ test("vice_recycle: after a confirmed recycle, a subsequent forwarded call succe
   const incidentsDir = tmpIncidentsDir();
   const { server, requests } = startStandInServer();
   const port = await listen(server);
+  const recycle = makeControllableRecycle();
+  let controlServer: NetServer | null = null;
   const proxy = startProxy({
     VICE_POOL_DIR: dir,
-    VICE_BROKER_BASE_PORT: String(port),
     VICE_MCP_HOST: "127.0.0.1",
     VICE_INCIDENTS_DIR: incidentsDir,
   });
   try {
     await handshake(proxy);
-    const { id: leaseId } = await acquireLeaseViaBroker(proxy, dir, port, 3);
+    const acquired = await acquireLeaseViaBroker(proxy, dir, port, 3, recycle.onRecycle);
+    controlServer = acquired.controlServer;
     writeEpochFileFixture(dir, port, { epoch: 1 });
 
     proxy.send({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "vice_recycle", arguments: { reason: "rebaseline test" } } });
-    const recycleId = await waitForRecycleRequestId(dir, leaseId);
+    await recycle.waitForCall();
 
     // Simulate the deliberate identity change a real recycle causes: the
     // epoch actually moves.
     writeEpochFileFixture(dir, port, { epoch: 2 });
-    writeRecycleAckFixture(dir, recycleId, { target_id: leaseId, port, outcome: "ok", kill_stage: "sigterm", epoch_before: 1 });
+    recycle.respond({ port, pid: 40001, viceBin: "x64sc", killStage: "sigterm", epochBefore: 1, outcome: "ok", reason: "" });
 
     const recycleResp = await proxy.nextMessage();
     assert.equal(recycleResp.result.isError, false);
@@ -3055,6 +3233,7 @@ test("vice_recycle: after a confirmed recycle, a subsequent forwarded call succe
   } finally {
     proxy.child.kill("SIGKILL");
     await new Promise((resolve) => server.close(resolve));
+    if (controlServer) await new Promise((resolve) => controlServer!.close(resolve));
     rmSync(dir, { recursive: true, force: true });
     rmSync(incidentsDir, { recursive: true, force: true });
   }
@@ -3138,21 +3317,23 @@ test("vice_recycle: a healthy capture produces a full evidence object -- bracket
   });
   const { server, requests } = startFlexibleStandInServer(respond);
   const port = await listen(server);
+  const recycle = makeControllableRecycle();
+  let controlServer: NetServer | null = null;
   const proxy = startProxy({
     VICE_POOL_DIR: dir,
-    VICE_BROKER_BASE_PORT: String(port),
     VICE_MCP_HOST: "127.0.0.1",
     VICE_INCIDENTS_DIR: evidenceDir,
   });
   try {
     await handshake(proxy);
-    const { id: leaseId } = await acquireLeaseViaBroker(proxy, dir, port, 3);
+    const acquired = await acquireLeaseViaBroker(proxy, dir, port, 3, recycle.onRecycle);
+    controlServer = acquired.controlServer;
     writeEpochFileFixture(dir, port, { epoch: 1 });
 
     proxy.send({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "vice_recycle", arguments: { reason: "evidence test" } } });
-    const recycleId = await waitForRecycleRequestId(dir, leaseId);
+    await recycle.waitForCall();
     writeEpochFileFixture(dir, port, { epoch: 2 });
-    writeRecycleAckFixture(dir, recycleId, { target_id: leaseId, port, outcome: "ok", kill_stage: "sigterm", epoch_before: 1 });
+    recycle.respond({ port, pid: 40001, viceBin: "x64sc", killStage: "sigterm", epochBefore: 1, outcome: "ok", reason: "" });
 
     const resp = await proxy.nextMessage();
     assert.equal(resp.result.isError, false);
@@ -3184,6 +3365,7 @@ test("vice_recycle: a healthy capture produces a full evidence object -- bracket
   } finally {
     proxy.child.kill("SIGKILL");
     await new Promise((resolve) => server.close(resolve));
+    if (controlServer) await new Promise((resolve) => controlServer!.close(resolve));
     rmSync(dir, { recursive: true, force: true });
     rmSync(evidenceDir, { recursive: true, force: true });
   }
@@ -3196,21 +3378,23 @@ test("vice_recycle: a rejected screenshot capture records unavailable with the r
   const respond = (name: string, args: any) => (name === "vice_display_screenshot" ? undefined : healthy(name, args));
   const { server } = startFlexibleStandInServer(respond);
   const port = await listen(server);
+  const recycle = makeControllableRecycle();
+  let controlServer: NetServer | null = null;
   const proxy = startProxy({
     VICE_POOL_DIR: dir,
-    VICE_BROKER_BASE_PORT: String(port),
     VICE_MCP_HOST: "127.0.0.1",
     VICE_INCIDENTS_DIR: evidenceDir,
   });
   try {
     await handshake(proxy);
-    const { id: leaseId } = await acquireLeaseViaBroker(proxy, dir, port, 3);
+    const acquired = await acquireLeaseViaBroker(proxy, dir, port, 3, recycle.onRecycle);
+    controlServer = acquired.controlServer;
     writeEpochFileFixture(dir, port, { epoch: 1 });
 
     proxy.send({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "vice_recycle", arguments: { reason: "no screenshot test" } } });
-    const recycleId = await waitForRecycleRequestId(dir, leaseId);
+    await recycle.waitForCall();
     writeEpochFileFixture(dir, port, { epoch: 2 });
-    writeRecycleAckFixture(dir, recycleId, { target_id: leaseId, port, outcome: "ok", kill_stage: "sigterm", epoch_before: 1 });
+    recycle.respond({ port, pid: 40001, viceBin: "x64sc", killStage: "sigterm", epochBefore: 1, outcome: "ok", reason: "" });
 
     const resp = await proxy.nextMessage();
     assert.equal(resp.result.isError, false, "a rejected screenshot must not fail the recycle");
@@ -3225,6 +3409,7 @@ test("vice_recycle: a rejected screenshot capture records unavailable with the r
   } finally {
     proxy.child.kill("SIGKILL");
     await new Promise((resolve) => server.close(resolve));
+    if (controlServer) await new Promise((resolve) => controlServer!.close(resolve));
     rmSync(dir, { recursive: true, force: true });
     rmSync(evidenceDir, { recursive: true, force: true });
   }
@@ -3237,21 +3422,23 @@ test("vice_recycle: a rejected checkpoint enumeration records unavailable for th
   const respond = (name: string, args: any) => (name === "vice_checkpoint_list" ? undefined : healthy(name, args));
   const { server } = startFlexibleStandInServer(respond);
   const port = await listen(server);
+  const recycle = makeControllableRecycle();
+  let controlServer: NetServer | null = null;
   const proxy = startProxy({
     VICE_POOL_DIR: dir,
-    VICE_BROKER_BASE_PORT: String(port),
     VICE_MCP_HOST: "127.0.0.1",
     VICE_INCIDENTS_DIR: incidentsDir,
   });
   try {
     await handshake(proxy);
-    const { id: leaseId } = await acquireLeaseViaBroker(proxy, dir, port, 3);
+    const acquired = await acquireLeaseViaBroker(proxy, dir, port, 3, recycle.onRecycle);
+    controlServer = acquired.controlServer;
     writeEpochFileFixture(dir, port, { epoch: 1 });
 
     proxy.send({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "vice_recycle", arguments: { reason: "no checkpoints test" } } });
-    const recycleId = await waitForRecycleRequestId(dir, leaseId);
+    await recycle.waitForCall();
     writeEpochFileFixture(dir, port, { epoch: 2 });
-    writeRecycleAckFixture(dir, recycleId, { target_id: leaseId, port, outcome: "ok", kill_stage: "sigterm", epoch_before: 1 });
+    recycle.respond({ port, pid: 40001, viceBin: "x64sc", killStage: "sigterm", epochBefore: 1, outcome: "ok", reason: "" });
 
     const resp = await proxy.nextMessage();
     assert.equal(resp.result.isError, false);
@@ -3265,6 +3452,7 @@ test("vice_recycle: a rejected checkpoint enumeration records unavailable for th
   } finally {
     proxy.child.kill("SIGKILL");
     await new Promise((resolve) => server.close(resolve));
+    if (controlServer) await new Promise((resolve) => controlServer!.close(resolve));
     rmSync(dir, { recursive: true, force: true });
     rmSync(incidentsDir, { recursive: true, force: true });
   }
@@ -3280,21 +3468,23 @@ test("vice_recycle: a stand-in that rejects every read produces a fully-populate
   const respond = (name: string) => (name === "vice_ping" ? { version: "3.10", machine: "C64SC", execution: "paused" } : undefined);
   const { server } = startFlexibleStandInServer(respond);
   const port = await listen(server);
+  const recycle = makeControllableRecycle();
+  let controlServer: NetServer | null = null;
   const proxy = startProxy({
     VICE_POOL_DIR: dir,
-    VICE_BROKER_BASE_PORT: String(port),
     VICE_MCP_HOST: "127.0.0.1",
     VICE_INCIDENTS_DIR: incidentsDir,
   });
   try {
     await handshake(proxy);
-    const { id: leaseId } = await acquireLeaseViaBroker(proxy, dir, port, 3);
+    const acquired = await acquireLeaseViaBroker(proxy, dir, port, 3, recycle.onRecycle);
+    controlServer = acquired.controlServer;
     writeEpochFileFixture(dir, port, { epoch: 1 });
 
     proxy.send({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "vice_recycle", arguments: { reason: "all rejected test" } } });
-    const recycleId = await waitForRecycleRequestId(dir, leaseId);
+    await recycle.waitForCall();
     writeEpochFileFixture(dir, port, { epoch: 2 });
-    writeRecycleAckFixture(dir, recycleId, { target_id: leaseId, port, outcome: "ok", kill_stage: "sigterm", epoch_before: 1 });
+    recycle.respond({ port, pid: 40001, viceBin: "x64sc", killStage: "sigterm", epochBefore: 1, outcome: "ok", reason: "" });
 
     const resp = await proxy.nextMessage();
     assert.equal(resp.result.isError, false, "the recycle must still complete even when every evidence read is rejected");
@@ -3311,6 +3501,7 @@ test("vice_recycle: a stand-in that rejects every read produces a fully-populate
   } finally {
     proxy.child.kill("SIGKILL");
     await new Promise((resolve) => server.close(resolve));
+    if (controlServer) await new Promise((resolve) => controlServer!.close(resolve));
     rmSync(dir, { recursive: true, force: true });
     rmSync(incidentsDir, { recursive: true, force: true });
   }
@@ -3330,21 +3521,23 @@ test("vice_recycle: a rejected snapshot attempt records unavailable with the rea
   const respond = (name: string, args: any) => (name === "vice_snapshot_save" ? undefined : healthy(name, args));
   const { server } = startFlexibleStandInServer(respond);
   const port = await listen(server);
+  const recycle = makeControllableRecycle();
+  let controlServer: NetServer | null = null;
   const proxy = startProxy({
     VICE_POOL_DIR: dir,
-    VICE_BROKER_BASE_PORT: String(port),
     VICE_MCP_HOST: "127.0.0.1",
     VICE_INCIDENTS_DIR: incidentsDir,
   });
   try {
     await handshake(proxy);
-    const { id: leaseId } = await acquireLeaseViaBroker(proxy, dir, port, 3);
+    const acquired = await acquireLeaseViaBroker(proxy, dir, port, 3, recycle.onRecycle);
+    controlServer = acquired.controlServer;
     writeEpochFileFixture(dir, port, { epoch: 1 });
 
     proxy.send({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "vice_recycle", arguments: { reason: "snapshot rejected test" } } });
-    const recycleId = await waitForRecycleRequestId(dir, leaseId);
+    await recycle.waitForCall();
     writeEpochFileFixture(dir, port, { epoch: 2 });
-    writeRecycleAckFixture(dir, recycleId, { target_id: leaseId, port, outcome: "ok", kill_stage: "sigterm", epoch_before: 1 });
+    recycle.respond({ port, pid: 40001, viceBin: "x64sc", killStage: "sigterm", epochBefore: 1, outcome: "ok", reason: "" });
 
     const resp = await proxy.nextMessage();
     assert.equal(resp.result.isError, false, "a rejected snapshot must not fail the recycle");
@@ -3357,6 +3550,7 @@ test("vice_recycle: a rejected snapshot attempt records unavailable with the rea
   } finally {
     proxy.child.kill("SIGKILL");
     await new Promise((resolve) => server.close(resolve));
+    if (controlServer) await new Promise((resolve) => controlServer!.close(resolve));
     rmSync(dir, { recursive: true, force: true });
     rmSync(incidentsDir, { recursive: true, force: true });
   }
@@ -3369,9 +3563,10 @@ test("vice_recycle: an unanswered snapshot call does not prevent the recycle fro
   const respond = (name: string, args: any) => (name === "vice_snapshot_save" ? HANG : healthy(name, args));
   const { server } = startFlexibleStandInServer(respond);
   const port = await listen(server);
+  const recycle = makeControllableRecycle();
+  let controlServer: NetServer | null = null;
   const proxy = startProxy({
     VICE_POOL_DIR: dir,
-    VICE_BROKER_BASE_PORT: String(port),
     VICE_MCP_HOST: "127.0.0.1",
     VICE_INCIDENTS_DIR: incidentsDir,
     // Overrides the 8s production default so this fixture's deliberate hang
@@ -3382,13 +3577,14 @@ test("vice_recycle: an unanswered snapshot call does not prevent the recycle fro
   });
   try {
     await handshake(proxy);
-    const { id: leaseId } = await acquireLeaseViaBroker(proxy, dir, port, 3);
+    const acquired = await acquireLeaseViaBroker(proxy, dir, port, 3, recycle.onRecycle);
+    controlServer = acquired.controlServer;
     writeEpochFileFixture(dir, port, { epoch: 1 });
 
     proxy.send({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "vice_recycle", arguments: { reason: "snapshot hang test" } } });
-    const recycleId = await waitForRecycleRequestId(dir, leaseId);
+    await recycle.waitForCall();
     writeEpochFileFixture(dir, port, { epoch: 2 });
-    writeRecycleAckFixture(dir, recycleId, { target_id: leaseId, port, outcome: "ok", kill_stage: "sigterm", epoch_before: 1 });
+    recycle.respond({ port, pid: 40001, viceBin: "x64sc", killStage: "sigterm", epochBefore: 1, outcome: "ok", reason: "" });
 
     const resp = await proxy.nextMessage(15000);
     assert.equal(resp.result.isError, false, "the recycle must still complete despite the hung snapshot call");
@@ -3401,6 +3597,7 @@ test("vice_recycle: an unanswered snapshot call does not prevent the recycle fro
   } finally {
     proxy.child.kill("SIGKILL");
     await new Promise((resolve) => server.close(resolve));
+    if (controlServer) await new Promise((resolve) => controlServer!.close(resolve));
     rmSync(dir, { recursive: true, force: true });
     rmSync(incidentsDir, { recursive: true, force: true });
   }
@@ -3411,15 +3608,17 @@ test("vice_recycle: two recycles at the same port and epoch produce two distinct
   const incidentsDir = tmpIncidentsDir();
   const { server } = startFlexibleStandInServer(healthyEvidenceRespond({}));
   const port = await listen(server);
+  const recycle = makeControllableRecycleSequence();
+  let controlServer: NetServer | null = null;
   const proxy = startProxy({
     VICE_POOL_DIR: dir,
-    VICE_BROKER_BASE_PORT: String(port),
     VICE_MCP_HOST: "127.0.0.1",
     VICE_INCIDENTS_DIR: incidentsDir,
   });
   try {
     await handshake(proxy);
-    const { id: leaseId } = await acquireLeaseViaBroker(proxy, dir, port, 3);
+    const acquired = await acquireLeaseViaBroker(proxy, dir, port, 3, recycle.onRecycle);
+    controlServer = acquired.controlServer;
     // epoch.json reads 1 at the moment EACH recycle's own preKillEpoch is
     // captured (handleRecycle()'s very first read) -- that is the "same
     // port and epoch" this test is about, since it drives the incident
@@ -3430,9 +3629,9 @@ test("vice_recycle: two recycles at the same port and epoch produce two distinct
     writeEpochFileFixture(dir, port, { epoch: 1 });
 
     proxy.send({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "vice_recycle", arguments: { reason: "first recycle" } } });
-    const recycleId1 = await waitForRecycleRequestId(dir, leaseId);
+    const first = await recycle.next();
     writeEpochFileFixture(dir, port, { epoch: 2 });
-    writeRecycleAckFixture(dir, recycleId1, { target_id: leaseId, port, outcome: "ok", kill_stage: "sigterm", epoch_before: 1 });
+    first.respond({ port, pid: 40001, viceBin: "x64sc", killStage: "sigterm", epochBefore: 1, outcome: "ok", reason: "" });
     const resp1 = await proxy.nextMessage();
     assert.equal(resp1.result.isError, false);
 
@@ -3449,9 +3648,9 @@ test("vice_recycle: two recycles at the same port and epoch produce two distinct
     // be issued immediately, same as production.
     writeEpochFileFixture(dir, port, { epoch: 1 });
     proxy.send({ jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "vice_recycle", arguments: { reason: "second recycle" } } });
-    const recycleId2 = await waitForRecycleRequestId(dir, leaseId, [recycleId1]);
+    const second = await recycle.next();
     writeEpochFileFixture(dir, port, { epoch: 2 });
-    writeRecycleAckFixture(dir, recycleId2, { target_id: leaseId, port, outcome: "ok", kill_stage: "sigterm", epoch_before: 1 });
+    second.respond({ port, pid: 40001, viceBin: "x64sc", killStage: "sigterm", epochBefore: 1, outcome: "ok", reason: "" });
     const resp2 = await proxy.nextMessage();
     assert.equal(resp2.result.isError, false);
 
@@ -3472,6 +3671,7 @@ test("vice_recycle: two recycles at the same port and epoch produce two distinct
   } finally {
     proxy.child.kill("SIGKILL");
     await new Promise((resolve) => server.close(resolve));
+    if (controlServer) await new Promise((resolve) => controlServer!.close(resolve));
     rmSync(dir, { recursive: true, force: true });
     rmSync(incidentsDir, { recursive: true, force: true });
   }
@@ -3486,16 +3686,16 @@ test("structural: within handleRecycle(), the record write appears before the re
   const body = src.slice(startIdx, endIdx);
 
   const recordCallIdx = body.indexOf("writeIncidentRecord(");
-  const requestCallIdx = body.indexOf("writeRecycleRequest(");
+  const requestCallIdx = body.indexOf("controlSession.recycle(");
   assert.ok(recordCallIdx >= 0, "writeIncidentRecord( must appear inside handleRecycle()'s own body");
-  assert.ok(requestCallIdx >= 0, "writeRecycleRequest( must appear inside handleRecycle()'s own body");
+  assert.ok(requestCallIdx >= 0, "controlSession.recycle( must appear inside handleRecycle()'s own body");
 
   // Mirrors "checked by comparing the two line numbers grep -n reports" --
   // an earlier byte offset within the same isolated body is exactly an
   // earlier line number would be.
   assert.ok(
     recordCallIdx < requestCallIdx,
-    "the incident record write must appear (and therefore execute) before the recycle request write inside handleRecycle()"
+    "the incident record write must appear (and therefore execute) before the recycle request over the control connection inside handleRecycle()"
   );
 });
 

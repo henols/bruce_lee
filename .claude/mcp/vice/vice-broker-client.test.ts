@@ -7,7 +7,7 @@
 // restores that env var around its own temp directory.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readdirSync, readFileSync, statSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,21 +17,16 @@ import {
   REQUEST_ID_PATTERN,
   newRequestId,
   isValidRequestId,
-  requestsDir,
-  grantsDir,
-  denialsDir,
-  brokerLeasesDir,
   brokerJsonPath,
-  leasePathFor,
-  writeRequest,
-  createLease,
-  touchLease,
-  releaseLease,
-  pollGrant,
   readBrokerLiveness,
   openBrokerControl,
 } from "./vice-broker-client.ts";
 import { startControlListener, newControlToken, type AcquireOutcome, type RecycleOutcome, type StatusInstanceEntry, type HostStateFields } from "./broker-control.mts";
+// Namespace import, read-only, for the export-list closure test below --
+// the whole point is comparing the module's OWN live key set against an
+// expected list, so this must be the real module object, not a destructured
+// subset of it.
+import * as viceBrokerClient from "./vice-broker-client.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -75,145 +70,15 @@ test("newRequestId()/isValidRequestId(): accepts its own output and rejects a ho
   }
 });
 
-// --------------------------------------------------------- writeRequest/createLease
-
-test("writeRequest()/createLease(): write final files with every documented field, no tmp file left behind", async () => {
-  await withPoolDir(async (dir) => {
-    const id = newRequestId();
-    const reqRecord = writeRequest({ id, op: "acquire", sessionId: "sess-abc", clientPid: 4242 });
-    for (const field of ["version", "id", "op", "proxy_pid", "session_id", "client_pid", "created_at"]) {
-      assert.ok(Object.prototype.hasOwnProperty.call(reqRecord, field), `request record missing field ${field}`);
-    }
-    assert.equal(reqRecord.id, id);
-    assert.equal(reqRecord.op, "acquire");
-    assert.equal(reqRecord.session_id, "sess-abc");
-    assert.equal(reqRecord.client_pid, 4242);
-
-    const requestPath = join(requestsDir(dir), `${id}.json`);
-    const onDisk = JSON.parse(readFileSync(requestPath, "utf8"));
-    assert.deepEqual(onDisk, reqRecord, "the file on disk must match the returned record");
-
-    const leaseRecord = createLease({ id, sessionId: "sess-abc", clientPid: 4242 });
-    for (const field of ["version", "id", "proxy_pid", "session_id", "client_pid", "created_at"]) {
-      assert.ok(Object.prototype.hasOwnProperty.call(leaseRecord, field), `lease record missing field ${field}`);
-    }
-    const leasePath = leasePathFor(id, dir);
-    assert.deepEqual(JSON.parse(readFileSync(leasePath, "utf8")), leaseRecord);
-
-    // No temp files left behind in either directory.
-    const reqEntries = readdirSync(requestsDir(dir));
-    const leaseEntries = readdirSync(brokerLeasesDir(dir));
-    assert.ok(reqEntries.every((f) => !f.startsWith(".tmp-")), `stray tmp file in requests/: ${reqEntries}`);
-    assert.ok(leaseEntries.every((f) => !f.startsWith(".tmp-")), `stray tmp file in leases/: ${leaseEntries}`);
-  });
-});
-
-test("writeRequest()/createLease(): reject an invalid request id before touching the filesystem", () => {
-  assert.throws(() => writeRequest({ id: "not-a-valid-id" }), /invalid request id/);
-  assert.throws(() => createLease({ id: "../../etc/passwd" }), /invalid request id/);
-});
-
-// -------------------------------------------------------------------- touchLease
-
-test("touchLease(): advances the lease file's mtime", async () => {
-  await withPoolDir(async (dir) => {
-    const id = newRequestId();
-    createLease({ id });
-    const before = statSync(leasePathFor(id, dir)).mtimeMs;
-    await sleepMs(10);
-    const touched = touchLease(id);
-    assert.equal(touched, true, "touchLease() must report success against an existing lease");
-    const after = statSync(leasePathFor(id, dir)).mtimeMs;
-    assert.ok(after > before, `mtime must advance: before=${before} after=${after}`);
-  });
-});
-
-test("touchLease(): a silent no-op against a lease that does not exist", async () => {
-  await withPoolDir(async () => {
-    const id = newRequestId();
-    assert.equal(touchLease(id), false, "touchLease() against a missing lease must report false, not throw");
-  });
-});
-
-// ----------------------------------------------------------------- releaseLease
-
-test("releaseLease(): the entire release removes the lease file", async () => {
-  await withPoolDir(async (dir) => {
-    const id = newRequestId();
-    createLease({ id });
-    assert.ok(readFileSync(leasePathFor(id, dir), "utf8"));
-    releaseLease(id);
-    assert.throws(() => readFileSync(leasePathFor(id, dir), "utf8"), /ENOENT/);
-  });
-});
-
-test("releaseLease(): a silent no-op on a missing lease file -- idempotent double release", async () => {
-  await withPoolDir(async () => {
-    const id = newRequestId();
-    // Never created at all -- must not throw.
-    assert.doesNotThrow(() => releaseLease(id));
-    createLease({ id });
-    releaseLease(id);
-    // Second release of the SAME id, already gone -- still must not throw.
-    assert.doesNotThrow(() => releaseLease(id));
-  });
-});
-
-// -------------------------------------------------------------------- pollGrant
-
-test("pollGrant(): resolves granted:true once a grant appears mid-poll", async () => {
-  await withPoolDir(async (dir) => {
-    const id = newRequestId();
-    const grantsPath = join(grantsDir(dir), `${id}.json`);
-    mkdirSync(grantsDir(dir), { recursive: true });
-    setTimeout(() => {
-      writeFileSync(grantsPath, JSON.stringify({ version: 1, id, port: 6510, dry_run: true }));
-    }, 100);
-    const result = await pollGrant(id, { timeoutMs: 5000, pollMs: 30 });
-    assert.equal(result.granted, true);
-    assert.equal(result.grant.port, 6510);
-    assert.equal(result.denial, null);
-  });
-});
-
-test("pollGrant(): resolves granted:false and surfaces the denial's reason verbatim", async () => {
-  await withPoolDir(async (dir) => {
-    const id = newRequestId();
-    mkdirSync(denialsDir(dir), { recursive: true });
-    writeFileSync(join(denialsDir(dir), `${id}.json`), JSON.stringify({ version: 1, id, reason: "max_instances reached" }));
-    const result = await pollGrant(id, { timeoutMs: 5000, pollMs: 30 });
-    assert.equal(result.granted, false);
-    assert.equal(result.reason, "max_instances reached");
-    assert.equal(result.denial?.reason, "max_instances reached");
-  });
-});
-
-test("pollGrant(): treats a truncated, half-written grant file as not-yet-there, not a throw", async () => {
-  await withPoolDir(async (dir) => {
-    const id = newRequestId();
-    mkdirSync(grantsDir(dir), { recursive: true });
-    const grantsPath = join(grantsDir(dir), `${id}.json`);
-    writeFileSync(grantsPath, '{"version": 1, "id": "' + id + '", "por'); // deliberately truncated
-    setTimeout(() => {
-      writeFileSync(grantsPath, JSON.stringify({ version: 1, id, port: 6511, dry_run: true }));
-    }, 100);
-    const result = await pollGrant(id, { timeoutMs: 5000, pollMs: 30 });
-    assert.equal(result.granted, true, "the eventual well-formed grant must still be picked up");
-    assert.equal(result.grant.port, 6511);
-  });
-});
-
-test("pollGrant(): resolves granted:false with a reason after its deadline, never hanging", async () => {
-  await withPoolDir(async () => {
-    const id = newRequestId();
-    const startedAt = Date.now();
-    const result = await pollGrant(id, { timeoutMs: 200, pollMs: 30 });
-    const elapsed = Date.now() - startedAt;
-    assert.equal(result.granted, false);
-    assert.match(result.reason, /200ms/);
-    assert.ok(elapsed < 2000, `must resolve promptly after its own deadline, took ${elapsed}ms`);
-  });
-});
+// writeRequest()/createLease()/touchLease()/releaseLease()/pollGrant() and
+// their ten tests above (plan 06's disposition table rows 2-11) are DELETED
+// in this plan (01.6.2-07, criterion F/D-12), in the SAME commit as their
+// own subjects' deletion from vice-broker-client.ts: the file-messaging
+// protocol they exercised retires wholesale, replaced by the TCP control
+// plane below. Six of those ten rows (releaseLease() x2, pollGrant() x4)
+// already have a named RE-OBSERVED replacement test in this file (added by
+// plan 06, listed in that plan's own disposition table) -- nothing here is
+// a silent drop.
 
 // -------------------------------------------------------------- readBrokerLiveness
 
@@ -834,4 +699,119 @@ test("structural: the new control-client region (between the plan-06 marker pair
   const writeConstructPattern = /\b(writeFileSync|renameSync|mkdirSync|unlinkSync|writeJsonAtomic)\s*\(/;
   const match = region.match(writeConstructPattern);
   assert.equal(match, null, `filesystem-write construct found in the new control-client region: ${match ? match[0] : ""}`);
+});
+
+// ------------------------------------------------- structural: the surviving export surface
+//
+// Plan 01.6.2-07, task 3: the client module's export list is exactly the
+// surviving surface named in this plan's own action text -- the request-id
+// pattern, its validator, the id generator, the state-directory resolver,
+// the discovery-record path helper, the liveness classifier and its
+// staleness threshold, plus the control session surface plan 06 added.
+// Comparing the module's own live `Object.keys()` (a namespace import, not
+// a destructured subset) against this expected list means a retiring export
+// left behind by accident, OR a surviving export silently dropped, both
+// fail this test -- not just the retiring set task 3 is scoped to remove.
+
+test("the client module's export list is exactly the surviving surface", () => {
+  const actualKeys = Object.keys(viceBrokerClient).sort();
+  const expectedKeys = [
+    "REQUEST_ID_PATTERN",
+    "newRequestId",
+    "isValidRequestId",
+    "brokerRootDir",
+    "brokerJsonPath",
+    "BROKER_STALE_MS",
+    "readBrokerLiveness",
+    "CONTROL_ACQUIRE_TIMEOUT_MS",
+    "acquireOverControlPlane",
+    "ACQUIRE_TIMEOUT_MS",
+    "RECYCLE_TIMEOUT_MS",
+    "CONTROL_CONNECT_TIMEOUT_MS",
+    "openBrokerControl",
+  ].sort();
+  assert.deepEqual(
+    actualKeys,
+    expectedKeys,
+    `the module's live export set drifted from the surviving surface this plan defines: actual=${JSON.stringify(actualKeys)} expected=${JSON.stringify(expectedKeys)}`
+  );
+});
+
+// ------------------------------------------------- structural: closure gate over the six retiring mechanisms
+//
+// Plan 01.6.2-07, task 3 (criterion F): a structural gate proving none of
+// the retiring file protocol's mechanisms exists ANYWHERE under the module
+// directory's non-test source -- not merely that this one module's export
+// list is clean. Enumerated from the directory itself (matching
+// vice-proxy.test.ts's own "structural: the set of source files..."
+// idiom and vice-broker-launch.test.ts's JUSTIFIED_NETWORK_CALLERS idiom),
+// so a future file reintroducing one of these identifiers is caught the
+// moment it lands, with no test file to remember to update. Comment lines
+// are filtered out before matching, so a header sentence NAMING a retired
+// identifier (as this very file's own comments do, deliberately, to explain
+// what was deleted and why) cannot make the gate self-invalidating.
+const RETIRING_MECHANISM_IDENTIFIERS: string[] = [
+  // The eight retiring functions (01.6.2-07-PLAN.md's own artifact list,
+  // cross-checked against vice-broker-client.ts's pre-this-plan export list):
+  "writeRequest",
+  "createLease",
+  "touchLease",
+  "releaseLease",
+  "pollGrant",
+  "writeRecycleRequest",
+  "pollRecycleAck",
+  "startHeartbeat",
+  // Their timeout/interval constants:
+  "GRANT_POLL_TIMEOUT_MS",
+  "GRANT_POLL_INTERVAL_MS",
+  "RECYCLE_ACK_TIMEOUT_MS",
+  "RECYCLE_ACK_POLL_INTERVAL_MS",
+  "HEARTBEAT_MS",
+  // The five protocol directory helpers, plus the lease path helper:
+  "requestsDir",
+  "grantsDir",
+  "denialsDir",
+  "brokerLeasesDir",
+  "recycleAcksDir",
+  "leasePathFor",
+];
+
+/** Strips `//` line comments and `/* ... *\/` block comments before matching
+ * -- a header sentence describing the history ("touchLease() is gone")
+ * must never make this gate self-invalidating by matching its OWN
+ * explanatory prose. Deliberately simple (no string-literal awareness): the
+ * retiring identifiers are all camelCase/UPPER_SNAKE code names that never
+ * legitimately appear inside a runtime string literal in this module set,
+ * so this is not a general-purpose comment stripper, just enough to serve
+ * this one gate. */
+function stripComments(source: string): string {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .split("\n")
+    .map((line) => line.replace(/\/\/.*$/, ""))
+    .join("\n");
+}
+
+test("structural: none of the six retiring D-12 mechanisms exists anywhere in the module's non-test source", () => {
+  const files = readdirSync(HERE)
+    .filter((f) => /\.[cm]?[jt]s$/.test(f) && !/\.test\.[cm]?[jt]s$/.test(f))
+    .sort();
+  assert.ok(files.length > 0, "module directory enumerated as empty -- glob or path resolution is broken");
+
+  const offenders: { file: string; identifier: string }[] = [];
+  for (const file of files) {
+    const stripped = stripComments(readFileSync(join(HERE, file), "utf8"));
+    for (const identifier of RETIRING_MECHANISM_IDENTIFIERS) {
+      const pattern = new RegExp(`\\b${identifier}\\b`);
+      if (pattern.test(stripped)) {
+        offenders.push({ file, identifier });
+      }
+    }
+  }
+  assert.deepEqual(
+    offenders,
+    [],
+    `a retiring D-12 mechanism identifier reappeared in non-test source: ${JSON.stringify(offenders)} -- ` +
+      "keeping any one of the six retiring mechanisms means two competing authorities on whether a lease is alive."
+  );
 });

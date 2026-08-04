@@ -47,21 +47,24 @@ import { containerizeRecord } from "./containerpath.ts";
 // host-path consumer set stays closed to four production modules
 // (vice-mcp-selector-docs.test.mjs's assertion 4), and this file is already
 // on that list, so any broker-related host path text is built HERE.
+// Tasks 1+2 (this plan) swap acquisition, release AND recycle onto the TCP
+// control session (openBrokerControl()/BrokerControlSession, plan 06's
+// completed client) -- writeRequest/createLease/touchLease/releaseLease/
+// pollGrant/startHeartbeat/requestsDir/newRequestId/writeRecycleRequest/
+// pollRecycleAck are no longer imported: their whole job (write a request,
+// create a lease file, heartbeat its mtime, poll for a grant or an
+// acknowledgement, unlink on release) is now "send one request over the
+// connection already held". RECYCLE_TIMEOUT_MS (the client's own recycle
+// deadline, task 3's renamed successor to the now-deleted
+// RECYCLE_ACK_TIMEOUT_MS) is reused below as the bound the post-kill
+// epoch-and-readiness poll uses -- a concern this swap does not touch.
 import {
-  newRequestId,
-  writeRequest,
-  createLease,
-  touchLease,
-  releaseLease,
-  pollGrant,
-  startHeartbeat,
   readBrokerLiveness,
-  requestsDir,
   brokerRootDir,
-  writeRecycleRequest,
-  pollRecycleAck,
-  RECYCLE_ACK_TIMEOUT_MS,
+  RECYCLE_TIMEOUT_MS,
+  openBrokerControl,
   type BrokerLivenessResult,
+  type BrokerControlSession,
 } from "./vice-broker-client.ts";
 // The recycle path's own incident record (plan 01.3-01) -- written BEFORE
 // anything is killed (D-17), never through any network call of its own.
@@ -77,7 +80,7 @@ import {
   type IncidentEvidence,
   type IncidentAssetStemOptions,
 } from "./incident-record.ts";
-import { readFileSync, unlinkSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, relative, resolve } from "node:path";
 
@@ -656,7 +659,7 @@ const handleRecycle: (args: Record<string, unknown>) => Promise<ToolCallResult> 
         "granted instance. No record and no request were written."
     );
   }
-  if (!brokerLeaseId) {
+  if (!controlSession) {
     return isErrorText(
       "vice_recycle: no broker lease is held yet for this session -- recycle only applies to an " +
         "instance already granted to this session. Make at least one other forwarded call first. " +
@@ -665,8 +668,6 @@ const handleRecycle: (args: Record<string, unknown>) => Promise<ToolCallResult> 
   }
 
   const sessionId = process.env.CLAUDE_CODE_SESSION_ID || null;
-  const clientPidRaw = Number(process.env.CLAUDE_PID);
-  const clientPid = Number.isFinite(clientPidRaw) ? clientPidRaw : null;
   const { port } = activeInstance();
   const epochBefore = preKillEpoch.present ? preKillEpoch.epoch : null;
   const at = new Date().toISOString();
@@ -691,33 +692,60 @@ const handleRecycle: (args: Record<string, unknown>) => Promise<ToolCallResult> 
     evidence,
   });
 
-  const id = newRequestId();
-  writeRecycleRequest({ id, targetId: brokerLeaseId, reason, sessionId, clientPid });
-
-  const pollResult = await pollRecycleAck(id);
-  if (!pollResult.acked) {
-    finaliseIncidentRecord(recordPath, { outcome: "timeout" });
+  // Plan 01.6.2-07 task 2: the request write + ack poll are replaced by one
+  // recycle request over the connection this session already holds -- the
+  // client_pid this session used to send with a recycle request has no
+  // successor field on the wire, since the connection itself already
+  // identifies which grant this is (broker-control.mts's own T-01.6.2-31
+  // discipline: a connection may only recycle the grant it itself holds).
+  const recycled = await controlSession.recycle(grantId as string);
+  if (!recycled.ok) {
+    if (recycled.kind === "broker_gone") {
+      // Distinct from an acknowledgement carrying a refusal (T-01.6.2-46):
+      // the instance's state is unknown in both cases, but the operator's
+      // next action differs -- a refusal means the target is alive and
+      // uncooperative, broker_gone means there is no longer anyone to ask.
+      // The full broker-death discipline and its agent-facing vocabulary are
+      // plan 08's; this branch only needs to exist and be distinguishable.
+      finaliseIncidentRecord(recordPath, { outcome: "broker_gone" });
+      return isErrorText(
+        `vice_recycle: the broker closed the connection while this recycle was in flight. Incident ` +
+          `record: ${recordPath}. The instance's state is now unknown -- the broker itself may be down, ` +
+          `which is a different problem from a refusal or a timeout and may require a host-side restart.`
+      );
+    }
+    if (recycled.kind === "deadline") {
+      finaliseIncidentRecord(recordPath, { outcome: "timeout" });
+      return isErrorText(
+        `vice_recycle: no ack arrived from the host within the timeout (${recycled.message}). Incident ` +
+          `record: ${recordPath}. The instance's state is now unknown -- treat it as neither confirmed ` +
+          `killed nor confirmed alive.`
+      );
+    }
+    // Any other control-plane failure (protocol/unauthorized/bad_request/
+    // denied/internal) -- an unexpected shape from the broker's own
+    // response, not exhaustively enumerated here (D-14's full vocabulary is
+    // plan 08's); still a well-formed, non-throwing result either way.
+    finaliseIncidentRecord(recordPath, { outcome: "internal" });
     return isErrorText(
-      `vice_recycle: no ack arrived from the host within the timeout (${pollResult.reason}). Incident ` +
-        `record: ${recordPath}. The instance's state is now unknown -- treat it as neither confirmed ` +
-        `killed nor confirmed alive.`
+      `vice_recycle: the recycle request failed (${recycled.kind}: ${recycled.message}). Incident record: ${recordPath}.`
     );
   }
 
-  const ack = pollResult.ack || {};
-  const killStage = typeof ack.kill_stage === "string" ? ack.kill_stage : null;
+  const ack = recycled.ack;
+  const killStage: string | null = ack.kill_stage;
   const successfulKill = killStage === "already_exited" || killStage === "sigterm" || killStage === "sigkill";
 
   if (!successfulKill) {
     finaliseIncidentRecord(recordPath, { outcome: ack.outcome || "refused", kill_stage: killStage });
-    return isErrorText(`${recycleAckOutcomeMessage(ack)} Incident record: ${recordPath}.`);
+    return isErrorText(`${recycleAckOutcomeMessage({ ...ack })} Incident record: ${recordPath}.`);
   }
 
   // The kill succeeded -- confirm the machine actually came back. The epoch
   // bump and the readiness probe are reported as two SEPARATE facts
   // (T-01.3-03): "the epoch moved" is bookkeeping, "the instance answers"
   // is evidence, and neither substitutes for the other.
-  const epochDeadline = Date.now() + RECYCLE_ACK_TIMEOUT_MS;
+  const epochDeadline = Date.now() + RECYCLE_TIMEOUT_MS;
   let afterEpoch = readEpoch();
   const epochMoved = () =>
     afterEpoch.present && (!preKillEpoch.present || (afterEpoch.epoch as number) > (preKillEpoch.epoch as number));
@@ -1475,22 +1503,13 @@ function brokerWarmingMessage(elapsedMs: number): string {
   );
 }
 
-/** Removes requests/<id>.json, best-effort. Called when a poll resolves to
- * a denial or a warming timeout, so a failed or still-warming acquisition
- * leaves no orphan request for the sweeper to reap later -- the request
- * file's own counterpart to releaseLease(id) (vice-broker-client.ts),
- * which already handles the lease half of this cleanup. Uses requestsDir()
- * (already exported by vice-broker-client.ts) rather than adding a new
- * export there, so this task's file-ownership boundary (vice-proxy.mjs /
- * vice-proxy.test.mjs only) stays intact. */
-function removeRequestFile(id: string): void {
-  try {
-    unlinkSync(join(requestsDir(), `${id}.json`));
-  } catch {
-    // already gone -- the broker may have consumed/removed it, or this is a
-    // second cleanup attempt; either way there is nothing left to do.
-  }
-}
+// removeRequestFile() (requests/<id>.json cleanup on a denial or a warming
+// timeout) is GONE, not merely unused -- its subject directory ceases to
+// exist under the control-plane acquisition below. There is nothing left to
+// clean up on a denial or a timeout because nothing was ever written: a
+// failed acquire() over the control connection leaves no file anywhere, so
+// the "orphan request the sweeper must reap" problem this helper solved
+// does not exist in this design.
 
 // A causeCode-shaped reason string (e.g. "ECONNREFUSED", "ECONNRESET") is
 // exactly what probeInstance() returns for a connection actively refused --
@@ -1577,7 +1596,7 @@ function brokerGrantedUnreachableMessage(probe: ProbeResult, epoch: EpochResult)
     ? `an epoch record is on file for it (epoch ${epoch.epoch}${epoch.pid != null ? `, pid ${epoch.pid}` : ""})`
     : "no epoch record is on file for it";
   return (
-    `vice-proxy: the on-demand VICE broker's granted instance (lease ${brokerLeaseId}, port ${port}, ${url}) ` +
+    `vice-proxy: the on-demand VICE broker's granted instance (grant ${grantId}, port ${port}, ${url}) ` +
     `is not answering -- ${probe.reason}. ${epochNote}. The broker already reported this instance as ` +
     `launched, so it may have crashed after being granted, or the grant may be stale -- a different ` +
     `problem than a host that has not been brought up at all. Investigate on the host with:\n` +
@@ -1938,13 +1957,19 @@ function handleResultContinue(args: Record<string, unknown>): ToolCallResult {
 // skill, proxy-lifecycle-and-process-identity.md) -- a session that never
 // forwards a call never asks the broker for anything (C3).
 //
-// brokerLeaseId is the request id this session's lease (if any) is keyed
-// by -- the PRIMARY noun of the protocol (assumption-delta decision:
-// promoted from port to request id, since ports are recycled across
-// sessions under on-demand launch). null means either no lease has been
-// acquired yet, or VICE_MCP_URL overrides the broker entirely.
-let brokerLeaseId: string | null = null;
-let brokerHeartbeatTimer: NodeJS.Timeout | null = null;
+// Plan 01.6.2-07: the lease is now the CONTROL CONNECTION itself, not a
+// file. controlSession holds the open BrokerControlSession (plan 06's
+// completed client) for this session's lifetime; grantId is the acquired
+// grant's own id -- the PRIMARY noun of the protocol carries over unchanged
+// (still promoted from port to request id, since ports are recycled across
+// sessions under on-demand launch), it is just no longer a filename. Both
+// null means either no session has been opened yet, or VICE_MCP_URL
+// overrides the broker entirely. There is no heartbeat timer any more --
+// nothing needs touching to prove a TCP connection is still alive; it
+// either is, or the broker's own "close" handler has already torn the
+// instance down.
+let controlSession: BrokerControlSession | null = null;
+let grantId: string | null = null;
 
 // ----------------------------------------------------- grant containerization
 //
@@ -1957,7 +1982,7 @@ let brokerHeartbeatTimer: NodeJS.Timeout | null = null;
 // (ECONNREFUSED, since nothing listens there) and the host-rooted epoch
 // path simply never resolved, so every broker-granted instance was silently
 // unreachable. containerizeGrant() is the seam that fixes this -- called in
-// ensureBrokerLease() below between pollGrant() returning a grant and
+// ensureBrokerLease() below between session.acquire() returning a grant and
 // useInstance() adopting it, since that is the LAST point before the
 // coordinates become the session's identity (D-1).
 function containerizeGrant(grant: Record<string, unknown>): Record<string, unknown> {
@@ -2055,34 +2080,45 @@ function containerizeGrant(grant: Record<string, unknown>): Record<string, unkno
 
 /**
  * Acquire a broker-granted instance for this session, once. Returns
- * immediately (no broker traffic at all) when a lease is already held, and
- * immediately when VICE_MCP_URL is set -- an explicit endpoint override
+ * immediately (no broker traffic at all) when a session is already held,
+ * and immediately when VICE_MCP_URL is set -- an explicit endpoint override
  * means the caller already chose an instance, which is both the principled
  * rule and what keeps every pre-existing proxy test passing with no edit.
  *
- * Ordering is load-bearing: the lease is created BEFORE awaiting the grant,
- * not after. This is what makes the broker's own teardown logic safe --
- * process_teardowns() only tears a grant down when its lease is ABSENT, and
- * if the lease were created only after a grant arrived, a broker pass
- * landing in that narrow window would see a grant with no lease yet and
- * tear it down out from under this very acquisition.
+ * Plan 01.6.2-07: the lease is now the CONTROL CONNECTION itself. The prior
+ * ordering constraint here -- create a lease file BEFORE awaiting the grant,
+ * because the host's own sweep tore a grant down whenever its lease file was
+ * absent -- DISSOLVES entirely under this design: the connection is open,
+ * and is therefore already the proof this session holds a claim, before the
+ * acquire request is even sent. There is no window between "a grant exists"
+ * and "a lease exists" for a sweep to land in, because there is no longer a
+ * second artifact for the two to disagree about. D-09's shutdown-deletion
+ * question dissolves the same way, for the same reason: under D-01 the
+ * request/lease/grant/denial directories never exist at all, so there is
+ * nothing to delete on shutdown and nothing to reconcile -- a reader meeting
+ * that earlier decision needs to know it no longer applies, not that it was
+ * quietly dropped.
  */
 type BrokerLeaseResult = { ok: true } | { ok: false; message: string };
 
 async function ensureBrokerLease(): Promise<BrokerLeaseResult> {
-  if (brokerLeaseId) return { ok: true };
+  if (controlSession) return { ok: true };
   if (process.env.VICE_MCP_URL) return { ok: true }; // explicit override -- broker never contacted
 
-  // Classify liveness FIRST, before writing any request (C10). never_started
-  // and stale both return their message immediately, with no request
-  // written and no lease created -- there is nothing on the other side to
-  // read a request, so writing one would litter the directory and delay the
-  // diagnosis. readBrokerLiveness() re-reads broker.json fresh on every call
-  // (see its own implementation in vice-broker-client.ts); nothing here
-  // memoises the verdict, so this is the broker-path instance of the same
-  // never-cache-a-negative-result invariant the comment above
-  // ensureViceSession() already states for the host path -- the call after a
-  // human starts the broker just works, with no session restart required.
+  // Classify liveness FIRST, before ever opening a connection (C10).
+  // never_started and stale both return their message immediately, with no
+  // connection attempted -- there is nothing on the other side to answer
+  // one, so attempting it would only delay the diagnosis. readBrokerLiveness()
+  // re-reads broker.json fresh on every call (see its own implementation in
+  // vice-broker-client.ts); nothing here memoises the verdict, so this is the
+  // broker-path instance of the same never-cache-a-negative-result invariant
+  // the comment above ensureViceSession() already states for the host path --
+  // the call after a human starts the broker just works, with no session
+  // restart required. openBrokerControl() performs this SAME classification
+  // again internally (over its own read of broker.json) before it ever
+  // connects -- a second, independent read, not a second answer to trust
+  // instead of this one; fetching liveness here first is what gives the
+  // diagnoses below (dead-or-hung's own pid) something to quote.
   const liveness = readBrokerLiveness();
   if (liveness.state === "never_started") {
     return { ok: false, message: brokerNeverStartedMessage() };
@@ -2091,38 +2127,36 @@ async function ensureBrokerLease(): Promise<BrokerLeaseResult> {
     return { ok: false, message: brokerDeadOrHungMessage(liveness) };
   }
 
-  const id = newRequestId();
-  const sessionId = process.env.CLAUDE_CODE_SESSION_ID || null;
-  const clientPidRaw = Number(process.env.CLAUDE_PID);
-  const clientPid = Number.isFinite(clientPidRaw) ? clientPidRaw : null;
-
-  writeRequest({ id, sessionId, clientPid });
-  createLease({ id, sessionId, clientPid }); // BEFORE pollGrant() -- see comment above
-
   const acquireStartedAt = Date.now();
-  const result = await pollGrant(id);
-  if (!result.granted) {
-    // Neither a grant nor a lasting reason to keep this attempt's files
-    // around -- a denial or a warming timeout both leave no orphan for the
-    // sweeper to reap later.
-    try {
-      releaseLease(id); // no grant is coming for this id -- release the lease we already created
-    } catch {
-      /* best effort -- the lease may already be gone */
+  const opened = await openBrokerControl();
+  if (!opened.ok) {
+    // A race (the broker died between the classification above and this
+    // connection attempt) or a refused connection -- either way there is no
+    // session to acquire over. Read as dead-or-hung using the liveness this
+    // call already fetched, rather than re-reading broker.json a third time.
+    return { ok: false, message: brokerDeadOrHungMessage(liveness) };
+  }
+  const session = opened.session;
+
+  const result = await session.acquire();
+  if (!result.ok) {
+    // No grant is coming for this session -- nothing to hold the connection
+    // open for. Closing it here is the control-plane's entire equivalent of
+    // the old cleanup (releaseLease(id) + removeRequestFile(id)): there was
+    // never a file to remove in the first place.
+    await session.release();
+    if (result.kind === "deadline") {
+      return { ok: false, message: brokerWarmingMessage(Date.now() - acquireStartedAt) };
     }
-    removeRequestFile(id);
-    if (result.denial) {
-      return { ok: false, message: brokerLaunchFailedMessage(result.reason || "denied with no reason recorded") };
-    }
-    return { ok: false, message: brokerWarmingMessage(Date.now() - acquireStartedAt) };
+    return { ok: false, message: brokerLaunchFailedMessage(result.message) };
   }
 
-  brokerLeaseId = id;
+  grantId = result.grant.id;
   // Invert the grant's host-local coordinates BEFORE useInstance() adopts
-  // them (D-1, this task) -- this is the LAST point before the coordinates
-  // become the session's identity: the endpoint every later tool call is
-  // sent to, and the path the epoch guard opens.
-  const containerized = containerizeGrant(result.grant);
+  // them (D-1, quick task 260801-ccn) -- this is the LAST point before the
+  // coordinates become the session's identity: the endpoint every later
+  // tool call is sent to, and the path the epoch guard opens.
+  const containerized = containerizeGrant({ ...result.grant });
   useInstance({
     port: containerized.port as number,
     url: containerized.url as string,
@@ -2130,12 +2164,7 @@ async function ensureBrokerLease(): Promise<BrokerLeaseResult> {
     pooled: true,
   });
   viceSession = null; // re-baseline: the next ensureViceSession() reads the GRANTED instance's own epoch file
-  // startHeartbeat() (vice-broker-client.ts) returns an unref'd interval
-  // timer -- unref'd so the TIMER never holds this process alive past its
-  // natural lifetime; stdin being open is what does that. Keeping the timer
-  // handle here is only so a future stop-the-heartbeat path has something to
-  // clear; nothing currently reads it back.
-  brokerHeartbeatTimer = startHeartbeat(id);
+  controlSession = session;
   return { ok: true };
 }
 
@@ -2388,9 +2417,11 @@ async function handleToolsCall(params: unknown): Promise<ToolCallResult> {
   if (!leaseResult.ok) {
     return isErrorText(leaseResult.message);
   }
-  if (brokerLeaseId) {
-    touchLease(brokerLeaseId); // touch-on-every-forwarded-call (C6), in addition to the heartbeat timer
-  }
+  // No touch-on-every-forwarded-call any more (C6's old mechanism, alongside
+  // the heartbeat timer, both retired under D-12): the connection itself is
+  // the claim, kernel-enforced, with nothing to refresh. Either the socket is
+  // still open, or the broker's own "close" handler has already reclaimed
+  // the instance -- there is no third, ambiguous state a touch could rescue.
 
   ensureViceSession();
 
@@ -2418,7 +2449,7 @@ async function handleToolsCall(params: unknown): Promise<ToolCallResult> {
     // broker-granted instance was being answered by the RETIRED fixed-port
     // triple instead of naming the broker. That ordering was the whole
     // defect.
-    if (brokerLeaseId) {
+    if (controlSession) {
       return isErrorText(brokerGrantedUnreachableMessage(probe, epoch));
     }
     if (isConnectionRefusedReason(probe.reason) && !epoch.present) {
@@ -2626,12 +2657,24 @@ process.stdin.on("data", (chunk: Buffer | string) => {
 // signal of every graceful ending.
 //
 // The measured numbers this depends on: ~490ms from the first signal to
-// SIGKILL, ~0.1ms for the lease's unlinkSync -- roughly three orders of
-// magnitude of headroom. The entire handler body below is ONE synchronous
-// filesystem operation and awaits nothing (C5): introducing anything
-// asynchronous here (an await, a fetch, a child process, a call to the
+// SIGKILL, on the order of microseconds for closing a socket handle --
+// roughly as many orders of magnitude of headroom as the retiring lease
+// file's own unlinkSync had. The entire handler body below calls exactly
+// one release and AWAITS NOTHING (C5): introducing anything that blocks on
+// a response here (an await, a fetch, a child process, a round trip to the
 // broker) reintroduces leaked leases silently, since there would be no time
-// left for it to complete before SIGKILL cuts the process off.
+// left for it to complete before SIGKILL cuts the process off. Plan
+// 01.6.2-07: the lease is now the control connection itself, so "release"
+// is `socket.destroy()` -- a synchronous, in-process handle close, not a
+// network round trip; nothing here waits for the broker to acknowledge
+// anything, matching the retiring unlinkSync's own fire-and-forget shape.
+// BrokerControlSession.release() is declared `async` (vice-broker-client.ts),
+// so a synchronous throw inside it becomes a REJECTED PROMISE, not a thrown
+// exception -- a plain try/catch around a bare, unawaited call would never
+// see it. `.catch(...)` (not `await`, not `.then(`) is the correct way to
+// observe that failure without awaiting or chaining a success handler,
+// and is not itself a promise-awaiting construct: nothing in this region
+// blocks on the release settling before returning.
 //
 // This removes the file's only explicit process.exit( call: nothing needs
 // it any more. The graceful path is killed by SIGKILL ~490ms after the
@@ -2641,17 +2684,15 @@ process.stdin.on("data", (chunk: Buffer | string) => {
 // TEARDOWN-REGION-BEGIN -- vice-proxy.test.mjs's source assertion slices
 // the file between this marker and its closing counterpart further below,
 // and asserts that slice contains no promise-awaiting construct and calls
-// the broker client's release function exactly once. Do not move either
+// the control session's release function exactly once. Do not move either
 // marker away from the code each one bounds.
 let teardownRan = false;
 
 function releaseLeaseNow(trigger: string): void {
-  if (!brokerLeaseId) return;
-  try {
-    releaseLease(brokerLeaseId);
-  } catch (err) {
-    console.error(`vice-proxy: lease_unlink_failed trigger=${trigger}: ${err && (err as Error).message ? (err as Error).message : err}`);
-  }
+  if (!controlSession) return;
+  controlSession.release().catch((err: unknown) => {
+    console.error(`vice-proxy: lease_release_failed trigger=${trigger}: ${err && (err as Error).message ? (err as Error).message : err}`);
+  });
 }
 
 function onTeardown(trigger: string): void {
