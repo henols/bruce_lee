@@ -3,18 +3,18 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: insertion note
 current_phase: 01.6.2.1
-current_phase_name: Broker Lifecycle Policy
+current_phase_name: broker-lifecycle-policy
 status: executing
 stopped_at: Phase 01.6.2.1 planned — 6 plans, verified, ready to execute
-last_updated: "2026-08-04T13:20:04.779Z"
+last_updated: "2026-08-04T13:37:05.224Z"
 last_activity: 2026-08-04
-last_activity_desc: "Phase 01.6.2.1 planned — 6 plans in 6 sequential waves, `gsd-plan-checker` returned VERIFICATION PASSED; research, pattern-mapping and a new VALIDATION.md were deliberately skipped because the phase shares 01.6.2's four artifacts, and the blocking decision-coverage gate was overridden on a parser mismatch (P-NN numbering) after coverage was verified by hand at 13/13 + 12/12. Phase 01.6.2 complete and sealed before it; alongside both, quick tasks 260804-brt/bux/dbf/dih/elq/eu6 worked the skill queue (see Quick Tasks Completed) — `c64-ram-capture` rewired and corrected, `c64-provenance-diff` added as the seventh skill, the RE-skill todo closed as already-built, and `vice-wedge-triage` added as the eighth, clearing the last outstanding skill and dropping its `blocker` todo to `minor`. 260804-eu6 also reconciled the skills' crash content against the rewritten MCP: two defects filed (`vice_diagnose`'s `checkpoint_trap` shapes may miss a mid-handler arming and fall through to the destructive `wedged` response; no exposed tool reads the restart epoch, which made a standing `c64-ram-capture` instruction unperformable) and the widened vector sweep found the game's own NMI **and** RESET handlers sharing `$1116` in both releases"
+last_activity_desc: Phase 01.6.2.1 execution started
 progress:
-  total_phases: 11
+  total_phases: 12
   completed_phases: 5
   total_plans: 54
   completed_plans: 44
-  percent: 45
+  percent: 42
 ---
 
 # Project State
@@ -30,8 +30,8 @@ See: .planning/PROJECT.md (updated 2026-07-31)
 ## Current Position
 
 Milestone: **v1.1 — Emulator Access Hardened** *(inserted 2026-08-02, ahead of the rest of v1.0)*
-Phase: 01.6.2.1 — Broker Lifecycle Policy
-Next: **`/gsd-execute-phase 01.6.2.1`** — six plans in six sequential waves, planned 2026-08-04 and verified by `gsd-plan-checker`.
+Phase: 01.6.2.1 (broker-lifecycle-policy) — EXECUTING
+Next: **`/gsd-execute-phase 01.6.2.1`** — six plans in six sequential waves, planned 2026-08-04 and verified by `gsd-plan-checker`. **Then continue autonomously through 01.6.3 → 01.4 → 01.3 → 01.8 without check-ins**, per § AUTONOMOUS RUN PROTOCOL below — the developer's standing instruction of 2026-08-04. Every developer-gated item routes to Phase 01.8's HV register instead of halting the run.
 
 > **Phase 01.6.2's four gaps are closed.** They were closed by its own gap-closure plan 15 on
 > 2026-08-04; `01.6.2-VERIFICATION.md` reads 20/20 at seal. The block below is retained as the
@@ -159,6 +159,57 @@ Phase 01 (recovery-provenance) — **PARKED mid-execution, not abandoned.** 4 of
 
 **Phase 01.6's host-`node` gate is CLEARED (2026-08-02).** The host has `node` on PATH — confirmed by the developer, who has host access; the container cannot verify this by construction. The TCP control plane is in scope and the bash-broker fallback is off the table. Still unknown and worth establishing in 01.6's first plan: the host's `node` **version**, and the shell→Node call boundary, since this repo has no host-side Node precedent to copy.
 
+## AUTONOMOUS RUN PROTOCOL — v1.1, standing from 2026-08-04
+
+**The developer's instruction, verbatim in effect:** drive the remaining v1.1 phases without asking,
+and when something genuinely needs the developer, **put it in a phase they can come back to** rather
+than stopping. **Phase 01.8 (Developer Closure & Live Verification) is that phase** and it is last in
+v1.1. This block governs every session that continues the run — including a fresh one that has lost
+this conversation.
+
+**The rule, in order:**
+
+1. **Do the work that does not depend on the answer, first and completely.** A blocker on one
+   criterion is not a blocker on a phase. Implementation, tests, structural gates, documentation and
+   commits all proceed.
+2. **When a gate genuinely requires the developer, file it as an `HV-NN` row in ROADMAP § Phase
+   01.8** with all four fields — ID, what it blocks, what the developer does, what the agent completes
+   once answered. A row missing the fourth field is not filed.
+3. **Mark the owning criterion `CARRIED → HV-NN`** in that phase's verification artifact. Never
+   `verified`, never silently omitted. The seal then reads "implemented, HV-NN carried", which is an
+   honest seal.
+4. **Continue to the next available work.** Do not pause the run, do not ask, do not idle waiting for
+   an answer.
+5. **Never answer an HV row by inference.** "The packages are probably fine", "the broker is probably
+   up", "the criterion clearly wasn't reworded" are all prohibited. An unanswered row stays open.
+
+**What genuinely requires the developer** — the test, so the rule is not applied by feel:
+
+- **Host access.** The container cannot start the host broker or read host state by construction. Any
+  claim needing a live emulator or a live `.vice-supervisor/broker.json` is developer-gated *unless a
+  forwarded `mcp__vice__*` call already succeeds this session* — check with `vice_ping` before filing,
+  because a broker that happens to be up makes the row closeable now, and filing it anyway wastes the
+  developer's trip.
+- **A blocking approval the project has declared non-auto-approvable.** 01.6.3 criterion E is the
+  only current instance.
+- **A decision the developer explicitly reserved.** D-06 is the only current instance. Arrive with a
+  priced recommendation; do not take the decision.
+- **A check on the agent's own honesty.** 01.3-06's `checkpoint:human-verify` asks whether a criterion
+  was reworded to fit its outcome. The agent is the subject of that check and cannot be its witness.
+
+**What does NOT qualify**, and must be closed rather than filed: a failing test, an ambiguous
+requirement resolvable from the artifacts, a gate false positive of the kind already documented twice
+in this file (negated-clause `api-coverage`, non-`D` decision prefixes), a tooling defect with a
+hand-authored workaround already precedented here, or a plan that needs re-planning. **Re-planning is
+autonomous work.** Filing one of these as an HV row is the failure mode this protocol exists to
+prevent — it converts "I should think harder" into "the developer will handle it".
+
+**Reporting obligation at the end of the run:** state per phase what sealed verified, what sealed
+CARRIED and against which HV rows, and — the number that matters — **how many HV rows the developer
+now owns**. A run that reports every phase green has either had no gates or has answered one
+dishonestly; 01.3 in particular cannot seal fully verified without HV-05, and HV-05 cannot be
+answered by the agent.
+
 **Next step, and why it is the right one (updated 2026-08-04, after gap-closure planning).**
 `/gsd-execute-phase 01.6.2` — waves 1–11 are executed and merged; waves 12–15 are authored and
 unexecuted. Three things to carry in: (1) **the four gaps share one root**, and it is a planning-scope
@@ -178,7 +229,7 @@ re-surfacing on 01.6.2 would be new, not inherited.
 (`/gsd-extract-learnings 01.6.1` — the TypeScript closure-narrowing hazard, the negated-clause gate
 false positives, and the tracer-vs-daemon distinction are all worth harvesting).
 
-Status: Ready to execute
+Status: Executing Phase 01.6.2.1
 
 > **2026-08-03 run:** `gsd-tools query state.planned-phase` returned `updated: []` and changed nothing
 > here, so this line and the Last-activity line below were written by hand. Same family as the
@@ -215,7 +266,7 @@ Status: Ready to execute
 
 **Known-failing check, carried forward for whoever resumes 01-04:** the plan's own Task 3 automated verification fails today — `saeger`'s `death` milestone is recorded `reached: true` with `cycles_advanced: null` and an explicit `evidentiary_gap` (no screen-matrix SHA-256 captured, attempt 4). Attempt 6 must re-capture that signature, not merely reach the two remaining milestones. danish's five milestones all carry full mechanical proof and pass.
 
-Last activity: 2026-08-04 — Phase 01.6.2.1 planned — 6 plans in 6 sequential waves, `gsd-plan-checker` returned VERIFICATION PASSED; research, pattern-mapping and a new VALIDATION.md were deliberately skipped because the phase shares 01.6.2's four artifacts, and the blocking decision-coverage gate was overridden on a parser mismatch (P-NN numbering) after coverage was verified by hand at 13/13 + 12/12. Phase 01.6.2 complete and sealed before it; alongside both, quick tasks 260804-brt/bux/dbf/dih/elq/eu6 worked the skill queue (see Quick Tasks Completed) — `c64-ram-capture` rewired and corrected, `c64-provenance-diff` added as the seventh skill, the RE-skill todo closed as already-built, and `vice-wedge-triage` added as the eighth, clearing the last outstanding skill and dropping its `blocker` todo to `minor`. 260804-eu6 also reconciled the skills' crash content against the rewritten MCP: two defects filed (`vice_diagnose`'s `checkpoint_trap` shapes may miss a mid-handler arming and fall through to the destructive `wedged` response; no exposed tool reads the restart epoch, which made a standing `c64-ram-capture` instruction unperformable) and the widened vector sweep found the game's own NMI **and** RESET handlers sharing `$1116` in both releases
+Last activity: 2026-08-04 — Phase 01.6.2.1 execution started
 
 Progress (v1.1): 32 of 39 authored plans done — 01.6 complete (4/4), 01.6.1 complete (8/8), 01.3 paused at 5/6 (01.3-06 outstanding), **01.6.2 complete and sealed 15/15 (20/20 verified, 2026-08-04)**, **01.6.2.1 planned 0/6 — six plans in six sequential waves, authored and unexecuted.** **No percentage given on purpose:** 01.6.3 and 01.4 are not yet broken into plans, so the denominator is still not knowable and any bar here would overstate progress. (01.5 and 01.7 are `ABSORBED` and contribute no plans.)
 Progress (v1.0, paused): [████░░░░░░] 40% — 8/20 plans
@@ -465,6 +516,7 @@ drifting implementations, while sharing code without sharing state means N broke
 - Phase 01.6.2 edited: scope enlarged: Phase 01.7 (TCP control plane) merged in, Phase 01.5 (survivability defects) folded in; both retained as ABSORBED stubs, not deleted. Reverses the 2026-08-02 split for two of four members. Decisions in 01.6.2-CONTEXT.md D-01..D-27.
 - Phase 01.5 edited: ABSORBED into 01.6.2 (does not run). Section retained with a per-criterion disposition table; criteria 4 and 6 flagged as not settled.
 - Phase 01.7 edited: ABSORBED into 01.6.2 (does not run). Section retained with a per-criterion disposition table; criterion 7 dropped entirely, criterion 8 weakened because 01.4 has not landed.
+- Phase 01.8 inserted after Phase 01.3: Developer Closure & Live Verification — collects every developer-gated v1.1 item so the autonomous run never halts
 
 ## Deferred Items
 

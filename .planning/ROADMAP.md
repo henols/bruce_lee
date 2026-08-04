@@ -60,7 +60,14 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 ### Milestone v1.1 — Emulator Access Hardened *(active, inserted 2026-08-02)*
 
-Execution order is **01.6 → 01.6.1 → 01.6.2 → 01.6.2.1 → 01.6.3 → 01.4 → 01.3**, not numeric order.
+Execution order is **01.6 → 01.6.1 → 01.6.2 → 01.6.2.1 → 01.6.3 → 01.4 → 01.3 → 01.8**, not numeric order.
+
+> **PHASE 01.8 APPENDED 2026-08-04 (developer).** The developer's instruction is that the remaining
+> phases are driven autonomously, with no check-ins, and that **anything genuinely requiring the
+> developer is collected into one phase they come back to** rather than halting the run. Phase 01.8 is
+> that phase, and it is last. Consequence accepted knowingly: several phases will seal with criteria
+> marked CARRIED rather than verified, so **no v1.1 phase seal should be read as live-verified until
+> 01.8 closes** — which is a sharper version of the limit 01.6, 01.6.1 and 01.6.2 already carry.
 
 > **SPLIT AGAIN 2026-08-03 (developer, via `/gsd-plan-phase 01.6.2`, at plan time).** Was
 > `01.6 → 01.6.1 → 01.6.2 → 01.6.3 → 01.4 → 01.3`. `gsd-planner` returned
@@ -106,6 +113,7 @@ Execution order is **01.6 → 01.6.1 → 01.6.2 → 01.6.2.1 → 01.6.3 → 01.4
 - [ ] **Phase 01.6.2.1: Broker Lifecycle Policy** *(INSERTED 2026-08-03 — split out of 01.6.2 at plan time)* - Fix the broker's five lifecycle-policy defects rather than translate them — five labelled tasks, five tests, separate commits — disposition Phase 01.5's seven absorbed criteria one by one against real work (criterion M is where absorbing 01.5 actually seals), and itemise every claim neither 01.6.2 nor this phase could verify live into the carry-forward list **Phase 01.4** must discharge. Shares 01.6.2's four artifacts unchanged; has none of its own. **D-07's launch-priority change is blocked on 01.6.2 criterion C's race test being green**, so a failure has one candidate cause
 - [ ] **Phase 01.6.3: `@mastra/mcp` Adoption** *(INSERTED 2026-08-02 — split out of 01.6, deliberately last)* - Swap the ~164-line generic JSON-RPC seam in the proxy for `@mastra/mcp` (developer decision D-01, taken against research's HIGH-confidence advice), with the ~88–94% of project-specific logic working unchanged, a decided `COVERAGE.md` capability matrix, a blocking package-legitimacy checkpoint, and D-06: whether to bundle to preserve the container's zero-dependency-clone property
 - [~] **Phase 01.7: The TCP Control Plane** — **ABSORBED INTO 01.6.2 (2026-08-03), does not run** - Replace the file-messaging protocol with one TCP control connection per proxy whose lifetime *is* the lease, so connection close — including on SIGKILL — is the release, enforced by the kernel. Bootstrap stays a file for discovery; the emulator data plane is untouched; broker restart reaps unconditionally and voids via the existing epoch mechanism; CR-01's singleton guard closes here. All eight criteria are dispositioned in its retained section — **criterion 7 (cross-project brokering) is dropped entirely, and criterion 8's live verification is unavailable because 01.4 has not landed**
+- [ ] **Phase 01.8: Developer Closure & Live Verification** *(INSERTED 2026-08-04 — runs **LAST**, and exists so the autonomous run never stops)* - Settle the v1.1 claims only the developer can settle, and complete the work each answer unblocks in the same phase. Six authored HV rows: the host-side backstop truths 01.6 and 01.6.1 share, the blocking `@mastra` package-legitimacy approval, D-06's bundle-or-`npm install` decision, 01.4's live-session criteria, 01.3-06's human-verify gate, and the `CF-01.4-NN` carry-forward list. **HV-05 is structurally unautomatable** — it asks a human to confirm no criterion was reworded to fit its outcome, so the agent cannot answer it. New blockers found mid-run are appended, never dropped
 
 ### Milestone v1.0 — Pipeline Proven *(paused behind v1.1)*
 
@@ -1004,6 +1012,53 @@ Plans:
   8. **The suite passes across the transport change as well, and it is a different suite than 01.6 handed over.** Phase 01.6's criterion 9 proved equivalence for the *language and consolidation* move; this criterion is the same discipline applied to the *protocol* move, against the TypeScript suite 01.6 produced. `--once` and `VICE_BROKER_PROBE_CMD` are the seams every test drives and both stay. Because 01.5 has landed by now, live-session verification is available here in a way it was not during 01.6 — use it, and do not fall back to treating a green suite as sufficient (see Phase 01.4's finding).
 
 **Risks**: **This is the phase where a lease stops being a file and becomes a socket**, so every failure mode changes shape at once: `startHeartbeat()`, the mtime-as-heartbeat convention, `file_mtime_epoch()`, `lease_is_stale()`, `sweep_grants()` and the 180 s TTL all retire together, and anything that quietly depended on one of them fails in a new way. **Broker death becomes fatal to the session** (criterion 5) — an accepted, knowing regression against today, where after the grant the proxy's only broker dependency is `touchLease`, whose failure is a silent no-op. **A restarted broker seeing zero connections concludes every emulator is free**, which is why criterion 4's reap must be unconditional on startup rather than on clean shutdown; a SIGKILLed broker never runs a shutdown path, and Phase 01.6 explicitly accepts leaving emulators running. **Two brokers on different ports are still two brokers** — `EADDRINUSE` is only a singleton guard if the port is well-known and `broker.json` is the arbiter of which one it is; verify that it holds rather than assuming it (criterion 6).
+
+---
+
+### Phase 01.8: Developer Closure & Live Verification
+
+> **INSERTED 2026-08-04 (developer), hand-authored.** `gsd-tools query phase.add` would have
+> computed `Phase 8` (max integer + 1) and landed it in v2.0's sequence, and `phase.insert` cannot
+> resolve any phase in this ROADMAP — `roadmap analyze` returns `phases: []`, re-confirmed live on
+> 2026-08-04, the same defect already filed for the 01.6.2.1 insertion. `roadmap get-phase 01.3`
+> resolves correctly, so the read verbs are unaffected and only the write path was bypassed.
+>
+> **This phase exists so the autonomous run does not stop.** The developer's instruction (2026-08-04)
+> is that the remaining v1.1 phases are driven without check-ins, and that anything genuinely needing
+> them collects here instead of blocking. It is therefore **the only phase in v1.1 that is allowed to
+> be a container for other phases' unfinished business**, and it is deliberately last.
+
+**Goal**: Every v1.1 claim that only the developer can settle is settled — the host-side backstop truths observed live, the two `@mastra` packages approved or rejected, D-06 decided, the carry-forward list discharged and 01.3-06's human-verify gate answered — and the work each answer unblocks is completed inside this phase, so v1.1 closes with nothing still carried
+
+**Depends on**: every other v1.1 phase (01.6.2.1, 01.6.3, 01.4, 01.3). It runs last by construction: its content is what those phases could not close without the developer.
+
+**Requirement mapping**: none — tooling phase, matching 01.1/01.2/01.3/01.4.
+
+**The HV register.** Each row names what it blocks, what the developer does, and what the agent completes once answered. **The last field is the point of the row** — a gate whose downstream work is not named is a gate that gets answered and then forgotten.
+
+| ID | Blocks | Developer action | Completed by agent after |
+|----|--------|------------------|--------------------------|
+| **HV-01** | 01.6 sealing at 14/14; 01.6.1 UAT test 3 (the two phases share one host-side truth) | Start the host broker and let the agent read `.vice-supervisor/broker.json` live | Confirm `node_version` is present and `written_by` names the TypeScript broker, not `vice-broker.sh`; seal both phases or state precisely what still fails |
+| **HV-02** | All of 01.6.3 downstream of the install — criterion E is `blocking` and explicitly **non-auto-approvable** | Approve or reject installing `@mastra/mcp` (453 K/wk) and `@mastra/core` (1.36 M/wk), both flagged `[SUS]` on a weak "too-new" heuristic | On approve: install and land the seam swap. On reject: re-plan 01.6.3 around the hand-rolled seam and record D-01 as reversed |
+| **HV-03** | 01.6.3 criterion D, and the container's zero-dependency-clone property | Decide D-06: bundle `@mastra/mcp`, or wire `npm install` into provisioning | Implement the chosen side and record the other as priced-and-declined. **Only live if HV-02 is approved** |
+| **HV-04** | 01.4 criteria 1–4 — its verification is "a live session call and nothing else" | Provide a live session with the broker up; for criterion 4, a session that spawns an executor subagent | Drive the three synthetic tools by name, reproduce the 64-vs-63 tool-count breach, and confirm `vice_disk_list` is unreachable on the generic path |
+| **HV-05** | 01.3-06 (`gate="blocking"`, `01.3-06-PLAN.md:259`) and therefore 01.3's seal | Read the phase records and confirm no criterion was reworded to fit its outcome (threat T-01.3-20) | Nothing — **this row is structurally unautomatable.** It is a check on the agent's own honesty, so the agent cannot be the one to answer it |
+| **HV-06** | The `CF-01.4-NN` carry-forward rows (01.6.2.1 plan 06, ~35 expected) that 01.4 cannot discharge container-side | Same live-broker access as HV-04, once | Walk the carry-forward list row by row and mark each discharged or permanently unverifiable, with the reason |
+| **HV-07+** | *(open)* | *(appended during the autonomous run)* | Any blocker the run hits is appended here with these same four fields, never dropped and never answered by inference |
+
+**Success Criteria** (what must be TRUE):
+
+  1. **Every HV row carries a dated developer answer.** No row is closed by inference, by "presumably approved", or by the agent deciding the answer was obvious. A row the developer *declines* is recorded as declined with its consequence named — that is a closed row, not an open one.
+
+  2. **Every downstream item an answer unblocks is completed in this phase.** This is where carrying stops. A phase that answers six gates and defers their consequences to a Phase 01.9 has reproduced the problem it was created to solve.
+
+  3. **Rows added during the autonomous run are indistinguishable in quality from the six authored here.** Same four fields, same specificity. A row reading "01.4 needs live verification" is a failure of this criterion; HV-04's wording is the bar.
+
+  4. **v1.1's per-phase seals are re-read after the answers land, not assumed to still be accurate.** 01.6, 01.6.1 and whichever of 01.6.3 / 01.4 / 01.3 sealed with carried items each move to fully verified or state exactly what remains and why.
+
+  5. **The autonomous run's deferral decisions are auditable.** Every criterion that was marked CARRIED rather than verified names its HV row, so the developer can see what was routed here and — more importantly — what was *not* routed here and closed for real.
+
+**Risks**: **Deferral becomes a habit if it is not policed, and this phase is the instrument that would make it easy.** The whole point of routing blockers here is to keep the run moving; the failure mode is five phases sealing "implemented, unverified" and handing the developer a wall of un-triaged gates. Criterion 1's dated-answer requirement and the register's *"Completed by agent after"* column are the mitigation — the cost of each answer is visible before the developer sits down. **A rejection at HV-02 invalidates 01.6.3's plans, not just its execution** — that phase would need re-planning around the hand-rolled seam, which is exactly what `01.6-RESEARCH.md` §B6 recommended at HIGH confidence before D-01 overrode it. Cheaper than installing 59 MB of agent-orchestration framework on a weak heuristic, and the reason the gate is blocking. **HV-05 cannot be discharged by the agent under any circumstance**, so an autonomous run that reports 01.3 fully sealed has either skipped it or answered it dishonestly; treat that as the tell.
 
 ---
 
