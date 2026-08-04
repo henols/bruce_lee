@@ -437,13 +437,25 @@ function resolveCount(envVar, defaultValue, override) {
 }
 /** The exit-driven respawn step. Reads the JUST-crashed record (still in
  * state.instances -- nothing here deletes it before this runs), decides
- * among the three outcomes, and acts:
+ * among the four outcomes, and acts:
  *
- * - deliberateKill set -> "deliberate_teardown": drop the instance, no
- *   respawn. This is T-01.6.2-21's whole point -- without reading this
- *   flag, every deliberate teardown would respawn exactly what it just
- *   killed, silently breaking kill-never-recycle (a released instance must
- *   be killed and stay gone).
+ * - deliberateKill set AND respawnAfterKill set -> "recycled": a
+ *   broker-ordered death that wants a replacement, relaunched on the SAME
+ *   port through launchSupervised() -- but called DIRECTLY, bypassing every
+ *   crash-accounting step below (no appended crash timestamp, no give-up
+ *   evaluation, no backoff wait, no doubling): a deliberate recycle is not
+ *   evidence of instability, and the crash-loop machinery exists for an
+ *   UNEXPLAINED exit, not this one. The pre-kill crash history and backoff
+ *   are carried forward UNCHANGED, and a pre-kill "granted" state is
+ *   restored on the fresh record -- the relaunch primitive always creates a
+ *   new record in the "launching" state, and leaving it there would let the
+ *   warm floor's own ready-count numerator mistake a recycled session's own
+ *   machine for an available spare.
+ * - deliberateKill set WITHOUT respawnAfterKill -> "deliberate_teardown":
+ *   drop the instance, no respawn. This is T-01.6.2-21's whole point --
+ *   without reading this flag, every deliberate teardown would respawn
+ *   exactly what it just killed, silently breaking kill-never-recycle (a
+ *   released instance must be killed and stay gone).
  * - crash count (this instance's crash timestamps still inside the window,
  *   INCLUDING this one) at or above the configured maximum ->
  *   "given_up": drop the instance, log a line naming it and the count.
@@ -463,6 +475,21 @@ async function handleExit(reason, port, deps) {
     }
     const log = deps.log ?? defaultLog;
     if (record.deliberateKill) {
+        if (record.respawnAfterKill) {
+            // Recycle. Capture the pre-kill state, crash history and backoff
+            // BEFORE launchSupervised() replaces the map entry at this port key
+            // with a brand new InstanceRecord -- nothing about those three facts
+            // survives once that overwrite happens.
+            const preKillState = record.state;
+            const preKillCrashTimes = record.crashTimes ?? [];
+            const preKillBackoffMs = record.backoffMs ?? resolveMs("VICE_RESTART_BACKOFF_S", 3, deps.initialBackoffMs);
+            const respawned = launchSupervised(reason, port, deps, preKillCrashTimes, preKillBackoffMs);
+            if (respawned && preKillState === "granted") {
+                respawned.state = "granted";
+            }
+            deps.onOutcome?.("recycled", port);
+            return;
+        }
         deps.state.instances.delete(port);
         deps.onOutcome?.("deliberate_teardown", port);
         return;

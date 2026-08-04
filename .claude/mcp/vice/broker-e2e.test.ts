@@ -355,6 +355,228 @@ test(
   },
 );
 
+// ---------------------------------------------------------------------------
+// 01.6.2-13-PLAN.md, Task 3: the wired proof that recycle respawns and
+// release does not, both against the real spawned broker artifact -- the
+// direction plan 12 wired but plan 13's marker split (Tasks 1-2, above) is
+// what makes SAFE to reach through the real control plane rather than only
+// through superviseChild() in isolation (broker-launch.test.ts already
+// covers the recycle branch's own behavior against a fully controlled
+// stub).
+//
+// A recycle's OWNERSHIP check (broker-control.mts) requires the recycle's
+// target_id to be the SAME requestId the acquiring connection itself holds
+// -- both tests below therefore hold ONE connection across both requests.
+// openBrokerControl()'s own session.recycle() discards the ack's
+// epoch_before field (it only returns outcome/kill_stage/reason), so proving
+// "epoch-before carries the recorded integer, not an absent value" needs
+// the raw wire-level ack -- per this task's own instruction, this is done
+// with a raw-request helper local to THIS test file (generalising
+// rawAcquire() above to hold one connection across several round trips),
+// never by adding a field to vice-broker-client.ts for a test's
+// convenience.
+// ---------------------------------------------------------------------------
+
+/** A held raw connection supporting several sequential request/response
+ * round trips over ONE socket -- generalises rawAcquire() above (which
+ * sends exactly one line and is done) for this task's own proof, which
+ * needs ONE connection to both acquire AND recycle (broker-control.mts's
+ * own ownership discipline: a connection may only recycle the grant it
+ * itself holds). Test-local infrastructure only -- never touches
+ * vice-broker-client.ts. */
+function makeRawSession(host: string, port: number) {
+  const socket = connect({ host, port });
+  const responses: Record<string, unknown>[] = [];
+  const waiters: Array<(v: Record<string, unknown>) => void> = [];
+  let buffer = "";
+  socket.on("data", (chunk: Buffer) => {
+    buffer += chunk.toString("utf8");
+    let idx: number;
+    while ((idx = buffer.indexOf("\n")) !== -1) {
+      const line = buffer.slice(0, idx);
+      buffer = buffer.slice(idx + 1);
+      if (line.trim() === "") continue;
+      const parsed = JSON.parse(line) as Record<string, unknown>;
+      const waiter = waiters.shift();
+      if (waiter) waiter(parsed);
+      else responses.push(parsed);
+    }
+  });
+  return {
+    send(obj: Record<string, unknown>): void {
+      socket.write(`${JSON.stringify(obj)}\n`);
+    },
+    next(timeoutMs = 5000): Promise<Record<string, unknown>> {
+      if (responses.length > 0) return Promise.resolve(responses.shift()!);
+      return new Promise((resolvePromise, reject) => {
+        const timer = setTimeout(() => reject(new Error(`no response within ${timeoutMs}ms`)), timeoutMs);
+        waiters.push((v) => {
+          clearTimeout(timer);
+          resolvePromise(v);
+        });
+      });
+    },
+    close(): void {
+      socket.destroy();
+    },
+  };
+}
+
+test(
+  "wired recycle: a recycle over the real control plane kills the granted child and the real broker brings a new one back on the SAME port with the epoch advanced",
+  { timeout: 20000 },
+  async () => {
+    build();
+    const stateDir = mkdtempSync(join(tmpdir(), "broker-e2e-recycle-"));
+    // VICE_BROKER_SPARES=0: this test's port-count and pid-stability
+    // assertions are only meaningful if NOTHING besides this test's own
+    // acquire/recycle sequence ever launches or frees a port. Node's global
+    // fetch gives maintainWarmFloor() a real HTTP readiness mechanism by
+    // default (never "no_mechanism"), so leaving the warm floor at its
+    // default of 3 would auto-launch speculative spares on other free ports
+    // during this test's own wait windows -- disabling it here isolates the
+    // scenario this test is actually proving.
+    const handle = startBroker(stateDir, { VICE_RESTART_BACKOFF_S: "0", VICE_BROKER_POLL_MS: "100", VICE_BROKER_SPARES: "0" });
+    try {
+      const brokerJson = await waitForBrokerJson(stateDir);
+      const host = String(brokerJson.control_host);
+      const port = Number(brokerJson.control_port);
+      const token = String(brokerJson.control_token);
+
+      const client = makeRawSession(host, port);
+      try {
+        // Acquire and recycle over the SAME connection -- the ownership
+        // check requires it (T-01.6.2-31).
+        const grantId = "recycle-proof-acquire";
+        client.send({ op: "acquire", id: grantId, token });
+        const grantResp = await client.next();
+        assert.equal(grantResp.kind, "grant", `expected a grant, got: ${JSON.stringify(grantResp)}`);
+        const grantPort = Number(grantResp.port);
+        const epochFile = String(grantResp.epoch_file);
+
+        const epochBefore = JSON.parse(readFileSync(epochFile, "utf8"));
+        const pidBefore: number = epochBefore.pid;
+        const epochNumBefore: number = epochBefore.epoch;
+        assert.equal(typeof pidBefore, "number");
+        assert.ok(isAlive(pidBefore), `granted child pid ${pidBefore} must be alive before the recycle`);
+
+        client.send({ op: "recycle", id: "recycle-proof-recycle", target_id: grantId, token });
+        const ack = await client.next();
+        assert.equal(ack.kind, "recycle_ack", `expected a recycle_ack, got: ${JSON.stringify(ack)}`);
+        assert.equal(ack.outcome, "ok", `recycle ack outcome must be "ok": ${JSON.stringify(ack)}`);
+        assert.notEqual(ack.epoch_before, null, "the epoch-before field must carry the recorded integer, not an absent value");
+        assert.equal(ack.epoch_before, epochNumBefore, "the epoch-before field must carry the SAME integer the instance held before the kill");
+
+        const respawned = await waitFor(() => {
+          let epoch: Record<string, unknown>;
+          try {
+            epoch = JSON.parse(readFileSync(epochFile, "utf8"));
+          } catch {
+            return false;
+          }
+          return (
+            typeof epoch.epoch === "number" &&
+            epoch.epoch > epochNumBefore &&
+            typeof epoch.pid === "number" &&
+            epoch.pid !== pidBefore &&
+            isAlive(epoch.pid as number)
+          );
+        }, 10000);
+        assert.ok(respawned, "the recycled instance must be respawned on the same port with an advanced epoch and a new, live pid within the deadline");
+
+        const epochAfter = JSON.parse(readFileSync(epochFile, "utf8"));
+        assert.equal(epochAfter.epoch, epochNumBefore + 1, "the epoch integer must advance by exactly one on recycle");
+        assert.notEqual(epochAfter.pid, pidBefore, "the respawned child must be a DIFFERENT pid from the killed one");
+
+        const portDirs = readdirSync(stateDir, { withFileTypes: true }).filter((d) => d.isDirectory() && /^\d+$/.test(d.name));
+        assert.equal(portDirs.length, 1, `exactly one instance directory must exist after the recycle, found ${JSON.stringify(portDirs.map((d) => d.name))}`);
+        assert.equal(Number(portDirs[0].name), grantPort, "the recycled instance must occupy the SAME port the grant named");
+
+        client.send({ op: "status", token });
+        const status = await client.next();
+        assert.equal(status.kind, "status");
+        const instances = status.instances as Array<Record<string, unknown>>;
+        const onRecycledPort = instances.filter((i) => Number(i.port) === grantPort);
+        assert.equal(instances.length, 1, `exactly one instance must be reported after the recycle, got ${JSON.stringify(instances)}`);
+        assert.equal(onRecycledPort.length, 1, `exactly one instance must be reported on the recycled port ${grantPort}, got ${JSON.stringify(instances)}`);
+
+        client.send({ op: "release", token });
+        await client.next();
+      } finally {
+        client.close();
+      }
+    } finally {
+      await stopBroker(handle);
+      rmSync(stateDir, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "wired release: a release over the real control plane kills the granted child and no replacement appears -- kill-never-recycle holds with supervision wired",
+  { timeout: 20000 },
+  async () => {
+    build();
+    const POLL_MS = 100;
+    const stateDir = mkdtempSync(join(tmpdir(), "broker-e2e-release-"));
+    // VICE_BROKER_SPARES=0: same isolation reasoning as the recycle test
+    // above -- a release frees its port back to the allocator, and an
+    // auto-warmed spare landing on that SAME now-free port would rewrite
+    // this test's own epoch.json with an unrelated pid, corrupting the
+    // exact "no replacement appears" assertion this test exists to make.
+    const handle = startBroker(stateDir, { VICE_RESTART_BACKOFF_S: "0", VICE_BROKER_POLL_MS: String(POLL_MS), VICE_BROKER_SPARES: "0" });
+    try {
+      const brokerJson = await waitForBrokerJson(stateDir);
+      const host = String(brokerJson.control_host);
+      const port = Number(brokerJson.control_port);
+      const token = String(brokerJson.control_token);
+
+      const client = makeRawSession(host, port);
+      try {
+        client.send({ op: "acquire", id: "release-proof-acquire", token });
+        const grantResp = await client.next();
+        assert.equal(grantResp.kind, "grant", `expected a grant, got: ${JSON.stringify(grantResp)}`);
+        const grantPort = Number(grantResp.port);
+        const epochFile = String(grantResp.epoch_file);
+
+        const epochBefore = JSON.parse(readFileSync(epochFile, "utf8"));
+        const pidBefore: number = epochBefore.pid;
+        assert.ok(isAlive(pidBefore), `granted child pid ${pidBefore} must be alive before the release`);
+
+        client.send({ op: "release", token });
+        const released = await client.next();
+        assert.equal(released.kind, "released");
+
+        const gone = await waitFor(() => !isAlive(pidBefore), 5000);
+        assert.ok(gone, `released child pid ${pidBefore} must be gone within deadline`);
+
+        // Past AT LEAST two evaluation passes -- the poll interval is
+        // configured explicitly above (100ms) so this is a known quantity:
+        // waiting 2 * POLL_MS plus margin guarantees at least two passes
+        // have run since the release completed.
+        await new Promise((r) => setTimeout(r, POLL_MS * 2 + 250));
+
+        const epochAfter = JSON.parse(readFileSync(epochFile, "utf8"));
+        assert.equal(epochAfter.epoch, epochBefore.epoch, "no new epoch generation may appear at this port after a release");
+        assert.equal(epochAfter.pid, pidBefore, "the epoch record's own pid must not change after a release -- nothing may have respawned it");
+        assert.ok(!isAlive(epochAfter.pid), "no live pid may answer at this port after a release");
+
+        client.send({ op: "status", token });
+        const status = await client.next();
+        assert.equal(status.kind, "status");
+        const instances = status.instances as Array<Record<string, unknown>>;
+        const onReleasedPort = instances.filter((i) => Number(i.port) === grantPort);
+        assert.equal(onReleasedPort.length, 0, `the status response must list no instance on the released port ${grantPort}, got ${JSON.stringify(instances)}`);
+      } finally {
+        client.close();
+      }
+    } finally {
+      await stopBroker(handle);
+      rmSync(stateDir, { recursive: true, force: true });
+    }
+  },
+);
+
 test("a control request with no token, and one with a wrong token, both return the unauthorized error code, are disconnected, and leave the spawn count unchanged", { timeout: 20000 }, async () => {
   const stateDir = mkdtempSync(join(tmpdir(), "broker-e2e-auth-"));
   const handle = startBroker(stateDir);
