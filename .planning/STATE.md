@@ -5,10 +5,10 @@ milestone_name: insertion note
 current_phase: 01.6.2.1
 current_phase_name: Broker Lifecycle Policy
 status: planning
-stopped_at: "Phase 01.6.2 context gathered — scope changed: Phase 01.7 merged in, Phase 01.5 folded in. ROADMAP amendments required BEFORE /gsd-plan-phase 01.6.2 (see CONTEXT.md § ROADMAP amendments required)."
-last_updated: "2026-08-04T10:27:07.719Z"
+stopped_at: Phase 01.6.2.1 context gathered
+last_updated: "2026-08-04T10:55:42.318Z"
 last_activity: 2026-08-04
-last_activity_desc: Phase 01.6.2 complete, transitioned to Phase 01.6.2.1
+last_activity_desc: Phase 01.6.2 complete, transitioned to Phase 01.6.2.1; alongside it, quick tasks 260804-brt/bux/dbf/dih/elq worked the skill queue (see Quick Tasks Completed) — `c64-ram-capture` rewired and corrected, `c64-provenance-diff` added as the seventh skill, and the RE-skill todo closed as already-built
 progress:
   total_phases: 11
   completed_phases: 5
@@ -452,6 +452,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-08-03T19:54:06.571Z
-Stopped at: Phase 01.6.2 context gathered — scope changed: Phase 01.7 merged in, Phase 01.5 folded in. ROADMAP amendments required BEFORE /gsd-plan-phase 01.6.2 (see CONTEXT.md § ROADMAP amendments required).
-Resume file: .planning/phases/01.6.2-the-one-process-host-broker/01.6.2-CONTEXT.md
+Last session: 2026-08-04T10:55:42.298Z
+Stopped at: Phase 01.6.2.1 context gathered
+Resume file: .planning/phases/01.6.2.1-broker-lifecycle-policy/01.6.2.1-CONTEXT.md
