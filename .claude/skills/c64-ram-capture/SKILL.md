@@ -5,8 +5,65 @@ description: Capture a running C64's full 64K RAM as a verified flat image, and 
 
 # Capturing and comparing C64 RAM
 
-Reach the emulator only through the `mcp__vice__*` tools. They are the one
-permitted route. Never open a connection to the emulator by any other means.
+**Reach the emulator only through the `mcp__vice__*` tools.** They are the one
+permitted route. Never open a connection by any other means.
+
+**Never hand-assemble a capture.** Sixteen `vice_memory_read` calls have to land
+contiguously and total exactly 65536 bytes; a dropped or short read is the normal
+failure and it is invisible in a hex dump. Two committed modules do that byte work
+and name the offending address when it is wrong.
+
+```bash
+P=tools/d64-parse.mjs                            # from the repo root
+A=tools/dump-artifacts.mjs
+
+node $P directory --image disks/danish.d64       # what's on the disk (--json flags faked entries)
+node $P bam       --image disks/danish.d64       # disk name, DOS type, occupied track ranges
+node $A assemble  --chunks chunks.json           # size + digest, writes nothing
+node $A write-set --release danish --label gameentry-run1 \
+                  --chunks chunks.json --raw raw.json    # the four committed artifacts
+node tools/releases.mjs list                     # the valid --release ids
+```
+
+Both modules read only committed files and the JSON **you** wrote from your own
+`mcp__vice__*` calls. They contact nothing.
+
+## The order
+
+| # | Phase | Settles |
+|---|---|---|
+| 1 | Read the disk directory | Whether the release's entries are real or faked, before booting anything |
+| 2 | Boot, confirm the PC moved | That the loader is actually executing |
+| 3 | Checkpoint, hit, read 64K + chip state | The capture itself — all reads in one paused window |
+| 4 | `write-set` | Assertions pass, four artifacts written, digest returned |
+| 5 | Disarm, enumerate, resume once | That you left no checkpoint armed and the machine running |
+
+## Read the disk first
+
+`tools/d64-parse.mjs` parses `.d64` bytes directly, so it answers what is on the
+disk whether or not the emulator is up:
+
+```bash
+$ node $P directory --image disks/danish.d64
+PRG "BRUCE LEE   (DC)" first=17/0 blocks=178
+
+$ node $P bam --image disks/danish.d64
+disk name: ""  id: 00  dos type: 2A
+first dir sector: 18/1
+occupied track ranges: 9-18
+```
+
+Do not eyeball the directory for fakery — `--json` decides it. Every entry carries
+`suspicious` plus `suspicious_reasons`, set when the block count is 0, when the
+first track/sector falls outside the image, or when it points into a track the BAM
+reports as entirely free. That last case is the signature of an entry claiming a
+file never written to disk.
+
+Both of this project's images come back `suspicious: false` — their `BRUCE LEE`
+entries are genuinely well-formed, not faked, asserted against the real images as
+committed fixture tests in `tools/d64-parse.test.mjs`. A non-null `chain_error` is
+the separate failure: a directory chain that leaves the image or loops, reported
+instead of hanging. **Confidence: HIGH** (fixture tests over the real images).
 
 ## Boot a disk
 
@@ -25,12 +82,27 @@ If the program counter has not moved, type `LOAD"*",8,1` with
 2. `mcp__vice__vice_execution_run`.
 3. Poll `mcp__vice__vice_ping` until the checkpoint reports a hit.
 4. Read `$0000`–`$FFFF` with repeated `mcp__vice__vice_memory_read` calls of
-   4096 bytes each, and concatenate the results in address order into one
-   65536-byte image.
-5. Confirm the image is exactly 65536 bytes, then record its SHA-256.
-6. Record alongside it, in the same step: the value at `$0001`, the video
-   standard from `mcp__vice__vice_vicii_get_state`, and the registers from
-   `mcp__vice__vice_registers_get`.
+   4096 bytes each. Write them to `chunks.json` as an array of
+   `{ "address": "$0000", "hex": "..." }` records, one per call, hex only.
+5. Record the chip state in the **same paused window**, into `raw.json`. The keys
+   are fixed, because `chip-state` derives from exactly these: `registers`,
+   `sprites` and `cpu` pass through verbatim from
+   `mcp__vice__vice_vicii_get_state` / `mcp__vice__vice_sprite_get` /
+   `mcp__vice__vice_registers_get`; `port01_raw` is `$0001`; `dd00_raw` is
+   `$DD00`; `d018_raw` is `$D018`; `sprite_pointers` is the eight bytes at
+   `screen_base+$3F8`.
+6. Write all four artifacts in one call:
+
+   ```bash
+   node $A write-set --release danish --label gameentry-run1 \
+     --chunks chunks.json --raw raw.json
+   ```
+
+   It asserts exactly 65536 bytes with no gap and no overlap *before* writing
+   anything, then emits `<release>-<label>.bin`, `.state.json`, `.map.json` and
+   `.capture.json` under `recovery/<release>/dumps/`, and returns their paths
+   with the SHA-256. It also derives `vic_bank`, `screen_base`, `charset_base`
+   and `sprite_data_addresses` for free — do not recompute them by hand.
 7. `mcp__vice__vice_checkpoint_delete` the checkpoint.
 8. `mcp__vice__vice_checkpoint_list` and confirm it reports zero checkpoints.
    Accept only this enumeration as proof. Record the count.
@@ -40,6 +112,40 @@ Read state before you resume, and resume exactly once at the end.
 
 Hold keys down across a gate by releasing them at the trigger checkpoint in
 step 3, never earlier.
+
+`assemble` runs the same assertions and writes nothing, so it is the cheap check
+on a set of chunks before committing them.
+
+## Worked example — a real capture
+
+Chunks derived from a committed image, fed back through `assemble`:
+
+```
+$ node $A assemble --chunks chunks.json
+65536 bytes, sha256 e1b8428c55bc7606b7e77846e8928bff23e9cf0c8241da479aadc1bc092faa26
+```
+
+That digest is byte-identical to the `sha256` field committed in
+`recovery/danish/dumps/danish-gameentry-run1.capture.json`, so the assembly path
+reproduces a known-good artifact rather than merely producing 65536 bytes.
+**Confidence: HIGH** (reproduced against the committed sidecar).
+
+Then break it deliberately, to see what the guards say:
+
+```
+$ node $A assemble --chunks gap.json      # one chunk removed
+Error: assembleImage: gap before address $3000 -- next chunk starts at $4000
+
+$ node $A assemble --chunks short.json    # last chunk truncated by 2 bytes
+Error: assembleImage: assembled 65534 bytes ending at $FFFE, expected exactly 65536
+```
+
+Read those as addresses to re-read, not as sizes to pad.
+
+`manifest` on a fresh capture reports `classification_state: "ranges-only"` with
+every range `unclassified`. That is correct and transient — it becomes `"bucketed"`
+only after the provenance diff partitions loader from cracktro from game. A fresh
+capture already claiming `"bucketed"` is the anomaly.
 
 ## Find an entry point
 
@@ -51,41 +157,65 @@ step 3, never earlier.
    dispatch loop; its lowest address is the entry point.
 4. Confirm the address with `mcp__vice__vice_disassemble` before recording it.
 
-Set a batch ceiling before you start. Report failure to stabilise as a
-finding with the batches spent; never extend the ceiling silently.
+Set a batch ceiling before you start. Report failure to stabilise as a finding
+with the batches spent; never extend the ceiling silently.
 
 ## Prove the machine did not change under you
 
-Read the restart epoch at the start of a capture and again at the end.
-Report the same epoch to accept the capture. Report a changed epoch to void
-it.
+Read the restart epoch at the start of a capture and again at the end. Report the
+same epoch to accept the capture. Report a changed epoch to void it.
 
-## Void a run
-
-Void a capture whose machine identity you could not prove unchanged.
+**Void a run** whose machine identity you could not prove unchanged:
 
 1. Rename each artifact to `<name>.VOID-<UTC timestamp>`.
-2. Write a sibling note recording the reason, both epoch values, and the
-   time. Keep the voided artifacts on disk.
+2. Write a sibling note recording the reason, both epoch values, and the time.
+   Keep the voided artifacts on disk.
 
 ## Compare two captures
 
 Compare two 65536-byte images address by address.
 
-- Treat differences at `$0000`–`$0001`, `$0100`–`$01FF` and `$0200`–`$03FF`
-  as volatile. Count them, exclude them from the verdict, and report the
-  count.
-- Treat a difference of exactly one bit as drift. List each one with its
-  address and both values, and report them as candidates.
-- Treat a difference of two or more bits as a real divergence. List each one
-  with its address and both values. Any such difference fails the comparison.
+- Treat differences at `$0000`–`$0001`, `$0100`–`$01FF` and `$0200`–`$03FF` as
+  volatile. Count them, exclude them from the verdict, and report the count.
+- Treat a difference of exactly one bit as drift. List each one with its address
+  and both values, and report them as candidates.
+- Treat a difference of two or more bits as a real divergence. List each one with
+  its address and both values. Any such difference fails the comparison.
 
 Report the verdict as pass or fail, with all three lists attached.
 
-## Establish a drift floor
+**Establish a drift floor** by capturing the power-on image as the very first
+action against a fresh machine. Then run the machine idle, capture, run idle
+again, capture again, and compare. Report every address that differed as that
+machine's drift floor. State it as a floor, not a complete set.
 
-Capture the power-on image as the very first action against a fresh machine.
+## Which skill does what
 
-Then run the machine idle, capture, run idle again, capture again, and
-compare. Report every address that differed as the drift floor for that
-machine. State it as a floor, not a complete set.
+This one owns the image and its identity. It does not restate what the others carry.
+
+| Need | Go to |
+|---|---|
+| Which address to read next, and what the answer rules out | `c64-program-recon` |
+| Every way a live read gives a wrong answer | `c64-program-recon` — `references/observation-hazards.md`. **Read before driving.** |
+| What a specific address or bit means | `c64-memory-mapping` — `node … lookup '$D018'` |
+| Assembling, or a first-pass dead listing | `acme-build` |
+| **A verified 64K image, or proving two captures equivalent** | here |
+
+Findings that make RE faster go in `.planning/RE-FINDINGS.md` **at the moment you
+find them**, graded with `Evidence:` and `Confidence:`. Promote by re-logging with
+the new evidence, never by editing a grade in place. File-changing work enters
+through a GSD command (`/gsd-quick`).
+
+## Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| `assembleImage: gap before address $3000 -- next chunk starts at $4000` | A `vice_memory_read` never landed. Re-read that 4096-byte window; do not pad it. |
+| `assembleImage: overlap at address $8000 -- a previous chunk already covered up to $8003` | Two chunks cover the same window, usually a duplicated call after a retry. Drop the duplicate. |
+| `assembleImage: assembled 65534 bytes ending at $FFFE, expected exactly 65536` | A read returned short. Re-read the final window. |
+| `unknown release "x" -- known releases: danish, saeger` | The `--release` id is not in `recovery/RELEASES.json`. The error names the valid ids; it throws before writing anything. |
+| A fresh `.map.json` says `classification_state: "bucketed"` | Wrong — a fresh capture is `"ranges-only"`. The provenance diff sets `"bucketed"`, nothing else. |
+| The checkpoint never fired | Most state reads pause the emulator. Resume exactly once, at the end, after every read. |
+| Two captures of the same checkpoint differ | Expected. Full-64K identity is impossible in principle; apply the drift rules above. |
+| The epoch changed mid-capture | The machine restarted under you. Void the run; do not salvage the artifacts. |
+| The emulator looks dead | Enumerate armed checkpoints before anything else — see `c64-program-recon`'s hazards. |

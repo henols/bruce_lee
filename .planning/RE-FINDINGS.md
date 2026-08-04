@@ -2572,3 +2572,83 @@ answers to the one shared setter.
 **Confidence:** HIGH — the conflation and its fix are both directly observable in the diff this
 plan produced, and the two end-to-end tests exercise the exact failure mode (a release respawning)
 the conflation would have caused.
+
+## Tooling findings — the pure-Node modules in `tools/`
+
+### 2026-08-04 — `d64-parse --json` decides directory fakery for you, with named reasons
+
+**Type:** shortcut
+**Evidence:** `node tools/d64-parse.mjs directory --image disks/danish.d64 --json` run live in
+this container; the flagging rule read off `parseDirectory`'s contract in `tools/d64-parse.mjs`
+**Saves:** the eyeball pass over a directory listing, and the wrong conclusion it invites
+
+Every entry carries `suspicious` plus `suspicious_reasons` — never a bare boolean. It is set when
+the block count is 0, when the first track/sector falls outside the image, or when it points into
+a track the BAM reports as entirely free. That third case is the actual signature of an entry
+claiming a file never written to disk. A non-null `chain_error` is the separate failure: a chain
+that leaves the image or loops, reported rather than hung on.
+
+Both project images return `suspicious: false` for `BRUCE LEE` — genuinely well-formed, not faked.
+`tools/d64-parse.test.mjs` asserts this against the real images as committed fixture tests.
+
+**Confidence:** HIGH — run live, and covered by fixture tests over the real disk images.
+
+### 2026-08-04 — a capture's assembly path is checkable against a committed dump's own digest
+
+**Type:** confirmation
+**Evidence:** 16×4096-byte `{address,hex}` chunks derived from
+`recovery/danish/dumps/danish-gameentry-run1.bin`, fed to `node tools/dump-artifacts.mjs assemble`
+→ `65536 bytes, sha256 e1b8428c55bc7606b7e77846e8928bff23e9cf0c8241da479aadc1bc092faa26`,
+byte-identical to the `sha256` field committed in that dump's `.capture.json`
+**Saves:** turns "the tool produced 65536 bytes" into "the tool reproduced a known-good artifact"
+
+This is the cheap regression check on the capture path itself, and it needs no emulator — any
+committed `.bin` can be re-chunked and pushed back through `assemble` to confirm the assembly and
+digest logic still agree with what was committed earlier.
+
+**Confidence:** HIGH — reproduced live against the committed sidecar.
+
+### 2026-08-04 — the guards name the offending address; a dropped 4096-byte read is otherwise invisible
+
+**Type:** hazard
+**Evidence:** deliberately broken chunk sets run through `assemble` live — a removed chunk gives
+`assembleImage: gap before address $3000 -- next chunk starts at $4000`, a 2-byte-truncated final
+chunk gives `assembleImage: assembled 65534 bytes ending at $FFFE, expected exactly 65536`, and a
+4-byte overlap gives `assembleImage: overlap at address $8000 -- a previous chunk already covered
+up to $8003`
+**Costs:** hand-concatenating the chunks instead loses all three of these signals silently
+
+A 64K capture is 16 `vice_memory_read` calls, and the normal failure is one of them dropping or
+returning short. In a hex dump the result still looks like plausible memory. The assertions run
+*before* anything is written, so a bad set never reaches `recovery/`. Read the messages as
+addresses to re-read, never as sizes to pad.
+
+**Confidence:** HIGH — all three messages produced live in this container.
+
+### 2026-08-04 — `classification_state` distinguishes a fresh capture from a post-diff one
+
+**Type:** trick
+**Evidence:** `manifest` on freshly derived chunks emits `classification_state: "ranges-only"`
+with every range `kind: "unclassified"`; the committed
+`recovery/danish/dumps/danish-gameentry-run1.map.json` carries `"bucketed"` with real
+`loader`/`cracktro`/`game`/`unused` kinds
+**Saves:** a one-field check for whether a manifest has been through the provenance diff yet
+
+A fresh capture claiming `"bucketed"` is the anomaly — only the provenance diff sets it.
+
+**Confidence:** HIGH — both states observed directly, one live and one committed.
+
+### 2026-08-04 — dead end: the `tools/` modules do NOT depend on the caller's working directory
+
+**Type:** dead end (a plausible troubleshooting rule that is simply false)
+**Evidence:** `cd tools && node releases.mjs list` succeeds and prints both releases; every module
+derives `REPO_ROOT` from `dirname(fileURLToPath(import.meta.url))`, not from `process.cwd()`
+**Saves:** stops "run it from the repo root" being written into docs as a fix for a failure it
+cannot cause
+
+This was drafted into a skill's troubleshooting table as the cause of a
+`no registry at .../recovery/RELEASES.json` error and removed after testing. That error means the
+registry is genuinely absent, not that the caller was in the wrong directory. Path arguments are
+resolved against the caller's cwd; the repo-relative data files are not.
+
+**Confidence:** HIGH — the false rule was tested and disproved in this container before shipping.
