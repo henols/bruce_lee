@@ -25,3 +25,19 @@ triage this plan's own acceptance criteria enumerate).
   "resolved via `repo-root.ts`'s `supervisorDir()`" path-resolution explanation, which is still
   accurate (only the WRITER changed, not the path or format — D-23's own "same paths, same
   format" contract).
+
+## Re-evaluation, 2026-08-04 (01.6.2-15, gap closure)
+
+Re-checked against this gap closure's own file sets, per plan 15's own re-evaluation rule (free to
+fix only if the module is one this gap closure already edits): `01.6.2-12-SUMMARY.md`'s modified
+files are `.claude/mcp/vice/broker-launch.mts`, `broker-launch.test.ts`, `vice-broker.mts`,
+`broker-e2e.test.ts`, `resources/broker-launch.mjs`, `resources/vice-broker.mjs`,
+`.planning/RE-FINDINGS.md`; `01.6.2-13-SUMMARY.md`'s are `broker-state.mts`, `broker-launch.mts`,
+`broker-launch.test.ts`, `vice-broker.mts`, `broker-control.test.ts`, `broker-e2e.test.ts`, three
+`resources/*.mjs` files, `.planning/RE-FINDINGS.md`; `01.6.2-14-SUMMARY.md`'s are
+`broker-control.mts`, `broker-control.test.ts`, `broker-e2e.test.ts`, `broker-state.mts`,
+`broker-state.test.ts`, `vice-proxy.ts`, `vice-proxy.test.ts`, two `resources/*.mjs` files,
+`.planning/RE-FINDINGS.md`. **`.claude/mcp/vice/vice.ts` — the file this deferred item's stale
+comment actually lives in — appears in none of the three plans' file sets.** The fix is therefore
+**not free** at this gap closure. This item remains deferred, unchanged, for whichever future plan
+next touches `vice.ts`.
