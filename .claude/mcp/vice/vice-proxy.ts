@@ -701,17 +701,26 @@ const handleRecycle: (args: Record<string, unknown>) => Promise<ToolCallResult> 
   const recycled = await controlSession.recycle(grantId as string);
   if (!recycled.ok) {
     if (recycled.kind === "broker_gone") {
-      // Distinct from an acknowledgement carrying a refusal (T-01.6.2-46):
-      // the instance's state is unknown in both cases, but the operator's
-      // next action differs -- a refusal means the target is alive and
-      // uncooperative, broker_gone means there is no longer anyone to ask.
-      // The full broker-death discipline and its agent-facing vocabulary are
-      // plan 08's; this branch only needs to exist and be distinguishable.
+      // D-14 (plan 08): distinct from an acknowledgement carrying a refusal
+      // (T-01.6.2-46) -- the instance's state is unknown in both cases, but
+      // the operator's next action differs, a refusal means the target is
+      // alive and uncooperative, broker_gone means there is no longer
+      // anyone to ask. Reuses sessionMustRestartMessage() -- the SAME
+      // fresh-machine vocabulary a forwarded call's own broker-gone path
+      // (handleGrantedInstanceUnreachable() above) produces -- rather than
+      // a bare transport error string. Deliberately does NOT attempt to
+      // open a fresh session and acquire a replacement the way a forwarded
+      // call does: the instance THIS recycle was trying to kill is now of
+      // genuinely unknown state (the kill request may or may not have
+      // reached the broker before the connection dropped), and silently
+      // handing back a different "replacement" instance under the name of
+      // a recycle result would claim more certainty about that kill than
+      // this proxy actually has.
       finaliseIncidentRecord(recordPath, { outcome: "broker_gone" });
       return isErrorText(
-        `vice_recycle: the broker closed the connection while this recycle was in flight. Incident ` +
-          `record: ${recordPath}. The instance's state is now unknown -- the broker itself may be down, ` +
-          `which is a different problem from a refusal or a timeout and may require a host-side restart.`
+        `${sessionMustRestartMessage(recycled)} Incident record: ${recordPath}. This recycle's own kill ` +
+          `request may or may not have reached the broker before the connection dropped -- the instance's ` +
+          `state is now unknown.`
       );
     }
     if (recycled.kind === "deadline") {
@@ -1570,40 +1579,23 @@ function aliveButFailedMessage(errMessage: string): string {
 
 // ------------------------------------------- broker-granted unreachable diagnostics
 //
-// Quick task 260801-ccn task 3 (D-5). Distinct from BOTH the host-unreachable
-// triple above (which answers "is the host VICE MCP server reachable" with
-// no broker in the picture at all) and the broker-ABSENT triple below (which
-// answers "is the on-demand broker itself reachable", reached only BEFORE a
-// lease exists) -- this answers a third, different question: the broker has
-// ALREADY reported successfully launching an instance for this session, and
-// THAT instance is not answering. Offering the fixed-port triple's
-// never-started/dead-or-hung diagnosis here would send the operator to
-// restart the RETIRED supervisor route while the broker is running fine and
-// had already granted a working emulator -- exactly the misdirection this
-// task fixes.
+// Quick task 260801-ccn task 3 (D-5) introduced ONE message here, distinct
+// from both the host-unreachable triple above and the broker-ABSENT triple
+// below, for a granted instance that stopped answering: report the fact and
+// tell a human to go investigate on the host.
 //
-// Deliberately ONE message, not a broker-side copy of the fixed-port
-// triple's own launched-vs-hung split: a granted instance cannot be in the
-// "was it ever started" state that split exists to distinguish -- the
-// broker has just told us it was. Quotes brokerHostPath() (an absolute HOST
-// path, recomputed fresh -- see that function's own comment), the granted
-// port and url (activeInstance()), the held lease id, the probe's own
-// reason verbatim, and whether an epoch record was found for this instance;
-// ends with the shared only-route note, never a second copy of it.
-function brokerGrantedUnreachableMessage(probe: ProbeResult, epoch: EpochResult): string {
-  const { port, url } = activeInstance();
-  const epochNote = epoch && epoch.present
-    ? `an epoch record is on file for it (epoch ${epoch.epoch}${epoch.pid != null ? `, pid ${epoch.pid}` : ""})`
-    : "no epoch record is on file for it";
-  return (
-    `vice-proxy: the on-demand VICE broker's granted instance (grant ${grantId}, port ${port}, ${url}) ` +
-    `is not answering -- ${probe.reason}. ${epochNote}. The broker already reported this instance as ` +
-    `launched, so it may have crashed after being granted, or the grant may be stale -- a different ` +
-    `problem than a host that has not been brought up at all. Investigate on the host with:\n` +
-    `  ${brokerHostPath()}\n` +
-    ONLY_ROUTE_NOTE
-  );
-}
+// Plan 01.6.2-08 (D-13) turns that report-and-instruct message into a
+// replace-and-report: a granted instance not answering no longer waits for
+// a human -- it costs this session exactly one replacement acquisition,
+// made automatically, and the triggering call still fails LOUDLY (never a
+// silently substituted result) naming the replacement. See
+// handleGrantedInstanceUnreachable() and its own three message builders
+// (machineReplacedMessage()/replacementFailedMessage()/
+// sessionMustRestartMessage()) further down this file, right after
+// ensureBrokerLease() -- the function this diagnostic superseded is gone,
+// not merely unused: brokerHostPath()'s "go investigate on the host"
+// framing no longer applies once the proxy investigates (replaces) on its
+// own first.
 
 // ------------------------------------------------------------ path rewriting
 //
@@ -2151,21 +2143,211 @@ async function ensureBrokerLease(): Promise<BrokerLeaseResult> {
     return { ok: false, message: brokerLaunchFailedMessage(result.message) };
   }
 
-  grantId = result.grant.id;
-  // Invert the grant's host-local coordinates BEFORE useInstance() adopts
-  // them (D-1, quick task 260801-ccn) -- this is the LAST point before the
-  // coordinates become the session's identity: the endpoint every later
-  // tool call is sent to, and the path the epoch guard opens.
-  const containerized = containerizeGrant({ ...result.grant });
+  // adoptGrant() is the ONE seam that inverts the grant's host-local
+  // coordinates (D-1, quick task 260801-ccn) and adopts them as this
+  // session's active instance -- the LAST point before the coordinates
+  // become the session's identity: the endpoint every later tool call is
+  // sent to, and the path the epoch guard opens. Plan 08 (D-13) reuses this
+  // EXACT function for a replacement acquisition too (see
+  // handleGrantedInstanceUnreachable() below) -- one code path for adopting
+  // an instance, never a second one for a replacement.
+  adoptGrant({ ...result.grant });
+  viceSession = null; // re-baseline: the next ensureViceSession() reads the GRANTED instance's own epoch file
+  controlSession = session;
+  return { ok: true };
+}
+
+/**
+ * The ONE adoption seam (D-13): containerize a grant's host-local
+ * coordinates and adopt them as this session's active instance, recording
+ * the grant id. Called by ensureBrokerLease() above for an ORDINARY
+ * acquisition and by handleGrantedInstanceUnreachable() below for BOTH of
+ * its replacement acquisitions (the same-session retry and the
+ * fresh-session retry) -- never a second, parallel adoption path for a
+ * replacement.
+ */
+function adoptGrant(grant: Record<string, unknown>): void {
+  grantId = typeof grant.id === "string" ? grant.id : null;
+  const containerized = containerizeGrant({ ...grant });
   useInstance({
     port: containerized.port as number,
     url: containerized.url as string,
     epochFile: containerized.epoch_file as string,
     pooled: true,
   });
-  viceSession = null; // re-baseline: the next ensureViceSession() reads the GRANTED instance's own epoch file
-  controlSession = session;
-  return { ok: true };
+}
+
+// --------------------------------------- D-13/D-14: replace-and-report
+//
+// Plan 01.6.2-08. A granted instance's pre-flight probe failing used to
+// produce ONE report-and-instruct message (the retired
+// brokerGrantedUnreachableMessage(), see this file's earlier comment naming
+// where it lived) and stop there, leaving a human to go investigate on the
+// host. D-13 changes that into a replace-and-report: the proxy acquires a
+// replacement itself, immediately, over the SAME control session (only the
+// emulator instance is suspected dead here, not necessarily the connection
+// to the broker) -- but still fails the TRIGGERING call LOUDLY, naming the
+// replacement, rather than silently substituting a result read from a
+// machine the caller never asked for. A memory read served quietly against
+// a blank replacement returns zeroed RAM indistinguishable from real data,
+// which is exactly the hazard the epoch guard elsewhere in this file exists
+// to catch -- a notice buried inside an otherwise-successful payload is
+// easy to skim past, so this never returns one.
+//
+// D-14 is what happens when that SAME-session replacement attempt itself
+// discovers the connection is gone (kind "broker_gone"): an ACCEPTED,
+// KNOWING regression, recorded here rather than left to be rediscovered as
+// a defect. Before plan 07's transport swap, the only broker dependency
+// surviving past a grant was a file write (the retiring lease heartbeat)
+// whose failure was a silent no-op -- broker death was survivable by
+// construction, because nothing after the grant still needed the broker at
+// all. Under one held TCP connection, that is no longer true: recycle and
+// (as of this plan) replacement both need a live connection. That safety
+// margin is given up DELIBERATELY, per the tolerance decision recorded in
+// broker-control-plane-over-tcp.md -- the compensation is that a session is
+// told LOUDLY rather than left to quietly keep working against whatever a
+// still-reachable granted instance happens to answer, for as long as it
+// happens to stay reachable.
+//
+// Both D-13 and D-14 reuse the SAME machineReplacedMessage() builder (which
+// itself reuses epochDriftMessage(), the existing voided-run vocabulary the
+// fixed-port epoch-drift guard already carries) -- one vocabulary for a
+// voided run, never a second one paralleling it. Neither outcome is ever
+// cached: controlSession is deliberately left pointing at a known-dead
+// session on every failure branch below, so the NEXT call's own probe
+// failure repeats this exact same from-scratch attempt (a fresh
+// openBrokerControl() reads broker.json fresh every time, never memoised),
+// rather than short-circuiting on a remembered verdict -- see the
+// NEVER-CACHE-A-NEGATIVE-RESULT invariant above ensureViceSession().
+
+/**
+ * D-13/D-14's shared report text: a call was refused because the machine
+ * behind it was REPLACED out from under it. Reuses epochDriftMessage() --
+ * the SAME builder the fixed-port epoch-drift guard already uses -- for the
+ * epoch-comparison sentence, rather than inventing a second wording for
+ * "this is not the machine you had a moment ago" (D-13's own instruction:
+ * no second notion of a voided run). States the three facts an agent needs,
+ * literally: the machine was REPLACED, the replacement is FRESH, and prior
+ * state on the old instance is GONE.
+ */
+function machineReplacedMessage(opts: {
+  where: string;
+  reason: string;
+  oldPort: number;
+  oldEpoch: EpochResult;
+  newPort: number;
+  newEpoch: EpochResult;
+}): string {
+  const { where, reason, oldPort, oldEpoch, newPort, newEpoch } = opts;
+  const driftSentence =
+    oldEpoch.present && newEpoch.present
+      ? epochDriftMessage(where, oldEpoch, newEpoch)
+      : `vice-proxy: epoch drift detected ${where} -- the old instance (port ${oldPort}) and the new ` +
+        `instance (port ${newPort}) could not both be compared by epoch (old epoch present: ` +
+        `${oldEpoch.present}, new epoch present: ${newEpoch.present}).`;
+  return (
+    `vice-proxy: ${reason}. A replacement instance (port ${newPort}) has already been acquired and ` +
+    `adopted for this session -- the machine was REPLACED, the replacement is a FRESH emulator, and all ` +
+    `prior state on the old instance (port ${oldPort}) is GONE. ${driftSentence} Make this call again; ` +
+    `it will run on the replacement.`
+  );
+}
+
+/** D-13: the replacement acquisition itself failed for a reason OTHER than
+ * the broker connection being gone (denied, no_free_port, at_capacity, its
+ * own deadline, ...). Names both failures -- the original unreachability
+ * and the failed replacement -- and does not retry: a retry loop against a
+ * broker that cannot currently grant is how one failure becomes a hang. */
+function replacementFailedMessage(probe: ProbeResult, failure: { kind: string; message: string }): string {
+  return (
+    `vice-proxy: the granted instance stopped answering -- ${probe.reason}. A replacement was attempted ` +
+    `over the same broker session and it ALSO failed (${failure.kind}: ${failure.message}). No further ` +
+    `replacement will be attempted for this call -- retry the call yourself once the underlying problem ` +
+    `is fixed.`
+  );
+}
+
+/** D-14: the broker connection is gone and a fresh one could not be opened
+ * either (or could be opened but could not itself acquire) -- there is
+ * nothing left this proxy can do on its own. Names the broker, not this
+ * proxy, as the cause, and states plainly that no further call in THIS
+ * session can succeed until it is running again. */
+function sessionMustRestartMessage(failure: { kind: string; message: string }): string {
+  return (
+    `vice-proxy: the on-demand VICE broker connection is gone and a fresh session could not be opened ` +
+    `(${failure.kind}: ${failure.message}). This session must be restarted -- no further call in this ` +
+    `session can succeed until the broker is running again. The broker, not this proxy, is the cause.`
+  );
+}
+
+/**
+ * D-13/D-14's entry point, reached only when the pre-flight probe found the
+ * session's granted instance unreachable AND a control session is held.
+ * Exactly one same-session replacement attempt, then (only if THAT attempt
+ * discovers the connection itself is gone) exactly one fresh-session
+ * attempt -- never a loop, never more than these two acquisitions for one
+ * triggering call. Always returns a report string; never a result, even on
+ * the success paths -- see this section's own header comment for why.
+ */
+async function handleGrantedInstanceUnreachable(probe: ProbeResult, oldEpoch: EpochResult): Promise<string> {
+  const { port: oldPort } = activeInstance();
+  const session = controlSession as BrokerControlSession;
+
+  // Attempt 1: a replacement over the SAME session (D-13). Only the granted
+  // EMULATOR is suspected dead here -- the connection to the broker may
+  // still be perfectly good, and reusing it is the whole point of "costs
+  // one acquisition, not the session."
+  const result = await session.acquire();
+  if (result.ok) {
+    adoptGrant({ ...result.grant });
+    viceSession = null;
+    ensureViceSession(); // re-baseline BEFORE returning -- see the never-cache invariant
+    const newInstance = activeInstance();
+    return machineReplacedMessage({
+      where: "at the pre-flight liveness probe",
+      reason: `the granted instance (port ${oldPort}) stopped answering -- ${probe.reason}`,
+      oldPort,
+      oldEpoch,
+      newPort: newInstance.port,
+      newEpoch: currentEpoch(),
+    });
+  }
+
+  if (result.kind !== "broker_gone") {
+    // Bounded: exactly one replacement attempt, and it failed for a reason
+    // that has nothing to do with the connection itself -- report both
+    // failures and stop.
+    return replacementFailedMessage(probe, result);
+  }
+
+  // D-14: attempt 1 itself discovered the control connection is gone.
+  // Attempt 2: open a GENUINELY FRESH session -- a brand-new broker.json
+  // read (never the stale record the dead session above was opened
+  // against), never reusing `session`. controlSession is deliberately left
+  // pointing at the dead session on every failure branch below, so a LATER
+  // call's own probe failure repeats this exact same from-scratch sequence.
+  const opened = await openBrokerControl();
+  if (!opened.ok) {
+    return sessionMustRestartMessage(opened);
+  }
+  const freshResult = await opened.session.acquire();
+  if (!freshResult.ok) {
+    await opened.session.release(); // nothing to hold this connection open for
+    return sessionMustRestartMessage(freshResult);
+  }
+  adoptGrant({ ...freshResult.grant });
+  controlSession = opened.session; // the fresh session replaces the dead one, held for the rest of this proxy's life
+  viceSession = null;
+  ensureViceSession();
+  const newInstance = activeInstance();
+  return machineReplacedMessage({
+    where: "after the broker connection itself was found gone and a fresh session was opened",
+    reason: `the broker connection was gone (${result.message})`,
+    oldPort,
+    oldEpoch,
+    newPort: newInstance.port,
+    newEpoch: currentEpoch(),
+  });
 }
 
 // ------------------------------------------------ D-16 seam hazard annotation
@@ -2450,7 +2632,14 @@ async function handleToolsCall(params: unknown): Promise<ToolCallResult> {
     // triple instead of naming the broker. That ordering was the whole
     // defect.
     if (controlSession) {
-      return isErrorText(brokerGrantedUnreachableMessage(probe, epoch));
+      // D-13/D-14 (plan 08): a granted instance not answering no longer
+      // gets a report-and-instruct message -- it gets a replace-and-report.
+      // handleGrantedInstanceUnreachable() acquires a replacement over this
+      // same session (or, if the session itself turns out to be gone, a
+      // genuinely fresh one) and returns an ERROR naming the replacement --
+      // never a silently substituted result, even though a working
+      // instance is now held for the NEXT call.
+      return isErrorText(await handleGrantedInstanceUnreachable(probe, epoch));
     }
     if (isConnectionRefusedReason(probe.reason) && !epoch.present) {
       return isErrorText(neverStartedMessage(probe));
