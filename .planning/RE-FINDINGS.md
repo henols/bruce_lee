@@ -3166,3 +3166,37 @@ getting a confusing, seemingly-unrelated extra-spawn failure. The rule this find
 whenever a test's own scenario depends on an instance STAYING in the `launching` state for the
 duration of the assertion, the probe stub for that specific call must resolve `false`, matching
 the file's own established idiom rather than the generic `makeWarmFloorDeps()` default.
+
+### 2026-08-04 — a timeout constant couples to the MCP client's own config file, and a fail-fast
+bound expressed as a fraction of the thing it bounds loosens itself silently as that thing grows
+
+**Type:** hazard
+
+**Evidence:** found at plan time (`01.6.2.1-04-PLAN.md`) by grepping every *consumer* of
+`vice-broker-client.ts`'s acquire-deadline constant, not merely its old literal value. This is
+that plan-time record reaching the log at the first commit that could carry it; the fix below was
+exercised live by that plan's own task 1.
+
+**Cross-file coupling:** `vice-proxy.test.ts`'s ordering-invariant test reads `.mcp.json`'s own
+`timeout` field off disk and asserts the acquire deadline stays strictly less than it, so a
+waiting caller sees this repo's own diagnostic, not the client's generic timeout. Raising the
+deadline (25000 -> 120000) without also raising `.mcp.json`'s `timeout` (60000 -> 150000, inside
+spike-003's proven >=150s budget) turns that green test red. Lesson: grep for *consumers* of a
+constant before changing its value, not only the literal — the binding assertion may compare
+against a value read from a file the constant's own module never imports, so nothing at the
+declaration site hints a second file must move in lockstep.
+
+**Self-loosening fraction bound:** the same file's never-started fail-fast test bounded its time
+at half the acquire deadline (`elapsedMs < ACQUIRE_TIMEOUT_MS / 2`). Raising the deadline would
+have silently carried that bound 12500ms -> 60000ms with no change to the assertion's own text —
+past the test's own hardcoded 10000ms message-read deadline, so a real regression would hit that
+read's timeout before this assertion ever fired. Fixed by re-anchoring to a fixed, named absolute
+value (5000ms) instead of a fraction of the thing being changed.
+
+**Confidence:** HIGH — `node --test --test-concurrency=1 '.claude/mcp/vice/'*.test.*` after the
+change: 400/395/0/5, matching the pre-change baseline; the ordering-invariant test's own body is
+byte-unchanged in the diff.
+
+**Saves:** the next timeout change in this module from repeating either half — grep every
+consumer, not just the literal; and treat any bound expressed as a *fraction* of a constant being
+changed as itself needing re-examination, since it grows silently with the constant.
