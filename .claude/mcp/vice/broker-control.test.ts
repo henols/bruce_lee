@@ -598,6 +598,73 @@ test("structural: vice-broker.mts or broker-control.mts states in a comment that
   assert.match(combined, /two brokers/i);
 });
 
+// ============================================================================
+// 01.6.2-13-PLAN.md, Task 2: the release and recycle handlers must set the
+// deliberate-death marker BEFORE their own kill call, with OPPOSITE
+// respawn-after-kill answers -- held here by a region-scoped source-order
+// structural gate, following the SAME region-scoping technique the two
+// structural tests above already use for this file, rather than inventing a
+// second one.
+// ============================================================================
+
+/** Strips both `/* ... *\/` (including JSDoc) block comments and whole `//`
+ * comment lines before any assertion below runs, so a sentence in a comment
+ * can never satisfy or break this gate -- the same block-comment-aware
+ * technique broker-launch.test.ts's own structural gate already
+ * established, reused here rather than the whole-line-`//`-only idiom
+ * alone. */
+function stripCommentsForStructuralGate(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
+}
+
+/** Extracts the substring between two marker strings (the first occurrence
+ * of `startMarker`, up to the first occurrence of `endMarker` that follows
+ * it) -- used to region-scope the assertions below to each handler's OWN
+ * body, so a call site in a DIFFERENT function can never satisfy this
+ * gate. */
+function extractSourceRegion(source: string, startMarker: string, endMarker: string): string {
+  const startIdx = source.indexOf(startMarker);
+  assert.ok(startIdx !== -1, `extractSourceRegion: start marker not found: ${startMarker}`);
+  const endIdx = source.indexOf(endMarker, startIdx + startMarker.length);
+  assert.ok(endIdx !== -1 && endIdx > startIdx, `extractSourceRegion: end marker not found after start: ${endMarker}`);
+  return source.slice(startIdx, endIdx);
+}
+
+test("structural: the release and recycle handlers both set the deliberate-death marker before their own kill call, and set opposite respawn-after-kill answers", () => {
+  const source = stripCommentsForStructuralGate(readFileSync(join(HERE, "vice-broker.mts"), "utf8"));
+
+  const recycleRegion = extractSourceRegion(
+    source,
+    "async function handleRecycleForRealBroker(targetId: string, state: BrokerState): Promise<RecycleOutcome> {",
+    "function maintainWarmFloorForRealBroker(stateDir: string, state: BrokerState): Promise<void> {",
+  );
+  const releaseRegion = extractSourceRegion(
+    source,
+    "function handleRelease(requestId: string, state: BrokerState): void {",
+    "async function run(args: ParsedArgs): Promise<void> {",
+  );
+
+  const recycleMarkerIdx = recycleRegion.indexOf("markDeliberateDeath(");
+  const recycleKillIdx = recycleRegion.indexOf("verifiedKill(");
+  assert.ok(recycleMarkerIdx !== -1, "the recycle handler must call the shared marker-and-intent setter");
+  assert.ok(recycleKillIdx !== -1, "the recycle handler must call verifiedKill()");
+  assert.ok(recycleMarkerIdx < recycleKillIdx, "the recycle handler must set the marker BEFORE its own kill call");
+
+  const releaseMarkerIdx = releaseRegion.indexOf("markDeliberateDeath(");
+  const releaseKillIdx = releaseRegion.indexOf("verifiedKill(");
+  assert.ok(releaseMarkerIdx !== -1, "the release handler must call the shared marker-and-intent setter");
+  assert.ok(releaseKillIdx !== -1, "the release handler must call verifiedKill()");
+  assert.ok(releaseMarkerIdx < releaseKillIdx, "the release handler must set the marker BEFORE its own kill call");
+
+  const recycleCall = recycleRegion.match(/markDeliberateDeath\([^)]*\)/);
+  const releaseCall = releaseRegion.match(/markDeliberateDeath\([^)]*\)/);
+  assert.ok(recycleCall, "the recycle handler's setter call must be matchable");
+  assert.ok(releaseCall, "the release handler's setter call must be matchable");
+  assert.notEqual(recycleCall![0], releaseCall![0], "the two call sites must pass opposite respawn-after-kill answers");
+  assert.match(recycleCall![0], /\btrue\b/, "the recycle handler must pass a TRUE respawn-after-kill answer");
+  assert.match(releaseCall![0], /\bfalse\b/, "the release handler must pass a FALSE respawn-after-kill answer");
+});
+
 test("a bind failure whose cause is NOT address-in-use produces its own loud failure, distinct from either singleton path", async () => {
   build();
   const stateDir = mkdtempSync(join(tmpdir(), "broker-control-bind-other-failure-"));

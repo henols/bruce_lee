@@ -296,6 +296,19 @@ function superviseDepsFor(stateDir: string, state: BrokerState): SuperviseChildD
   };
 }
 
+/** Sets the deliberate-death marker and its respawn-after-kill answer
+ * TOGETHER -- the single place in this module that ever writes either
+ * field, so a call site can never set one and forget the other, which is
+ * the exact shape of the defect this closes (T-01.6.2-80). Called BEFORE
+ * any signal reaches the target child in both handlers below, never after:
+ * the exit handler (broker-launch.mts) runs on the child's OWN exit event,
+ * so a marker set after the signal arrives too late to be read
+ * (T-01.6.2-84). */
+function markDeliberateDeath(instance: InstanceRecord, respawnAfterKill: boolean): void {
+  instance.deliberateKill = true;
+  instance.respawnAfterKill = respawnAfterKill;
+}
+
 /** Allocates a port, launches through tryLaunchOne() (the single in_flight
  * owner), writes the epoch record, and records the grant. Answers the full
  * discriminated AcquireOutcome (plan 05): `at_capacity` when the instance
@@ -376,12 +389,21 @@ function handleStatus(state: BrokerState): StatusInstanceEntry[] {
  * this topology at all, per broker-kill.mts's own header comment). A
  * recycle's OWNERSHIP check (does this connection hold this grant) already
  * happened in broker-control.mts before this function is ever called -- this
- * function only resolves and kills, exactly mirroring
- * handle_recycle_request()'s own division of labour in the bash original.
- * Deliberately does NOT relaunch or mark deliberateKill: a recycle only
- * kills, matching the bash handler's own scope; whether the killed instance
- * comes back is the per-child supervisor's concern, unchanged by this
- * function. */
+ * function only resolves, marks and kills.
+ *
+ * Marks the death as broker-ordered AND to be replaced, with a TRUE
+ * respawn-after-kill answer, BEFORE the kill -- the actual replacement is
+ * then carried out by the per-child supervision exit handler
+ * (broker-launch.mts's handleExit(), wired in by plan 12) on the SAME port,
+ * asynchronously, after this function has already returned its own
+ * acknowledgement. This is exactly what the tool description's own "via the
+ * host supervisor's existing respawn loop" wording describes: this function
+ * marks and kills; the respawn loop is the exit handler, not this function.
+ * Neither the grant nor the instance entry is deleted here -- the grant is
+ * what keeps the recycled port belonging to this same session, and the
+ * instance entry is what the exit handler reads to decide the relaunch;
+ * both must still exist once this function returns for the exit handler to
+ * have anything to act on. */
 async function handleRecycleForRealBroker(targetId: string, state: BrokerState): Promise<RecycleOutcome> {
   const grant = state.grants.get(targetId);
   if (!grant) {
@@ -420,6 +442,7 @@ async function handleRecycleForRealBroker(targetId: string, state: BrokerState):
   }
 
   const epochBefore = typeof instance.epoch === "number" ? instance.epoch : null;
+  markDeliberateDeath(instance, true);
   const killStage = await verifiedKill({ pid: instance.pid, expectedIdentity: instance.expectedIdentity });
   const outcome = killStage === "identity_refused" ? "identity_refused" : "ok";
   const reason = killStage === "identity_refused" ? "process identity did not match the recorded emulator binary -- the target was NOT signalled and is still running" : "";
@@ -468,15 +491,25 @@ function maintainWarmFloorForRealBroker(stateDir: string, state: BrokerState): P
 }
 let lastWarmLaunchLogRelPath = "";
 
-/** Releases a grant and identity-verified-kills its instance. Fire-and-
- * forget from the control listener's close handler's own perspective --
- * the full shutdown wiring and the startup reap are plan 04's; this task
- * only needs release-on-close to actually tear the child down. */
+/** Releases a grant and identity-verified-kills its instance. Marks the
+ * death as broker-ordered with a FALSE respawn-after-kill answer BEFORE the
+ * kill -- the opposite answer from the recycle handler above, since a
+ * release wants no replacement. The instance entry is still deleted here on
+ * purpose, exactly as before: the exit handler's own final-death branch
+ * would also delete it, and both deleting is harmless, whereas neither
+ * deleting would leak the record if the exit event were never delivered.
+ * Fire-and-forget from the control listener's close handler's own
+ * perspective -- the full shutdown wiring and the startup reap are plan
+ * 04's; this task only needs release-on-close to actually tear the child
+ * down. */
 function handleRelease(requestId: string, state: BrokerState): void {
   const grant = state.grants.get(requestId);
   if (!grant) return;
-  state.grants.delete(requestId);
   const instance = state.instances.get(grant.port);
+  if (instance) {
+    markDeliberateDeath(instance, false);
+  }
+  state.grants.delete(requestId);
   state.instances.delete(grant.port);
   if (instance) {
     verifiedKill({ pid: instance.pid, expectedIdentity: instance.expectedIdentity }).catch(() => {
