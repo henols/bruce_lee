@@ -470,6 +470,35 @@ test("recycle result: the ack object has exactly the key set the proxy's outcome
   }
 });
 
+// This is the CLIENT's own responsibility (task 1's <behavior> list: "Acquire
+// resolves with a typed failure carrying the broker's error code when the
+// broker answers an error") -- distinct from the SERVER's own error-code
+// semantics (which broker's own no_free_port/at_capacity/denied logic
+// produces those codes correctly), already covered by
+// broker-control.test.ts and deliberately not re-tested here. This is also
+// the RE-OBSERVED replacement for the retiring
+// "pollGrant(): resolves granted:false and surfaces the denial's reason
+// verbatim" test (see this plan's SUMMARY disposition table, row 9).
+test("acquire: resolves a typed failure carrying the broker's own error code and message when the broker answers an error", async () => {
+  const { server, dir } = await startFullBrokerListener({
+    onAcquire: async () => ({ ok: false, reason: "at_capacity" }) as AcquireOutcome,
+  });
+  try {
+    const opened = await openBrokerControl(dir);
+    assert.equal(opened.ok, true);
+    if (!opened.ok) return;
+    const acquired = await opened.session.acquire();
+    assert.equal(acquired.ok, false);
+    if (acquired.ok) return;
+    assert.equal(acquired.kind, "at_capacity");
+    assert.match(acquired.message, /at_capacity/);
+    await opened.session.release();
+  } finally {
+    server.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // ------------------------------------------------- openBrokerControl(): liveness precheck
 
 test("openBrokerControl(): a never-started record (missing heartbeat_at) returns a typed failure fast, without attempting a connection", async () => {
