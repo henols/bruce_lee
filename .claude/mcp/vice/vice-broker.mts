@@ -91,6 +91,17 @@ export function parseArgs(argv: string[]): ParsedArgs {
   return { repoRoot: repoRoot ?? "", stateDir: resolvedStateDir, checkContainer, dryRun };
 }
 
+// The final fourteen-field set (plan 05, D-27, G/K): version, written_by,
+// pid, started_at, heartbeat_at, node_version, control_host, control_port,
+// control_token, spares_target, max_instances, base_port, poll_ms, dry_run.
+// The bash original's `ttl_seconds` field is DELETED, not merely renamed --
+// it is one of criterion F's six retiring lease mechanisms; the connection
+// is the lease now, and keeping a TTL-shaped field here would advertise an
+// authority that no longer exists. Every other bash config-echo field is
+// kept even though no consumer parses it beyond a status message
+// (readBrokerLiveness() reads only `pid` and `heartbeat_at`) -- a human
+// reading this file by hand benefits from the full configuration echo,
+// which is why the bash version carried it and why this port keeps it.
 export interface BrokerRecord {
   version: number;
   written_by: string;
@@ -101,6 +112,11 @@ export interface BrokerRecord {
   control_host: string;
   control_port: number;
   control_token: string;
+  spares_target: number;
+  max_instances: number;
+  base_port: number;
+  poll_ms: number;
+  dry_run: boolean;
 }
 
 /** The deployed JavaScript broker artifact's own name -- D-26's entire
@@ -446,6 +462,7 @@ async function run(args: ParsedArgs): Promise<void> {
   const token = newControlToken();
   const controlHost = process.env.VICE_BROKER_CONTROL_HOST ?? "0.0.0.0";
   const startedAt = new Date().toISOString(); // FIXED across every heartbeat refresh -- see writeBrokerRecordFile()'s callers below
+  const pollMs = Number(process.env.VICE_BROKER_POLL_MS) || 500;
 
   // Criterion I / D-15: the unconditional startup reap runs BEFORE the
   // control listener accepts and before anything is launched. A SIGKILLed
@@ -493,6 +510,11 @@ async function run(args: ParsedArgs): Promise<void> {
   // nothing to tear down before that point.
   registerShutdownHandlers({ state });
 
+  // The fourteen-field set (D-27, criterion G): the lease time-to-live field
+  // the bash original carried is gone -- the connection is the lease now
+  // (D-12) -- and every other config-echo field survives even though no
+  // consumer parses it beyond a status message, because a human reading
+  // this file by hand benefits from the full echo.
   let record: BrokerRecord = {
     version: 1,
     written_by: WRITTEN_BY,
@@ -503,6 +525,11 @@ async function run(args: ParsedArgs): Promise<void> {
     control_host: listener.host,
     control_port: listener.port,
     control_token: token, // never logged -- T-01.6.2-02
+    spares_target: resolveWarmFloorForRecord(),
+    max_instances: resolveCeilingForRecord(),
+    base_port: resolveBasePort(),
+    poll_ms: pollMs,
+    dry_run: args.dryRun,
   };
   writeBrokerRecordFile(args.stateDir, record);
   process.stderr.write(`vice-broker: wrote ${finalPath} (node ${record.node_version}); control listener bound on ${listener.host}:${listener.port}\n`);
@@ -530,7 +557,6 @@ async function run(args: ParsedArgs): Promise<void> {
   // silently wrong one. Re-entrancy guarded: a pass that is still running
   // (e.g. a slow external VICE_BROKER_PROBE_CMD) is never overlapped by the
   // next tick.
-  const pollMs = Number(process.env.VICE_BROKER_POLL_MS) || 500;
   let passInFlight = false;
   setInterval(() => {
     if (passInFlight) return;

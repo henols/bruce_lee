@@ -95,9 +95,29 @@ async function stopBroker(child: ChildProcess): Promise<void> {
   if (!exited) child.kill("SIGKILL");
 }
 
-const BROKER_JSON_NINE_KEYS = ["version", "written_by", "pid", "started_at", "heartbeat_at", "node_version", "control_host", "control_port", "control_token"];
+// The final fourteen-field discovery-record set (plan 05, D-27, criterion
+// G/K) -- amended a second and final time from plan 01's nine-key tracer
+// assertion. `ttl_seconds` (the bash fixture's own lease-time-to-live field)
+// is DELETED, not carried forward: it is one of criterion F's six retiring
+// lease mechanisms, and the connection is the lease now.
+const BROKER_JSON_FOURTEEN_KEYS = [
+  "version",
+  "written_by",
+  "pid",
+  "started_at",
+  "heartbeat_at",
+  "node_version",
+  "control_host",
+  "control_port",
+  "control_token",
+  "spares_target",
+  "max_instances",
+  "base_port",
+  "poll_ms",
+  "dry_run",
+];
 
-test("emitted artifact starts a LONG-LIVED broker: writes the nine-key broker.json record (mode 0600), binds a control listener on 0.0.0.0", async () => {
+test("emitted artifact starts a LONG-LIVED broker: writes the fourteen-field discovery record (mode 0600), binds a control listener on 0.0.0.0", async () => {
   const deployDir = freshDeployDir();
   const { child } = runBrokerAsync(
     deployDir,
@@ -112,10 +132,16 @@ test("emitted artifact starts a LONG-LIVED broker: writes the nine-key broker.js
     const record: Record<string, unknown> = JSON.parse(readFileSync(recordPath, "utf8"));
     assert.deepEqual(
       Object.keys(record).sort(),
-      [...BROKER_JSON_NINE_KEYS].sort(),
-      "the long-lived broker's record must carry EXACTLY these nine fields",
+      [...BROKER_JSON_FOURTEEN_KEYS].sort(),
+      "the long-lived broker's discovery record must carry EXACTLY these fourteen fields, no lease-TTL field among them",
     );
+    assert.ok(!("ttl_seconds" in record), "the lease time-to-live field must be gone -- the connection is the lease now (D-12)");
     assert.equal(record.written_by, "vice-broker.mjs");
+    assert.notEqual(
+      record.written_by,
+      JSON.parse(readFileSync(join(HERE, "fixtures", "bash-broker.json"), "utf8")).written_by,
+      "written_by must differ from the frozen bash fixture's own value -- D-26's whole point",
+    );
     assert.equal(record.node_version, process.version, "the record must carry the HOST's own process.version");
     assert.equal(record.control_host, "0.0.0.0");
     assert.ok(Number.isInteger(record.control_port) && (record.control_port as number) > 0);
@@ -123,9 +149,43 @@ test("emitted artifact starts a LONG-LIVED broker: writes the nine-key broker.js
     assert.ok((record.control_token as string).length > 0);
     assert.ok(!Number.isNaN(Date.parse(record.heartbeat_at as string)), "heartbeat_at must be a parseable timestamp");
     assert.ok(!Number.isNaN(Date.parse(record.started_at as string)));
+    assert.equal(record.spares_target, 3, "default warm floor, unchanged this phase");
+    assert.equal(record.max_instances, 16, "default instance ceiling, unchanged this phase");
+    assert.equal(record.base_port, 6600, "default base port, D-18");
+    assert.equal(record.poll_ms, 500, "default poll interval, unchanged this phase");
+    assert.equal(record.dry_run, false);
 
     const mode = statSync(recordPath).mode & 0o777;
     assert.equal(mode, 0o600, `expected mode 0600, got ${mode.toString(8)}`);
+  } finally {
+    await stopBroker(child);
+    rmSync(deployDir, { recursive: true, force: true });
+  }
+});
+
+test("heartbeat_at advances and the mode stays owner-read-write across a REFRESH write, not only the first", async () => {
+  const deployDir = freshDeployDir();
+  const { child } = runBrokerAsync(
+    deployDir,
+    ["--repo-root", "/tmp/fake-repo-root", "--state-dir", join(deployDir, "state")],
+    { VICE_SUPERVISOR_ALLOW_CONTAINER: "1", VICE_BROKER_CONTROL_PORT: "0", VICE_BROKER_HEARTBEAT_MS: "200" },
+  );
+  try {
+    const recordPath = join(deployDir, "state", "broker.json");
+    await waitFor(() => existsSync(recordPath), 5000);
+    const first = JSON.parse(readFileSync(recordPath, "utf8"));
+
+    const advanced = await waitFor(() => {
+      const current = JSON.parse(readFileSync(recordPath, "utf8"));
+      return current.heartbeat_at !== first.heartbeat_at;
+    }, 3000);
+    assert.ok(advanced, "heartbeat_at must advance on the recurring timer");
+
+    const after = JSON.parse(readFileSync(recordPath, "utf8"));
+    assert.equal(after.started_at, first.started_at, "started_at is FIXED at process start -- a refresh must never change it");
+
+    const mode = statSync(recordPath).mode & 0o777;
+    assert.equal(mode, 0o600, `expected mode 0600 after a refresh write, got ${mode.toString(8)}`);
   } finally {
     await stopBroker(child);
     rmSync(deployDir, { recursive: true, force: true });
@@ -203,7 +263,7 @@ test("overwrites a record naming a DEAD pid even though it carries heartbeat_at 
     assert.ok(wroteNewRecord, "a dead-pid record (even with heartbeat_at) must be overwritten, not refused");
 
     const record: Record<string, unknown> = JSON.parse(readFileSync(recordPath, "utf8"));
-    assert.deepEqual(Object.keys(record).sort(), [...BROKER_JSON_NINE_KEYS].sort());
+    assert.deepEqual(Object.keys(record).sort(), [...BROKER_JSON_FOURTEEN_KEYS].sort());
     assert.notEqual(record.pid, 999999999, "the new record must name the SPAWNED BROKER's own pid, not the dead fixture pid");
     assert.ok(Number.isInteger(record.pid) && (record.pid as number) > 0);
   } finally {
@@ -227,7 +287,7 @@ test("a record file truncated mid-JSON is treated as absent and overwritten rath
     const wroteNewRecord = await waitFor(() => {
       try {
         const parsed = JSON.parse(readFileSync(recordPath, "utf8"));
-        return Object.keys(parsed).length === BROKER_JSON_NINE_KEYS.length;
+        return Object.keys(parsed).length === BROKER_JSON_FOURTEEN_KEYS.length;
       } catch {
         return false;
       }

@@ -1,15 +1,23 @@
 // broker-control.test.ts
 //
-// Plan 05, Task 1: the complete control-plane message set (recycle, status,
-// host_state, alongside plan 01's tracer-era acquire/release), and the
-// arrival-ordered pending-acquire structure. Every test here drives a REAL
-// listener bound on port zero, in this test's own process, against injected
-// onAcquire/onRelease/onRecycle/onStatus/onHostState stubs -- no real
-// emulator, no real spawn, no test opens a connection to the host VICE.
+// Plan 05: the complete control-plane message set (recycle, status,
+// host_state, alongside plan 01's tracer-era acquire/release), the
+// arrival-ordered pending-acquire structure (Task 1), and the liveness
+// round trip proving broker.json's full fourteen-field record is read
+// correctly by the UNCHANGED container-side classifier (Task 2). Most tests
+// here drive a REAL listener bound on port zero, in this test's own
+// process, against injected onAcquire/onRelease/onRecycle/onStatus/
+// onHostState stubs -- no real emulator, no real spawn, no test opens a
+// connection to the host VICE. The liveness round trip additionally spawns
+// the real, BUILT broker artifact, exactly like broker-e2e.test.ts already
+// does, because it proves something about vice-broker.mts's own real
+// output, not about broker-control.mts in isolation.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { connect } from "node:net";
-import { readFileSync } from "node:fs";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -25,8 +33,11 @@ import {
   type HostStateFields,
   type PendingAcquireQueue,
 } from "./broker-control.mts";
+import { readBrokerLiveness } from "./vice-broker-client.ts";
+import { build } from "./build.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+const BROKER_ARTIFACT = join(HERE, "resources", "vice-broker.mjs");
 
 // --------------------------------------------------------------- test helpers
 
@@ -430,4 +441,38 @@ test("enqueueAcquire appends to the back; drainPendingAcquires processes strictl
   await drainPendingAcquires(queue);
   assert.deepEqual(order, ["a", "b", "c"]);
   assert.equal(queue.length, 0);
+});
+
+// ============================================================================
+// Task 2: broker.json's liveness classification round trip -- proving the
+// field THIS broker writes is the field the UNCHANGED container-side
+// classifier reads.
+// ============================================================================
+
+test("liveness round trip: the existing container-side classifier reads a running broker's record as alive, and a stale-heartbeat record as stale", async () => {
+  build();
+  const stateDir = mkdtempSync(join(tmpdir(), "broker-control-liveness-"));
+  const child = spawn(process.execPath, [BROKER_ARTIFACT, "--repo-root", "/tmp/fake-repo-root-liveness", "--state-dir", stateDir], {
+    env: { ...process.env, VICE_SUPERVISOR_ALLOW_CONTAINER: "1", VICE_BIN: "/bin/sleep", VICE_ARGS: "600", VICE_BROKER_CONTROL_PORT: "0" },
+  }) as ChildProcessWithoutNullStreams;
+  try {
+    const recordPath = join(stateDir, "broker.json");
+    const appeared = await waitFor(() => existsSync(recordPath), 5000);
+    assert.ok(appeared, "broker.json did not appear within deadline");
+
+    const alive = readBrokerLiveness(recordPath);
+    assert.equal(alive.state, "alive", "a freshly-started, running broker's own record must classify as alive");
+
+    // Hand-build a record with a stale heartbeat, sharing the SAME live pid
+    // (liveness of the pid itself is not what distinguishes alive/stale --
+    // only heartbeat_at's age does).
+    const record = JSON.parse(readFileSync(recordPath, "utf8"));
+    const stalePath = join(stateDir, "broker-stale.json");
+    writeFileSync(stalePath, JSON.stringify({ ...record, heartbeat_at: "2020-01-01T00:00:00Z" }));
+    const stale = readBrokerLiveness(stalePath);
+    assert.equal(stale.state, "stale", "a record whose heartbeat is far older than the stale threshold must classify as stale");
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    rmSync(stateDir, { recursive: true, force: true });
+  }
 });
