@@ -48,18 +48,28 @@ import { fileURLToPath } from "node:url";
 // So the gate is repointed rather than retired, at every doc that now plays
 // that role:
 //
-//   .claude/CLAUDE.md                        § Emulator Access
-//   .claude/skills/c64-ram-capture/SKILL.md  the capture procedure
+//   .claude/CLAUDE.md                            § Emulator Access
+//   .claude/skills/c64-ram-capture/SKILL.md      the capture procedure
+//   .claude/skills/vice-wedge-triage/SKILL.md    the liveness/recovery triage
 //
 // Both assertions carry over unchanged in meaning: no module under this
 // directory may be named in agent-facing docs, and those docs must name the
 // real surface (the mcp__vice__ prefix) so a rewrite that drops it is caught.
 // Add a doc to this list when a new agent-facing emulator document appears.
+//
+// vice-wedge-triage/SKILL.md added 2026-08-04 (quick task 260804-eu6) under
+// exactly that standing instruction: it is the most emulator-facing skill in
+// the repo -- it decides whether a machine is alive and whether recycling it
+// is safe -- so leaving it unlisted would silently drop the coverage this
+// gate exists to hold. It passed both assertions when added (no module name
+// leaked; it names the mcp__vice__ prefix), so this registration locks in a
+// property that was already true rather than asserting a new one.
 const MODULE_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(MODULE_DIR, "..", "..", "..");
 const AGENT_DOCS = [
   join(REPO_ROOT, ".claude", "CLAUDE.md"),
   join(REPO_ROOT, ".claude", "skills", "c64-ram-capture", "SKILL.md"),
+  join(REPO_ROOT, ".claude", "skills", "vice-wedge-triage", "SKILL.md"),
 ];
 const TOOL_PREFIX = "mcp__vice__";
 
