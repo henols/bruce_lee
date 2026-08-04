@@ -255,9 +255,9 @@ function resolveWarmFloor(override) {
         return override;
     const raw = process.env.VICE_BROKER_SPARES;
     if (raw === undefined || raw === "")
-        return 3;
+        return 1;
     const n = Number(raw);
-    return Number.isFinite(n) ? n : 3;
+    return Number.isFinite(n) ? n : 1;
 }
 function resolveCeiling(override) {
     if (typeof override === "number")

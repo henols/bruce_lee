@@ -489,8 +489,49 @@ test("maintainWarmFloor: a pass overlapping an in-flight launch produces no seco
   assert.equal(spawnCalls2.length, 1, "warming proceeds once the earlier launch is no longer in flight");
 });
 
+// D-06/D-20 (01.6.2.1-03-PLAN.md, Task 1): the warm floor's default dropped
+// from 3 to 1. This test is the specified proof, and it is written to READ
+// the default rather than inject one -- makeWarmFloorDeps() below is called
+// with NO `warmFloor` key in its overrides at all, so resolveWarmFloor()
+// falls through to whatever the CODE's own default is (via
+// VICE_BROKER_SPARES, guarded to absent for this test's own integrity). A
+// floor of 3 would fail this test (demonstrated live during this task's
+// execution and recorded in the plan's own SUMMARY, not asserted here as a
+// separate red-then-green step -- this test asserts only the CORRECT,
+// landed behaviour).
+test("maintainWarmFloor: with no floor override, an idle broker settles at exactly one warm instance -- reading the default (D-06/D-20)", async () => {
+  const savedFloorEnv = process.env.VICE_BROKER_SPARES;
+  delete process.env.VICE_BROKER_SPARES;
+  try {
+    const state = createBrokerState();
+    // No `warmFloor` key anywhere in this overrides object -- resolveWarmFloor()
+    // must fall through to the code's own default.
+    const { deps, spawnCalls } = makeWarmFloorDeps(state, {
+      probe: () => Promise.resolve(true), // promotes immediately, so a second pass can observe the settled state
+    });
+
+    await maintainWarmFloor(deps); // pass 1: nothing ready yet, launches the first (and, at floor 1, only) instance
+    await maintainWarmFloor(deps); // pass 2: promotes it to ready; ready(1) is no longer < floor(1) -- no further spawn
+    await maintainWarmFloor(deps); // pass 3: still settled -- no further spawn
+
+    assert.equal(spawnCalls.length, 1, `exactly one spawn total with the default floor -- an idle broker must settle at exactly one warm instance, got ${spawnCalls.length}`);
+    assert.equal(countReadyInstances(state), 1, "exactly one ready instance once settled");
+    assert.equal(countInstances(state), 1, "no extra instance record of any kind exists beyond the one settled warm instance");
+  } finally {
+    if (savedFloorEnv === undefined) {
+      delete process.env.VICE_BROKER_SPARES;
+    } else {
+      process.env.VICE_BROKER_SPARES = savedFloorEnv;
+    }
+  }
+});
+
 function countInstances(state: BrokerState): number {
   return state.instances.size;
+}
+
+function countReadyInstances(state: BrokerState): number {
+  return Array.from(state.instances.values()).filter((r) => r.state === "ready").length;
 }
 
 // ------------------------------------------------------------- runBrokerPass

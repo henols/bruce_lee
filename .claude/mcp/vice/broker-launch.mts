@@ -330,9 +330,9 @@ export async function probeReady(port: number, deps: ProbeDeps = {}): Promise<bo
 function resolveWarmFloor(override?: number): number {
   if (typeof override === "number") return override;
   const raw = process.env.VICE_BROKER_SPARES;
-  if (raw === undefined || raw === "") return 3;
+  if (raw === undefined || raw === "") return 1;
   const n = Number(raw);
-  return Number.isFinite(n) ? n : 3;
+  return Number.isFinite(n) ? n : 1;
 }
 
 function resolveCeiling(override?: number): number {
@@ -362,9 +362,13 @@ export interface MaintainWarmFloorDeps {
   /** Probes a PORT (not a full InstanceRecord) -- defaults to a thin call
    * into probeReady() above with no overrides. */
   probe?: (port: number) => Promise<boolean>;
-  /** VICE_BROKER_SPARES override -- default 3, UNCHANGED in this plan; the
-   * default itself and the variable's name are both Phase 01.6.2.1's
-   * criterion L. */
+  /** VICE_BROKER_SPARES override -- default 1 (D-06, landed
+   * 01.6.2.1-03-PLAN.md), down from the tracer-era default of 3. The knob
+   * itself keeps working unchanged: an explicitly configured N still
+   * overrides this default exactly as before, so the 2026-08-02
+   * host-validation run stays reproducible with no code change. The
+   * variable's own NAME is Phase 01.6.2.1's separate criterion (D-11's
+   * rename lands in plan 05, not here). */
   warmFloor?: number;
   /** VICE_BROKER_MAX override -- default 16, untouched by this phase. */
   ceiling?: number;
