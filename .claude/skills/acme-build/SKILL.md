@@ -16,7 +16,8 @@ node $A sym game.asm          # the symbols the program uses
 node $A disasm game.prg       # object code back into ACME source
 ```
 
-Options: `-o FILE` `--out-dir DIR` `-f FORMAT` `--setpc ADDR` `-DSYM=VAL` `-I DIR` `--no-report` `--json`.
+Options: `-o FILE` `--out-dir DIR` `-f FORMAT` `--setpc ADDR` `-DSYM=VAL`
+`-I DIR` `--no-report` `--json`.
 
 ## Build
 
@@ -30,7 +31,8 @@ symbols: game.sym (4 used / 121 total)
 debug labels: game.vs (4 addresses)
 ```
 
-The indented line is ACME's own `-v1` note, passed straight through. Three side files land next to the `.prg`, and `--no-report` drops the `.rep`:
+The indented line is ACME's own `-v1` note, passed straight through. Three side
+files land next to the `.prg`, and `--no-report` drops the `.rep`:
 
 | file | contents |
 |---|---|
@@ -39,7 +41,13 @@ The indented line is ACME's own `-v1` note, passed straight through. Three side 
 | `.vs` | address labels, ready for a debugger or monitor |
 | `.rep` | each source line with the address and bytes it produced |
 
-Only address-typed *and* referenced symbols survive into the `.vs` — raw `--vicelabels` output lists constants too, and a debugger reading `viccolor_WHITE = $1` would relabel the 6510 processor port at `$0001` (`curateLabels`, `scripts/acme.mjs`) — hence 4 addresses against 121 total symbols above. Load it with `mcp__vice__vice_symbols_load` (format `vice`), this project's only route to the emulator (`.claude/CLAUDE.md` § Version Compatibility / § Emulator Access).
+Only address-typed *and* referenced symbols survive into the `.vs` — raw
+`--vicelabels` output lists constants too, and a debugger reading
+`viccolor_WHITE = $1` would relabel the 6510 processor port at `$0001`
+(`curateLabels`, `scripts/acme.mjs`) — hence 4 addresses against 121 total
+symbols above. Load it with `mcp__vice__vice_symbols_load` (format `vice`), this
+project's only route to the emulator (`.claude/CLAUDE.md` § Version Compatibility
+/ § Emulator Access).
 
 Re-run `build` until it exits 0 — a clean exit means every symbol resolved.
 
@@ -78,11 +86,13 @@ Inspect the result with `od`:
 od -An -tx1 game.prg | head -2
 ```
 
-The first two bytes are the little-endian load address (`01 08` = `$0801`); code follows.
+The first two bytes are the little-endian load address (`01 08` = `$0801`); code
+follows.
 
 ## Writing source
 
-Start from the scaffold — it carries a BASIC stub whose `SYS` target is computed, so the entry point stays correct as the program grows:
+Start from the scaffold — it carries a BASIC stub whose `SYS` target is computed,
+so the entry point stays correct as the program grows:
 
 ```bash
 node $A new game.asm
@@ -97,7 +107,9 @@ Use the C64 symbol library instead of writing addresses by hand:
 | `<cbm/c64/cia1.a>` / `<cbm/c64/cia2.a>` | `cia1_*` / `cia2_*` | keyboard, joystick, timers |
 | `<cbm/c64/sid.a>` | `sid_*` | sound |
 
-KERNAL routines use the **`k_`** prefix — `k_chrout`, `k_getin`, `k_setnam`, `k_plot`. Several have aliases (`k_bsout` and `k_basout` are also `$ffd2`). Run `node $A sym game.asm` to see what a build resolved:
+KERNAL routines use the **`k_`** prefix — `k_chrout`, `k_getin`, `k_setnam`,
+`k_plot`. Several have aliases (`k_bsout` and `k_basout` are also `$ffd2`).
+Run `node $A sym game.asm` to see what a build resolved:
 
 ```
 addr    $80d  entry
@@ -109,7 +121,11 @@ addr   $d020  vic_cborder
 Let `-o` name the output and leave `!to` out of the source, so the filename you
 pass is the filename you get.
 
-The 6510's illegal opcodes are always available: `lax dcp sax slo rla sre rra isc anc alr arr sbx las tas sha shx shy jam`. Verified — `lax $fb / dcp $fc / sax $fd / slo $02 / anc #$0f / sbx #$10` assembles to `a7 fb c7 fc 87 fd 07 02 0b 0f cb 10`. Keep `!cpu 6510` at the top of any source you also assemble by hand, so these stay recognised as mnemonics.
+The 6510's illegal opcodes are always available: `lax dcp sax slo rla sre rra
+isc anc alr arr sbx las tas sha shx shy jam`. Verified — `lax $fb / dcp $fc /
+sax $fd / slo $02 / anc #$0f / sbx #$10` assembles to
+`a7 fb c7 fc 87 fd 07 02 0b 0f cb 10`. Keep `!cpu 6510` at the top of any source
+you also assemble by hand, so these stay recognised as mnemonics.
 
 ## Disassembly
 
@@ -124,7 +140,10 @@ define the out-of-range labels it emits (Ld020, Lffd2, ...) and
 indent its illegal-opcode lines to the operand column.
 ```
 
-The default output is `<stem>.dis.a` — one more `.a` file the agent's Read tool refuses (see Troubleshooting). Pass a second positional ending `.asm` for an agent-readable listing instead (same stdout shape, `game.dis.asm: 28 lines` in place of the first line):
+The default output is `<stem>.dis.a` — one more `.a` file the agent's Read tool
+refuses (see Troubleshooting). Pass a second positional ending `.asm` for an
+agent-readable listing instead (same stdout shape, `game.dis.asm: 28 lines` in
+place of the first line):
 
 ```bash
 node $A disasm game.prg game.dis.asm
@@ -147,13 +166,22 @@ L0824		rts
 L0825		pha              <- PETSCII string, read as data
 ```
 
-Read it as a linear decode: the instruction stream is accurate, and strings, tables and the BASIC stub appear as instructions — interpret those regions as data. To reassemble the listing, define the out-of-range labels it emits (`Ld020`, `Lffd2`) and indent its illegal-opcode lines to the operand column.
+Read it as a linear decode: the instruction stream is accurate, and strings,
+tables and the BASIC stub appear as instructions — interpret those regions as
+data. To reassemble the listing, define the out-of-range labels it emits
+(`Ld020`, `Lffd2`) and indent its illegal-opcode lines to the operand column.
 
 ## Setup
 
-Put `acme` and `toacme` on `$PATH`. The wrapper auto-probes `$ACME`, `/usr/local/share/acme`, `/usr/share/acme`, `/usr/lib/acme` and `~/.acme` itself, so `$ACME` only needs setting by hand when calling `acme` directly. Verified live in this container on 2026-08-04: the library resolves to `/usr/local/share/acme` (`/usr/share/acme` doesn't exist), ACME release 0.97 "Zem" (31 Jan 2021) at `/usr/bin/acme`.
+Put `acme` and `toacme` on `$PATH`. The wrapper auto-probes `$ACME`,
+`/usr/local/share/acme`, `/usr/share/acme`, `/usr/lib/acme` and `~/.acme` itself,
+so `$ACME` only needs setting by hand when calling `acme` directly. Verified live
+in this container on 2026-08-04: the library resolves to `/usr/local/share/acme`
+(`/usr/share/acme` doesn't exist), ACME release 0.97 "Zem" (31 Jan 2021) at
+`/usr/bin/acme`.
 
-Copy `acme.mjs` into any project's `.claude/skills/acme-build/scripts/`, and `template.a` into `.claude/skills/acme-build/`, to use this elsewhere.
+Copy `acme.mjs` into any project's `.claude/skills/acme-build/scripts/`, and
+`template.a` into `.claude/skills/acme-build/`, to use this elsewhere.
 
 ## Troubleshooting
 
