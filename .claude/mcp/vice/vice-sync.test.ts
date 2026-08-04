@@ -15,8 +15,13 @@
 // to reach it, so the gap is named here rather than filled.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { addrNum, hex4, POLL_WINDOWS_MS, PING_INTERVAL_MS, armedCheckpoints } from "./vice-sync.ts";
+
+const HERE = dirname(fileURLToPath(import.meta.url));
 
 test("addrNum() converts each accepted input form to the same number", () => {
   const rows: Array<[number | string, number]> = [
@@ -137,3 +142,22 @@ test(
   "screenshot() -- vice_display_screenshot writes on the HOST; needs a real emulator to prove the host-path translation lands correctly",
   { todo: "requires a real emulator (vice_display_screenshot writes host-side) -- mcp__vice__* is the only permitted route" }
 );
+
+// ---------------------------------------------------------------------------
+// 01.6.2-09 (T-01.6.2-54): waitCheckpointHit()'s never-fired message is the
+// fourth of the four prose instructions that used to tell an agent to run
+// the retiring per-instance supervisor (tools/vice-supervisor.sh) on the
+// host. Actually driving waitCheckpointHit() to its own timeout would need
+// the real emulator this file's own header comment already explains is out
+// of reach for a test process -- a STRUCTURAL read of the source is the
+// same idiom vice-proxy.test.ts's own "structural: ..." tests already use
+// for asserting a message builder's text without invoking it live.
+// ---------------------------------------------------------------------------
+
+test("structural: waitCheckpointHit()'s never-fired message names the surviving launcher and describes on-demand launch plus respawn, not the retired per-instance supervisor", () => {
+  const src = readFileSync(join(HERE, "vice-sync.ts"), "utf8");
+  assert.match(src, /tools\/vice-launcher\.sh/, "the never-fired message must name the surviving launcher");
+  assert.doesNotMatch(src, /tools\/vice-supervisor\.sh/, "the never-fired message must not still name the retiring per-instance supervisor");
+  assert.match(src, /on-demand broker/i, "the message must describe the broker's on-demand launch");
+  assert.match(src, /respawn/i, "the message must describe the broker respawning a crashed instance");
+});

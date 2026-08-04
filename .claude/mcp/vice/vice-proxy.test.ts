@@ -1325,6 +1325,17 @@ test("three states: each unreachable shape gets its own message and fix", async 
   for (const text of [neverStartedText, deadOrHungText, aliveButFailedText]) {
     assert.match(text, /(^|\s)\/\S+/, "every unreachable-adjacent message must quote an absolute path");
     assert.match(text, /only route/i, "every unreachable-adjacent message must state this is the only route");
+    // 01.6.2-09 (T-01.6.2-54): all three host-unreachable messages used to
+    // quote the retiring per-instance supervisor (tools/vice-supervisor.sh);
+    // each now quotes the surviving launcher instead. Whether any quoted
+    // invocation carries a subcommand the launcher doesn't accept is
+    // checked structurally, against the SOURCE (see "structural: no message
+    // quotes the launcher with a subcommand" below) -- the fully-assembled,
+    // multi-sentence runtime text here legitimately has more prose after
+    // the path, which a text-level "nothing follows" check cannot tell
+    // apart from an appended subcommand.
+    assert.match(text, /vice-launcher\.sh/, "every unreachable-adjacent message must name the surviving launcher");
+    assert.doesNotMatch(text, /vice-supervisor\.sh/, "no unreachable-adjacent message may still name the retiring per-instance supervisor");
   }
 
   rmSync(dir, { recursive: true, force: true });
@@ -2218,6 +2229,16 @@ test("broker three states: each broker-absent shape gets its own message and fix
   for (const text of [neverStartedText, deadOrHungText, launchFailedText]) {
     assert.match(text, /(^|\s)\/\S+/, "every broker-absent message must quote an absolute path");
     assert.match(text, /only route/i, "every broker-absent message must state this is the only route");
+    // 01.6.2-09 (T-01.6.2-54/T-01.6.2-55): all three broker-absent messages
+    // used to quote the retiring bash broker (tools/vice-broker.sh); each
+    // now quotes the surviving launcher instead. Whether the quoted
+    // invocation carries a subcommand is checked structurally against the
+    // SOURCE (see "structural: no message quotes the launcher with a
+    // subcommand" below), not against this fully-assembled runtime text --
+    // aliveButFailedMessage()/brokerLaunchFailedMessage() legitimately
+    // follow the path with more prose on the same line.
+    assert.match(text, /vice-launcher\.sh/, "every broker-absent message must name the surviving launcher");
+    assert.doesNotMatch(text, /vice-broker\.sh/, "no broker-absent message may still name the retiring bash broker");
   }
 
   rmSync(dir, { recursive: true, force: true });
@@ -3012,7 +3033,7 @@ test("structural: the source records broker death as an accepted, knowing regres
   assert.match(src, /accepted/i, "the source must call this an ACCEPTED regression, not merely a limitation");
 });
 
-test("fixed-port unreachable is unchanged: no lease held still produces the 01.1 never-started message naming the supervisor launcher", async () => {
+test("fixed-port unreachable is unchanged: no lease held still produces the 01.1 never-started message naming the surviving launcher", async () => {
   const dir = mkdtempSync(join(tmpdir(), "vice-proxy-ccn-fixedport-"));
   const neverStartedEpochFile = join(dir, "never-written-epoch.json"); // deliberately never written
   const refusedPort = await reserveFreePort();
@@ -3029,12 +3050,92 @@ test("fixed-port unreachable is unchanged: no lease held still produces the 01.1
     const text = resp.result.content[0].text;
 
     assert.match(text, /never.*started/i, "a fixed-port instance with no lease held must still produce the 01.1 never-started message");
-    assert.match(text, /vice-supervisor\.sh/, "the message must name the supervisor launcher");
+    assert.match(text, /vice-launcher\.sh/, "the message must name the surviving launcher");
     assert.doesNotMatch(text, /on-demand VICE broker/i, "a fixed-port (no-lease) instance must never be answered by the broker-granted message");
   } finally {
     proxy.child.kill("SIGKILL");
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// ---------------------------------------------------------------------------
+// Plan 01.6.2-09 (T-01.6.2-54 -- T-01.6.2-59): eight agent-facing messages
+// used to tell a human or an agent to run one of two files this phase
+// deletes (the retiring per-instance supervisor, vice-supervisor.sh, and
+// the retiring bash broker, vice-broker.sh). Every one is repointed at the
+// single surviving launcher (resources/vice-launcher.sh). These structural
+// tests check the SOURCE directly, for properties a live-message test
+// cannot express cleanly: exactly one host-path helper survives, and no
+// quoted invocation carries a subcommand the launcher does not accept.
+// ---------------------------------------------------------------------------
+
+test("structural: vice-proxy.ts defines exactly one host-path helper (brokerHostPath), and supervisorHostPath is gone entirely", () => {
+  const src = readFileSync(join(HERE, "vice-proxy.ts"), "utf8");
+  const brokerHostPathDefs = (src.match(/^function brokerHostPath\(/gm) || []).length;
+  assert.equal(brokerHostPathDefs, 1, "expected exactly one brokerHostPath() function definition");
+  assert.doesNotMatch(src, /function supervisorHostPath\(/, "supervisorHostPath() must be deleted, not merely unused");
+  // Its resolved path's basename must equal the surviving launcher's own
+  // filename -- read directly out of the function body rather than calling
+  // it (calling it would need repoRoot()/hostPath() wired up identically to
+  // production, which the live "three states" tests above already do).
+  const fnBody = src.match(/function brokerHostPath\(\): string \{[\s\S]*?\n\}/);
+  assert.ok(fnBody, "expected to find brokerHostPath()'s function body");
+  assert.match(fnBody![0], /"vice-launcher\.sh"/, "brokerHostPath() must resolve tools/vice-launcher.sh");
+});
+
+test("structural: exactly one definition of the shared only-route sentence (ONLY_ROUTE_NOTE) exists", () => {
+  const files = readdirSync(HERE)
+    .filter((f) => /\.[cm]?[jt]s$/.test(f) && !/\.test\.[cm]?[jt]s$/.test(f));
+  let defCount = 0;
+  for (const f of files) {
+    const src = readFileSync(join(HERE, f), "utf8");
+    defCount += (src.match(/^const ONLY_ROUTE_NOTE\s*=/gm) || []).length;
+  }
+  assert.equal(defCount, 1, "expected exactly one ONLY_ROUTE_NOTE definition across the non-test module set -- no message may grow a second copy of the only-route sentence");
+});
+
+test("structural: no message quotes the launcher with a subcommand -- vice-launcher.sh accepts none", () => {
+  const src = readFileSync(join(HERE, "vice-proxy.ts"), "utf8");
+  // Every call site is either a bare interpolation inside a template
+  // literal chunk (immediately followed by the chunk's own closing
+  // backtick or a literal newline with nothing else appended before it),
+  // or `.split("\n")[0]` assigned to `hostRef` and used the same way. None
+  // concatenates a literal subcommand token (e.g. "start", "[N]") onto the
+  // call's own result.
+  const callSites = [...src.matchAll(/\$\{brokerHostPath\(\)\}/g), ...src.matchAll(/brokerHostPath\(\)\.split\("\\n"\)\[0\]/g)];
+  assert.ok(callSites.length >= 6, `expected at least 6 brokerHostPath() call sites, found ${callSites.length}`);
+  // Confirm none is followed, within the same statement, by a string
+  // concatenation carrying a bare word or bracketed argument -- the actual
+  // shape the retired install-resources.ts paragraph used to have
+  // (`${brokerDisplayPath} start [N]`) and which vice-launcher.sh's own
+  // forwarding exec (`exec node "$BROKER_ARTIFACT" ... "$@"`) accepts no
+  // positional subcommand for at all.
+  assert.doesNotMatch(src, /brokerHostPath\(\)\}\s*start/, "no call site may append a bare 'start' subcommand");
+  assert.doesNotMatch(src, /brokerHostPath\(\)\.split\("\\n"\)\[0\]\}\s*start/, "no hostRef call site may append a bare 'start' subcommand");
+});
+
+// ---------------------------------------------------------------------------
+// Plan 01.6.2-09 task 2 (D-18): the per-occurrence port triage's own
+// counterpart to "do not change the allocation band's default in this
+// task" -- proving it, not merely stating it. broker-state.mts's
+// DEFAULT_BASE_PORT (set by plan 02) is the single source this task's
+// triage is measured against; a second place defining that default would
+// be exactly the drift the single-source rule exists to prevent.
+// ---------------------------------------------------------------------------
+
+test("structural: the broker's allocated-port-band default (DEFAULT_BASE_PORT) is defined in exactly one place", () => {
+  const files = readdirSync(HERE).filter((f) => /\.[cm]?[jt]s$/.test(f) && !/\.test\.[cm]?[jt]s$/.test(f));
+  let defCount = 0;
+  for (const f of files) {
+    const src = readFileSync(join(HERE, f), "utf8");
+    defCount += (src.match(/^export const DEFAULT_BASE_PORT\s*=/gm) || []).length;
+  }
+  assert.equal(
+    defCount,
+    1,
+    "expected exactly one DEFAULT_BASE_PORT definition across the non-test module set -- a second place setting " +
+      "the allocation band's default is the single-source drift D-18's own convention exists to prevent"
+  );
 });
 
 // -----------------------------------------------------------------------

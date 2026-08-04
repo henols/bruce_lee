@@ -233,7 +233,8 @@ async function rpc(method: string, params: unknown, { timeoutMs = DEFAULT_TIMEOU
       throw new ViceError(
         `${method} timed out after ${timeoutMs}ms -- the host VICE MCP server may be hung or unreachable. ` +
           `Recovery is a HOST-SIDE restart, which this container cannot perform. Run ` +
-          `tools/vice-supervisor.sh on the HOST -- it restarts x64sc automatically and logs the crash ` +
+          `tools/vice-launcher.sh on the HOST -- its broker launches a boot-fresh instance on demand, ` +
+          `supervises it, and respawns a crashed one with backoff, logging the crash ` +
           `for the still-open root-cause investigation (see .planning/STATE.md).`
       );
     }
@@ -285,17 +286,20 @@ async function ensureInitialized(): Promise<void> {
 // The host server has been observed to drop connections and recover on its own,
 // but the outage outlasts a short backoff -- a 6s total budget was measured as
 // too short. These values give it ~50s to come back before we declare it dead
-// and point the operator at tools/vice-supervisor.sh (host-only; this
-// container cannot restart it itself).
+// and point the operator at tools/vice-launcher.sh (host-only; this
+// container cannot restart it itself) -- its on-demand broker launches a
+// fresh instance and respawns a crashed one with backoff automatically
+// (01.6.2-09: the retiring per-instance supervisor, vice-supervisor.sh, is
+// superseded by this same launcher/broker).
 //
-// IMPORTANT: under that supervisor, this retry can now SUCCEED -- against a
+// IMPORTANT: under that broker, this retry can now SUCCEED -- against a
 // brand-new, blank machine with no disk attached and no checkpoints armed,
 // not the one this session started with. That is exactly why
 // beginSession()/assertSameMachine() exist below: a retry that starts
 // working again is no longer proof that nothing happened. Do not remove the
-// identity check while this supervisor (or any future one) exists, and do
-// not remove the supervisor without also removing the retry -- they are one
-// mitigation in two halves, not two independent features.
+// identity check while this broker (or any future host-side recovery)
+// exists, and do not remove it without also removing the retry -- they are
+// one mitigation in two halves, not two independent features.
 const RECONNECT_ATTEMPTS = 5;
 const RECONNECT_BACKOFF_MS = [2000, 5000, 12000, 30000, 0];
 const nap = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
@@ -312,12 +316,13 @@ const nap = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
  * tool call would just repeat a mistake, and for a tool with side effects could
  * repeat it destructively.
  *
- * Under host-side supervision (tools/vice-supervisor.sh), this retry can now
- * SUCCEED -- against a brand-new, blank machine with no disk attached, no
- * checkpoints armed and the CPU halted at the BASIC prompt. A success here is
- * therefore no longer proof that nothing happened; it is exactly the signal
- * the session-identity section below (readEpoch/assertSameMachine) exists to
- * catch. Do not remove one half of this pairing without the other.
+ * Under host-side recovery (tools/vice-launcher.sh's on-demand broker), this
+ * retry can now SUCCEED -- against a brand-new, blank machine with no disk
+ * attached, no checkpoints armed and the CPU halted at the BASIC prompt. A
+ * success here is therefore no longer proof that nothing happened; it is
+ * exactly the signal the session-identity section below
+ * (readEpoch/assertSameMachine) exists to catch. Do not remove one half of
+ * this pairing without the other.
  */
 async function withReconnect(toolName: string, args: Record<string, unknown>, opts: RpcOptions): Promise<unknown> {
   lastCallSummary = summarizeCall(toolName, args);
@@ -349,8 +354,9 @@ async function withReconnect(toolName: string, args: Record<string, unknown>, op
   throw new ViceError(
     `${toolName} failed after ${RECONNECT_ATTEMPTS} transport attempts against ${activeUrl} ` +
       `(port ${activePort}): ${lastErr?.message} -- recovery is a HOST-SIDE restart, which this ` +
-      `container cannot perform. Run tools/vice-supervisor.sh on the HOST (see its header comment) ` +
-      `-- it restarts x64sc automatically and logs the crash for the still-open root-cause investigation.`
+      `container cannot perform. Run tools/vice-launcher.sh on the HOST (see its header comment) -- ` +
+      `its broker launches a boot-fresh instance on demand, supervises it, and respawns a crashed one ` +
+      `with backoff, logging the crash for the still-open root-cause investigation.`
   );
 }
 
@@ -358,11 +364,11 @@ async function withReconnect(toolName: string, args: Record<string, unknown>, op
 //
 // WHY this lives in the transport seam, not in tools/recover.mjs: this file
 // is the only place that knows a reconnect happened at all. Once
-// tools/vice-supervisor.sh is respawning x64sc on the host, withReconnect()'s
-// retry-with-backoff above starts SUCCEEDING again -- but potentially against
-// a completely different, freshly-booted machine. Turning that "quiet
-// success" back into a loud, checkable signal is the whole point of this
-// section (D-3, D-4).
+// tools/vice-launcher.sh's on-demand broker is respawning x64sc on the host,
+// withReconnect()'s retry-with-backoff above starts SUCCEEDING again -- but
+// potentially against a completely different, freshly-booted machine.
+// Turning that "quiet success" back into a loud, checkable signal is the
+// whole point of this section (D-3, D-4).
 //
 // Module-level state, deliberately NOT per-call-argument: there is one
 // active recovery session per process (recover.mjs's CLI runs one verb at a
@@ -533,7 +539,7 @@ export async function assertSameMachine(
   }
 
   // A reconnect happened and the epoch file could not confirm sameness
-  // (either no supervisor is running at all, or its epoch file just isn't
+  // (either no broker is running at all, or its epoch file just isn't
   // there to compare against). The checkpoint-fallback probe is the only
   // identity signal left -- and it deliberately reuses checkpoints the
   // harness already armed for its own reasons; arming a new sentinel
@@ -543,7 +549,7 @@ export async function assertSameMachine(
     throw new MachineRestartedError(
       `${where}: a reconnect happened and identity could not be proven -- no epoch file to compare ` +
         `and no armed checkpoint to probe. Unproven is not the same as fine; re-run the capture. If ` +
-        `this recurs, run tools/vice-supervisor.sh on the HOST so future runs have an epoch file to check.`,
+        `this recurs, run tools/vice-launcher.sh on the HOST so future runs have an epoch file to check.`,
       { baselineEpoch: session.baseline.epoch, currentEpoch: currentEpoch.epoch, where, lastToolCall: lastCallSummary }
     );
   }

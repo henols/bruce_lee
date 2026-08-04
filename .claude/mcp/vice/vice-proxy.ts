@@ -1412,28 +1412,31 @@ const ONLY_ROUTE_NOTE =
   "the human to start it on the host -- falling back to a direct shell invocation of the underlying " +
   "transport is not an available workaround.";
 
-/** The absolute path of the command a human should run on the HOST to
- * start/restart the emulator -- computed via hostPath() over the deployed
- * supervisor's container path, degrading to the container path plus
- * SET_ENV_HINT exactly as install-resources.mjs's hostLaunchInstructions() does, so a
- * translation failure still yields something to act on rather than an empty
- * message. Recomputed fresh every call -- never cached (see the
- * never-cache-a-negative-result invariant above ensureViceSession()). */
-function supervisorHostPath(): string {
-  const root = repoRoot();
-  const target = join(root, "tools", "vice-supervisor.sh");
-  try {
-    return hostPath(target, { workspaceRoot: root });
-  } catch {
-    return `${target}\n  (host path could not be determined -- ${SET_ENV_HINT})`;
-  }
-}
+// supervisorHostPath() (the per-instance-supervisor host-path helper) is
+// GONE, not merely unused (01.6.2-09, T-01.6.2-54/T-01.6.2-59): its three
+// former consumers below -- neverStartedMessage(), deadOrHungMessage() and
+// aliveButFailedMessage() -- now resolve brokerHostPath() instead, the SAME
+// single helper the broker-absent triple already used. There is exactly one
+// host-path helper left in this file (a structural test in
+// vice-proxy.test.ts asserts that directly: the resolved path's basename
+// equals the surviving launcher's filename).
 
-/** Same shape as supervisorHostPath(), for the broker launcher instead of
- * the supervisor. Recomputed fresh every call -- never cached. */
+/** The absolute path of the command a human should run on the HOST to
+ * start/restart access to the emulator -- computed via hostPath() over the
+ * deployed launcher's container path, degrading to the container path plus
+ * SET_ENV_HINT exactly as install-resources.ts's hostLaunchInstructions()
+ * does, so a translation failure still yields something to act on rather
+ * than an empty message. Recomputed fresh every call -- never cached (see
+ * the never-cache-a-negative-result invariant above ensureViceSession()).
+ * Points at resources/vice-launcher.sh's deployed copy -- the one surviving
+ * host script (01.6.2-09). Every message in this file that used to name
+ * either the retiring per-instance supervisor (vice-supervisor.sh) or the
+ * retiring bash broker (vice-broker.sh) now names THIS launcher instead: its
+ * own broker performs both the acquire-on-demand job the bash broker did and
+ * the launch/supervise/respawn-with-backoff job the bash supervisor did. */
 function brokerHostPath(): string {
   const root = repoRoot();
-  const target = join(root, "tools", "vice-broker.sh");
+  const target = join(root, "tools", "vice-launcher.sh");
   try {
     return hostPath(target, { workspaceRoot: root });
   } catch {
@@ -1452,7 +1455,10 @@ function brokerHostPath(): string {
 // replacing the other. Every message here quotes brokerHostPath() (an
 // absolute HOST path, recomputed fresh -- see that function's own comment)
 // and the single shared ONLY_ROUTE_NOTE definition; no message below writes
-// its own second only-route sentence.
+// its own second only-route sentence. As of 01.6.2-09, the host-unreachable
+// triple below quotes the exact same brokerHostPath() helper -- there is
+// only one surviving launcher left to name, so both triples now resolve
+// identically rather than two different paths.
 
 /** State: readBrokerLiveness() found no broker.json at all -- the broker has
  * never been started on this host. Nothing on the other side would ever
@@ -1534,7 +1540,7 @@ function neverStartedMessage(probe: ProbeResult): string {
   return (
     `vice-proxy: the host VICE MCP server has never been started at this configured path -- no ` +
     `restart-epoch record exists, and the connection was refused (${probe.reason}). Start it on the host with:\n` +
-    `  ${supervisorHostPath()}\n` +
+    `  ${brokerHostPath()}\n` +
     ONLY_ROUTE_NOTE
   );
 }
@@ -1547,7 +1553,7 @@ function deadOrHungMessage(probe: ProbeResult, epoch: EpochResult): string {
   return (
     `vice-proxy: the host VICE MCP server appears to be dead or hung${pidNote} -- ${probe.reason}. ` +
     `Restart it on the host with:\n` +
-    `  ${supervisorHostPath()}\n` +
+    `  ${brokerHostPath()}\n` +
     ONLY_ROUTE_NOTE
   );
 }
@@ -1561,21 +1567,28 @@ function deadOrHungMessage(probe: ProbeResult, epoch: EpochResult): string {
  * (both required of every unreachable-adjacent message this proxy emits),
  * worded so as never to suggest the action a restart message would. */
 function aliveButFailedMessage(errMessage: string): string {
-  const hostRef = supervisorHostPath().split("\n")[0];
+  const hostRef = brokerHostPath().split("\n")[0];
   return (
     `vice-proxy: the host VICE MCP server (reachable via the host-side launcher at ${hostRef}) rejected ` +
     `this call: ${errMessage} ${ONLY_ROUTE_NOTE}`
   );
 }
 
-// STATED RESIDUAL (quick-260801-ccn task 3), recorded rather than fixed
-// here: aliveButFailedMessage() above still names the supervisor launcher
-// as its reference path, even under a broker-granted session. It answers a
-// DIFFERENT question from both the host-unreachable triple and the
-// broker-granted message below -- an instance that IS reachable and
+// RESOLVED RESIDUAL (originally quick-260801-ccn task 3; re-examined by
+// 01.6.2-09, T-01.6.2-54/T-01.6.2-59): this comment used to record that
+// aliveButFailedMessage() above still named a SEPARATE per-instance
+// supervisor path even under a broker-granted session -- a genuine
+// mismatch, because two different launchers existed. That mismatch is
+// dissolved, not merely reworded: supervisorHostPath() is deleted, and
+// aliveButFailedMessage() now resolves the exact same brokerHostPath()
+// helper every other message in this file uses, so there is only ever one
+// launcher path to name, regardless of session type. What still holds,
+// unchanged, is the REASON this message carries no restart instruction: it
+// answers a different question from both the host-unreachable triple and
+// the broker-granted message below -- an instance that IS reachable and
 // answering rejected ONE call -- where no launcher is the fix and a
 // restart would be the wrong advice on either route (broker-granted or
-// fixed-port). Left alone deliberately, not missed.
+// fixed-port).
 
 // ------------------------------------------- broker-granted unreachable diagnostics
 //

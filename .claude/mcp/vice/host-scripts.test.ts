@@ -12,7 +12,7 @@
 // script itself run with `--dry-run`/`--print-paths`/`-n`.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, existsSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, existsSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
@@ -287,5 +287,68 @@ test("structural: git ls-files enumerates the tracked shell-script set as exactl
     devcontainerScripts.length,
     2,
     `expected exactly 2 container-provisioning shell scripts under .devcontainer/, got ${devcontainerScripts.length}: ${JSON.stringify(devcontainerScripts)}`
+  );
+});
+
+// ============================================================================
+// Plan 01.6.2-09 (T-01.6.2-54): a structural gate proving neither retiring
+// daemon filename (the per-instance supervisor, vice-supervisor.sh, or the
+// bash broker, vice-broker.sh) appears anywhere in the module directory's
+// non-test TypeScript source -- not merely that the eight known message
+// builders were fixed by hand. Enumerated from the directory itself (the
+// same idiom vice-proxy.test.ts's own "structural: the set of source
+// files..." test and vice-broker-client.test.ts's own closure gate already
+// use), so a future message reintroducing a dead filename is caught the
+// moment it lands, with no test file to remember to update.
+//
+// DELIBERATELY OUT OF SCOPE THIS WAVE: resources/ (a subdirectory, never
+// enumerated by this shallow, non-recursive readdirSync(HERE)) still holds
+// both retiring scripts' actual bytes -- they are not deleted until plan
+// 11. This gate polices the AUTHORED TYPESCRIPT SOURCE (the messages that
+// quote a host path), not the shell-script inventory itself; the still-open
+// EXPECTED_TRACKED_SHELL_SCRIPTS array above continues to police that.
+//
+// Comment lines are filtered out before matching, so a header sentence
+// NAMING a retiring filename (as this very comment does, deliberately, to
+// explain what changed and why) cannot make the gate self-invalidating.
+// ============================================================================
+
+const RETIRING_DAEMON_FILENAMES: string[] = ["vice-supervisor.sh", "vice-broker.sh"];
+
+/** Strips `//` line comments and `/* ... *\/` block comments before matching
+ * -- matches vice-broker-client.test.ts's own stripComments() idiom
+ * exactly (plan 07's closure gate precedent). Deliberately simple: the
+ * retiring filenames never legitimately appear inside a runtime string
+ * literal in this module set outside the messages this gate polices, so a
+ * comment-stripping pass is enough to serve this one gate. */
+function stripCommentsForDaemonGate(source: string): string {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .split("\n")
+    .map((line) => line.replace(/\/\/.*$/, ""))
+    .join("\n");
+}
+
+test("structural: neither retiring daemon filename (vice-supervisor.sh, vice-broker.sh) appears anywhere in the module's non-test TypeScript source", () => {
+  const files = readdirSync(HERE)
+    .filter((f) => /\.[cm]?[jt]s$/.test(f) && !/\.test\.[cm]?[jt]s$/.test(f))
+    .sort();
+  assert.ok(files.length > 0, "module directory enumerated as empty -- glob or path resolution is broken");
+
+  const offenders: { file: string; filename: string }[] = [];
+  for (const file of files) {
+    const stripped = stripCommentsForDaemonGate(readFileSync(join(HERE, file), "utf8"));
+    for (const filename of RETIRING_DAEMON_FILENAMES) {
+      const escaped = filename.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      if (new RegExp(escaped).test(stripped)) {
+        offenders.push({ file, filename });
+      }
+    }
+  }
+  assert.deepEqual(
+    offenders,
+    [],
+    `a retiring daemon filename reappeared in non-test source: ${JSON.stringify(offenders)} -- ` +
+      "every agent-facing or operator-facing message must name the surviving launcher (vice-launcher.sh) instead."
   );
 });
