@@ -31,8 +31,8 @@ import { spawn as nodeSpawn } from "node:child_process";
 import { containerGuardReport, containerGuardEnforce } from "./container-guard.mjs";
 import { createBrokerState, nextFreePort, countReady, countTotal, countLaunching } from "./broker-state.mjs";
 import { acquirePortAndLaunch, maintainWarmFloor, probeReady, runBrokerPass } from "./broker-launch.mjs";
-import { verifiedKill, registerShutdownHandlers, startupBanner } from "./broker-kill.mjs";
-import { writeEpochRecord } from "./broker-epoch.mjs";
+import { verifiedKill, registerShutdownHandlers, startupBanner, reapOrphanedInstances } from "./broker-kill.mjs";
+import { writeEpochRecord, epochPathFor, nextEpochFor } from "./broker-epoch.mjs";
 import { startControlListener, newControlToken } from "./broker-control.mjs";
 const USAGE = "usage: vice-broker.mjs --repo-root <path> [--state-dir <path>] [--check-container] [--dry-run]";
 /** `--repo-root` is required UNLESS `--check-container` is given -- the
@@ -274,6 +274,18 @@ async function run(args) {
     const state = createBrokerState();
     const token = newControlToken();
     const controlHost = process.env.VICE_BROKER_CONTROL_HOST ?? "0.0.0.0";
+    // Criterion I / D-15: the unconditional startup reap runs BEFORE the
+    // control listener accepts and before anything is launched. A SIGKILLed
+    // prior broker never ran a shutdown path, so this is the only place the
+    // "every emulator this project's port band could be squatting is either
+    // ours or a human's own work" guarantee can be enforced -- no marker file
+    // is consulted, per this reap's own header comment in broker-kill.mts.
+    await reapOrphanedInstances({
+        stateDir: args.stateDir,
+        epochPathFor,
+        nextEpochFor,
+        writeEpochRecord,
+    });
     let listener;
     try {
         listener = await startControlListener({

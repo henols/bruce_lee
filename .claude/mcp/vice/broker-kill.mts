@@ -1,40 +1,54 @@
 // broker-kill.mts
 //
-// D (complete through this task -- Task 3 of this plan adds the startup
-// reap below): the identity-verified kill discipline, ported from
-// resources/vice-broker.sh's signal_recorded_pid()/signal_vice_child_pid():
-// zero-signal liveness check, identity check against the process's own
-// argument string, SIGTERM, poll-then-SIGKILL. The expected-identity string
-// always comes from the instance record (the resolved binary path recorded
-// at spawn time by broker-launch.mts), never a module constant -- this
-// broker spawns the emulator directly and there is no intermediate
-// supervising script for an identity check to match against. See this
-// module's own history: the bash original's PARAMETERISED sibling
+// D (complete, this plan -- 01.6.2-04): the identity-verified kill discipline,
+// ported from resources/vice-broker.sh's signal_recorded_pid()/
+// signal_vice_child_pid(): zero-signal liveness check, identity check against
+// the process's own argument string, SIGTERM, poll-then-SIGKILL. The
+// expected-identity string always comes from the instance record (the
+// resolved binary path recorded at spawn time by broker-launch.mts), never a
+// module constant -- this broker spawns the emulator directly and there is
+// no intermediate supervising script for an identity check to match against.
+// See this module's own history: the bash original's PARAMETERISED sibling
 // (signal_vice_child_pid, matched against a caller-supplied binary) is the
 // model this ported; its hardcoded sibling (signal_recorded_pid, matched
 // against $SUPERVISOR_SCRIPT) is NOT -- there is no supervisor script in
 // this topology, so carrying that constant forward would make every kill
 // silently refuse while logging a plausible-looking pid-reuse warning.
 //
-// This task (Task 2, C5/D-25) adds shutdown()/registerShutdownHandlers():
-// every catchable teardown path (SIGTERM, SIGINT, SIGHUP, an uncaught
-// exception, an unhandled rejection, normal exit) converges on one
-// re-entrant-safe teardown that identity-verified-kills every instance and
-// clears the map unconditionally (kill-never-recycle). The uncatchable
-// signals (SIGKILL, SIGSTOP) are deliberately unhandled -- see
-// registerShutdownHandlers()'s own comment. Task 3 (criterion I, D-15) adds
-// the unconditional startup reap next.
+// This task also completes the module with two further concerns, both
+// depending on the kill discipline above rather than replacing it:
+//   - shutdown()/registerShutdownHandlers(): every catchable teardown path
+//     (SIGTERM, SIGINT, SIGHUP, an uncaught exception, an unhandled
+//     rejection, normal exit) converges on one re-entrant-safe teardown that
+//     identity-verified-kills every instance and clears the map
+//     unconditionally (kill-never-recycle). The uncatchable signals (SIGKILL,
+//     SIGSTOP) are deliberately unhandled -- see registerShutdownHandlers()'s
+//     own comment.
+//   - reapOrphanedInstances()/discoverBandProcesses(): the unconditional
+//     startup reap (criterion I, D-15) that reaches instances this broker
+//     process has no in-memory record of, derived from the emulator port
+//     band plus process identity rather than from a registry a restart just
+//     lost.
 import { execFileSync } from "node:child_process";
-// TYPE-ONLY import, deliberately -- this module is imported directly
+import { readFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
+// TYPE-ONLY imports, deliberately -- this module is imported directly
 // (unbuilt, native Node type-stripping) by its own test file and by
 // broker-e2e.test.ts, exactly like broker-launch.mts already is (plan 02's
 // finding: a VALUE import of a sibling ".mjs" specifier only resolves once
 // both siblings are compiled by tsc into resources/; it cannot resolve when
-// THIS file is loaded directly as ".mts" source). BrokerState (shutdown's
-// own target) is referenced as a TYPE only; vice-broker.mts (which is only
-// ever executed from its BUILT resources/vice-broker.mjs form) supplies the
-// real one at the real wiring site.
+// THIS file is loaded directly as ".mts" source). BrokerState/InstanceRecord
+// (shutdown's own target) and EpochRecord (the reap's epoch-bump payload
+// shape) are referenced as TYPES only; the epoch-writer FUNCTIONS
+// (epochPathFor/nextEpochFor/writeEpochRecord) are taken as required,
+// injected dependencies on ReapOrphanedInstancesOptions below instead of
+// being value-imported -- the same EpochWriterDeps shape superviseChild()
+// (broker-launch.mts) already established for the identical reason.
+// vice-broker.mts (which is only ever executed from its BUILT
+// resources/vice-broker.mjs form) supplies the real functions at the real
+// wiring site; tests inject their own.
 import type { BrokerState } from "./broker-state.mjs";
+import type { EpochRecord } from "./broker-epoch.mjs";
 
 /** The same four-value vocabulary resources/vice-broker.sh's
  * signal_vice_child_pid() already returns -- the recycle ack contract
@@ -251,11 +265,10 @@ export interface RegisterShutdownHandlersDeps extends ShutdownDeps {
  * block, and in a one-process design there is no supervisor left standing
  * to be told anything happened. Orphaned emulators after such a kill are
  * accepted and cleaned up by hand (T-01.6.2-29) -- the NEXT broker start's
- * unconditional reap (Task 3's reapOrphanedInstances(), added below in a
- * later commit) is the actual recovery mechanism, not anything registered
- * here. Two kernel-level alternatives (a watchdog process, a cgroup-wide
- * kill) were considered during this phase's own design discussion and
- * dropped as over-engineering, not deferred.
+ * unconditional reap (reapOrphanedInstances() below) is the actual recovery
+ * mechanism, not anything registered here. Two kernel-level alternatives (a
+ * watchdog process, a cgroup-wide kill) were considered during this phase's
+ * own design discussion and dropped as over-engineering, not deferred.
  *
  * The 'exit' listener is registered identically to the other five, but
  * carries an honest limitation worth stating rather than hiding: Node's
@@ -369,4 +382,240 @@ export function startupBanner(): string {
     "vice-broker: to run this broker outside the current terminal session, use your own",
     "vice-broker: nohup/setsid/systemd -- this launcher does not offer a --detach flag.",
   ].join("\n");
+}
+
+// ============================================================================
+// Startup reap: unconditional, file-free, band-aware (criterion I, D-15).
+// ============================================================================
+
+export interface ProcessListEntry {
+  pid: number;
+  /** The process's own argument string, exactly the shape
+   * defaultReadProcessArgs()/`ps -o args=` returns for a single pid. */
+  args: string;
+}
+
+export type ProcessListingProbe = () => ProcessListEntry[] | Promise<ProcessListEntry[]>;
+
+/** Real default: `ps -eo pid=,args=` -- every process on the host, pid plus
+ * its full argument string. Never throws: an unreadable `ps` (e.g. no
+ * processes visible under this container's pid namespace) yields an empty
+ * list rather than aborting the reap. */
+function defaultListProcesses(): ProcessListEntry[] {
+  let raw: string;
+  try {
+    raw = execFileSync("ps", ["-eo", "pid=,args="], { encoding: "utf8" });
+  } catch {
+    return [];
+  }
+  const out: ProcessListEntry[] = [];
+  for (const line of raw.split("\n")) {
+    const trimmed = line.trimStart();
+    if (trimmed === "") continue;
+    const m = /^(\d+)\s+(.*)$/.exec(trimmed);
+    if (!m) continue;
+    const pid = Number(m[1]);
+    if (!Number.isFinite(pid)) continue;
+    out.push({ pid, args: m[2] });
+  }
+  return out;
+}
+
+/** True iff `args` contains a bare numeric token whose value is >= basePort.
+ * This is a substring/token scan over the process's own argument string --
+ * the same class of untrusted-but-locally-observed check this module's
+ * identity check already performs -- not a parse of any particular VICE
+ * flag shape, so it holds regardless of whether the port arrived via
+ * `-mcpserverport N` or a raw VICE_ARGS override naming the port some other
+ * way. */
+function argsNamePortAtOrAbove(args: string, basePort: number): boolean {
+  const matches = args.match(/\d+/g);
+  if (!matches) return false;
+  return matches.some((token) => {
+    const n = Number(token);
+    return Number.isFinite(n) && n >= basePort;
+  });
+}
+
+function resolveBasePortForReap(override?: number): number {
+  if (typeof override === "number") return override;
+  const raw = process.env.VICE_BROKER_BASE_PORT;
+  if (raw === undefined || raw === "") return 6600;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : 6600;
+}
+
+function resolveViceBinForReap(override?: string): string {
+  return override ?? process.env.VICE_BIN ?? "x64sc";
+}
+
+export interface DiscoverBandProcessesOptions {
+  listProcesses?: ProcessListingProbe;
+  viceBin?: string;
+  basePort?: number;
+}
+
+/** Two-condition selection (T-01.6.2-25/-26): a process qualifies ONLY when
+ * its own argument string BOTH names the configured emulator binary AND
+ * names a port at or above the allocation band's base. A process matching
+ * only one condition is left alone -- this is the whole point: the
+ * 6510-6599 band below the base is reserved by convention for an emulator a
+ * human launched for their own work (D-18), and reaping one of those would
+ * be exactly the squatting problem that band separation exists to prevent;
+ * conversely an unrelated process that merely happens to mention a
+ * matching-looking port is never a target either. */
+export async function discoverBandProcesses(options: DiscoverBandProcessesOptions = {}): Promise<ProcessListEntry[]> {
+  const listProcesses = options.listProcesses ?? defaultListProcesses;
+  const viceBin = resolveViceBinForReap(options.viceBin);
+  const basePort = resolveBasePortForReap(options.basePort);
+
+  const entries = await listProcesses();
+  return entries.filter((entry) => entry.args.includes(viceBin) && argsNamePortAtOrAbove(entry.args, basePort));
+}
+
+export interface ReapResult {
+  found: number;
+  killed: number;
+}
+
+/** The epoch-writer functions reapOrphanedInstances() needs, taken as
+ * required, injected dependencies for the identical reason
+ * superviseChild()'s own EpochWriterDeps exists (broker-launch.mts): this
+ * module cannot VALUE-import broker-epoch.mjs's real exports without
+ * breaking its own direct-unbuilt-import contract. vice-broker.mts (built
+ * form only) supplies the real broker-epoch.mts functions; tests inject
+ * their own or the real ones via a direct ".mts" source import. */
+export interface EpochWriterDeps {
+  epochPathFor: (stateDir: string, port: number) => string;
+  nextEpochFor: (supervisorDir: string) => number;
+  writeEpochRecord: (opts: { supervisorDir: string; record: EpochRecord }) => string;
+}
+
+export interface ReapOrphanedInstancesOptions extends EpochWriterDeps {
+  /** Root state directory -- the same one every per-port supervisorDir is
+   * derived from elsewhere in this codebase (`join(stateDir, String(port))`). */
+  stateDir: string;
+  viceBin?: string;
+  basePort?: number;
+  listProcesses?: ProcessListingProbe;
+  /** Defaults to the real verifiedKill() above. */
+  kill?: (opts: VerifiedKillOptions) => Promise<KillStage>;
+  log?: (line: string) => void;
+  /** Enumerates every port-numbered directory currently on disk under
+   * `stateDir` -- defaults to a real directory listing. Overridable so tests
+   * can assert against a controlled, temporary state directory without
+   * every other test in the suite's own stateDir leaking in. */
+  listInstanceDirs?: (stateDir: string) => number[];
+}
+
+function defaultListInstanceDirs(stateDir: string): number[] {
+  let names: string[];
+  try {
+    names = readdirSync(stateDir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name);
+  } catch {
+    return [];
+  }
+  return names.filter((name) => /^\d+$/.test(name)).map(Number);
+}
+
+function readExistingEpochFieldsMaybe(path: string): Partial<EpochRecord> | null {
+  let raw: string;
+  try {
+    raw = readFileSync(path, "utf8");
+  } catch {
+    return null;
+  }
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+      return parsed as Partial<EpochRecord>;
+    }
+  } catch {
+    /* malformed -- treated as "nothing to preserve", matching nextEpochFor()'s
+     * own never-throw posture */
+  }
+  return null;
+}
+
+/** Bumps a single in-band instance directory's epoch by exactly one
+ * (via the injected nextEpochFor(), the SAME derivation superviseChild()
+ * uses on every respawn), preserving every OTHER field already on disk when
+ * readable so a human inspecting the file afterwards still finds the
+ * instance's real spawned_at/pid/vice_bin/log -- and degrading to
+ * reasonable placeholders when the directory carries no prior epoch.json at
+ * all (the exact case this reap exists to still cover: a directory the
+ * broker has no in-memory record of). This bump is what carries the void
+ * into the existing MachineRestartedError path (vice.ts's
+ * assertSameMachine()) -- no second notion of "recoverable" is invented
+ * here. */
+function bumpEpochForInstanceDir(deps: EpochWriterDeps, stateDir: string, port: number): void {
+  const supervisorDir = join(stateDir, String(port));
+  const path = deps.epochPathFor(stateDir, port);
+  const existing = readExistingEpochFieldsMaybe(path);
+  const nextEpoch = deps.nextEpochFor(supervisorDir);
+  const record: EpochRecord = {
+    epoch: nextEpoch,
+    spawned_at: typeof existing?.spawned_at === "string" ? existing.spawned_at : new Date().toISOString(),
+    pid: typeof existing?.pid === "number" ? existing.pid : 0,
+    supervisor_pid: typeof existing?.supervisor_pid === "number" ? existing.supervisor_pid : process.pid,
+    vice_bin: typeof existing?.vice_bin === "string" ? existing.vice_bin : "",
+    vice_args: Array.isArray(existing?.vice_args) ? (existing.vice_args as string[]) : [],
+    log: typeof existing?.log === "string" ? existing.log : "",
+    dry_run: typeof existing?.dry_run === "boolean" ? existing.dry_run : false,
+  };
+  deps.writeEpochRecord({ supervisorDir, record });
+}
+
+/** The unconditional startup reap (criterion I, D-15). Runs on every broker
+ * start, before the control listener accepts and before anything is
+ * launched -- unconditional because a broker killed with SIGKILL never runs
+ * a shutdown path, so "was the last shutdown clean" is unanswerable, and a
+ * marker file recording that answer would itself be the class of file-based
+ * liveness claim this phase retires (consults NO such file; the seam this
+ * module offers is the process listing and the on-disk instance
+ * directories, nothing else).
+ *
+ * Enumerates host processes via the injected/real process-listing
+ * dependency, selects the two-condition matches (discoverBandProcesses()
+ * above), and kills each one identity-verified against the configured
+ * emulator binary. Then bumps the epoch of EVERY instance directory under
+ * `stateDir` whose port falls in the band -- including directories this
+ * broker process has no in-memory record of, which is the exact case this
+ * seed (.planning/seeds/broker-restart-reaps-and-voids.md) flags: the void
+ * has to reach instances a registry-free restart never heard of.
+ *
+ * Logs one line naming the count found and the count killed, including the
+ * zero case -- both the 2026-08-01 and 2026-08-02 incidents were diagnosed
+ * from broker log lines, and a silent reap would be exactly the kind of
+ * thing impossible to reconstruct afterwards. */
+export async function reapOrphanedInstances(options: ReapOrphanedInstancesOptions): Promise<ReapResult> {
+  const kill = options.kill ?? verifiedKill;
+  const log = options.log ?? defaultLog;
+  const viceBin = resolveViceBinForReap(options.viceBin);
+  const basePort = resolveBasePortForReap(options.basePort);
+  const listInstanceDirs = options.listInstanceDirs ?? defaultListInstanceDirs;
+
+  const matched = await discoverBandProcesses({
+    listProcesses: options.listProcesses,
+    viceBin,
+    basePort,
+  });
+
+  let killed = 0;
+  for (const entry of matched) {
+    const stage = await kill({ pid: entry.pid, expectedIdentity: viceBin });
+    if (stage === "sigterm" || stage === "sigkill") killed++;
+  }
+
+  const ports = listInstanceDirs(options.stateDir);
+  for (const port of ports) {
+    if (port >= basePort) {
+      bumpEpochForInstanceDir(options, options.stateDir, port);
+    }
+  }
+
+  log(`vice-broker: startup reap found ${matched.length} process(es) in the emulator port band, terminated ${killed}`);
+  return { found: matched.length, killed };
 }
