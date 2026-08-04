@@ -178,6 +178,51 @@ test("structural: broker-launch.mts's child exit listener is installed in exactl
   assert.ok(importsWrapperByName, "assertion 3 (import by name) FAILED: vice-broker.mts must import withCrashSupervision by name from ./broker-launch.mjs");
 });
 
+// ===========================================================================
+// 01.6.2.1-01-PLAN.md, Task 2: the structural anti-regression gate over
+// grant recording -- the SAME "correct module, never called" failure shape
+// the two gates above already guard against, one level up: Defect 5 was
+// maintainWarmFloor()'s own warm pool sitting correctly built and
+// unit-tested while handleAcquire() never consulted it. This gate counts
+// the grant-recording call site (this task's own assumption-delta decision
+// promotes "resolve a grantable instance" to the ONE primary operation, fed
+// by both a warm-instance and a cold-launch arm) and asserts the real
+// acquire entry point's own body actually invokes the warm-instance
+// selector, not merely defines it.
+// ===========================================================================
+
+test("structural: vice-broker.mts records a grant in exactly one place, and its real acquire entry point invokes the warm-instance selector by name", () => {
+  const brokerSource = stripComments(readFileSync(join(HERE, "vice-broker.mts"), "utf8"));
+
+  // Assertion 1: exactly one grant-recording call site in the whole module.
+  // Two independent state.grants.set() sites (one per arm) would let a
+  // FUTURE third acquire arm reintroduce Defect 5 invisibly -- this task's
+  // own assumption-delta decision promotes "resolve a grantable instance"
+  // to the ONE primary operation for exactly this reason.
+  const grantCallCount = (brokerSource.match(/\bstate\.grants\.set\(/g) ?? []).length;
+  assert.equal(
+    grantCallCount,
+    1,
+    `assertion 1 (grant-recording call count) FAILED: expected exactly 1 comment-stripped state.grants.set( call in vice-broker.mts, found ${grantCallCount} -- a second, independent grant-recording site would let a future third acquire arm reintroduce Defect 5 invisibly`,
+  );
+
+  // Assertion 2: the real acquire entry point's own body invokes the
+  // warm-instance selector BY NAME -- the exact "correct module, never
+  // called" failure shape Defect 5 was. Matches ONLY a single-line
+  // invocation ("await selectWarmInstance(...)"), never the selector's own
+  // multi-line declaration ("async function selectWarmInstance(\n  state:
+  // ..."), so this assertion cannot be satisfied by the selector merely
+  // existing, unreferenced -- exactly how maintainWarmFloor() itself sat
+  // correctly built and unit-tested while orphaned from handleAcquire()
+  // before this task.
+  const selectorCallSiteCount = (brokerSource.match(/\bawait\s+selectWarmInstance\(/g) ?? []).length;
+  assert.equal(
+    selectorCallSiteCount,
+    1,
+    `assertion 2 (warm-instance selector call-site count) FAILED: expected exactly 1 comment-stripped "await selectWarmInstance(" call in vice-broker.mts, found ${selectorCallSiteCount} -- the real acquire entry point must actually CALL the selector, not merely define it`,
+  );
+});
+
 function makeInstance(overrides: Partial<InstanceRecord> = {}): InstanceRecord {
   return {
     port: 6600,

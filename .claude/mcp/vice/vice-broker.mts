@@ -42,8 +42,9 @@ import {
   runBrokerPass,
   withCrashSupervision,
   type SuperviseChildDeps,
+  type ProbeOutcome,
 } from "./broker-launch.mjs";
-import { verifiedKill, registerShutdownHandlers, startupBanner, reapOrphanedInstances } from "./broker-kill.mjs";
+import { verifiedKill, registerShutdownHandlers, startupBanner, reapOrphanedInstances, type KillStage } from "./broker-kill.mjs";
 import { writeEpochRecord, epochPathFor, nextEpochFor, instanceLogDirFor, type EpochRecord } from "./broker-epoch.mjs";
 import {
   startControlListener,
@@ -309,53 +310,175 @@ function markDeliberateDeath(instance: InstanceRecord, respawnAfterKill: boolean
   instance.respawnAfterKill = respawnAfterKill;
 }
 
-/** Allocates a port, launches through tryLaunchOne() (the single in_flight
- * owner), writes the epoch record, and records the grant. Answers the full
- * discriminated AcquireOutcome (plan 05): `at_capacity` when the instance
- * ceiling is already reached (checked BEFORE ever touching the port
- * allocator or spawning anything), `no_free_port`/`launch_in_flight` passed
- * straight through from acquirePortAndLaunch()'s own typed failure, and
- * `internal` only for a genuine, otherwise-unclassified fault. A
+/** Injectable dependency seam for handleAcquire()'s warm-instance selection
+ * arm and its cold-launch fall-through, mirroring the SAME
+ * spawn/probe/clock-seam shape every other launch/kill/probe primitive in
+ * this module tree already exposes (BrokerDeps, TryLaunchDeps,
+ * MaintainWarmFloorDeps, SuperviseChildDeps). The real broker wiring
+ * (run()'s onAcquire callback below) calls handleAcquire() with no deps at
+ * all, so every default here IS the production behaviour; a unit test
+ * against the built artifact injects its own stubs for `probe` and `kill`
+ * (never opening a real connection or signalling a real pid) and its own
+ * `buildColdSpawnFactory` (never spawning a real process) -- see
+ * vice-broker-acquire.test.ts. */
+export interface HandleAcquireDeps {
+  /** Overrides the grant-time re-probe (P-02) -- defaults to a thin call
+   * into broker-launch.mjs's real probeReady(). */
+  probe?: (port: number) => Promise<ProbeOutcome>;
+  /** Overrides the identity-verified kill on a failed grant-time probe --
+   * defaults to broker-kill.mjs's real verifiedKill(), reused unchanged
+   * (Phase 01.6.2 criterion 6), never re-derived. */
+  kill?: (opts: { pid: number | null; expectedIdentity: string }) => Promise<KillStage>;
+  /** Overrides the cold-launch arm's spawn factory -- defaults to the same
+   * makeLoggingSpawn()+withCrashSupervision() composition this function
+   * always used. */
+  buildColdSpawnFactory?: (port: number) => (command: string, args: string[]) => ChildProcess;
+  log?: (line: string) => void;
+}
+
+/** Walks `state.instances` for probe-live `ready` candidates, in iteration
+ * order, and returns the first that answers a grant-time re-probe (P-02) --
+ * or `null` once every candidate has been tried and none answered, letting
+ * the caller fall through to a cold launch (P-03). Regardless of
+ * `record.reason`: per D-07, a waiting request takes an instance whichever
+ * reason booted it, so a warm spare and a not-yet-granted instance are
+ * equally eligible. Kill-never-recycle needs no separate guard here --
+ * handleRelease() below already deletes a released instance's record
+ * outright, so a released instance is structurally absent from
+ * `state.instances` and can never be a candidate.
+ *
+ * A candidate whose grant-time probe FAILS is dropped and identity-
+ * verified-killed before the walk continues to the next candidate --
+ * read-a-record-is-bookkeeping, a probe-that-answers-now is evidence (the
+ * todo's own wording this decision comes from). The marker is set BEFORE
+ * any signal reaches the child (markDeliberateDeath()'s own contract), with
+ * a FALSE respawn-after-kill answer -- this arm never wants a replacement
+ * on the SAME port; a replacement, if any, comes from either the next
+ * candidate in this same walk or the caller's own cold-launch fall-through.
+ *
+ * Re-checks `record.state === "ready"` immediately after every `await` (the
+ * probe call itself) and BEFORE ever treating a probe-live candidate as the
+ * winner -- this is what makes the caller's own "no await between selection
+ * and the grant-recording step" property (T-01.6.2.1-03) actually hold
+ * under two concurrent acquires: a candidate's own probe response cannot
+ * change because a sibling acquire granted it first, but its RECORDED state
+ * does, the instant that sibling's synchronous grant step runs -- and that
+ * recorded state is the only signal this function is willing to trust. */
+async function selectWarmInstance(
+  state: BrokerState,
+  deps: {
+    probe: (port: number) => Promise<ProbeOutcome>;
+    kill: (opts: { pid: number | null; expectedIdentity: string }) => Promise<KillStage>;
+    log: (line: string) => void;
+  },
+): Promise<InstanceRecord | null> {
+  for (const record of Array.from(state.instances.values())) {
+    if (record.state !== "ready") continue;
+
+    const outcome = await deps.probe(record.port);
+
+    // Claimed by a concurrent acquire while this probe was in flight -- not
+    // a candidate any more, and never a failure to log or kill over.
+    if (record.state !== "ready") continue;
+
+    if (outcome.ready) {
+      return record;
+    }
+
+    markDeliberateDeath(record, false);
+    state.instances.delete(record.port);
+    const killStage = await deps.kill({ pid: record.pid, expectedIdentity: record.expectedIdentity });
+    // Distinct wording from shutdown()'s own "shutdown complete" line
+    // (broker-kill.mts) and from handleRecycleForRealBroker's own log-free
+    // path -- D-07's standing constraint that a lifecycle decision must be
+    // reconstructable from the log after an incident (both 2026-08-01 and
+    // 2026-08-02 were diagnosed from broker log lines).
+    deps.log(
+      `vice-broker: grant-time probe failed for port ${record.port} (pid ${record.pid ?? "null"}) -- dropped the record and identity-verified-killed the pid (kill stage: ${killStage})`,
+    );
+  }
+  return null;
+}
+
+/** Resolves a GRANTABLE instance -- a cold launch is one of two ways of
+ * obtaining one, not the only one (this task's own assumption-delta
+ * decision: "resolve a grantable instance" is now the primary operation).
+ * The warm-instance selection arm (selectWarmInstance(), P-01) runs BEFORE
+ * the cold-launch arm; `atCapacity()` runs before EITHER arm, so a full host
+ * refuses before ever walking the pool or touching the port allocator.
+ * Both arms converge on exactly ONE `state.grants.set()` call -- load-
+ * bearing for task 2's structural anti-regression gate, which counts it --
+ * fed by whichever arm produced a record. Answers the full discriminated
+ * AcquireOutcome (plan 05): `at_capacity` when the instance ceiling is
+ * already reached, `no_free_port`/`launch_in_flight` passed straight
+ * through from acquirePortAndLaunch()'s own typed failure (the cold arm
+ * only), and `internal` only for a genuine, otherwise-unclassified fault. A
  * `launch_in_flight` outcome is NOT a control-plane error -- broker-
  * control.mts's own attemptAcquire()/enqueueAcquire() queue the request and
  * retry it later rather than refusing it. */
-async function handleAcquire(requestId: string, stateDir: string, state: BrokerState): Promise<AcquireOutcome> {
+export async function handleAcquire(requestId: string, stateDir: string, state: BrokerState, deps: HandleAcquireDeps = {}): Promise<AcquireOutcome> {
   if (atCapacity(state)) {
     return { ok: false, reason: "at_capacity" };
   }
 
-  // acquirePortAndLaunch() holds the single in_flight owner across its own
-  // async port allocation (not merely tryLaunchOne()'s synchronous spawn
-  // instant) -- see that function's own header comment for the race this
-  // closes between a cold acquire and a concurrent warm-floor pass. This
-  // is also what restores vice-broker.sh's own process_requests() throttle:
-  // a cold acquire that arrives while ANY launch (cold or warm) is already
-  // under way is queued here (plan 05), matching the bash original's
-  // declined-to-change behaviour of never racing a second instance into
-  // existence, but answered LATER instead of refused outright.
-  let lastLogRelPath = "";
-  const result = await acquirePortAndLaunch("acquire", {
-    state,
-    stateDir,
-    allocatePort: nextFreePort,
-    spawnFactory: (port: number) => {
-      const supervisorDir = join(stateDir, String(port));
-      const { spawn, logRelPath } = makeLoggingSpawn(join(supervisorDir, "logs"));
-      lastLogRelPath = logRelPath;
-      return withCrashSupervision("acquire", port, spawn, superviseDepsFor(stateDir, state));
-    },
-  });
+  const probe = deps.probe ?? ((port: number) => probeReady(port));
+  // Textually a verifiedKill( call site, not merely a reference -- reused
+  // UNCHANGED from broker-kill.mts (Phase 01.6.2 criterion 6), never
+  // re-derived, and never replaced by a bare process.kill().
+  const kill = deps.kill ?? ((opts: { pid: number | null; expectedIdentity: string }) => verifiedKill(opts));
+  const log = deps.log ?? ((line: string) => process.stderr.write(`${line}\n`));
 
-  if (!result.ok) {
-    return { ok: false, reason: result.reason };
+  const winner = await selectWarmInstance(state, { probe, kill, log });
+
+  let record: InstanceRecord;
+  if (winner) {
+    record = winner;
+  } else {
+    // acquirePortAndLaunch() holds the single in_flight owner across its own
+    // async port allocation (not merely tryLaunchOne()'s synchronous spawn
+    // instant) -- see that function's own header comment for the race this
+    // closes between a cold acquire and a concurrent warm-floor pass. This
+    // is also what restores vice-broker.sh's own process_requests() throttle:
+    // a cold acquire that arrives while ANY launch (cold or warm) is already
+    // under way is queued here (plan 05), matching the bash original's
+    // declined-to-change behaviour of never racing a second instance into
+    // existence, but answered LATER instead of refused outright.
+    let lastLogRelPath = "";
+    const result = await acquirePortAndLaunch("acquire", {
+      state,
+      stateDir,
+      allocatePort: nextFreePort,
+      spawnFactory:
+        deps.buildColdSpawnFactory ??
+        ((port: number) => {
+          const supervisorDir = join(stateDir, String(port));
+          const { spawn, logRelPath } = makeLoggingSpawn(join(supervisorDir, "logs"));
+          lastLogRelPath = logRelPath;
+          return withCrashSupervision("acquire", port, spawn, superviseDepsFor(stateDir, state));
+        }),
+    });
+
+    if (!result.ok) {
+      return { ok: false, reason: result.reason };
+    }
+    if (result.record.pid === null) {
+      return { ok: false, reason: "internal" };
+    }
+    record = result.record;
+
+    // Only the cold-launch arm ever writes a FRESH epoch record -- the warm
+    // arm's winner already has one, written when it was warmed
+    // (maintainWarmFloorForRealBroker()'s own onLaunched hook), and
+    // rewriting it here would advance an epoch no restart caused, which the
+    // container-side assertSameMachine() would read as a machine change.
+    writeEpochForLaunch(record, lastLogRelPath);
   }
-  if (result.record.pid === null) {
-    return { ok: false, reason: "internal" };
-  }
-  const record = result.record;
 
-  writeEpochForLaunch(record, lastLogRelPath);
-
+  // THE single grant-recording step, fed by both arms above -- no `await`
+  // between resolving `record` (whichever arm produced it) and this
+  // synchronous pair, so two concurrent acquires can never both grant the
+  // SAME record (T-01.6.2.1-03; see selectWarmInstance()'s own re-check for
+  // the other half of that guarantee).
   state.grants.set(requestId, { id: requestId, port: record.port, grantedAt: Date.now() });
   record.state = "granted";
 
@@ -502,7 +625,7 @@ let lastWarmLaunchLogRelPath = "";
  * perspective -- the full shutdown wiring and the startup reap are plan
  * 04's; this task only needs release-on-close to actually tear the child
  * down. */
-function handleRelease(requestId: string, state: BrokerState): void {
+export function handleRelease(requestId: string, state: BrokerState): void {
   const grant = state.grants.get(requestId);
   if (!grant) return;
   const instance = state.instances.get(grant.port);

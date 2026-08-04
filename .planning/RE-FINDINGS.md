@@ -3014,3 +3014,67 @@ fallback for a session whose `vice_diagnose` cannot answer.
 It deliberately does **not** restate the tool schemas — that is the failure that deleted
 `vice-mcp-selector` — and it ships no script, because a helper that reached the emulator is the
 failure that deleted `c64-ram-capture`'s original `scripts/`.
+
+### 2026-08-04 — a subsystem can be correctly built, exhaustively unit-tested, and never consulted by the entry point that is supposed to use it — a fully green suite reports nothing wrong, and this is now the second occurrence
+
+**Type:** hazard
+**Evidence:** two independent, live occurrences in the SAME subsystem (`.claude/mcp/vice`), each
+reproduced directly in this container rather than inferred from documentation:
+
+1. **01.6.2 plan 12's crash supervisor** (already logged above, 2026-08-04, "Plan 12 Task 3: a
+   complete, exhaustively unit-tested module can be dead code..."): `broker-launch.mts`'s
+   `superviseChild()` was built and exhaustively unit-tested in plan 03, then never imported or
+   called anywhere in `vice-broker.mts` for two whole plans and a full phase verification pass.
+   368 tests passed the whole time.
+2. **This plan's own Defect 5** (`.planning/todos/pending/2026-08-01-vice-broker-spare-warming-and-stale-grant-defects.md`,
+   found while building 01.6.2's own test ledger on 2026-08-04): `broker-launch.mts`'s
+   `maintainWarmFloor()` — the warm-instance pool, correctly built and unit-tested — was never
+   consulted by `handleAcquire()`, the real acquire entry point in `vice-broker.mts`. Every
+   acquire cold-launched regardless of how many probe-live "ready" instances sat in the pool,
+   from the moment the warm floor was built through 390 passing tests (385 pass / 0 fail / 5
+   todo) and a full 01.6.2 seal. Reproduced as a RED unit test in `vice-broker-acquire.test.ts`
+   BEFORE this plan's own fix landed: against the pre-fix `handleAcquire()` (which was not even
+   exported), all five new unit tests failed with `TypeError: handleAcquire is not a function` /
+   `TypeError: handleRelease is not a function` — the strongest possible confirmation that the
+   warm-instance selection arm was not merely buggy but structurally absent from the entry point's
+   own reachable surface.
+
+Two independent occurrences in one subsystem, both caught only after a full green suite, make this
+a **pattern**, not an accident.
+
+**What detects it (the reusable part):** a unit test cannot, by construction — a unit test injects
+the very dependency (the module under test) whose absence from the real caller is the bug, so a
+green unit-test run proves the unit behaves, never that the real entry point reaches it. Two
+techniques actually work, and both are now landed in this subsystem for the warm-floor case
+(mirroring the crash-supervisor case's own pair):
+
+1. **An end-to-end test against the real, assembled artifact** — `broker-e2e.test.ts`'s "wired
+   warm floor: an acquire over the real control plane with one probe-live warm instance ready is
+   served from it and spawns no second instance" spawns the REAL emitted `resources/vice-broker.mjs`
+   under bare `node`, warms a real (stubbed-emulator) spare through the real periodic evaluation
+   pass, sends one real `acquire` over the real TCP control plane, and asserts the grant names the
+   already-existing instance with no second instance directory appearing. This is the only test
+   shape that can observe "the assembled system reaches the module," because it never injects the
+   module under test — it drives the real caller.
+2. **A structural assertion that the real entry point names the thing** — `broker-launch.test.ts`'s
+   new "structural: vice-broker.mts records a grant in exactly one place, and its real acquire
+   entry point invokes the warm-instance selector by name" greps the real entry point's own
+   comment-stripped source for an actual call site (`await selectWarmInstance(`), distinguished
+   from the selector's own declaration, and was proved live to fail (0 !== 1) when the call site
+   was temporarily removed, then pass again when it was restored. This is the cheap, standing form
+   of the crash-supervisor case's own diagnostic grep (`grep -c superviseChild vice-broker.mts`),
+   promoted to a test the moment it existed rather than left as a one-off diagnosis.
+
+**Confidence:** HIGH for both occurrences and both detection techniques — all four are reproduced
+directly in this container (grep counts before/after, RED-then-GREEN unit test runs, a real
+spawned broker artifact under a real TCP connection), not inferred from documentation or plan
+prose.
+
+**Saves:** the diagnosis cost this log already paid once (2026-08-04, Plan 12 Task 3 entry above)
+would otherwise be paid a second time from scratch by whoever next finds a correctly-built,
+correctly-unit-tested module in this subsystem with zero effect on the running broker. Recording
+the SECOND occurrence in the same entry, rather than a fresh one, is what turns "this happened
+once" into "this is a pattern this subsystem produces, and here are the two techniques that catch
+it every time" — the generalised wiring-assertion technique already logged above (2026-08-04,
+"the wiring-assertion technique") is the same move this entry's own structural gate applies a
+second time.
