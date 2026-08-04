@@ -2442,3 +2442,52 @@ structural gate anywhere in this codebase and reaches for the established `grep 
 idiom by reflex — that idiom is correct for whole-line `//` comments only, and silently
 under-strips any `/** ... */` JSDoc block that happens to mention the counted token, which is
 precisely the self-invalidation failure mode a count gate exists to avoid.
+
+### 2026-08-04 — Plan 13: a single boolean silently answering two orthogonal questions is a latent defect that stays dormant only while one of the two questions has no second answer
+
+**Finding:** `InstanceRecord.deliberateKill` (`broker-state.mts`) originally answered two
+different questions with one boolean: "did the broker order this death?" and "should a
+replacement follow?" This was harmless for the whole of plans 02–11 because there was only ever
+ONE kind of broker-ordered death in the shipped broker — a release, whose answer to the second
+question is always "no" — so with no second answer ever in play, the conflation had nothing to
+expose. The moment plan 12 wired real crash supervision into the real broker, the conflation
+became live: had this plan wired respawn-on-recycle by simply reusing `deliberateKill` without a
+second field, the exit handler would have had no way to tell a recycle (wants a replacement)
+apart from a release (wants none) — every release would have been misread as a recycle candidate
+the instant the marker's meaning was silently stretched to also mean "replace it," breaking
+kill-never-recycle for every release in the broker, not merely failing to add recycle's own new
+path.
+
+**The detector:** whether the two call sites that set the marker — the recycle handler and the
+release handler in `vice-broker.mts` — want the SAME value for the second question. They do not:
+recycle wants `true`, release wants `false`. That is exactly why the fix splits the question at
+the type level into two fields (`deliberateKill`, narrowed to the first question only, and a new
+`respawnAfterKill` for the second) set together by one shared setter (`markDeliberateDeath()`),
+rather than widening `deliberateKill` itself into a tri-state value, or leaving a second, silently
+competing boolean for a future maintainer to reconcile by hand. A structural test
+(`broker-control.test.ts`) now holds this apart permanently: it asserts, region-scoped to each
+handler's own body, that the setter precedes the kill call and that the two call sites pass
+opposite `respawnAfterKill` answers.
+
+**What it saves:** this plan's own release end-to-end test
+(`broker-e2e.test.ts#"wired release: a release over the real control plane kills the granted
+child and no replacement appears -- kill-never-recycle holds with supervision wired"`) is what
+would have caught this exact regression if the fields had been conflated — but only AFTER the
+fact, on a green suite that had already shipped the conflated marker. Splitting the question at
+the type level means a future maintainer adding a THIRD kind of broker-ordered death cannot
+reintroduce this conflation without either the structural gate above or a call site visibly
+passing the same `respawnAfterKill` answer for two semantically different deaths — both are things
+a code reviewer can actually see, unlike a single boolean whose second meaning was only ever
+implicit in the reader's head.
+
+**Evidence:** derived from this plan's own design work (`01.6.2-13-PLAN.md`'s
+`assumption_delta_decision` block, itself written before any code existed) and confirmed live
+against the wired broker in this container: both new end-to-end tests
+(`broker-e2e.test.ts#"wired recycle: ..."` and `broker-e2e.test.ts#"wired release: ..."`) pass
+against the real spawned broker artifact with the split fields in place, and the structural gate
+in `broker-control.test.ts` passes asserting the two handlers pass opposite `respawnAfterKill`
+answers to the one shared setter.
+
+**Confidence:** HIGH — the conflation and its fix are both directly observable in the diff this
+plan produced, and the two end-to-end tests exercise the exact failure mode (a release respawning)
+the conflation would have caused.
