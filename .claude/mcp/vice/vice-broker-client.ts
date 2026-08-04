@@ -187,7 +187,21 @@ export interface AcquireOverControlPlaneHandle {
   release: () => void;
 }
 
-export const CONTROL_ACQUIRE_TIMEOUT_MS: number = Number(process.env.VICE_BROKER_ACQUIRE_TIMEOUT_MS || 25000);
+/** P-08 (01.6.2.1-04-PLAN.md): default raised from 25000 to 120000. The
+ * knob (VICE_BROKER_ACQUIRE_TIMEOUT_MS) is unchanged -- an explicitly
+ * configured value keeps working exactly as before.
+ *
+ * Counter-evidence, recorded here rather than only in the plan: at the
+ * measured sub-second cold-launch boot (spike-003), the OLD 25000 ms value
+ * already implied a cliff far past what the instance ceiling would ever
+ * force -- so this raise is robustness headroom for a slow or contended
+ * host, not an unblocking of any wave-width constraint. .mcp.json's own
+ * `timeout` field is raised to 150000 in the same commit (see the ordering-
+ * invariant test in vice-proxy.test.ts), keeping this deadline strictly
+ * less than the MCP client's own configured timeout -- so a waiting caller
+ * always sees this module's warming-and-retry diagnostic rather than the
+ * client's generic timeout. */
+export const CONTROL_ACQUIRE_TIMEOUT_MS: number = Number(process.env.VICE_BROKER_ACQUIRE_TIMEOUT_MS || 120000);
 
 /** Reads broker.json ONCE for control_host/control_port/control_token,
  * opens ONE TCP connection, sends a single `acquire` request framed as one
@@ -317,10 +331,10 @@ export function acquireOverControlPlane(dir: string = brokerRootDir()): Promise<
  * referenced directly (not re-computed from the env var a second time) so
  * the two can never drift apart. This is "the relocated value of the
  * retiring grant-poll timeout" per 01.6.2-01-PLAN.md's own environment
- * variable table (VICE_BROKER_ACQUIRE_TIMEOUT_MS, default 25000) -- carried
- * forward unchanged, not re-tuned. Choosing a final value against the
- * measured tool-call budget is explicitly Phase 01.6.2.1's item, not this
- * plan's. */
+ * variable table (VICE_BROKER_ACQUIRE_TIMEOUT_MS, default now 120000, raised
+ * from 25000 per P-08 / 01.6.2.1-04-PLAN.md, against the measured tool-call
+ * budget spike-003 established -- see the counter-evidence comment at
+ * CONTROL_ACQUIRE_TIMEOUT_MS's own declaration above). */
 export const ACQUIRE_TIMEOUT_MS: number = CONTROL_ACQUIRE_TIMEOUT_MS;
 
 /** The recycle bound. Plan 06 referenced the (now-deleted) retiring
