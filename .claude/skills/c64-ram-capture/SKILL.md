@@ -16,6 +16,7 @@ and name the offending address when it is wrong.
 ```bash
 P=tools/d64-parse.mjs                            # from the repo root
 A=tools/dump-artifacts.mjs
+C=.claude/skills/c64-ram-capture/scripts/compare.mjs
 
 node $P directory --image disks/danish.d64       # what's on the disk (--json flags faked entries)
 node $P bam       --image disks/danish.d64       # disk name, DOS type, occupied track ranges
@@ -23,10 +24,14 @@ node $A assemble  --chunks chunks.json           # size + digest, writes nothing
 node $A write-set --release danish --label gameentry-run1 \
                   --chunks chunks.json --raw raw.json    # the four committed artifacts
 node tools/releases.mjs list                     # the valid --release ids
+
+node $C digest  dump.bin                         # sha256 + size, for the capture record
+node $C compare a.bin b.bin                      # classify every difference, exit 1 on FAIL
+node $C floor   a.bin b.bin c.bin                # drift floor across a capture set
 ```
 
-Both modules read only committed files and the JSON **you** wrote from your own
-`mcp__vice__*` calls. They contact nothing.
+All three modules read only committed files and the JSON **you** wrote from your
+own `mcp__vice__*` calls. They contact nothing.
 
 ## The order
 
@@ -173,21 +178,65 @@ same epoch to accept the capture. Report a changed epoch to void it.
 
 ## Compare two captures
 
-Compare two 65536-byte images address by address.
+Do not classify differences by hand — `scripts/compare.mjs` applies the rules
+identically every time, and exits 1 on a FAIL so a script can gate on it:
 
-- Treat differences at `$0000`–`$0001`, `$0100`–`$01FF` and `$0200`–`$03FF` as
-  volatile. Count them, exclude them from the verdict, and report the count.
-- Treat a difference of exactly one bit as drift. List each one with its address
-  and both values, and report them as candidates.
-- Treat a difference of two or more bits as a real divergence. List each one with
-  its address and both values. Any such difference fails the comparison.
+```bash
+node $C compare recovery/danish/dumps/danish-gameentry-run{2,3}.bin
+```
 
-Report the verdict as pass or fail, with all three lists attached.
+```
+A  danish-gameentry-run2.bin  sha256 741213dcd1beb548b8896737f9f07e867c718dabeb56238862b9f3020e4902d2
+B  danish-gameentry-run3.bin  sha256 ee3813322127b7bedf97abf3dd6ffcebb80c937f8b75dfe471c886fb36975573
 
-**Establish a drift floor** by capturing the power-on image as the very first
-action against a fresh machine. Then run the machine idle, capture, run idle
-again, capture again, and compare. Report every address that differed as that
-machine's drift floor. State it as a floor, not a complete set.
+volatile (excluded from the verdict): 100
+  $020A  $9E %10011110  ->  $8E %10001110   1 bit
+  … 99 more (--limit 0 for all)
+
+drift — exactly one bit, reported as candidates: 61
+  $CC03  $00 %00000000  ->  $20 %00100000   1 bit
+  … 60 more (--limit 0 for all)
+
+DIVERGENCE — two or more bits, fails the comparison: 0
+
+total differing addresses: 161 of 65536
+
+VERDICT: PASS
+Drift candidates present — pass, but record them with the capture.
+```
+
+The three classes:
+
+| Class | Rule | Effect on the verdict |
+|---|---|---|
+| volatile | `$0000-$0001`, `$0100-$01FF`, `$0200-$03FF`, **`$D000-$DFFF`** | counted and listed, never fails |
+| drift | exactly one bit differs | listed as a candidate, passes |
+| divergence | two or more bits differ | listed, **fails** |
+
+**`$D000-$DFFF` is volatile because it is I/O, not RAM.** The VIC's registers
+repeat every `$40` across `$D000-$D3FF` and the SID's across `$D400-$D7FF`, so
+reading that range samples live hardware and two captures can never agree there.
+Omitting it is what made the earlier hand-applied rule fail five of the six
+committed gameentry pairings on `$D344`, `$D625` and `$D628` — differences that
+were guaranteed. Region first, bit-count second.
+
+`$E000-$FFFF` (RAM under KERNAL ROM when HIRAM = 0) is deliberately **not**
+excluded. `$FAD8` and `$FC51` do differ across captures, but only two addresses
+out of 8192 — too few for power-on garbage, and unexplained. They still fail, and
+what writes them is an open question. Evidence and grading:
+`.planning/RE-FINDINGS.md`, 2026-08-04.
+
+**Establish a drift floor** with `floor` across every capture of one checkpoint.
+It reports each address that differed in any pairing, with the distinct values
+seen:
+
+```bash
+node $C floor recovery/saeger/dumps/saeger-gameentry-run{1,2,3}.bin
+```
+
+Capture the power-on image as the very first action against a fresh machine, then
+idle-capture twice more and run `floor` over the set. State the result as a
+floor, not a complete set — more captures can only widen it.
 
 ## Which skill does what
 
@@ -200,6 +249,18 @@ This one owns the image and its identity. It does not restate what the others ca
 | What a specific address or bit means | `c64-memory-mapping` — `node … lookup '$D018'` |
 | Assembling, or a first-pass dead listing | `acme-build` |
 | **A verified 64K image, or proving two captures equivalent** | here |
+
+## References
+
+What this skill ships, and the committed modules it leans on. No `references/`
+split: the workflow fits in one file, which is the right call when it does.
+
+| Path | Covers |
+|---|---|
+| `scripts/compare.mjs` | Difference classification and the drift floor. Pure logic over captures you already have — `node $C` with no arguments prints the rules. |
+| `templates/capture-record.template.md` | The per-capture record: identity, machine state read in the same paused window, the void checklist, and the per-pairing comparison table. |
+| `tools/d64-parse.mjs` | `.d64` directory, BAM, and `--json` fakery detection. Fixture-tested against both real images by `tools/d64-parse.test.mjs`. |
+| `tools/dump-artifacts.mjs` | `assemble` / `chip-state` / `manifest` / `write-set` — the guarded byte work, and the source of every `assembleImage:` message in the table below. |
 
 Findings that make RE faster go in `.planning/RE-FINDINGS.md` **at the moment you
 find them**, graded with `Evidence:` and `Confidence:`. Promote by re-logging with
@@ -216,6 +277,9 @@ through a GSD command (`/gsd-quick`).
 | `unknown release "x" -- known releases: danish, saeger` | The `--release` id is not in `recovery/RELEASES.json`. The error names the valid ids; it throws before writing anything. |
 | A fresh `.map.json` says `classification_state: "bucketed"` | Wrong — a fresh capture is `"ranges-only"`. The provenance diff sets `"bucketed"`, nothing else. |
 | The checkpoint never fired | Most state reads pause the emulator. Resume exactly once, at the end, after every read. |
-| Two captures of the same checkpoint differ | Expected. Full-64K identity is impossible in principle; apply the drift rules above. |
+| Two captures of the same checkpoint differ | Expected. Full-64K identity is impossible in principle; run `compare` and read the verdict rather than judging by eye. |
+| `compare` fails on an address in `$D000`-`$DFFF` | It cannot — that range is volatile. If you are seeing this, you applied the rules by hand; use `scripts/compare.mjs`. |
+| `compare` fails on `$FAD8` or `$FC51` only | Known and unexplained: RAM under KERNAL ROM, two addresses out of 8192. Record it with the capture rather than voiding a set that is otherwise clean. |
+| `--limit 0` printed nothing | Fixed 2026-08-04 — it now means unlimited. Re-pull the script if you see the old behaviour. |
 | The epoch changed mid-capture | The machine restarted under you. Void the run; do not salvage the artifacts. |
 | The emulator looks dead | Enumerate armed checkpoints before anything else — see `c64-program-recon`'s hazards. |

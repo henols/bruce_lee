@@ -2652,3 +2652,82 @@ registry is genuinely absent, not that the caller was in the wrong directory. Pa
 resolved against the caller's cwd; the repo-relative data files are not.
 
 **Confidence:** HIGH — the false rule was tested and disproved in this container before shipping.
+
+### 2026-08-04 — HAZARD: `c64-ram-capture`'s volatile-span list omits `$D000-$DFFF`, so its own comparison rule fails 5 of 6 pairings of this project's verified captures
+
+**Type:** hazard (a documented rule that gives the wrong answer), plus a confirmation of where
+capture non-determinism actually lives.
+**Evidence:** mechanical, no emulator. `.claude/skills/c64-ram-capture/scripts/compare.mjs`
+(written during quick task 260804-bux) implements the three classification rules exactly as
+`c64-ram-capture/SKILL.md` states them — volatile spans `$0000-$0001`, `$0100-$01FF`,
+`$0200-$03FF` excluded from the verdict; one differing bit is drift and passes; two or more bits
+is divergence and fails — then run over all six committed gameentry captures
+(`recovery/{danish,saeger}/dumps/*-gameentry-run{1,2,3}.bin`, all 65536 bytes, all six sha256s
+matching their committed `.capture.json` manifests, which independently validates the reader).
+
+Result — **five of the six pairings FAIL** under the skill's own documented rule:
+
+| pairing | volatile | drift | divergence | verdict |
+|---|---|---|---|---|
+| danish run1 vs run2 | 195 | 142 | 1 | FAIL |
+| danish run1 vs run3 | 164 | 130 | 2 | FAIL |
+| danish run2 vs run3 | 35 | 126 | 0 | PASS |
+| saeger run1 vs run2 | 139 | 104 | 1 | FAIL |
+| saeger run1 vs run3 | 14 | 113 | 2 | FAIL |
+| saeger run2 vs run3 | 133 | 105 | 1 | FAIL |
+
+**Every divergence, across all pairings, sits at one of five addresses**, and each falls in a
+region that cannot be stable:
+
+- `$D344` — VIC-II register **image** (the VIC's 47 registers repeat every `$40` across
+  `$D000-$D3FF`).
+- `$D625`, `$D628` — SID **images** (`$D500-$D7FF`). This project already relies on `$D41B`
+  changing every cycle as its RNG, which is the same mechanism.
+- `$FAD8`, `$FC51` — RAM under KERNAL ROM (`$E000-$FFFF`, live as RAM because `$01 = $40`,
+  HIRAM 0).
+
+**The finding:** `$D000-$DFFF` is not RAM. Reading it samples live hardware, so two captures of
+the same checkpoint can never agree there, and the skill's volatile list omitting that range
+means its rule condemns good captures. Region classification, not bit-count, is what decides
+whether a difference matters — a 2-bit difference at `$D625` is meaningless and a 1-bit
+difference in game code is not, which is the exact inverse of what the documented rule says.
+
+**Confidence: HIGH** for the `$D000-$DFFF` half — that reading register images is
+non-deterministic is structural, and the addresses land on documented image ranges (resolved via
+`c64-memory-mapping`'s `lookup`).
+**Confidence: MEDIUM** for the `$E000-$FFFF` half — the two addresses are consistent with
+uninitialised RAM under ROM, but **only two addresses out of 8192 differ**, which is far too few
+for power-on garbage and is not yet explained. Do not treat `$E000-$FFFF` as blanket-volatile on
+this evidence; `$FAD8` and `$FC51` deserve a look at what writes them.
+
+**Saves / costs:** stops a reviewer voiding a sound three-run capture set over hardware register
+reads, and redirects the comparison rule from bit-counting toward region classification. The
+cost of not knowing it is a re-capture cycle that cannot converge, because no number of retries
+makes a SID image hold still.
+
+### 2026-08-04 — follow-up to the same hazard: excluding `$D000-$DFFF` moves 3 of 6 pairings to PASS, and isolates the remaining failure to two unexplained addresses
+
+**Type:** confirmation of the fix for the entry immediately above, plus a sharpened open question.
+**Evidence:** `compare.mjs`'s `VOLATILE` table extended with `$D000-$DFFF`, then all six committed
+gameentry pairings re-run. No emulator.
+
+| pairing | volatile | drift | divergence | verdict |
+|---|---|---|---|---|
+| danish run1 vs run2 | 271 | 66 | 1 (`$FAD8`) | FAIL |
+| danish run1 vs run3 | 235 | 61 | 0 | **PASS** |
+| danish run2 vs run3 | 100 | 61 | 0 | **PASS** |
+| saeger run1 vs run2 | 197 | 46 | 1 (`$FC51`) | FAIL |
+| saeger run1 vs run3 | 72 | 56 | 1 (`$FC51`) | FAIL |
+| saeger run2 vs run3 | 189 | 50 | 0 | **PASS** |
+
+PASS count goes 1 → 3, and **every remaining failure is one of exactly two addresses** — `$FAD8`
+on danish, `$FC51` on saeger — both in RAM under KERNAL ROM. Each is per-release, not shared.
+
+**The open question, now precise enough to answer cheaply:** what writes `$FAD8` (danish) and
+`$FC51` (saeger)? Two addresses out of 8192 is not power-on garbage. `vice_watch_add` on each
+address finds the writer, which is the leverage `c64-program-recon` names for exactly this shape.
+Until then `$E000-$FFFF` stays non-volatile so the failure keeps surfacing rather than being
+buried under a blanket exclusion.
+
+**Confidence:** HIGH for the verdict table (mechanical, reproducible from committed files).
+MEDIUM for "these two are benign" — untested, and the reason the range was not excluded.
