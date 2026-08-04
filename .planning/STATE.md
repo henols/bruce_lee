@@ -4,11 +4,11 @@ milestone: v1.1
 milestone_name: insertion note
 current_phase: 01.6.2
 current_phase_name: the-one-process-host-broker
-status: executing
-stopped_at: "Phase 01.6.2 context gathered — scope changed: Phase 01.7 merged in, Phase 01.5 folded in. ROADMAP amendments required BEFORE /gsd-plan-phase 01.6.2 (see CONTEXT.md § ROADMAP amendments required)."
-last_updated: "2026-08-03T21:54:27.190Z"
-last_activity: 2026-08-03
-last_activity_desc: Phase 01.6.2 execution started
+status: executed_gaps_found
+stopped_at: "Phase 01.6.2 EXECUTED (11/11 plans, all merged to main) but NOT SEALED — verification returned gaps_found at 16/20. Four gaps, all provable from wiring without a live emulator: (1) superviseChild() is never called by vice-broker.mts, so crash-respawn is unreachable; (2) vice_recycle kills without respawning, contradicting its own tool description; (3) attemptAcquire() leaks a real launch for an already-abandoned connection; (4) 01.6.2-VALIDATION.md ledger row 51 mis-dispositions the recycle-respawn test. Next: /gsd-plan-phase 01.6.2 --gaps"
+last_updated: "2026-08-04T06:30:00.000Z"
+last_activity: 2026-08-04
+last_activity_desc: "Phase 01.6.2 executed end to end — 11 plans / 11 waves, both blocking checkpoints resolved by the developer (wire format as-specified; four-file deletion approved). Bash host daemon replaced by an in-process TypeScript broker + TCP control plane; file protocol deleted; 5,530 lines of bash retired; exactly one shell script left in the module. Suite 275 -> 368 (363 pass, 0 fail, 0 skipped, 5 todo). Code review: 2 critical / 4 warning / 1 info. Verification: gaps_found 16/20 — phase NOT complete."
 progress:
   total_phases: 11
   completed_phases: 4
@@ -30,8 +30,30 @@ See: .planning/PROJECT.md (updated 2026-07-31)
 ## Current Position
 
 Milestone: **v1.1 — Emulator Access Hardened** *(inserted 2026-08-02, ahead of the rest of v1.0)*
-Phase: 01.6.2 (the-one-process-host-broker) — EXECUTING
-Next: 01.6.2 (the one-process host broker) — **PLANNED, ready to execute: 11 plans, 11 sequential waves.** `/gsd-execute-phase 01.6.2`. Plans 01 and 11 are non-autonomous (each carries a blocking `checkpoint:decision` — the control-plane wire format, and the four-file deletion). Then 01.6.2.1, which still needs planning.
+Phase: 01.6.2 (the-one-process-host-broker) — **EXECUTED 11/11, VERIFIED 16/20, NOT SEALED**
+Next: **`/gsd-plan-phase 01.6.2 --gaps`** — four gaps in `01.6.2-VERIFICATION.md`, structured in its YAML frontmatter. Then 01.6.2.1, which still needs planning.
+
+**The four gaps share one root and one shape.** `superviseChild()` — the crash-respawn supervisor
+with backoff and give-up — was built and unit-tested in plan 03, but `vice-broker.mts` was outside
+that plan's `files_modified`, so it was never wired in, and no later plan picked it up. Plan 03's
+SUMMARY stated the boundary honestly at the time; the miss is that nothing owned closing it.
+Everything downstream follows: `vice_recycle` kills without respawning (contradicting its own tool
+description), a crashed emulator leaves a ghost record holding a port and a capacity slot forever,
+and `01.6.2-VALIDATION.md` ledger row 51 dispositions the retiring suite's "recycle respawns" test
+as RE-OBSERVED against tests that never observe it in the shipped broker. `WR-01` compounds it:
+`handleRelease()`/`handleRecycleForRealBroker()` never set the `deliberateKill` marker — dormant
+**only because** the supervisor is unwired, so fixing the wiring alone would make every deliberate
+release respawn. **Fix them together.**
+
+**This is the phase's own stated hazard arriving on schedule:** 368 tests pass, and the assembled
+system never reaches the code they prove. `broker-e2e.test.ts` has no kill-and-assert-respawn test;
+`broker-launch.test.ts` exercises `superviseChild()` in isolation — a function the real broker never
+calls. A gap plan should add the reaching test, not only the wiring.
+
+**Separately, and NOT part of the gap set:** `WINDOWS.md` id 3 — `handleAcquire()` never grants from
+`maintainWarmFloor()`'s warm pool, so every acquire is a cold launch and the warming machinery feeds
+nothing. Found by plan 10 while building the ledger, filed as Defect 5 in the spare-warming todo.
+It belongs to **01.6.2.1** (criterion M), not here.
 Execution order within v1.1 is **01.6 → 01.6.1 → 01.6.2 → 01.6.2.1 → 01.6.3 → 01.4 → 01.3**, not numeric order.
 
 **Phases 01.5 and 01.7 are ABSORBED into 01.6.2 (2026-08-03) and no longer run.** Their ROADMAP
