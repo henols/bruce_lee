@@ -30,6 +30,7 @@ handler is known, because that is where most chip writes happen.
 
 | # | Question | Read | What the answer settles |
 |---|---|---|---|
+| 0 | Which of these bytes are even the game? | The manifest's buckets — `c64-provenance-diff` | Tracing a depacker's IRQ handler is wasted work. Scope before you trace |
 | 1 | Where does execution start? | Post-depack: wherever the PC sits at the decrunch checkpoint. There is no BASIC stub to find. | The one address everything else hangs off |
 | 2 | Which vector is live? | `$01`, then `$0314/$0315` **or** `$FFFE/$FFFF` | HIRAM (`$01` bit 1) decides. KERNAL out ⇒ the RAM vectors are meaningless |
 | 3 | What drives the frame? | `$D01A`, `$D012`, `$DC0D` | `$DC0D` untouched ⇒ raster IRQ; programmed ⇒ the game runs its own timebase |
@@ -38,6 +39,35 @@ handler is known, because that is where most chip writes happen.
 | 6 | Where is the graphics? | `$DD00` → `$D018` → mode bits → `$D015` → VM+`$03F8` | Every displayed byte, computed. Nothing to search for |
 | 7 | Where is the music? | Watch `$D404` | `init` runs once from main code; `play` runs once per frame from the IRQ |
 | 8 | Where is the input? | Reads of `$DC00`/`$DC01` | Games poll the matrix directly and ignore the KERNAL buffer |
+
+## Step 0 in full: only the game is in scope
+
+Every image taken from a cracked release carries three layers that are **not the game**, and no
+original master exists to strip them for you:
+
+| Layer | What it is | Dead when |
+|---|---|---|
+| **loader** | The custom raw-sector routine that bypasses the KERNAL | The payload is in RAM |
+| **cruncher / depacker** | The decompression stub | It has run once |
+| **cracktro** | The group's intro, scroller, credits, and the keypress gate that dismisses it | Dismissed |
+
+**The rule: a byte with nothing to do with the game is out of scope — always, not case by case.**
+It is not annotated, not reconstructed, and not traced. This is a standing default, not a
+per-session decision.
+
+**The evidence bar runs both ways, and this project has been burned in both directions.**
+
+- Removal needs *positive* evidence of the bucket: a crack-credit vocabulary match, a
+  `RELEASES.json` `loader_ranges` entry earned from live disassembly, or a depacker stub provably
+  dead after first run. A bare printable-ASCII scan classified **the game's own title text** as
+  cracktro credit and would have shipped a confidently-wrong `CRACKER-PATCH` verdict.
+- Absence of evidence records `UNKNOWN` and **keeps the bytes**. The
+  `DATASOFT PRESENTS` / `DIABOLO  PRESENTS` divergence at `$4771-$4779` sits in a region that is
+  neither loader nor cracktro — a cracker edit inside the game's own data. Stripping only the
+  obvious intro screen leaves crack residue behind.
+
+`c64-provenance-diff` owns the machinery and the five kinds; do not re-derive them here. What
+belongs here is the ordering: **bucket first, then trace only what survives.**
 
 Then work **backwards from observable effects** rather than reading code sequentially — it is
 consistently faster. Watch writes to the sprite coordinates to find movement; watch `$D018` to find
@@ -58,20 +88,32 @@ $01 = $40 %01000000
   bit 2 CHAREN = 0  character ROM at $D000-$DFFF
 
 LIVE VECTOR PAIR: $FFFE/$FFFF (KERNAL banked OUT — the hardware vectors are live)
+CBM80 SIGNATURE:  absent — nothing catches a reset here
 
-vector        value   default  status
+## KERNAL IRQ/BRK/NMI ($0314-$0319)
+   DORMANT: KERNAL ROM banked out — nothing maintains these. Read it, do not act on it.
+vector        value   default   status
 $0314/$0315  $0101   $EA31   *** RETARGETED ***
+              CINV  — KERNAL IRQ (RAM, indirect)
 …
-$FFFE/$FFFF  $1103     --     RAM under ROM
+## Hardware vectors ($FFFA-$FFFF) — live when the KERNAL is banked out
+$FFFA/$FFFB  $1116     --     no default
+$FFFC/$FFFD  $1116     --     no default
+$FFFE/$FFFF  $1103     --     no default
+
+Non-default bytes in DORMANT blocks: 17. These are NOT diverted
+vectors. …
 ```
 
-Read it as: the KERNAL is banked out, so `$0314`'s `$0101` is **not** a retargeted vector but
-uninitialised RAM — ignore it. The live handler is `$1103`, and that is where to arm the first
-checkpoint.
+Read it as: the KERNAL is banked out, so the whole `$0300-$0333` range is **dormant** and `$0314`'s
+`$0101` is residue, not a retargeted vector — ignore it. The live handler is `$1103`, and that is
+where to arm the first checkpoint. `$FFFA` and `$FFFC` both holding `$1116` says the game installs
+its own NMI *and* RESET handlers, at one shared address.
 
-Both cracked releases give the same answer, and `$1103` is the same IRQ entry that phase-01 live
-work established independently (chain `$1103 → $1574 → $152C`). The method reproduces a known-good
-result from a static image with no emulator running. **Confidence: HIGH** for steps 1-2.
+Both cracked releases give the same answers across all three of their captures, and `$1103` is the
+same IRQ entry that phase-01 live work established independently (chain `$1103 → $1574 → $152C`).
+The method reproduces a known-good result from a static image with no emulator running, and the
+`$1116` pair is new — see `references/control-flow.md` § 2. **Confidence: HIGH** for steps 1-2.
 
 ## Before you touch the emulator
 
@@ -97,6 +139,7 @@ This one is the route between the stations. It does not restate what the others 
 | What a specific address or bit means | `c64-memory-mapping` — `node … lookup '$D018'` |
 | Assembling, or a first-pass dead listing | `acme-build` |
 | Whether a byte is original or cracker-changed | `c64-provenance-diff` |
+| The emulator stopped moving — wedged, self-trapped, or respawned | `vice-wedge-triage` |
 | **Which address to read next, and what the answer rules out** | here |
 
 ## References
