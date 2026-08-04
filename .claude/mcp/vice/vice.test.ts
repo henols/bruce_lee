@@ -10,8 +10,13 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { useInstance, serverInfo, activeInstance } from "./vice.ts";
+
+const HERE = dirname(fileURLToPath(import.meta.url));
 
 test("serverInfo() strips DENY_LIST tools from discovery: a server that advertises vice_disk_list yields a payload with no trace of it, in the object and in a JSON dump alike", async () => {
   // A stub speaking just enough MCP to answer initialize + tools/list. The
@@ -70,4 +75,50 @@ test("serverInfo() strips DENY_LIST tools from discovery: a server that advertis
     srv.close();
     useInstance(originalInstance);
   }
+});
+
+// ---------------------------------------------------------------------------
+// 01.6.2-09 (T-01.6.2-54): three of the four prose instructions that used to
+// tell an agent to run the retiring per-instance supervisor
+// (tools/vice-supervisor.sh) on the host live in this file -- rpc()'s
+// timeout catch, withReconnect()'s exhausted-retry throw, and
+// assertSameMachine()'s no-evidence throw. Driving any of them live would
+// mean forcing a real transport failure through the FULL retry-with-backoff
+// ladder (RECONNECT_BACKOFF_MS sums to 49s, none of it overridable by a
+// test), so each is asserted STRUCTURALLY instead -- the same idiom
+// vice-proxy.test.ts's own "structural: ..." tests already use for a
+// message builder's text without invoking it live. Each regex is scoped to
+// the SPECIFIC message text (not the whole file), because vice.ts's
+// EPOCH_FILE comment deliberately still names vice-supervisor.sh as an
+// out-of-scope, separately-tracked staleness (see the plan's own SUMMARY).
+// ---------------------------------------------------------------------------
+
+const VICE_TS_SRC = readFileSync(join(HERE, "vice.ts"), "utf8");
+
+test("structural: rpc()'s timeout-catch message names the surviving launcher and describes on-demand launch plus respawn", () => {
+  const match = VICE_TS_SRC.match(/`\$\{method\} timed out after[\s\S]*?\);/);
+  assert.ok(match, "expected to find rpc()'s timeout-catch ViceError message in vice.ts");
+  const msg = match![0];
+  assert.match(msg, /tools\/vice-launcher\.sh/, "must name the surviving launcher");
+  assert.doesNotMatch(msg, /vice-supervisor\.sh/, "must not still name the retiring per-instance supervisor");
+  assert.match(msg, /on[- ]demand/i, "must describe the broker's on-demand launch");
+  assert.match(msg, /respawn/i, "must describe the broker respawning a crashed instance");
+});
+
+test("structural: withReconnect()'s exhausted-retry message names the surviving launcher and describes on-demand launch plus respawn", () => {
+  const match = VICE_TS_SRC.match(/`\$\{toolName\} failed after[\s\S]*?\);/);
+  assert.ok(match, "expected to find withReconnect()'s exhausted-retry ViceError message in vice.ts");
+  const msg = match![0];
+  assert.match(msg, /tools\/vice-launcher\.sh/, "must name the surviving launcher");
+  assert.doesNotMatch(msg, /vice-supervisor\.sh/, "must not still name the retiring per-instance supervisor");
+  assert.match(msg, /on[- ]demand/i, "must describe the broker's on-demand launch");
+  assert.match(msg, /respawn/i, "must describe the broker respawning a crashed instance");
+});
+
+test("structural: assertSameMachine()'s no-evidence message names the surviving launcher", () => {
+  const match = VICE_TS_SRC.match(/a reconnect happened and identity could not be proven[\s\S]*?\);/);
+  assert.ok(match, "expected to find assertSameMachine()'s no-evidence MachineRestartedError message in vice.ts");
+  const msg = match![0];
+  assert.match(msg, /tools\/vice-launcher\.sh/, "must name the surviving launcher");
+  assert.doesNotMatch(msg, /vice-supervisor\.sh/, "must not still name the retiring per-instance supervisor");
 });

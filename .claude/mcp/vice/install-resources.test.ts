@@ -25,6 +25,7 @@ import {
   resourceEntries,
   installResources,
   ensureResourcesInstalled,
+  hostLaunchInstructions,
   DEPLOY_MANIFEST_NAME,
   deployManifestPath,
   readDeployManifest,
@@ -33,6 +34,7 @@ import {
   type InstallResourcesResult,
   type PruneResourcesResult,
 } from "./install-resources.ts";
+import { containerGuardReport, containerGuardEnforce } from "./container-guard.mts";
 
 const execFileP = promisify(execFile);
 
@@ -303,6 +305,55 @@ test("pruneResources(): an absolute-path manifest entry is refused and reported 
   assert.ok(result.skipped.includes(escapee), "expected an absolute-path entry to be refused and reported skipped");
   assert.equal(result.pruned.length, 0, "nothing should be pruned when the only retired candidate is an absolute path");
   assert.ok(existsSync("/etc/passwd"), "sanity: the real /etc/passwd must survive completely untouched");
+});
+
+// ============================================================================
+// Plan 01.6.2-09 (D-23, T-01.6.2-56): hostLaunchInstructions() used to
+// return TWO paragraphs -- one repointable (the broker launcher) and one
+// advertising a standalone (non-MCP) recovery pipeline whose own scripts
+// were already deleted behind a zero-consumers gate in an earlier phase
+// (01.6-CONTEXT.md D-02). That second paragraph is DELETED here, not
+// repointed -- swapping its path would keep advertising a capability that
+// no longer exists. This was never covered by a test before this plan.
+// ============================================================================
+
+test("hostLaunchInstructions(): contains exactly one resolved host path, names the surviving launcher, and advertises no standalone recovery pipeline", () => {
+  const root = mkdtempSync(join(tmpdir(), "vice-hostlaunch-"));
+  const text = hostLaunchInstructions(root);
+
+  // Counted by the launcher's own basename, not the full absolute path --
+  // hostPath() may translate installTargetDir(root) into a different HOST
+  // path (or degrade to the container path plus SET_ENV_HINT) depending on
+  // this test process's own mount view, but "vice-launcher.sh" survives
+  // either way as the resolved path's own final path segment.
+  const occurrences = (text.match(/vice-launcher\.sh/g) || []).length;
+  assert.equal(occurrences, 1, `expected exactly one resolved host path (naming vice-launcher.sh) in hostLaunchInstructions(), found ${occurrences}`);
+
+  assert.doesNotMatch(text, /vice-supervisor\.sh/, "must not still name the retiring per-instance supervisor");
+  assert.doesNotMatch(text, /vice-broker\.sh/, "must not still name the retiring bash broker by its own filename");
+  assert.doesNotMatch(text, /standalone/i, "must not advertise the standalone (non-MCP) recovery pipeline -- its scripts are already gone");
+  assert.doesNotMatch(text, /recovery pipeline/i, "must not advertise a recovery pipeline whose scripts no longer exist");
+
+  assert.match(text, /on-demand broker/i, "must describe the broker's on-demand launch");
+  assert.match(text, /respawn/i, "must describe the broker respawning a crashed instance with backoff");
+});
+
+test("hostLaunchInstructions(): the named exit codes match what containerGuardEnforce()/containerGuardReport() actually return in this (containerized) environment", () => {
+  const root = mkdtempSync(join(tmpdir(), "vice-hostlaunch-exitcodes-"));
+  const text = hostLaunchInstructions(root);
+
+  // This test process is itself running inside the devcontainer, so both
+  // guard functions fire for real here -- no stubbed deps needed. Plan 01's
+  // own container-guard.test.ts asserts the SAME two values (2 refuse, 3
+  // report); this test compares hostLaunchInstructions()'s PROSE against
+  // those same live-computed numbers rather than a second hardcoded literal.
+  const enforceRc = containerGuardEnforce();
+  const reportRc = containerGuardReport();
+  assert.equal(enforceRc, 2, "sanity: containerGuardEnforce() must refuse with exit 2 inside this container");
+  assert.equal(reportRc, 3, "sanity: containerGuardReport() must report exit 3 inside this container");
+
+  assert.match(text, new RegExp(`exit ${enforceRc}\\b`), `hostLaunchInstructions() must name the guard's actual refusal exit code (${enforceRc})`);
+  assert.match(text, /--check-container/, "must name the diagnostic flag for the full per-signal breakdown");
 });
 
 test("pruneResources(): an unlink failure on a read-only deployment target is reported as failed, not thrown (D-3)", () => {

@@ -224,6 +224,11 @@ test("probeInstance never throws: a dead-port failure is a verdict object, not a
 });
 
 test("probeInstance: probing the real default (currently down) endpoint completes in under 3 seconds whatever the verdict -- THE assertion that D-3 was implemented rather than the resilient path reused", async () => {
+  // PORT TRIAGE (01.6.2-09, D-18): 6510 here is kept, not an oversight -- it
+  // is vice.ts's own DEFAULT_ENDPOINT/activePort fallback, the reserved
+  // human-band (6510-6599) value this test drives against, never a
+  // broker-allocated one (that band moved to 6600+, DEFAULT_BASE_PORT in
+  // broker-state.mts).
   const url = process.env.VICE_MCP_URL || "http://host.docker.internal:6510/mcp";
   const start = Date.now();
   const verdict = await probeInstance({ url, port: 6510, timeoutMs: DEFAULT_PROBE_TIMEOUT_MS });
