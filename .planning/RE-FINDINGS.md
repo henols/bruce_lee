@@ -3200,3 +3200,32 @@ byte-unchanged in the diff.
 **Saves:** the next timeout change in this module from repeating either half — grep every
 consumer, not just the literal; and treat any bound expressed as a *fraction* of a constant being
 changed as itself needing re-examination, since it grows silently with the constant.
+
+### 2026-08-04 — a vocabulary rename landing across three tiers at different times produces,
+inside the very change meant to end it, the confusion it exists to prevent
+
+**Type:** hazard
+
+**Evidence:** found live, at the start of 01.6.2.1-05-PLAN.md's own execution, by reading the
+codebase before editing it: the control-plane host-state reply and the container-side client's
+type (`vice-broker-client.ts`) already spoke `warm_floor`, plan 03 had already renamed every
+internal identifier (`resolveWarmFloor`, `resolveWarmFloorForRecord`, the `warmFloor` option) to
+the target vocabulary, and yet the environment knob (`VICE_BROKER_SPARES`) and the on-disk
+discovery-record field (`spares_target`) were still the retired name — three tiers of the SAME
+rename, landed at three different times across three different plans, disagreeing with each
+other for the length of a whole phase.
+
+**Lesson:** internals said one thing, the wire said another, and the on-disk record said a third.
+A human debugging under pressure reads the on-disk record and the wire, not the internal
+identifiers — so those two surfaces are the ones a staged rename should land **first**, not last,
+if it must be staged at all. This plan closed the gap in one commit (D-11/P-12), but the gap
+existed because nothing forced the three tiers to move together.
+
+**Confidence:** HIGH — observed directly in this repository's own landed code at plan time
+(`vice-broker.mts`, `vice-broker-client.ts`, `broker-control.mts`, `broker-launch.mts`), with the
+three tiers and their landing plans (01, 03, 05) named above.
+
+**Saves:** the next multi-surface rename in this codebase from repeating the same staged
+disagreement — either land the wire/on-disk surfaces first, or land the whole rename in one
+commit as this plan's own D-11 requires, rather than letting "internals already renamed" read as
+"the rename is done."

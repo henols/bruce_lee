@@ -81,7 +81,7 @@ export const WRITTEN_BY = "vice-broker.mjs";
 // sibling .mjs directly -- exporting them would widen broker-launch.mts's
 // own surface for a one-line env-var read this file can duplicate exactly
 // as cheaply). Both mirror broker-launch.mts's defaults precisely
-// (VICE_BROKER_SPARES/1, VICE_BROKER_MAX/16) so broker.json's config echo
+// (VICE_BROKER_WARM_FLOOR/1, VICE_BROKER_MAX/16) so broker.json's config echo
 // and host_state's own answer can never disagree with what maintainWarmFloor
 // itself actually enforces. The floor default dropped from 3 to 1 in
 // 01.6.2.1-03-PLAN.md (D-06) -- BOTH readers changed together in that same
@@ -91,7 +91,7 @@ export const WRITTEN_BY = "vice-broker.mjs";
 // concurrency-ceiling spike's territory, not this phase's.
 // ---------------------------------------------------------------------------
 function resolveWarmFloorForRecord() {
-    const raw = process.env.VICE_BROKER_SPARES;
+    const raw = process.env.VICE_BROKER_WARM_FLOOR;
     if (raw === undefined || raw === "")
         return 1;
     const n = Number(raw);
@@ -190,9 +190,9 @@ function makeLoggingSpawn(logDir) {
  * launch paths so D-04's contract (format, location, atomic-write
  * discipline, all unchanged -- only the writer moves) is discharged from
  * exactly one place regardless of WHY the instance was launched. A
- * granted instance and a still-warm spare are equally real processes; both
+ * granted instance and a still-warm instance are equally real processes; both
  * need a real epoch.json the moment they exist, or plan 04's grant-time
- * re-probe (which reads a spare's recorded epoch_file, per
+ * re-probe (which reads a warm instance's recorded epoch_file, per
  * grant_from_spare()'s bash original) would carry forward a path to
  * nothing. */
 function writeEpochForLaunch(record, logRelPath) {
@@ -252,7 +252,7 @@ function markDeliberateDeath(instance, respawnAfterKill) {
  * or `null` once every candidate has been tried and none answered, letting
  * the caller fall through to a cold launch (P-03). Regardless of
  * `record.reason`: per D-07, a waiting request takes an instance whichever
- * reason booted it, so a warm spare and a not-yet-granted instance are
+ * reason booted it, so a warm-floor instance and a not-yet-granted instance are
  * equally eligible. Kill-never-recycle needs no separate guard here --
  * handleRelease() below already deletes a released instance's record
  * outright, so a released instance is structurally absent from
@@ -466,7 +466,7 @@ async function handleRecycleForRealBroker(targetId, state) {
  * (never reused across passes) wiring broker-state.mjs's real
  * allocatePort/counts and broker-launch.mjs's real probeReady, and hooks
  * onLaunched to write the SAME epoch record a cold acquire writes -- a
- * warm spare is a real process the moment it exists, per D-04. */
+ * warm instance is a real process the moment it exists, per D-04. */
 function maintainWarmFloorForRealBroker(stateDir, state) {
     return maintainWarmFloor({
         state,
@@ -655,7 +655,7 @@ async function run(args) {
         control_host: listener.host,
         control_port: listener.port,
         control_token: token, // never logged -- T-01.6.2-02
-        spares_target: resolveWarmFloorForRecord(),
+        warm_floor: resolveWarmFloorForRecord(),
         max_instances: resolveCeilingForRecord(),
         base_port: resolveBasePort(),
         poll_ms: pollMs,

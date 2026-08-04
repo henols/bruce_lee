@@ -494,14 +494,14 @@ test("maintainWarmFloor: a pass overlapping an in-flight launch produces no seco
 // the default rather than inject one -- makeWarmFloorDeps() below is called
 // with NO `warmFloor` key in its overrides at all, so resolveWarmFloor()
 // falls through to whatever the CODE's own default is (via
-// VICE_BROKER_SPARES, guarded to absent for this test's own integrity). A
+// VICE_BROKER_WARM_FLOOR, guarded to absent for this test's own integrity). A
 // floor of 3 would fail this test (demonstrated live during this task's
 // execution and recorded in the plan's own SUMMARY, not asserted here as a
 // separate red-then-green step -- this test asserts only the CORRECT,
 // landed behaviour).
 test("maintainWarmFloor: with no floor override, an idle broker settles at exactly one warm instance -- reading the default (D-06/D-20)", async () => {
-  const savedFloorEnv = process.env.VICE_BROKER_SPARES;
-  delete process.env.VICE_BROKER_SPARES;
+  const savedFloorEnv = process.env.VICE_BROKER_WARM_FLOOR;
+  delete process.env.VICE_BROKER_WARM_FLOOR;
   try {
     const state = createBrokerState();
     // No `warmFloor` key anywhere in this overrides object -- resolveWarmFloor()
@@ -519,9 +519,9 @@ test("maintainWarmFloor: with no floor override, an idle broker settles at exact
     assert.equal(countInstances(state), 1, "no extra instance record of any kind exists beyond the one settled warm instance");
   } finally {
     if (savedFloorEnv === undefined) {
-      delete process.env.VICE_BROKER_SPARES;
+      delete process.env.VICE_BROKER_WARM_FLOOR;
     } else {
-      process.env.VICE_BROKER_SPARES = savedFloorEnv;
+      process.env.VICE_BROKER_WARM_FLOOR = savedFloorEnv;
     }
   }
 });

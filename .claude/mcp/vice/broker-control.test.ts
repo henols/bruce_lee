@@ -817,7 +817,7 @@ test("singleton: a broker started against a port held by a plain non-broker list
       control_host: "0.0.0.0",
       control_port: 0,
       control_token: "0".repeat(64),
-      spares_target: 3,
+      warm_floor: 3,
       max_instances: 16,
       base_port: 6600,
       poll_ms: 500,
