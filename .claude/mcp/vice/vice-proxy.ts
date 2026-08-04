@@ -2310,6 +2310,42 @@ async function handleGrantedInstanceUnreachable(probe: ProbeResult, oldEpoch: Ep
   // EMULATOR is suspected dead here -- the connection to the broker may
   // still be perfectly good, and reusing it is the whole point of "costs
   // one acquisition, not the session."
+  //
+  // Gap closure (plan 14, WR-03 / T-01.6.2-90): release the grant this
+  // session currently holds BEFORE acquiring its replacement -- two
+  // independent reasons, both load-bearing, and order matters for both.
+  //
+  // Reason one: releasing frees the OLD instance's port and capacity slot
+  // FIRST, before the acquire below ever asks for one -- a broker already
+  // sitting at its instance ceiling can still serve this replacement, where
+  // acquiring first could not.
+  //
+  // Reason two, the actual leak this closes: grantId (this proxy's own
+  // module-level grant slot, declared above) is a SINGLE value --
+  // adoptGrant() below simply overwrites it. Acquiring a replacement
+  // without first releasing what is about to be overwritten is what
+  // abandons the prior grant: the broker goes on holding an instance this
+  // proxy no longer remembers asking to release, and every further
+  // lost-machine event on this same session leaks one more, compounding
+  // toward the instance ceiling. No new control-plane message is needed to
+  // close this -- the existing release request already releases exactly
+  // the grant THIS connection currently holds (no target id on the wire at
+  // all), which is precisely the right one, provided it lands before the
+  // slot below is overwritten.
+  //
+  // session.release() performs that release by closing the underlying
+  // connection (a synchronous socket.destroy() under the hood -- D-12: the
+  // connection IS the lease). The acquire immediately below therefore
+  // finds THIS session already gone and answers "broker_gone" -- which is
+  // NOT a new failure mode invented for this fix: it is handled by the
+  // SAME broker-gone branch a few lines down this function already had,
+  // exactly as it already handles any other dead-connection discovery. A
+  // failed release introduces no new branch of its own: release() never
+  // rejects (closing an already-closed socket is an idempotent no-op), and
+  // even if it somehow did, the acquire that follows would classify and
+  // report it exactly the same way.
+  await session.release();
+  grantId = null;
   const result = await session.acquire();
   if (result.ok) {
     adoptGrant({ ...result.grant });
@@ -2333,7 +2369,17 @@ async function handleGrantedInstanceUnreachable(probe: ProbeResult, oldEpoch: Ep
     return replacementFailedMessage(probe, result);
   }
 
-  // D-14: attempt 1 itself discovered the control connection is gone.
+  // D-14: attempt 1 itself discovered the control connection is gone --
+  // now the ORDINARY way this branch is reached, since the release just
+  // above always closes it (T-01.6.2-90's own fix, not a regression: the
+  // grant that release protects against leaking is already gone by
+  // construction before this line ever runs). No release is sent over
+  // `session` here, and none is needed: a release cannot be sent over a
+  // connection that is already gone, and connection close IS the release
+  // in this design, kernel-enforced -- the broker's own close handler has
+  // already released the prior grant and killed its instance the moment
+  // that close event fired, whichever branch triggered it. If the broker
+  // itself died instead, there is nothing left to leak into either.
   // Attempt 2: open a GENUINELY FRESH session -- a brand-new broker.json
   // read (never the stale record the dead session above was opened
   // against), never reusing `session`. controlSession is deliberately left

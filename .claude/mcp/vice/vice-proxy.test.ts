@@ -2769,7 +2769,24 @@ test("D-13: the epoch baseline after a replacement is re-based to the replacemen
   }
 });
 
-test("D-13: a replacement acquire the broker itself refuses produces a report naming both failures, with no third acquire attempted", async () => {
+// Updated by 01.6.2-14-PLAN.md (Task 3, WR-03/T-01.6.2-90): the same-session
+// replacement attempt now sends session.release() BEFORE session.acquire()
+// -- release() closes the underlying connection (D-12: the connection IS
+// the lease, a synchronous socket.destroy() under the hood), so the
+// same-session acquire that follows ALWAYS finds that connection already
+// closed and answers "broker_gone", never a broker-side refusal like
+// at_capacity. That branch of handleGrantedInstanceUnreachable()
+// (replacementFailedMessage(), reached only when the same-session acquire
+// fails for a reason OTHER than broker_gone) is therefore unreachable by
+// this fix's own construction -- kept in the source as a defensive branch
+// per this plan's own acceptance criteria ("the existing broker-gone branch
+// still handles a dead connection"), but no longer something a mock can
+// drive from the SAME session. A broker-side refusal (at_capacity) is now
+// only observable on the FRESH session's own attempt (D-14), reported
+// through sessionMustRestartMessage() instead of replacementFailedMessage()
+// -- this test is updated to assert that actually-reachable shape rather
+// than the one this fix retires.
+test("D-13/D-14: a replacement the broker itself refuses (at_capacity) is only reachable on the FRESH session's own attempt, reporting session-must-restart", async () => {
   const dir = mkdtempSync(join(tmpdir(), "vice-proxy-d13-replace-fails-"));
   const refusedPort = await reserveFreePort();
 
@@ -2802,9 +2819,17 @@ test("D-13: a replacement acquire the broker itself refuses produces a report na
     assert.equal(resp.result.isError, true);
     const text = resp.result.content[0].text;
 
-    assert.match(text, /ECONNREFUSED/, "must name the original unreachability");
-    assert.match(text, /at_capacity/, "must name the failed replacement's own reason");
-    assert.equal(acquireCount, 2, "no third acquire -- exactly one replacement attempt, no retry loop");
+    assert.match(
+      text,
+      /on-demand VICE broker connection is gone/i,
+      "the same-session acquire (right after this fix's own release()) must find the connection already gone -- reported through the session-must-restart branch",
+    );
+    assert.match(text, /at_capacity/, "must name the FRESH session's own failed acquire reason");
+    assert.equal(
+      acquireCount,
+      2,
+      "exactly two acquires reach the fake broker: the original grant, and the fresh session's own attempt -- the same-session acquire right after release() is intercepted client-side (broker_gone) and never reaches the broker at all",
+    );
   } finally {
     proxy.child.kill("SIGKILL");
     if (controlServer) await new Promise((resolveClose) => controlServer!.close(resolveClose));
@@ -3024,6 +3049,74 @@ test("D-14: two consecutive calls after the connection dropped each attempt a fr
     if (server2) await new Promise((resolveClose) => server2!.close(resolveClose));
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// ---------------------------------------------------------------------------
+// 01.6.2-14-PLAN.md, Task 3 (WR-03/T-01.6.2-90): the same-session replacement
+// releases before it acquires, and the fresh-session branch states in
+// writing why it needs no release of its own. Region-scoped, following the
+// SAME idiom this file's own pre-existing structural tests already use
+// (indexOf-based region extraction, comments never touched) -- these two
+// gates hold the SOURCE ORDER and the SOURCE'S OWN STATED REASONING; they do
+// NOT exercise the replacement path against a live session (not reachable
+// from this container -- see this plan's own SUMMARY for the backstop this
+// carries forward, unchanged from plan 08).
+// ---------------------------------------------------------------------------
+
+/** Strips both `/* ... *\/` block comments and whole-line `//` comments
+ * before any assertion runs, so a sentence IN a comment (e.g. this file's
+ * own prose mentioning `session.release()`) can never satisfy or break a
+ * call-count gate -- the same technique broker-control.test.ts's own
+ * stripCommentsForStructuralGate() already established, reused here rather
+ * than inventing a second one. */
+function stripCommentsForRegionGate(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
+}
+
+test("structural: within handleGrantedInstanceUnreachable(), the same-session release call precedes the same-session acquire call, and appears exactly once", () => {
+  const src = stripCommentsForRegionGate(readFileSync(PROXY_PATH, "utf8"));
+  const startIdx = src.indexOf("async function handleGrantedInstanceUnreachable(probe: ProbeResult, oldEpoch: EpochResult): Promise<string> {");
+  assert.ok(startIdx >= 0, "handleGrantedInstanceUnreachable()'s own definition must be found in the source");
+  const endIdx = src.indexOf('if (result.kind !== "broker_gone") {', startIdx);
+  assert.ok(endIdx > startIdx, "could not isolate the same-session replacement region (up to the broker_gone check)");
+  const region = src.slice(startIdx, endIdx);
+
+  const releaseCalls = region.match(/\bsession\.release\(\)/g) ?? [];
+  assert.equal(releaseCalls.length, 1, `the same-session region must call session.release() exactly once, found ${releaseCalls.length}`);
+
+  const releaseIdx = region.indexOf("session.release()");
+  const acquireIdx = region.indexOf("session.acquire()");
+  assert.ok(acquireIdx >= 0, "the same-session region must call session.acquire()");
+  assert.ok(releaseIdx < acquireIdx, "session.release() must appear (and therefore execute) BEFORE session.acquire() in the same-session replacement attempt");
+
+  const grantIdClearIdx = region.indexOf("grantId = null;");
+  assert.ok(grantIdClearIdx >= 0, "the module-level grantId slot must be cleared in this region");
+  assert.ok(releaseIdx < grantIdClearIdx && grantIdClearIdx < acquireIdx, "grantId must be cleared AFTER the release is attempted and BEFORE the acquire, per this plan's own ordering requirement");
+
+  const oldPortReadIdx = region.indexOf("const { port: oldPort } = activeInstance();");
+  assert.ok(oldPortReadIdx >= 0 && oldPortReadIdx < releaseIdx, "the old instance's port must be read BEFORE the release, since release() destroys the instance it names");
+});
+
+test("structural: the fresh-session replacement branch performs no release over the dead session, and the source states why", () => {
+  const rawSrc = readFileSync(PROXY_PATH, "utf8");
+  const rawStartIdx = rawSrc.indexOf("// D-14: attempt 1 itself discovered the control connection is gone");
+  const rawEndIdx = rawSrc.indexOf("const opened = await openBrokerControl();", rawStartIdx);
+  assert.ok(rawStartIdx >= 0, "the D-14 transition comment must be found in the source");
+  assert.ok(rawEndIdx > rawStartIdx, "could not isolate the D-14 transition region (up to the fresh openBrokerControl() call)");
+  const rawRegion = rawSrc.slice(rawStartIdx, rawEndIdx);
+
+  // The call-count assertion strips comments first (a comment mentioning
+  // ".release(" in prose must never satisfy this gate); the reason-text
+  // assertion matches the ORIGINAL, un-stripped region separately, so the
+  // two assertions can never satisfy each other.
+  const codeOnlyRegion = stripCommentsForRegionGate(rawRegion);
+  assert.equal(
+    (codeOnlyRegion.match(/\.release\(/g) ?? []).length,
+    0,
+    "no release call may appear in the transition into the fresh-session branch -- a release cannot be sent over a connection that is already gone",
+  );
+  assert.match(rawRegion, /connection close IS the release/i, "the region must state that connection close IS the release in this design");
+  assert.match(rawRegion, /kernel-enforced/i, "the region must state the release is kernel-enforced");
 });
 
 test("structural: the source records broker death as an accepted, knowing regression, naming what was survivable before", () => {
