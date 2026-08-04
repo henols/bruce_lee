@@ -96,6 +96,7 @@ This one is the route between the stations. It does not restate what the others 
 | A verified 64K image, or comparing two captures | `c64-ram-capture` |
 | What a specific address or bit means | `c64-memory-mapping` — `node … lookup '$D018'` |
 | Assembling, or a first-pass dead listing | `acme-build` |
+| Whether a byte is original or cracker-changed | `c64-provenance-diff` |
 | **Which address to read next, and what the answer rules out** | here |
 
 ## References
@@ -106,6 +107,7 @@ This one is the route between the stations. It does not restate what the others 
 | `references/graphics.md` | The VIC derivation chain, the char-ROM shadow trap, sprites, watch targets |
 | `references/sound-and-input.md` | SID player vs `$D41B`-as-RNG vs digi; CIA#1 vs CIA#2 |
 | `references/observation-hazards.md` | Every way a live read gives a wrong answer. **Read before driving.** |
+| `references/tool-selection.md` | Which `mcp__vice__*` call answers which question, and what to delegate |
 | `references/reconstruction.md` | Binary inclusion, byte-identity scope, SMC labels, label vocabulary |
 | `templates/memory-map.template.md` | Region map with per-row confidence grading |
 

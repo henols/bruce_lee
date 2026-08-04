@@ -201,3 +201,73 @@ Order settled by exploration on 2026-08-01; rationale in
    Bruce-Lee-specific. That strengthens the case for shipping this in the RE package
    ([[2026-08-01-pack-the-whole-c64-re-toolkit-including-the-vice-mcp-into-one-package]]),
    whose skills layer this skill is a named candidate for.
+
+## Resolution 2026-08-04 (quick task 260804-elq) — the skill was built, incrementally, and is not one skill
+
+**Do not build a single RE skill. It already exists as four, and this todo predates all of them.**
+
+When this was written on 2026-08-01, `.claude/skills/` held the survivors of a cleanup and nothing
+that covered RE method. Since then `c64-program-recon` (2026-08-04, `bd597e8`), `c64-ram-capture`'s
+rewrite, `c64-memory-mapping`, and `c64-provenance-diff` (2026-08-04, `b43d409`) have absorbed most
+of this log's technique content — each one built from these findings, each verified live.
+
+### Where the log's ten sections actually live
+
+Measured 2026-08-04 against a 2788-line, 117-entry log:
+
+| Section | Lines | Home |
+|---|---|---|
+| Control-flow discovery method | 107 | `c64-program-recon` → `references/control-flow.md` |
+| VIC-II discovery | 140 | `c64-program-recon` → `references/graphics.md` |
+| SID discovery | 58 | `c64-program-recon` → `references/sound-and-input.md` |
+| CIA discovery | 71 | same |
+| Emulator technique | 55 | mostly `c64-program-recon` → `references/observation-hazards.md` |
+| Capture and comparison | 148 | `c64-ram-capture` |
+| Tooling findings (`tools/`) | 212 | `c64-ram-capture` + `c64-provenance-diff` |
+| Tool-to-question mapping | 400 | **one** entry → `c64-program-recon/references/tool-selection.md` (added by this task); the rest is not tool-mapping at all — see below |
+| Manual and printed-documentation | 1151 | **not skill material** — routed to the two `docs` todos |
+| Corrections to earlier entries | 465 | **stays in the log, permanently** |
+
+### Two section titles are misleading, which is why this looked bigger than it is
+
+Both large sections are **dated dumping grounds**, not topics — content was appended
+chronologically under whatever heading was current.
+
+- `## Tool-to-question mapping` (400 lines): only its **first** entry is a tool-to-question
+  mapping. The rest is silent-stall incidents, broker grant-poll and `VICE_BROKER_MAX` defects,
+  boot-time measurements, a saeger chamber-1 `FALLS` counter, and three diff hazards — and those
+  three (the kind-boundary bug, the `$4771-$4779` `DATASOFT`/`DIABOLO` text divergence, the
+  cracktro-vocabulary fix) were folded into `c64-provenance-diff` on 2026-08-04.
+- `## Manual and printed-documentation findings` (1151 lines): mixes genuine game-domain fact
+  (scoring, damage, lives, game modes, `POKE 5472` → the lives-counter address) with entirely
+  unrelated engineering findings logged the same day (`python3-minimal`'s partial stdlib, a TDZ
+  crash, `npm ci` in fresh worktrees, an async `finally` ordering bug).
+
+### What this task did
+
+1. Added `c64-program-recon/references/tool-selection.md` — the one genuinely skill-shaped orphan,
+   the question→call table, with its `Confidence: MEDIUM` (doc-derived) carried over rather than
+   silently upgraded. Registered in that skill's References table.
+2. Routed the manual-derived game facts to
+   [[2026-08-03-register-the-primary-source-documents-manuals-and-writeups]] and
+   [[2026-08-03-pin-canonical-character-names-bruce-lee-yamo-and-the-ninja]], with the three
+   cautions the log records (the transcription is the **Apple II** manual; the two-player question
+   is already RESOLVED; a naive HTML-to-text extraction corrupted a table).
+3. Left `## Corrections to earlier entries` untouched. Curating it into a skill would destroy the
+   thing CLAUDE.md says the log exists for — the record of *when* something stopped being a guess.
+   Promotion happens by re-logging with new evidence, never by editing a grade in place.
+
+### Still open
+
+- **The misfiled engineering findings.** Toolchain and GSD lessons sitting under a manual heading.
+  Not skill material and not RE method; they need either a home or an explicit decision to leave
+  them where they are. Re-topicalizing the log was considered and **rejected for now** as touching
+  the project's most carefully-guarded append-only file for organisational benefit alone.
+- **`## Manual and printed-documentation findings` keeps growing** under a title that does not
+  describe it. Worth renaming or splitting the *next* time something is appended there.
+
+**Evidence:** section line counts and entry counts measured directly with `awk`/`grep` over
+`.planning/RE-FINDINGS.md` on 2026-08-04; each mapping checked against the target skill's actual
+files rather than assumed.
+**Confidence:** HIGH for what is already homed. The two "still open" items are judgement calls
+deliberately left to a human.

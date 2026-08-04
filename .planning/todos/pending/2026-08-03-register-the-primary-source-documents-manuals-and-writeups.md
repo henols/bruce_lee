@@ -153,3 +153,36 @@ date, confidence grade) for every archived file lives in the new `docs/SOURCES.m
 not exist before this task.
 
 This todo remains in `pending/` — steps 2 and 4 are still open.
+
+## Do not re-extract: the facts are already in `RE-FINDINGS.md` (noted 2026-08-04, quick task 260804-elq)
+
+`.planning/RE-FINDINGS.md`'s `## Manual and printed-documentation findings` section is **1151
+lines**, and a substantial part of it is manual-derived game-domain fact already extracted, dated
+and graded. When this todo runs, draw from there rather than re-reading the PDFs — and treat the
+log as the provenance record, since each entry already carries its source.
+
+Already extracted, with confidence grades attached:
+
+- The **scoring table**, all eight values — and separately **cross-confirmed by two independent
+  sources**, so this one is settled rather than single-sourced.
+- **Damage thresholds and life count.**
+- **Named in-fiction hazards/objects**, explicitly logged as doubling as a string-sweep target list.
+- **Second-loop difficulty escalation** — instant respawn, plus one room losing its safe spots.
+- **C64-specific metadata** — SID attribution, HVSC path, and the alternate title *Banzai*.
+- **`POKE 5472,99` for unlimited lives** — a community cheat that hands over the **lives-counter
+  address** ($1560). That is an RE lead, not just trivia.
+
+Three cautions the log already records, which this todo must not lose:
+
+1. **The Lemon64 / Project 64 transcription is the APPLE II manual, not the C64 one.** It is a full
+   plain-text transcription rather than a scan, which makes it easy to over-trust. Several entries
+   are explicitly edition-scoped to Apple II — including the credits nuance (Mirsky for
+   programming, Fortier for concept) and the fact that this edition gives **the ninja no proper
+   name**, logged as a dead end.
+2. **The two-player disagreement was RESOLVED** — it was never a contradiction; the C64 has three
+   game modes. Do not reopen it against `FEATURES.md:202`.
+3. **A naive HTML-to-text extraction silently corrupted a value/label table.** If any of these
+   values are re-derived from a web source, that hazard applies.
+
+Related: [[2026-08-03-pin-canonical-character-names-bruce-lee-yamo-and-the-ninja]] — the ninja's
+namelessness in the Apple II edition is directly relevant to pinning canonical names.

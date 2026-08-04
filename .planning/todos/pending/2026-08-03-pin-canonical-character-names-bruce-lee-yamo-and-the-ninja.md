@@ -100,3 +100,17 @@ cross-contaminating.
 
 Best done at the start of Phase 5, when the actor documentation is written and the names get
 used for the first time in anger.
+
+## Relevant already-logged evidence (noted 2026-08-04, quick task 260804-elq)
+
+`.planning/RE-FINDINGS.md` records a dead end that bears directly on this todo: **the Apple II
+edition's manual gives the ninja no proper name**, logged explicitly as edition-scoped. So the
+printed manual cannot settle the third actor's name on its own, and a canonical choice will have to
+be made rather than found — which is worth stating in the decision itself rather than leaving the
+absence of evidence looking like an unfinished search.
+
+Note also that the widely-linked Lemon64 / Project 64 plain-text transcription is the **Apple II**
+manual, not the C64 one. Any naming evidence taken from it is edition-scoped.
+
+See [[2026-08-03-register-the-primary-source-documents-manuals-and-writeups]] for the full list of
+already-extracted manual facts and their cautions.
