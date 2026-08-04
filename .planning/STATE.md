@@ -6,14 +6,14 @@ current_phase: 01.6.2
 current_phase_name: the-one-process-host-broker
 status: executing
 stopped_at: "Phase 01.6.2 executed 11/11 but NOT SEALED — verification returned gaps_found at 16/20. Four gap-closure plans (12–15) are now authored, checker-passed and committed (9c26fbf), covering all four failed truths plus WR-01 and WR-03. Nothing from them is executed yet. Next: /gsd-execute-phase 01.6.2 — it picks up waves 12–15."
-last_updated: "2026-08-04T06:58:04.925Z"
+last_updated: "2026-08-04T07:10:05.835Z"
 last_activity: 2026-08-04
-last_activity_desc: "Phase 01.6.2 gap closure planned — 4 plans (12–15), waves 12–15, all four failed verification truths carried into must_haves verbatim; plan-checker returned VERIFICATION PASSED with 0 issues. Plans 01–11 untouched (additive-only, developer decision at the planning gate)."
+last_activity_desc: Phase 01.6.2 execution started
 progress:
   total_phases: 11
   completed_phases: 4
   total_plans: 48
-  completed_plans: 29
+  completed_plans: 40
   percent: 36
 ---
 
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-07-31)
 ## Current Position
 
 Milestone: **v1.1 — Emulator Access Hardened** *(inserted 2026-08-02, ahead of the rest of v1.0)*
-Phase: 01.6.2 (the-one-process-host-broker) — **EXECUTED 11/11, VERIFIED 16/20, NOT SEALED**
+Phase: 01.6.2 (the-one-process-host-broker) — EXECUTING
 Next: **`/gsd-plan-phase 01.6.2 --gaps`** — four gaps in `01.6.2-VERIFICATION.md`, structured in its YAML frontmatter. Then 01.6.2.1, which still needs planning.
 
 **The four gaps share one root and one shape.** `superviseChild()` — the crash-respawn supervisor
@@ -174,7 +174,7 @@ re-surfacing on 01.6.2 would be new, not inherited.
 (`/gsd-extract-learnings 01.6.1` — the TypeScript closure-narrowing hazard, the negated-clause gate
 false positives, and the tracer-vs-daemon distinction are all worth harvesting).
 
-Status: Ready to execute
+Status: Executing Phase 01.6.2
 
 > **2026-08-03 run:** `gsd-tools query state.planned-phase` returned `updated: []` and changed nothing
 > here, so this line and the Last-activity line below were written by hand. Same family as the
@@ -193,7 +193,7 @@ Status: Ready to execute
 
 **Known-failing check, carried forward for whoever resumes 01-04:** the plan's own Task 3 automated verification fails today — `saeger`'s `death` milestone is recorded `reached: true` with `cycles_advanced: null` and an explicit `evidentiary_gap` (no screen-matrix SHA-256 captured, attempt 4). Attempt 6 must re-capture that signature, not merely reach the two remaining milestones. danish's five milestones all carry full mechanical proof and pass.
 
-Last activity: 2026-08-04 — Phase 01.6.2 gap closure planned (plans 12–15, waves 12–15); quick task 260804-9m3 added the `skill-writer` skill
+Last activity: 2026-08-04 — Phase 01.6.2 execution started
 
 Progress (v1.1): 28 of 33 authored plans done — 01.6 complete (4/4), 01.6.1 complete (8/8), 01.3 paused at 5/6 (01.3-06 outstanding), **01.6.2 executed 11/15 — the four gap-closure plans (12–15) are authored and unexecuted, and the phase is NOT sealed.** **No percentage given on purpose:** 01.6.2.1, 01.6.3 and 01.4 are not yet broken into plans, so the denominator is still not knowable and any bar here would overstate progress. (01.5 and 01.7 are `ABSORBED` and contribute no plans.)
 Progress (v1.0, paused): [████░░░░░░] 40% — 8/20 plans
