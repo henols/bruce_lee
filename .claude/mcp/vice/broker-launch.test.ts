@@ -28,7 +28,16 @@ import {
   type InstanceRecord,
   type PortAllocationResult,
 } from "./broker-state.mts";
-import { tryLaunchOne, isLaunchInFlight, probeReady, maintainWarmFloor, runBrokerPass, acquirePortAndLaunch, superviseChild } from "./broker-launch.mts";
+import {
+  tryLaunchOne,
+  isLaunchInFlight,
+  probeReady,
+  maintainWarmFloor,
+  runBrokerPass,
+  acquirePortAndLaunch,
+  superviseChild,
+  withCrashSupervision,
+} from "./broker-launch.mts";
 // Direct SOURCE import (".mts", not ".mjs") -- safe for a test file, which
 // always references the literal extension the file is actually saved
 // under, regardless of the same-module-to-sibling-module ".mjs"-only
@@ -102,6 +111,71 @@ test("structural: only tryLaunchOne() ever adds an instance record to state.inst
       assert.equal(matches.length, 0, `${sourceRel} must not register an instance record directly -- every launch must route through tryLaunchOne()`);
     }
   }
+});
+
+// 01.6.2-12-PLAN.md, Task 3: strips BOTH `/* ... */` (including JSDoc
+// `/** ... */`) block comments AND whole `//` comment lines before any of
+// this file's own count-based structural assertions run. A naive
+// line-anchored `^\s*//` strip alone (this project's own established
+// idiom elsewhere) is NOT enough here: a `/** ... */` doc comment that
+// happens to mention the counted token inline (e.g. a header comment
+// explaining "the wrapper this file uses is withCrashSupervision()") is
+// invisible to that filter and silently inflates the count -- a real
+// instance of exactly this trap was found and fixed while writing this
+// task's own gate (see this task's own findings-log entry). Only whole
+// `//` comment LINES are stripped (never a trailing inline "// ..." after
+// real code on the same line) so a string literal containing "//" (e.g.
+// this file's own "http://127.0.0.1:<port>/mcp" URL construction) is never
+// truncated mid-line.
+function stripComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
+}
+
+// ===========================================================================
+// 01.6.2-12-PLAN.md, Task 3: the structural anti-regression gate. Promotes
+// 01.6.2-VERIFICATION.md's own diagnostic grep (a zero-hit search for
+// superviseChild/withCrashSupervision in the real broker entry point) from a
+// one-off finding into a standing test: an unwrapped spawn factory added to
+// EITHER real launch path in vice-broker.mts must fail this test, not ship
+// silently the way CR-01 did the first time.
+// ===========================================================================
+
+test("structural: broker-launch.mts's child exit listener is installed in exactly one place, and vice-broker.mts's spawn-factory count equals its withCrashSupervision call-site count, importing the wrapper by name", () => {
+  const launchSource = stripComments(readFileSync(join(HERE, "broker-launch.mts"), "utf8"));
+  const brokerSource = stripComments(readFileSync(join(HERE, "vice-broker.mts"), "utf8"));
+
+  // Assertion 1: the child exit listener exists in exactly ONE place in the
+  // whole supervision module -- inside withCrashSupervision() itself. Two
+  // installation points (e.g. a regressed inline copy alongside the shared
+  // wrapper) is the same shape of hazard this whole gap closure exists to
+  // remove, one level down.
+  const exitListenerCount = (launchSource.match(/\.once\("exit"/g) ?? []).length;
+  assert.equal(
+    exitListenerCount,
+    1,
+    `assertion 1 (exit-listener installation count) FAILED: expected exactly 1 comment-stripped '.once("exit"' call in broker-launch.mts, found ${exitListenerCount} -- the child exit listener must be installed in exactly ONE place in the whole module tree`,
+  );
+
+  // Assertion 2: the real broker entry point's spawn-factory count must
+  // equal its supervision-wrapper call-site count. This is the load-bearing
+  // check -- a third spawnFactory added to a future launch path without a
+  // matching withCrashSupervision() composition changes this equality and
+  // fails HERE, rather than shipping an unsupervised launch path silently.
+  const spawnFactoryCount = (brokerSource.match(/\bspawnFactory:/g) ?? []).length;
+  const wrapperCallSiteCount = (brokerSource.match(/\bwithCrashSupervision\(/g) ?? []).length;
+  assert.ok(spawnFactoryCount > 0, "assertion 2 setup FAILED: found zero spawnFactory properties in vice-broker.mts -- the equality check below would pass vacuously against a broker with no launch paths at all");
+  assert.equal(
+    spawnFactoryCount,
+    wrapperCallSiteCount,
+    `assertion 2 (spawn-factory count vs supervision-wrapper call-site count) FAILED: vice-broker.mts declares ${spawnFactoryCount} comment-stripped spawnFactory propert${spawnFactoryCount === 1 ? "y" : "ies"} but composes through withCrashSupervision( at only ${wrapperCallSiteCount} comment-stripped call site${wrapperCallSiteCount === 1 ? "" : "s"} -- every real launch path's spawn factory must be wrapped by the shared supervision primitive`,
+  );
+
+  // Assertion 3: the real broker entry point must import the wrapper BY
+  // NAME from the supervision module -- a differently-named local
+  // re-implementation could satisfy assertion 2's raw count without ever
+  // being the shared, unit-tested wrapper.
+  const importsWrapperByName = /import\s*\{[^}]*\bwithCrashSupervision\b[^}]*\}\s*from\s*["']\.\/broker-launch\.mjs["']/.test(brokerSource);
+  assert.ok(importsWrapperByName, "assertion 3 (import by name) FAILED: vice-broker.mts must import withCrashSupervision by name from ./broker-launch.mjs");
 });
 
 function makeInstance(overrides: Partial<InstanceRecord> = {}): InstanceRecord {
@@ -611,6 +685,28 @@ function makeSuperviseDeps(stateDir: string, overrides: Partial<Parameters<typeo
     ...overrides,
   };
 }
+
+// ===========================================================================
+// 01.6.2-12-PLAN.md, Task 1 (gap closure): withCrashSupervision() is the
+// single exit-listener installation point extracted from launchSupervised()
+// -- this test proves the wrapper's own return-value contract in isolation
+// (never replaces or wraps the child object itself), independent of
+// launchSupervised()'s respawn-chain tests above, which already exercise
+// the same wrapper transitively via superviseChild().
+// ===========================================================================
+
+test("withCrashSupervision: the wrapper returns the base spawn's own child object unchanged, so a caller's own handle is never replaced", () => {
+  const child = fakeChild();
+  const deps = {
+    state: createBrokerState(),
+    stateDir: "/tmp/withCrashSupervision-unused",
+    epoch: makeEpochDeps(),
+    log: () => {},
+  };
+  const wrapped = withCrashSupervision("acquire", 6600, () => child, deps);
+  const returned = wrapped("x64sc", ["-mcpserverport", "6600"]);
+  assert.equal(returned, child, "the wrapper must return the exact child object baseSpawn produced, unchanged -- never a new or wrapped object");
+});
 
 test("superviseChild: a stub child that exits on its own is respawned, and the instance's epoch record advances by one", async () => {
   const dir = mkdtempSync(join(tmpdir(), "supervise-respawn-"));

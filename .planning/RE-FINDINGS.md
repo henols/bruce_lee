@@ -2309,3 +2309,136 @@ already-made decision before proceeding to Tasks 2 and 3, rather than re-asking.
 **Confidence:** HIGH — a developer decision at a blocking checkpoint:decision gate, not a coded
 behavior a test can prove; recorded here per the precedent `01.6.2-01-SUMMARY.md` set for its own
 Task 2 wire-format checkpoint.
+
+### 2026-08-04 — Plan 12 Task 3: a complete, exhaustively unit-tested module can be dead code from the real entry point's point of view, and a fully green suite reports nothing wrong
+
+**Finding:** `broker-launch.mts`'s `superviseChild()` — a complete per-child crash-respawn
+supervisor with doubling backoff, a crash-loop give-up threshold, and a `deliberateKill` marker —
+was built and exhaustively unit-tested in plan 03 (backoff-doubling, give-up, deliberate-kill,
+per-instance logging, all green). It was never imported or called anywhere in `vice-broker.mts`,
+the real broker entry point, for two whole plans (04 through 11) and a full phase verification
+pass. The concrete instance: before this plan's Task 1, the only non-test, non-comment reference
+to `superviseChild` in the entire `.claude/mcp/vice` tree was its own export at
+`broker-launch.mts:820` — confirmed directly by grep (`01.6.2-VERIFICATION.md`'s own diagnosis,
+re-confirmed independently at the start of this plan). 368 tests passed the whole time; none of
+them proved the assembled system ever reached the module they were testing, because a unit test
+proves the unit behaves, not that the real entry point arrives at it.
+
+**Cheap detector that found it:** a one-line grep for the module's own exported name inside the
+real entry-point file (`grep -c superviseChild vice-broker.mts`, restricted to non-test,
+non-comment lines) — zero hits was the whole diagnosis. No static analysis tool, no type error,
+and no failing test surfaced this; the module typechecked, exported cleanly, and its own tests
+were green throughout.
+
+**Cheap detector that keeps it closed:** this plan's own structural gate
+(`broker-launch.test.ts`, "structural: broker-launch.mts's child exit listener is installed in
+exactly one place, and vice-broker.mts's spawn-factory count equals its withCrashSupervision
+call-site count, importing the wrapper by name") promotes that same diagnostic grep into a
+standing, three-part equality assertion: a future third launch path that adds a `spawnFactory`
+without composing it through the shared wrapper changes the count equality and fails this test,
+rather than shipping unsupervised the way this one did.
+
+**Process mechanism that produced it:** plan 03's own `files_modified` deliberately excluded
+`vice-broker.mts` — confirmed by direct read of `01.6.2-03-SUMMARY.md` line 206: *"vice-broker.mts
+(Plan 01/02's real broker entry point) is NOT wired to call superviseChild() yet — this plan's own
+files_modified deliberately excludes vice-broker.mts... This is a known, explicit scope boundary
+..., not an oversight — whichever plan next touches vice-broker.mts's real launch paths should
+route them through superviseChild() ... and should flag this gap if it is not already accounted
+for in that plan's own scope."* The boundary was stated honestly at the time. The miss is that no
+later plan's own scope picked up that flagged gap until this gap-closure plan — wiring a module
+into its real caller was nobody's declared task, so it stayed undone silently behind a green
+suite for two plans and a full verification pass.
+
+**Evidence:** live, in this container — the pre-fix zero-hit grep was re-run and reconfirmed at
+the start of this plan (matching `01.6.2-VERIFICATION.md`'s independent finding), and the fix
+(Tasks 1–2 of this plan) plus the standing gate (Task 3) were built and proved against the real
+spawned broker artifact, not merely against the module in isolation.
+
+**Confidence:** HIGH — reproduced directly in this container (the grep, before and after), not
+inferred from documentation.
+
+**Saves:** re-deriving this exact diagnosis (which file to grep, which name to grep for, why a
+green suite does not mean the system reaches the code) for whoever next builds a host-side module
+in `broker-launch.mts`/`vice-broker.mts`'s sibling relationship and wonders why their new
+`unit`-tested function has zero effect on the running broker.
+
+### 2026-08-04 — Plan 12 Task 3: the wiring-assertion technique — count call sites in the real entry point, not just exports in the module
+
+**Finding:** the general technique this plan's structural gate applies: for any host-side module
+in this subsystem that exposes a primitive meant to be composed into a real entry point (a
+wrapper, a factory, a guard), the unit test proving the primitive behaves correctly is
+insufficient on its own — pair it with a wiring assertion in the SAME file that counts the real
+entry point's own call sites into that primitive and asserts the count is not zero (or, where
+there are multiple call sites that must each be wrapped, that it equals the number of places that
+need wrapping). This plan's own gate does the count-equality form: `vice-broker.mts`'s
+`spawnFactory:` property count must equal its `withCrashSupervision(` call-site count, so a THIRD
+launch path added later without composing through the wrapper changes the equality and fails the
+gate immediately, rather than shipping silently the way the original CR-01 gap did.
+
+**What it costs:** one structural test per primitive that needs this guarantee — a `readFileSync`
+of the two files plus two or three count-based assertions, no new production code and no runtime
+cost.
+
+**What it saves:** the entire class of defect this gap closure exists to repair — a substantively
+correct, exhaustively unit-tested module that the shipped system never reaches, discoverable only
+by a fully green suite that reports nothing wrong. The cost of NOT having this gate, demonstrated
+in this exact plan, is two full plans (04–11) plus a full phase verification pass elapsing before
+anyone noticed.
+
+**Evidence:** the gate's own discriminating power was demonstrated live in this container, not
+assumed: the warm-floor path's `withCrashSupervision(...)` composition (Task 2 of this same plan)
+was temporarily reverted to a bare, unwrapped spawn factory in the actual working tree (never
+committed), the gate was run, and it failed with `assertion 2 (spawn-factory count vs
+supervision-wrapper call-site count) FAILED: vice-broker.mts declares 2 comment-stripped
+spawnFactory properties but composes through withCrashSupervision( at only 1 comment-stripped call
+site` (`2 !== 1`). The file was then restored via `git checkout -- vice-broker.mts` (a targeted,
+single-file restore of already-committed content, not a blanket reset) and the gate was
+re-confirmed green.
+
+**Confidence:** HIGH — the discriminating-power demonstration above was executed live in this
+container, immediately before this entry was written.
+
+**Saves:** for the next maintainer deciding whether a wiring assertion is worth writing versus
+"the unit tests are already green" — this is the concrete, reproduced cost/benefit: one test,
+versus a defect that survives a fully green 368-test suite for two plans undetected.
+
+### 2026-08-04 — Plan 12 Task 3: a naive line-anchored comment strip (`^\s*//`) misses `/** ... */` JSDoc block comments, and a count-based structural gate is self-invalidating the moment its OWN authoring comments mention the counted token
+
+**Finding:** while writing this plan's structural gate (the entry above), the exact self-
+invalidation failure mode the plan's own task description warned about was reproduced by
+accident, in the gate's own surrounding code, before the gate was even finished: this plan's
+Task 1/2 authored `/** ... */` JSDoc comments in `vice-broker.mts` (documenting the new
+`superviseDepsFor()` helper and the warm-floor composition) happen to mention both counted tokens
+inline — one doc comment reads "Builds the supervision dependency object for
+withCrashSupervision()," and another reads "Deliberately does NOT set spawnFactory: on a
+respawn...". A first-draft verification grep using this project's OWN established idiom elsewhere
+(`grep -v '^\s*//'`, which strips only whole COMMENT LINES that begin with `//`) left both of
+these untouched, because they are `/** */` block-comment lines that begin with ` * `, not `//` —
+inflating `withCrashSupervision(` 's raw count to 3 and `spawnFactory:` 's raw count to 3, when
+the real (non-comment) count of each is 2. An "at least N" acceptance check tolerates this
+silently; the Task 3 gate's exact-equality check (`spawnFactoryCount === wrapperCallSiteCount`)
+would NOT have — it would have reported 3 !== 2 against perfectly correct code, a false failure
+exactly as costly as the false pass this whole gap closure exists to prevent.
+
+**Fix:** the gate's own `stripComments()` helper (`broker-launch.test.ts`) strips full `/* ... */`
+block comments (including `/** ... */`, via a non-greedy `[\s\S]*?` match spanning newlines)
+BEFORE stripping whole `//` comment lines, rather than relying on the whole-line `^\s*//` idiom
+alone. Whole-line-only `//` stripping (never an inline trailing `// comment` after real code) is
+kept deliberately, so a string literal containing `//` (e.g. this same file's own
+`http://127.0.0.1:<port>/mcp` URL construction) is never truncated mid-line by an over-eager
+inline strip.
+
+**Evidence:** live, in this container — the raw (pre-fix) counts were computed via
+`grep -v '^\s*//' vice-broker.mts | grep -c 'withCrashSupervision'` (returned 3) and the same for
+`spawnFactory:` (returned 3), then re-computed after applying the block-comment-aware
+`stripComments()` helper (returned 2 for both), matching the real, non-comment call-site count
+confirmed by direct line-by-line inspection (`grep -n`).
+
+**Confidence:** HIGH — reproduced and fixed live in this container against the actual authored
+source, not inferred from documentation.
+
+**Saves:** this exact off-by-one-comment-style trap, for whoever next writes a count-based
+structural gate anywhere in this codebase and reaches for the established `grep -v '^\s*//'`
+idiom by reflex — that idiom is correct for whole-line `//` comments only, and silently
+under-strips any `/** ... */` JSDoc block that happens to mention the counted token, which is
+precisely the self-invalidation failure mode a count gate exists to avoid.

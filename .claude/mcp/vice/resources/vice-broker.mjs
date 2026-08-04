@@ -30,9 +30,9 @@ import { fileURLToPath } from "node:url";
 import { spawn as nodeSpawn } from "node:child_process";
 import { containerGuardReport, containerGuardEnforce } from "./container-guard.mjs";
 import { createBrokerState, nextFreePort, countReady, countTotal, countLaunching, atCapacity, resolveBasePort, } from "./broker-state.mjs";
-import { acquirePortAndLaunch, maintainWarmFloor, probeReady, runBrokerPass } from "./broker-launch.mjs";
+import { acquirePortAndLaunch, maintainWarmFloor, probeReady, runBrokerPass, withCrashSupervision, } from "./broker-launch.mjs";
 import { verifiedKill, registerShutdownHandlers, startupBanner, reapOrphanedInstances } from "./broker-kill.mjs";
-import { writeEpochRecord, epochPathFor, nextEpochFor } from "./broker-epoch.mjs";
+import { writeEpochRecord, epochPathFor, nextEpochFor, instanceLogDirFor } from "./broker-epoch.mjs";
 import { startControlListener, newControlToken, drainPendingAcquires, resolveControlPort, } from "./broker-control.mjs";
 const USAGE = "usage: vice-broker.mjs --repo-root <path> [--state-dir <path>] [--check-container] [--dry-run]";
 /** `--repo-root` is required UNLESS `--check-container` is given -- the
@@ -202,6 +202,33 @@ function writeEpochForLaunch(record, logRelPath) {
         dry_run: false,
     };
     writeEpochRecord({ supervisorDir: record.supervisorDir, record: epochRecord });
+    // The in-memory record's own epoch field must carry the SAME value the
+    // epoch record was just written with -- without this, every
+    // first-generation instance reports an absent epoch to the status
+    // response and an absent epoch-before in a recycle acknowledgement,
+    // making a later respawn's advance unobservable at the one place a
+    // caller reads it (handleStatus(), handleRecycleForRealBroker()).
+    record.epoch = epochRecord.epoch;
+}
+/** Builds the supervision dependency object for withCrashSupervision(),
+ * once per launch, so both real launch paths (handleAcquire here; Task 2's
+ * maintainWarmFloorForRealBroker) pass a structurally identical
+ * SuperviseChildDeps object into the SAME shared wrapper. Deliberately does
+ * NOT set spawnFactory: on a respawn, launchSupervised() (broker-launch.mts)
+ * derives its own per-instance log path from instanceLogDirFor and names
+ * that same path in the epoch record it writes -- supplying a competing
+ * spawn factory here would produce two log files per respawn with the
+ * epoch record naming the wrong one. Leaving it unset means a respawn's
+ * output lands in the supervision module's own log file under the same
+ * per-instance logs directory D-23 requires, and the epoch record names
+ * the file that actually received the output. */
+function superviseDepsFor(stateDir, state) {
+    return {
+        state,
+        stateDir,
+        epoch: { epochPathFor, instanceLogDirFor, nextEpochFor, writeEpochRecord },
+        log: (line) => process.stderr.write(`${line}\n`),
+    };
 }
 /** Allocates a port, launches through tryLaunchOne() (the single in_flight
  * owner), writes the epoch record, and records the grant. Answers the full
@@ -235,7 +262,7 @@ async function handleAcquire(requestId, stateDir, state) {
             const supervisorDir = join(stateDir, String(port));
             const { spawn, logRelPath } = makeLoggingSpawn(join(supervisorDir, "logs"));
             lastLogRelPath = logRelPath;
-            return spawn;
+            return withCrashSupervision("acquire", port, spawn, superviseDepsFor(stateDir, state));
         },
     });
     if (!result.ok) {
@@ -338,15 +365,19 @@ function maintainWarmFloorForRealBroker(stateDir, state) {
         spawnFactory: (port) => {
             const supervisorDir = join(stateDir, String(port));
             const { spawn, logRelPath } = makeLoggingSpawn(join(supervisorDir, "logs"));
-            return (cmd, args) => {
+            const stashingSpawn = (cmd, args) => {
                 const child = spawn(cmd, args);
                 // Stash the log path where onLaunched (fired synchronously right
                 // after this returns, still within the SAME maintainWarmFloor()
                 // call -- at most one launch per call, per the serialised-warming
-                // invariant) can find it.
+                // invariant) can find it. withCrashSupervision() below composes
+                // AROUND this function, so the stash still runs (and still
+                // completes before onLaunched reads it) before the exit listener
+                // is ever attached.
                 lastWarmLaunchLogRelPath = logRelPath;
                 return child;
             };
+            return withCrashSupervision("spare", port, stashingSpawn, superviseDepsFor(stateDir, state));
         },
         probe: (port) => probeReady(port),
         allocatePort: nextFreePort,
