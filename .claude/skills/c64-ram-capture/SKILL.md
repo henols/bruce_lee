@@ -149,8 +149,8 @@ Read those as addresses to re-read, not as sizes to pad.
 
 `manifest` on a fresh capture reports `classification_state: "ranges-only"` with
 every range `unclassified`. That is correct and transient — it becomes `"bucketed"`
-only after the provenance diff partitions loader from cracktro from game. A fresh
-capture already claiming `"bucketed"` is the anomaly.
+only after the provenance diff partitions loader from cracktro from game — see
+`c64-provenance-diff`. A fresh capture already claiming `"bucketed"` is the anomaly.
 
 ## Find an entry point
 
@@ -248,6 +248,7 @@ This one owns the image and its identity. It does not restate what the others ca
 | Every way a live read gives a wrong answer | `c64-program-recon` — `references/observation-hazards.md`. **Read before driving.** |
 | What a specific address or bit means | `c64-memory-mapping` — `node … lookup '$D018'` |
 | Assembling, or a first-pass dead listing | `acme-build` |
+| Whether a byte is original or cracker-changed, and what `bucketed` means | `c64-provenance-diff` |
 | **A verified 64K image, or proving two captures equivalent** | here |
 
 ## References

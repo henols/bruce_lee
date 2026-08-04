@@ -144,9 +144,14 @@ modules; nothing relocates.
 
 ## Still open
 
-1. **Build the provenance-diff skill for `diff-images.mjs`.** Held deliberately on 2026-08-04: a
-   concurrent session was committing to `.claude/skills/` at the time (`3e9c37a`, `191e0d9`), so
-   creating a new skill risked colliding with in-flight work.
+1. ~~**Build the provenance-diff skill for `diff-images.mjs`.**~~ **DONE 2026-08-04** (quick task
+   `260804-dih`) — `.claude/skills/c64-provenance-diff/`, registered by hand in CLAUDE.md's skills
+   table. Was held earlier the same day because a concurrent session was committing to
+   `.claude/skills/` (`3e9c37a`, `191e0d9`); it landed once that cleared. Writing it surfaced one
+   hazard the module's own docs do not state: **`anchor-search` and `ledger` write to tracked files**
+   (`recovery/RELEASES.json`, `recovery/PROVENANCE.md`), so a run leaves `git status` dirty. A clean
+   re-run is a timestamp-only diff, and `ledger` reproduced the committed
+   `generated_tier_sha256 dde5db52…` byte-identically, which is the determinism check.
 2. **Decide `.claude/skills/c64-ram-capture/scripts/compare.mjs`.** An untracked 238-line
    `compare`/`floor`/`digest` implementation of the skill's comparison rules appeared during
    260804-brt, authored by neither that task nor its user. It is genuinely pure — it contacts
