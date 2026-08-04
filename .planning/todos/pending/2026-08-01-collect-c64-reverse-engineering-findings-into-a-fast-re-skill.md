@@ -125,6 +125,32 @@ provenance-diff second check — reference them, do not copy them.
 Order settled by exploration on 2026-08-01; rationale in
 `.planning/notes/re-findings-sweep-design.md`.
 
+> **STATUS 2026-08-04 (quick task 260804-bjq) — the skill exists; this todo stays open for one
+> reason.** `.claude/skills/c64-program-recon/` is written, registered and committed (`bd597e8`):
+> `SKILL.md` as the index, five `references/` files, `scripts/derive.mjs`, and a memory-map
+> template. Steps 1-4, 6 and 7 are discharged. All three of its shown commands were re-run at
+> finalisation and reproduce their documented output; the frontmatter checker passes on all six
+> skills; `derive.mjs` imports `node:fs` alone and opens no socket, so the `mcp__vice__*`
+> single-route rule holds.
+>
+> **Step 5 is half done, and the outstanding half is the one with the good test available.**
+> - **Control-flow half: DONE, promoted to HIGH** (`9ce0d11`). The procedure run cold on
+>   `recovery/danish/dumps/danish-gameentry-run1.bin` *and* the saeger capture returns
+>   `$01 = $40` (HIRAM 0) and `$FFFE/$FFFF = $1103` — the same IRQ entry phase-01 live work
+>   established independently, from a static image with no emulator. Re-verified 2026-08-04.
+> - **Chip half: NOT DONE, stays MEDIUM.** The procedure has not been made to independently
+>   rediscover this game's charset, sprite set and screen layout and checked against what the
+>   extraction work already produced. `derive.mjs vic` and `derive.mjs sprites` were exercised
+>   only on *hand-supplied* register values (including the char-ROM-shadow path, which does flag
+>   correctly) — never on registers read out of a real Bruce Lee capture through
+>   `mcp__vice__vice_vicii_get_state`. Until that happens this todo's own bar is unmet: **"a
+>   method that does not reproduce known-good results is not ready."**
+>
+> So the remaining work is narrow and well-specified: read the VIC registers at a gameentry
+> checkpoint, feed them to `derive.mjs vic`/`sprites`, and diff the derived charset/sprite/screen
+> addresses against the extraction work's. If they agree, re-log the chip-half entries at HIGH as
+> new entries. That needs the emulator, which is why it did not ride along with the authoring.
+
 0. ~~**Make the log self-sufficient.**~~ **Done 2026-08-01.** `Confidence:` added as a required
    field distinct from `Evidence:`, on STACK.md's HIGH/MEDIUM/LOW scale; the control-flow and
    chip method migrated out of this todo into `.planning/RE-FINDINGS.md`; `.claude/CLAUDE.md`
