@@ -28,7 +28,16 @@ import {
   type InstanceRecord,
   type PortAllocationResult,
 } from "./broker-state.mts";
-import { tryLaunchOne, isLaunchInFlight, probeReady, maintainWarmFloor, runBrokerPass, acquirePortAndLaunch, superviseChild } from "./broker-launch.mts";
+import {
+  tryLaunchOne,
+  isLaunchInFlight,
+  probeReady,
+  maintainWarmFloor,
+  runBrokerPass,
+  acquirePortAndLaunch,
+  superviseChild,
+  withCrashSupervision,
+} from "./broker-launch.mts";
 // Direct SOURCE import (".mts", not ".mjs") -- safe for a test file, which
 // always references the literal extension the file is actually saved
 // under, regardless of the same-module-to-sibling-module ".mjs"-only
@@ -611,6 +620,28 @@ function makeSuperviseDeps(stateDir: string, overrides: Partial<Parameters<typeo
     ...overrides,
   };
 }
+
+// ===========================================================================
+// 01.6.2-12-PLAN.md, Task 1 (gap closure): withCrashSupervision() is the
+// single exit-listener installation point extracted from launchSupervised()
+// -- this test proves the wrapper's own return-value contract in isolation
+// (never replaces or wraps the child object itself), independent of
+// launchSupervised()'s respawn-chain tests above, which already exercise
+// the same wrapper transitively via superviseChild().
+// ===========================================================================
+
+test("withCrashSupervision: the wrapper returns the base spawn's own child object unchanged, so a caller's own handle is never replaced", () => {
+  const child = fakeChild();
+  const deps = {
+    state: createBrokerState(),
+    stateDir: "/tmp/withCrashSupervision-unused",
+    epoch: makeEpochDeps(),
+    log: () => {},
+  };
+  const wrapped = withCrashSupervision("acquire", 6600, () => child, deps);
+  const returned = wrapped("x64sc", ["-mcpserverport", "6600"]);
+  assert.equal(returned, child, "the wrapper must return the exact child object baseSpawn produced, unchanged -- never a new or wrapped object");
+});
 
 test("superviseChild: a stub child that exits on its own is respawned, and the instance's epoch record advances by one", async () => {
   const dir = mkdtempSync(join(tmpdir(), "supervise-respawn-"));

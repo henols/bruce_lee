@@ -35,9 +35,16 @@ import {
   type BrokerState,
   type InstanceRecord,
 } from "./broker-state.mjs";
-import { acquirePortAndLaunch, maintainWarmFloor, probeReady, runBrokerPass } from "./broker-launch.mjs";
+import {
+  acquirePortAndLaunch,
+  maintainWarmFloor,
+  probeReady,
+  runBrokerPass,
+  withCrashSupervision,
+  type SuperviseChildDeps,
+} from "./broker-launch.mjs";
 import { verifiedKill, registerShutdownHandlers, startupBanner, reapOrphanedInstances } from "./broker-kill.mjs";
-import { writeEpochRecord, epochPathFor, nextEpochFor, type EpochRecord } from "./broker-epoch.mjs";
+import { writeEpochRecord, epochPathFor, nextEpochFor, instanceLogDirFor, type EpochRecord } from "./broker-epoch.mjs";
 import {
   startControlListener,
   newControlToken,
@@ -259,6 +266,34 @@ function writeEpochForLaunch(record: InstanceRecord, logRelPath: string): void {
     dry_run: false,
   };
   writeEpochRecord({ supervisorDir: record.supervisorDir, record: epochRecord });
+  // The in-memory record's own epoch field must carry the SAME value the
+  // epoch record was just written with -- without this, every
+  // first-generation instance reports an absent epoch to the status
+  // response and an absent epoch-before in a recycle acknowledgement,
+  // making a later respawn's advance unobservable at the one place a
+  // caller reads it (handleStatus(), handleRecycleForRealBroker()).
+  record.epoch = epochRecord.epoch;
+}
+
+/** Builds the supervision dependency object for withCrashSupervision(),
+ * once per launch, so both real launch paths (handleAcquire here; Task 2's
+ * maintainWarmFloorForRealBroker) pass a structurally identical
+ * SuperviseChildDeps object into the SAME shared wrapper. Deliberately does
+ * NOT set spawnFactory: on a respawn, launchSupervised() (broker-launch.mts)
+ * derives its own per-instance log path from instanceLogDirFor and names
+ * that same path in the epoch record it writes -- supplying a competing
+ * spawn factory here would produce two log files per respawn with the
+ * epoch record naming the wrong one. Leaving it unset means a respawn's
+ * output lands in the supervision module's own log file under the same
+ * per-instance logs directory D-23 requires, and the epoch record names
+ * the file that actually received the output. */
+function superviseDepsFor(stateDir: string, state: BrokerState): SuperviseChildDeps {
+  return {
+    state,
+    stateDir,
+    epoch: { epochPathFor, instanceLogDirFor, nextEpochFor, writeEpochRecord },
+    log: (line: string) => process.stderr.write(`${line}\n`),
+  };
 }
 
 /** Allocates a port, launches through tryLaunchOne() (the single in_flight
@@ -294,7 +329,7 @@ async function handleAcquire(requestId: string, stateDir: string, state: BrokerS
       const supervisorDir = join(stateDir, String(port));
       const { spawn, logRelPath } = makeLoggingSpawn(join(supervisorDir, "logs"));
       lastLogRelPath = logRelPath;
-      return spawn;
+      return withCrashSupervision("acquire", port, spawn, superviseDepsFor(stateDir, state));
     },
   });
 

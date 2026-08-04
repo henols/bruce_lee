@@ -487,6 +487,33 @@ async function handleExit(reason, port, deps) {
     const respawned = launchSupervised(reason, port, deps, crashTimes, nextBackoffMs);
     deps.onOutcome?.(respawned ? "respawned" : "given_up", port);
 }
+/** The single exit-listener installation point in the whole module tree.
+ * Wraps `baseSpawn` (a plain spawn function of the same shape
+ * `(command, args) => ChildProcess` every launch path already threads
+ * through) so the returned spawn function, when called, attaches a
+ * one-shot "exit" listener that drives handleExit() above -- the SAME
+ * respawn/give-up/deliberate-teardown resolution launchSupervised()'s own
+ * relaunch path already uses. Returns the child object baseSpawn produced,
+ * UNCHANGED -- a caller's own handle to the child (e.g. its pid) is never
+ * replaced or wrapped itself; only the spawn FUNCTION is composed.
+ *
+ * This is the extraction the phase's own gap closure exists to make: before
+ * this function existed, launchSupervised() built this exact listener
+ * inline, and it was the ONLY place in the tree that ever did -- both real
+ * launch paths in vice-broker.mts instead spawned through a bare,
+ * unwrapped spawn with no exit observation at all. Composing a real launch
+ * path's own spawn factory through THIS function, rather than reaching for
+ * a second inline listener, is what keeps the "exactly one installation
+ * point" invariant a structural gate (broker-launch.test.ts) can hold. */
+export function withCrashSupervision(reason, port, baseSpawn, deps) {
+    return (cmd, args) => {
+        const child = baseSpawn(cmd, args);
+        child.once("exit", () => {
+            void handleExit(reason, port, deps);
+        });
+        return child;
+    };
+}
 /** Launches (or relaunches) a supervised instance: spawns through
  * tryLaunchOne() (the SAME single guarded primitive plan 02 established --
  * "spawn again through the SAME single guarded launch function", never a
@@ -523,13 +550,7 @@ function launchSupervised(reason, port, deps, crashTimes, backoffMs) {
         return nodeSpawn(cmd, args, { stdio: ["ignore", fd, fd] });
     };
     const baseSpawn = deps.spawnFactory ? deps.spawnFactory(port) : (deps.spawn ?? defaultRealSpawn);
-    const wrappedSpawn = (cmd, args) => {
-        const child = baseSpawn(cmd, args);
-        child.once("exit", () => {
-            void handleExit(reason, port, deps);
-        });
-        return child;
-    };
+    const wrappedSpawn = withCrashSupervision(reason, port, baseSpawn, deps);
     const record = tryLaunchOne(reason, port, {
         state: deps.state,
         supervisorDir,

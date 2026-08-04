@@ -53,7 +53,7 @@ interface BrokerHandle {
  * harmless, long-lived process (/bin/sleep) so a spawned "instance" is a
  * real pid without ever touching x64sc. VICE_BROKER_CONTROL_PORT=0 lets
  * the kernel pick a free port so parallel test runs never collide. */
-function startBroker(stateDir: string): BrokerHandle {
+function startBroker(stateDir: string, extraEnv: Record<string, string> = {}): BrokerHandle {
   const child = spawn(process.execPath, [BROKER_ARTIFACT, "--repo-root", "/tmp/fake-repo-root-e2e", "--state-dir", stateDir], {
     env: {
       ...process.env,
@@ -61,6 +61,7 @@ function startBroker(stateDir: string): BrokerHandle {
       VICE_BIN: "/bin/sleep",
       VICE_ARGS: "600",
       VICE_BROKER_CONTROL_PORT: "0",
+      ...extraEnv,
     },
   }) as ChildProcessWithoutNullStreams;
 
@@ -154,6 +155,81 @@ test(
       acquired.release();
       const gone = await waitFor(() => !isAlive(childPid), 5000);
       assert.ok(gone, `spawned child pid ${childPid} must be gone within deadline after connection close`);
+    } finally {
+      await stopBroker(handle);
+      rmSync(stateDir, { recursive: true, force: true });
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// 01.6.2-12-PLAN.md, Task 1 (gap closure -- CR-01, criterion C2, D-04): the
+// end-to-end proof that per-instance crash supervision is a real, wired
+// property of the RUNNING broker -- not merely of superviseChild() in
+// isolation (broker-launch.test.ts already covers that function's own
+// backoff/give-up/deliberate-kill behavior against a fully controlled stub;
+// this test instead kills a REAL granted child out from under the REAL
+// spawned broker artifact and watches the respawn happen through the whole
+// stack: withCrashSupervision() -> handleExit() -> launchSupervised() ->
+// tryLaunchOne() -> a fresh epoch.json on disk). VICE_RESTART_BACKOFF_S=0
+// keeps the test fast without touching the respawn logic itself -- the
+// backoff duration is not what this test is proving.
+// ---------------------------------------------------------------------------
+
+test(
+  "wired supervision: a granted stub child killed out from under the real broker is respawned on the SAME port, its epoch advances, and exactly one instance directory remains",
+  { timeout: 20000 },
+  async () => {
+    build();
+    const stateDir = mkdtempSync(join(tmpdir(), "broker-e2e-supervise-cold-"));
+    const handle = startBroker(stateDir, { VICE_RESTART_BACKOFF_S: "0" });
+    try {
+      await waitForBrokerJson(stateDir);
+      const acquired = await acquireOverControlPlane(stateDir);
+      const grant = acquired.grant;
+
+      const epochBefore = JSON.parse(readFileSync(grant.epoch_file, "utf8"));
+      const pidBefore: number = epochBefore.pid;
+      assert.equal(typeof pidBefore, "number");
+      assert.ok(isAlive(pidBefore), `granted child pid ${pidBefore} must be alive before the kill`);
+
+      // Kill the granted child from OUTSIDE the broker with an uncatchable
+      // signal -- the broker sees an unexplained exit, exactly the crash
+      // shape withCrashSupervision()'s exit listener exists to observe.
+      process.kill(pidBefore, "SIGKILL");
+      const killedChildGone = await waitFor(() => !isAlive(pidBefore), 5000);
+      assert.ok(killedChildGone, `killed child pid ${pidBefore} must actually exit before a respawn can be observed`);
+
+      const respawned = await waitFor(() => {
+        let epoch: Record<string, unknown>;
+        try {
+          epoch = JSON.parse(readFileSync(grant.epoch_file, "utf8"));
+        } catch {
+          return false;
+        }
+        return (
+          typeof epoch.epoch === "number" &&
+          epoch.epoch > epochBefore.epoch &&
+          typeof epoch.pid === "number" &&
+          epoch.pid !== pidBefore &&
+          isAlive(epoch.pid as number)
+        );
+      }, 10000);
+      assert.ok(respawned, "the killed instance must be respawned on the same port with an advanced epoch and a new, live pid within the deadline");
+
+      const epochAfter = JSON.parse(readFileSync(grant.epoch_file, "utf8"));
+      assert.equal(epochAfter.epoch, epochBefore.epoch + 1, "the epoch integer must advance by exactly one on respawn");
+      assert.notEqual(epochAfter.pid, pidBefore, "the respawned child must be a DIFFERENT pid from the killed one");
+      assert.ok(isAlive(epochAfter.pid), "the respawned child's pid must answer a zero-signal liveness check");
+
+      const portDirs = readdirSync(stateDir, { withFileTypes: true }).filter((d) => d.isDirectory() && /^\d+$/.test(d.name));
+      assert.equal(portDirs.length, 1, `exactly one instance directory must exist after the respawn, found ${JSON.stringify(portDirs.map((d) => d.name))}`);
+      assert.equal(Number(portDirs[0].name), grant.port, "the respawned instance must occupy the SAME port the original grant named");
+
+      assert.equal(handle.child.exitCode, null, "the broker process itself must still be running after the respawn");
+      assert.equal(handle.child.signalCode, null, "the broker process itself must not have been signalled");
+
+      acquired.release();
     } finally {
       await stopBroker(handle);
       rmSync(stateDir, { recursive: true, force: true });
