@@ -16,9 +16,11 @@
 // depth). A naive move that kept the old fixed `".."` would have silently
 // resolved to `.claude/skills/.vice-supervisor` or
 // `.claude/skills/vice-session/.vice-supervisor` instead of
-// `<repo>/.vice-supervisor` -- a directory the host-side shell scripts
-// (`tools/vice-supervisor.sh`, `tools/vice-pool.sh`) never write to. NOTHING
-// would have errored: the container would just read a permanently-empty
+// `<repo>/.vice-supervisor` -- a directory the host-side shell launcher
+// (`tools/vice-launcher.sh`, plan 11's surviving script -- the paired
+// implementation this era's now-retired `tools/vice-supervisor.sh` and
+// `tools/vice-pool.sh` used to be) never writes to. NOTHING would have
+// errored: the container would just read a permanently-empty
 // epoch/registry/session directory, and restart detection (and the pool,
 // and sessions) would quietly stop working while every command kept
 // "succeeding". That failure mode -- a broken invariant with no error

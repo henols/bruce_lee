@@ -61,7 +61,7 @@ test("RESOURCES_DIR (quick-260731-p8a, path-anchor regression): points at the MO
   // still fails loudly there, not here.
   const entries = resourceEntries();
   assert.ok(entries.length > 0, "expected at least one deployed resource under RESOURCES_DIR");
-  assert.ok(entries.includes("vice-supervisor.sh"), "expected vice-supervisor.sh to still be a tracked resource");
+  assert.ok(entries.includes("vice-broker.mjs"), "expected vice-broker.mjs (the compiled broker artifact) to still be a tracked resource");
   assert.ok(entries.includes("vice-launcher.sh"), "expected vice-launcher.sh (plan 01) to be a tracked resource");
 });
 
@@ -81,59 +81,50 @@ test("installResources(): install-when-missing -- every file under resources/ la
 test("installResources(): no-op-when-present -- a second run reports nothing installed and leaves mtimes untouched", () => {
   const root = mkdtempSync(join(tmpdir(), "vice-install-noop-"));
   installResources({ root, log: () => {} });
-  const target = join(installTargetDir(root), "vice-supervisor.sh");
+  const target = join(installTargetDir(root), "vice-broker.mjs");
   const mtimeBefore = statSync(target).mtimeMs;
 
   const result = installResources({ root, log: () => {} });
 
   assert.equal(result.installed.length, 0, "expected nothing installed on a second run");
-  assert.ok(result.skipped.includes("vice-supervisor.sh"), "expected the already-present entry to be reported skipped");
+  assert.ok(result.skipped.includes("vice-broker.mjs"), "expected the already-present entry to be reported skipped");
   assert.equal(statSync(target).mtimeMs, mtimeBefore, "mtime must be untouched by a no-op run");
 });
 
 test("installResources(): no-overwrite-when-diverged -- a hand-edited target is reported diverged and left byte-for-byte unchanged", () => {
   const root = mkdtempSync(join(tmpdir(), "vice-install-diverged-"));
   installResources({ root, log: () => {} });
-  const target = join(installTargetDir(root), "vice-supervisor.sh");
-  writeFileSync(target, "# edited by hand\n");
+  const target = join(installTargetDir(root), "vice-broker.mjs");
+  writeFileSync(target, "// edited by hand\n");
 
   const result = installResources({ root, log: () => {} });
 
-  assert.ok(result.diverged.includes("vice-supervisor.sh"), "expected the hand-edited entry to be reported diverged");
+  assert.ok(result.diverged.includes("vice-broker.mjs"), "expected the hand-edited entry to be reported diverged");
   assert.equal(result.installed.length, 0, "a divergence must never be auto-overwritten");
-  assert.equal(readFileSync(target, "utf8"), "# edited by hand\n", "the hand edit must survive byte-for-byte");
+  assert.equal(readFileSync(target, "utf8"), "// edited by hand\n", "the hand edit must survive byte-for-byte");
 });
 
 test("installResources({ force: true }): restores a diverged target to the resources/ content", () => {
   const root = mkdtempSync(join(tmpdir(), "vice-install-force-"));
   installResources({ root, log: () => {} });
-  const target = join(installTargetDir(root), "vice-supervisor.sh");
+  const target = join(installTargetDir(root), "vice-broker.mjs");
   const original = readFileSync(target);
-  writeFileSync(target, "# edited by hand\n");
+  writeFileSync(target, "// edited by hand\n");
 
   const result = installResources({ root, force: true, log: () => {} });
 
-  assert.ok(result.installed.includes("vice-supervisor.sh"), "expected the forced overwrite to be reported as installed");
+  assert.ok(result.installed.includes("vice-broker.mjs"), "expected the forced overwrite to be reported as installed");
   assert.ok(readFileSync(target).equals(original), "forced install must restore the exact resources/ content");
 });
 
-test("installResources(): executable bit preserved -- both launchers (including the one plan 01 created) arrive executable, lib/container-guard.sh non-executable like its tracked source", () => {
+test("installResources(): executable bit preserved -- the surviving launcher arrives executable, a compiled broker artifact non-executable like its tracked source", () => {
   const root = mkdtempSync(join(tmpdir(), "vice-install-modes-"));
   installResources({ root, log: () => {} });
-  const supervisor = join(installTargetDir(root), "vice-supervisor.sh");
   const launcher = join(installTargetDir(root), "vice-launcher.sh");
-  const guard = join(installTargetDir(root), "lib", "container-guard.sh");
+  const broker = join(installTargetDir(root), "vice-broker.mjs");
 
-  assert.ok(statSync(supervisor).mode & 0o111, "vice-supervisor.sh must be deployed executable");
   assert.ok(statSync(launcher).mode & 0o111, "vice-launcher.sh (plan 01's launcher) must be deployed executable -- it is exec'd directly");
-  assert.equal(statSync(guard).mode & 0o111, 0, "lib/container-guard.sh must NOT be executable, matching its tracked (sourced-only) source mode");
-});
-
-test("installResources(): lib/ deployed -- both lib/container-guard.sh and lib/repo-root.sh land under <root>/tools/lib/", () => {
-  const root = mkdtempSync(join(tmpdir(), "vice-install-lib-"));
-  installResources({ root, log: () => {} });
-  assert.ok(existsSync(join(installTargetDir(root), "lib", "container-guard.sh")));
-  assert.ok(existsSync(join(installTargetDir(root), "lib", "repo-root.sh")));
+  assert.equal(statSync(broker).mode & 0o111, 0, "vice-broker.mjs must NOT be executable, matching its tracked (node-invoked, never exec'd directly) source mode");
 });
 
 test("installResources(): a real install writes its host-launch instructions to stderr only, never stdout (D-4)", async () => {
@@ -159,7 +150,7 @@ test("ensureResourcesInstalled(): fire-once-per-process -- calling it twice in o
     import { existsSync, rmSync } from "node:fs";
     import { join } from "node:path";
     const root = ${JSON.stringify(root)};
-    const target = join(root, "tools", "vice-supervisor.sh");
+    const target = join(root, "tools", "vice-broker.mjs");
     ensureResourcesInstalled({ root });
     console.log("first:" + existsSync(target));
     rmSync(target);
@@ -180,7 +171,7 @@ test("ensureResourcesInstalled(): env opt-out -- VICE_SKIP_RESOURCE_INSTALL=1 ma
     import { existsSync } from "node:fs";
     import { join } from "node:path";
     ensureResourcesInstalled({ root: ${JSON.stringify(root)} });
-    console.log(existsSync(join(${JSON.stringify(root)}, "tools", "vice-supervisor.sh")));
+    console.log(existsSync(join(${JSON.stringify(root)}, "tools", "vice-broker.mjs")));
   `;
   const env = { ...process.env, VICE_SKIP_RESOURCE_INSTALL: "1" };
   const { stdout } = await execFileP(process.execPath, ["--input-type=module", "-e", src], { env });
@@ -227,8 +218,8 @@ test("readDeployManifest(): a missing, malformed, or shape-wrong manifest reads 
   writeFileSync(manifestPath, JSON.stringify({ entries: "not-an-array" }));
   assert.deepEqual(readDeployManifest(root), [], "a non-array entries field must read as an empty list");
 
-  writeFileSync(manifestPath, JSON.stringify({ entries: ["vice-supervisor.sh"] }));
-  assert.deepEqual(readDeployManifest(root), ["vice-supervisor.sh"], "a well-formed manifest must read back its entries");
+  writeFileSync(manifestPath, JSON.stringify({ entries: ["vice-broker.mjs"] }));
+  assert.deepEqual(readDeployManifest(root), ["vice-broker.mjs"], "a well-formed manifest must read back its entries");
 });
 
 test("writeDeployManifest()/readDeployManifest(): round-trips a sorted entry list", () => {
@@ -247,8 +238,8 @@ test("installResources(): a full install-then-prune round trip leaves the manife
 test("pruneResources(): a manifest entry naming a file no longer in resources/ is removed from the deployment target", () => {
   const root = mkdtempSync(join(tmpdir(), "vice-prune-retired-"));
   installResources({ root, log: () => {} });
-  const survivor = join(installTargetDir(root), "vice-supervisor.sh");
-  assert.ok(existsSync(survivor), "sanity: vice-supervisor.sh must exist before the retirement is simulated");
+  const survivor = join(installTargetDir(root), "vice-broker.mjs");
+  assert.ok(existsSync(survivor), "sanity: vice-broker.mjs must exist before the retirement is simulated");
 
   // Simulate a retirement: a manifest naming a file that is no longer a
   // current resource, with that file actually present on disk (as a real

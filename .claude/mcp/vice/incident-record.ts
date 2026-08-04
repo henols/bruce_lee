@@ -321,9 +321,12 @@ export function renderIncidentRecord(record: IncidentRecordInput = {}): string {
 // content lands -> content written -> renamed over the destination, the
 // same shape vice-broker.mts's writeBrokerRecord() and install-resources.ts's
 // manifest writer use (01.6.1-PATTERNS.md's "Atomic write" pattern). Ported
-// here rather than left at the plain tmp-then-rename shape write_json_atomic()
-// (resources/vice-broker.sh) and writeJsonAtomic() (vice-broker-client.mjs)
-// use: this module's own threat register entry (T-01.6.1-08) requires the
+// here rather than left at the plain tmp-then-rename shape the retiring
+// bash broker's write_json_atomic() (formerly resources/vice-broker.sh,
+// deleted plan 11 -- its own mode-0600 shape survives independently in
+// vice-broker.mts's writeBrokerRecord() and broker-epoch.mts's
+// writeEpochRecord()) and writeJsonAtomic() (vice-broker-client.mjs) use:
+// this module's own threat register entry (T-01.6.1-08) requires the
 // mode-restriction step specifically, since a record can carry register/
 // screenshot-path evidence and briefly sat world-readable at the default
 // umask between write and rename otherwise. The rename itself is still what
