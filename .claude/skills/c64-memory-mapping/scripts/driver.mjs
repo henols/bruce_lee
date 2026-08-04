@@ -354,7 +354,7 @@ const FLOW = new Set(["JMP", "JSR", "BNE", "BEQ", "BCC", "BCS", "BMI", "BPL", "B
 
 // ------------------------------------------------------------------- annotate
 
-function annotate(lines, { maxSpan = INLINE_SPAN_MAX } = {}) {
+function annotate(lines, { maxSpan = INLINE_SPAN_MAX, noHeader = false } = {}) {
   const out = [];
   const referenced = new Map();
 
@@ -395,7 +395,7 @@ function annotate(lines, { maxSpan = INLINE_SPAN_MAX } = {}) {
   }
 
   const header = [];
-  if (referenced.size) {
+  if (referenced.size && !noHeader) {
     header.push(";; ------------------------------------------------------------------");
     header.push(";; Addresses referenced by this listing");
     for (const s of SOURCES) header.push(`;;   ${s.url}`);
@@ -507,12 +507,17 @@ const commands = {
     const outFile = flag(argv, "out");
     const inFile = flag(argv, "file");
     const maxSpan = Number(flag(argv, "max-span", INLINE_SPAN_MAX));
+    // A presence test, not `flag()`: `flag()` returns the argv element *following*
+    // the named flag, which for a valueless flag would silently swallow whatever
+    // comes next (e.g. `--no-header --file game.asm` would read "--file" as the
+    // value of `--no-header`).
+    const noHeader = argv.includes("--no-header");
 
     // `--file -` and a bare `annotate` both mean stdin; fd 0 reads it whole.
     const src = !inFile || inFile === "-" ? 0 : inFile;
     const lines = readFileSync(src, "utf8").replace(/\n$/, "").split("\n");
 
-    const text = annotate(lines, { maxSpan });
+    const text = annotate(lines, { maxSpan, noHeader });
     if (outFile) {
       writeFileSync(outFile, text + "\n");
       console.log(`wrote ${outFile} (${text.split("\n").length} lines)`);
@@ -535,7 +540,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
 
   lookup <addr>...                  full memory-map prose for an address
   annotate --file <listing>         document a listing or .asm file
-            [--out f.asm] [--max-span N]
+            [--out f.asm] [--max-span N] [--no-header]
   annotate                          ... the same, reading stdin
   memmap                            (re)build memmap.json from the four sources
                                     (the only command needing a network)`);
