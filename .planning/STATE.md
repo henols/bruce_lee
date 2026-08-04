@@ -2,19 +2,19 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: insertion note
-current_phase: 01.6.2
-current_phase_name: the-one-process-host-broker
-status: executing
-stopped_at: "Phase 01.6.2 executed 11/11 but NOT SEALED — verification returned gaps_found at 16/20. Four gap-closure plans (12–15) are now authored, checker-passed and committed (9c26fbf), covering all four failed truths plus WR-01 and WR-03. Nothing from them is executed yet. Next: /gsd-execute-phase 01.6.2 — it picks up waves 12–15."
-last_updated: "2026-08-04T07:10:05.835Z"
+current_phase: 01.6.2.1
+current_phase_name: Broker Lifecycle Policy
+status: planning
+stopped_at: "Phase 01.6.2 context gathered — scope changed: Phase 01.7 merged in, Phase 01.5 folded in. ROADMAP amendments required BEFORE /gsd-plan-phase 01.6.2 (see CONTEXT.md § ROADMAP amendments required)."
+last_updated: "2026-08-04T10:27:07.719Z"
 last_activity: 2026-08-04
-last_activity_desc: Phase 01.6.2 execution started
+last_activity_desc: Phase 01.6.2 complete, transitioned to Phase 01.6.2.1
 progress:
   total_phases: 11
-  completed_phases: 4
+  completed_phases: 5
   total_plans: 48
-  completed_plans: 40
-  percent: 36
+  completed_plans: 44
+  percent: 45
 ---
 
 # Project State
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-07-31)
 ## Current Position
 
 Milestone: **v1.1 — Emulator Access Hardened** *(inserted 2026-08-02, ahead of the rest of v1.0)*
-Phase: 01.6.2 (the-one-process-host-broker) — EXECUTING
+Phase: 01.6.2.1 — Broker Lifecycle Policy
 Next: **`/gsd-plan-phase 01.6.2 --gaps`** — four gaps in `01.6.2-VERIFICATION.md`, structured in its YAML frontmatter. Then 01.6.2.1, which still needs planning.
 
 **The four gaps share one root and one shape.** `superviseChild()` — the crash-respawn supervisor
@@ -174,7 +174,7 @@ re-surfacing on 01.6.2 would be new, not inherited.
 (`/gsd-extract-learnings 01.6.1` — the TypeScript closure-narrowing hazard, the negated-clause gate
 false positives, and the tracer-vs-daemon distinction are all worth harvesting).
 
-Status: Executing Phase 01.6.2
+Status: Ready to plan
 
 > **2026-08-03 run:** `gsd-tools query state.planned-phase` returned `updated: []` and changed nothing
 > here, so this line and the Last-activity line below were written by hand. Same family as the
@@ -193,7 +193,7 @@ Status: Executing Phase 01.6.2
 
 **Known-failing check, carried forward for whoever resumes 01-04:** the plan's own Task 3 automated verification fails today — `saeger`'s `death` milestone is recorded `reached: true` with `cycles_advanced: null` and an explicit `evidentiary_gap` (no screen-matrix SHA-256 captured, attempt 4). Attempt 6 must re-capture that signature, not merely reach the two remaining milestones. danish's five milestones all carry full mechanical proof and pass.
 
-Last activity: 2026-08-04 — Phase 01.6.2 execution started (plans 13-15 authored, unexecuted); quick tasks 260804-a5l and 260804-ae9 closed documentation gaps in the `c64-memory-mapping` and `acme-build` skills; 260804-bjq finalized the new `c64-program-recon` skill; 260804-brt wired `dump-artifacts` and `d64-parse` into `c64-ram-capture` and aligned its structure with recon; 260804-bux gave it `scripts/`+`templates/` and corrected its volatile-span rule; 260804-dbf triaged the blocked skill-queue todos and confirmed `vice_diagnose`/`vice_recycle` are now reachable and proxy-intercepted; 260804-dih added the seventh skill, `c64-provenance-diff`
+Last activity: 2026-08-04 — Phase 01.6.2 complete, transitioned to Phase 01.6.2.1
 
 Progress (v1.1): 28 of 33 authored plans done — 01.6 complete (4/4), 01.6.1 complete (8/8), 01.3 paused at 5/6 (01.3-06 outstanding), **01.6.2 executed 11/15 — the four gap-closure plans (12–15) are authored and unexecuted, and the phase is NOT sealed.** **No percentage given on purpose:** 01.6.2.1, 01.6.3 and 01.4 are not yet broken into plans, so the denominator is still not knowable and any bar here would overstate progress. (01.5 and 01.7 are `ABSORBED` and contribute no plans.)
 Progress (v1.0, paused): [████░░░░░░] 40% — 8/20 plans
@@ -207,7 +207,7 @@ Progress (overall): [██░░░░░░░░] 23% — 8/35 plans
 
 **Velocity:**
 
-- Total plans completed: 9
+- Total plans completed: 24
 - Average duration: —
 - Total execution time: 0.0 hours
 
@@ -217,6 +217,7 @@ Progress (overall): [██░░░░░░░░] 23% — 8/35 plans
 |-------|-------|-------|----------|
 | 01.1 | 4 | - | - |
 | 01.2 | 5 | - | - |
+| 01.6.2 | 15 | - | - |
 
 **Recent Trend:**
 
