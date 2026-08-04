@@ -95,11 +95,12 @@ recovery/*/dumps/probe-*.png
 # any .claude/mcp/vice/ .mjs entry point runs, and are disposable: never
 # hand-edit them here (edit resources/ instead), and a real host setup keeps
 # working exactly as before because they still land at these same paths.
-# vice-broker.sh (Phase 01.2) joins the supervisor and pool scripts here.
-/tools/vice-supervisor.sh
-/tools/vice-broker.sh
-/tools/lib/container-guard.sh
-/tools/lib/repo-root.sh
+# vice-supervisor.sh, vice-broker.sh, lib/container-guard.sh and
+# lib/repo-root.sh (the retiring per-instance supervisor, the retiring bash
+# broker, and their two shared libraries) are DELETED (Phase 01.6.2 plan 11)
+# -- the surviving vice-launcher.sh below now inlines the one library
+# function it used (resolve_repo_root()), and the container guard ported to
+# TypeScript (container-guard.mjs) in plan 01.
 # vice-broker.mjs and vice-launcher.sh (Phase 01.6 plan 01) join them --
 # resources/ is now generated-but-committed for these two, tsc-emitted for
 # the former, hand-authored for the latter; tools/ stays the disposable
