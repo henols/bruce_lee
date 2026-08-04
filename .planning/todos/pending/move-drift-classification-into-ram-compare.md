@@ -91,3 +91,71 @@ along file convenience.
 - If `SKILL.md`'s description changes, keep it scoped so it does not fire on every prompt in this
   repo — it must not match "annotate this listing" (`c64-memory-mapping`) or "assemble this
   source" (`acme-build`).
+
+## RETARGETED 2026-08-04 (quick task 260804-dbf) — NOT closed, because a real gap surfaced
+
+This todo was queued for closure as "STALE, target deleted". **It must not be closed.** The tension
+it described did dissolve, but it dissolved by *both* sides being deleted, and one of them took a
+load-bearing rule with it that now exists in no code at all.
+
+### Both sides of the original tension are gone
+
+| Original location | Fate |
+|---|---|
+| `.claude/skills/c64-ram-capture/scripts/ram-compare.mjs` (the proposed destination) | deleted in `db9eed3` with the rest of that `scripts/` dir — those scripts reached the emulator outside `mcp__vice__*` |
+| `tools/recover.mjs` (where the four symbols lived, and 01-01's documented choice) | deleted in `d963c5b`, *"delete the legacy VICE driver tooling from tools/"* |
+
+So `REPORT_ZONES`, `inPowerOnPatternBlock`, `sharesSingleBitDriftOrigin` and `classifyRunSet` — plus
+`tools/recover.test.mjs`'s 120 lines covering exactly that surface — are all gone. A grep for any of
+those four symbols across the repo now returns **only prose**: `recovery/*/NOTES.md`, two planning
+notes, and todos. No code.
+
+### What replaced part of it, on 2026-08-04
+
+Commits `0db0127` and `e1b55c1` added `.claude/skills/c64-ram-capture/scripts/compare.mjs` — pure
+logic over committed captures, no emulator contact, so it does not repeat the violation that deleted
+its predecessor. It provides `compare` (pairwise), `floor` (union of differing addresses across N
+captures) and `digest`. That change also **corrected** the classification: `$D000-$DFFF` is now
+volatile because it is I/O rather than RAM, and `$FAD8`/`$FC51` are documented as known-unexplained
+RAM-under-KERNAL-ROM rather than treated as failures.
+
+### The actual open item now
+
+**The N≥3 stability gate is missing.** `compare.mjs` answers "how do these two differ?" and "what is
+the union across a set?" — it does **not** implement the rule `classifyRunSet` carried: *a byte is
+only called stable when it agrees across N ≥ 3 captures, and a pairwise multi-bit finding is
+re-adjudicated against the whole run set before it is called a real divergence.*
+
+That rule is not a preference. This todo already records the measurement that forces it: **93 bytes
+were identical in runs 1+2 yet differed in run 3.** Two captures are demonstrably insufficient to
+call a byte stable, and `floor` reporting a union is not the same as a verdict that re-adjudicates
+multi-bit findings against the set.
+
+So the question this todo posed — capability or policy — is still live, but with the options changed:
+
+1. Port the N≥3 adjudication into `compare.mjs` as a fourth verb (e.g. `stable <a> <b> <c> …`),
+   making the skill's advertised scope true.
+2. Re-establish it as project-gate policy somewhere in `tools/`, and say explicitly in
+   `compare.mjs` that it deliberately stops at pairwise-plus-floor and why.
+
+Option 1 is now better supported than when this todo was written: the skill's own `SKILL.md`
+description still promises *"prove **two** captures are equivalent"*, which this todo already flagged
+as advertising the weaker half of the capability. The half that is trustworthy under the project's
+own measurement is the N≥3 half, and it currently exists nowhere.
+
+### Constraints carried forward
+
+- Whatever holds it must not contact the emulator. `compare.mjs` is currently import-free apart from
+  `node:` built-ins; keep that property, which is what lets the rule be tested exhaustively
+  in-process.
+- Do not re-derive the rule from scratch. See [[drift-discriminator-resolved]] and
+  `.planning/notes/reusable-capture-harness-seam.md`; a prior quick task,
+  `260731-84f-resolve-where-the-n-run-drift-classifica`, already attempted this decision — read it
+  before re-deciding.
+- Related and still open: `correct-stale-drift-gap-notes`.
+
+**Evidence:** `git log --diff-filter=D` for both deleted files; a repo-wide symbol grep returning
+prose only; `compare.mjs` read directly and run against
+`recovery/danish/dumps/danish-gameentry-run{1,2,3}.bin`.
+**Confidence:** HIGH that the code is absent. The choice between options 1 and 2 is undecided and
+deliberately left so — this todo is a decision, not a move, and that has not changed.

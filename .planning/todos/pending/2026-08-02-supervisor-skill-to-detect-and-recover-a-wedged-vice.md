@@ -93,3 +93,52 @@ unrelated pid, so blind killing is not safe.
 **Related:** the incident evidence lives in the four sibling todos and `.planning/RE-FINDINGS.md`.
 Whatever gets built should fold the cycle-bracket liveness test into that findings log's
 eventual RE skill rather than duplicating it in a third place.
+
+## Status 2026-08-04 (quick task 260804-dbf) — still open, but part 2 is settled
+
+**Part 2 ("Where it lives — decide before building") no longer needs deciding.** The answer this
+todo listed as "likely the honest answer" is what shipped: *both*. Two MCP tools now exist and are
+reachable from an agent session as named functions — `mcp__vice__vice_diagnose` and
+`mcp__vice__vice_recycle`. Confirmed live on 2026-08-04; see
+`.planning/todos/completed/2026-08-02-vice-diagnose-and-vice-recycle-unreachable-from-agent-session.md`
+for the evidence, which turns on the proxy returning its own broker-absence message rather than the
+host's `Tool not found`.
+
+That also clears the prerequisite this todo was waiting on. The sibling todo that blocked plan
+01.3-05 is resolved.
+
+**`vice_diagnose`'s own schema already encodes much of what part 1 was going to write down**, so the
+skill must reference it rather than restate it. From the schema verbatim: it answers which of five
+states the session's emulator is in — `restarted`, `checkpoint_trap`, `wedged`, `stale_read_path`,
+`live` — with the evidence that produced the verdict; it may resume the machine once or twice to
+measure a cycle bracket; **it leaves the machine PAUSED afterward, and resuming is the caller's own
+next call**; and a `checkpoint_trap` verdict means the machine stopped *itself* at an armed
+checkpoint and must **not** be recycled, because recycling a self-inflicted stop destroys a healthy
+instance.
+
+Note what that last point does to this todo's framing. The original text treats the hard case as
+distinguishing *wedged* from *crashed* from *merely slow*. The tool adds a fourth that is more
+dangerous than any of them: a self-inflicted checkpoint stop is indistinguishable from a wedge from
+the outside, and the intuitive response to it — recycle — is destructive. That trap belongs at the
+top of the skill, not in a troubleshooting table. It is also already logged in
+`c64-program-recon`'s hazards, which the skill should point at rather than duplicate.
+
+### What is actually left
+
+Part 1 only: the triage narrative — when to suspect a wedge, that `vice_ping`'s `execution` field is
+not a liveness signal, the cycle-bracket test, read-before-resume ordering, what evidence to capture
+before recovering, and what is not recoverable. It **is** implementable as a skill now, because the
+privileged actions it needs are MCP tools it can call, which is exactly what the hard constraint
+requires.
+
+### Blocked on
+
+The host broker is not running (`vice_diagnose` reports no `broker.json` record exists at all). No
+part of a triage skill should be written from the schema alone — the whole value of this todo is that
+it encodes what four live incidents taught, and the five-state verdict path has **not** been
+exercised end to end. Write it against a live wedge, or against a live healthy machine at minimum.
+Starting the broker is a host action; the tool's own error says to ask the human.
+
+### Unchanged
+
+Severity stays `blocker`. Nothing here builds the skill.

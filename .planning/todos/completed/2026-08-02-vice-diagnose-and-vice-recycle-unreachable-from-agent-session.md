@@ -77,3 +77,54 @@ as named functions or via a `tools/list` call that is confirmed to route through
 `handleToolsList()` rather than a static manifest snapshot. If the harness supports refreshing its
 tool-discovery cache independently of restarting `vice-proxy.mjs` itself, that is the fix to try
 first, since the running process's own code was already confirmed correct and current.
+
+## RESOLVED 2026-08-04 (quick task 260804-dbf)
+
+This todo's own "Suggested next step" was to confirm from a fresh session whether the two tools
+are reachable. Done, in a session dated 2026-08-04:
+
+| Check | 2026-08-02 | 2026-08-04 |
+|---|---|---|
+| Named `mcp__vice__vice_diagnose` exists in the session tool surface | absent | **present** |
+| Named `mcp__vice__vice_recycle` exists | absent | **present** |
+| The call is intercepted proxy-side rather than forwarded | **no** — host replied `Tool not found` | **yes** |
+
+**The error shape is the load-bearing evidence, and it is this todo's own diagnostic.** On
+2026-08-02 the reply was `vice-proxy: the host VICE MCP server ... rejected this call: Tool not
+found`, which this todo correctly read as proof that the literal tool name had been forwarded to
+the host instead of intercepted. Calling `mcp__vice__vice_diagnose` on 2026-08-04 instead returns:
+
+```
+vice-proxy: the on-demand VICE broker has never been started on this host -- no broker.json
+record exists at all. Start it on the host with: .../tools/vice-launcher.sh
+```
+
+That message is proxy-local and tool-specific. Only `handleToolsCall()` dispatching on
+`DIAGNOSE_TOOL.name` before any forwarding logic can produce it — a forwarded call cannot, because
+the host has no such tool to report a broker state for. So both halves are now true: the harness
+generates named stubs for proxy-local synthetic tools, **and** the proxy intercepts them.
+
+The leading hypothesis recorded above — that the session's tool stubs were generated from a
+`tools-manifest.json` snapshot that structurally cannot contain synthetic tools — is therefore no
+longer the operative situation, whatever changed in the harness. It is left unedited above as the
+record of what was true on 2026-08-02.
+
+### Not verified
+
+That `vice_diagnose` returns a **correct verdict**. The host broker is not running in this session,
+so no cycle bracket could be measured and no five-state verdict was exercised. Reachability and
+proxy-side interception are proven; behaviour is not. A session with the broker up should confirm
+the verdict path before anything depends on it.
+
+### Also unresolved, and deliberately not folded in here
+
+This todo separately recorded that `tools_list` returned a flat 64-tool set that **included
+`vice_disk_list`**, which the four-layer deny-list guard exists to prevent. That was not re-tested
+on 2026-08-04 — `tools_list` was skipped as too verbose for the question at hand — so it stays an
+open claim. It is a deny-list-guard question, not a synthetic-tool-reachability one, and should not
+be treated as closed by this resolution.
+
+**Evidence:** live tool call in this container, 2026-08-04, compared against the verbatim error
+wording recorded in this todo on 2026-08-02.
+**Confidence:** HIGH for reachability and interception. The unverified verdict path and the
+`vice_disk_list` leak are named above rather than assumed.

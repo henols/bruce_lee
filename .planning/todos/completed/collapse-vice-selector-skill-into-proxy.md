@@ -152,3 +152,44 @@ Two things that came out of that move and still bear on this todo:
 Note the two outcomes are not equivalent. Deleting is cleaner but must find homes for three
 survivors; minimizing keeps a file whose *entire* remaining content passes the criterion. Decide
 after § 2.5's moves land — if all three survivors get code-side homes, nothing is left to keep.
+
+## RESOLVED 2026-08-04 (quick task 260804-dbf) — closeable as its own banner predicted
+
+The 2026-08-01 banner said "this may be closeable as-is". Re-read and verified; it is. All three
+things this todo needed are done, and none of them were done by this task:
+
+| Requirement | State |
+|---|---|
+| The SKILL.md is gone | `.claude/skills/vice-mcp-selector/` does not exist |
+| Its CLAUDE.md skills-table row is gone | `grep -c` on `.claude/CLAUDE.md` returns **0** |
+| The assertions that read its SKILL.md are repointed | Done, and now inverted into a retirement gate |
+
+**The third one is stronger than "repointed", which is why this closes rather than lingers.** The
+surviving `.claude/mcp/vice/vice-mcp-selector-docs.test.ts` no longer asserts anything *about* the
+skill existing. It asserts the opposite, over a list of retired routes:
+
+```js
+for (const retired of ["vice-session", "vice-mcp-selector", "spike-findings-bruce-lee", "devcontainer-host-path"]) {
+  assert.ok(!text.includes(retired), `CLAUDE.md must not name the retired ${retired} skill`);
+}
+```
+
+Its own header records the rewrite and the reasoning: *"The invariant underneath was never 'this row
+exists'; it was 'CLAUDE.md tells an agent how to reach the emulator, and names no retired route'."*
+So the deletion this todo asked for is now enforced by a test that walks directories fresh at run
+time — the skill cannot come back by accident, and no future doc can re-name it.
+
+### On the eight remaining references
+
+`grep -rln vice-mcp-selector` over `.claude/mcp/vice/` still returns eight files, which looks at
+first like unfinished cleanup. It is not: they are the retirement machinery itself (the gate above,
+plus header comments recording *why* the route was retired) and file names. Nothing depends on the
+skill existing. Deliberately not "cleaned up" — deleting the gate would remove the thing keeping
+the skill deleted, and renaming the test file is churn with no invariant behind it.
+
+`.claude/mcp/vice/` was read but **not edited** here. Editing it is MCP maintenance, a different
+task from triaging this todo.
+
+**Evidence:** direct verification in this container, 2026-08-04 — directory absent, `grep -c` on
+CLAUDE.md returns 0, and the negative assertion read verbatim from the test source.
+**Confidence:** HIGH.

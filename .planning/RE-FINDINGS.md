@@ -2731,3 +2731,58 @@ buried under a blanket exclusion.
 
 **Confidence:** HIGH for the verdict table (mechanical, reproducible from committed files).
 MEDIUM for "these two are benign" — untested, and the reason the range was not excluded.
+
+### 2026-08-04 — the error *shape* tells you whether a `mcp__vice__` tool was intercepted or forwarded
+
+**Type:** trick (and the resolution of a major todo)
+**Evidence:** `mcp__vice__vice_diagnose` called live in this container on 2026-08-04, compared against
+the verbatim failure wording recorded on 2026-08-02 in
+`.planning/todos/completed/2026-08-02-vice-diagnose-and-vice-recycle-unreachable-from-agent-session.md`
+**Saves:** distinguishes "this tool does not exist for me" from "this tool exists and is telling me
+something", which cost a whole plan (01.3-05, 0/6 attempts) when read the wrong way
+
+The `mcp__vice__*` surface mixes two kinds of tool: real host tools that the proxy **forwards**, and
+proxy-local synthetic tools (`vice_diagnose`, `vice_recycle`, `vice_result_continue`) that the proxy
+**intercepts** before any forwarding. Which one you hit is readable off the error text alone:
+
+| Reply shape | Means |
+|---|---|
+| `vice-proxy: the host VICE MCP server ... rejected this call: Tool not found` | the literal name was forwarded to x64sc — the proxy did **not** intercept it |
+| A proxy-local, tool-specific message (e.g. `the on-demand VICE broker has never been started on this host -- no broker.json record exists at all`) | the proxy intercepted it and dispatched correctly |
+
+The second shape is proof of interception, because a forwarded call cannot produce it — the host has
+no such tool and therefore nothing to report broker state about.
+
+As of 2026-08-04 both synthetic tools resolve as named functions and intercept correctly, reversing
+the 2026-08-02 finding. That was a harness-side change, not a code change: the proxy's code was
+already confirmed correct and current then.
+
+**Confidence:** HIGH for the reachability and the error-shape test, both observed directly. That
+`vice_diagnose` returns a *correct verdict* is **not** established — the host broker was not running,
+so no cycle bracket was measured.
+
+### 2026-08-04 — the N≥3 drift-stability rule currently exists in no code
+
+**Type:** hazard (a deleted invariant, not a deleted file)
+**Evidence:** `tools/recover.mjs` deleted in `d963c5b` and
+`.claude/skills/c64-ram-capture/scripts/ram-compare.mjs` in `db9eed3`; a repo-wide grep for
+`classifyRunSet`, `sharesSingleBitDriftOrigin`, `inPowerOnPatternBlock` and `REPORT_ZONES` now
+returns prose only — `recovery/*/NOTES.md`, two planning notes, and todos
+**Costs:** a capture set can be declared equivalent on two runs, which this project has already
+measured to be wrong
+
+The rule was: *a byte is only stable when it agrees across N ≥ 3 captures, and a pairwise multi-bit
+finding is re-adjudicated against the whole run set before it is called a real divergence.* The
+forcing measurement is already in the record — **93 bytes were identical in runs 1+2 yet differed in
+run 3.**
+
+What survives is `scripts/compare.mjs` (`compare`, `floor`, `digest`), which is pairwise plus a union
+floor. A union floor is not an adjudication: it reports which addresses ever differed, not which
+bytes may be trusted as stable. `c64-ram-capture`'s own description still advertises proving **two**
+captures equivalent, which is the half the project's own evidence says is insufficient.
+
+Tracked in `.planning/todos/pending/move-drift-classification-into-ram-compare.md`, retargeted rather
+than closed for exactly this reason.
+
+**Confidence:** HIGH that the code is absent (grep + two deletion commits). The right home for the
+rule is undecided.
