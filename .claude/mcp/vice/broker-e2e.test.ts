@@ -18,7 +18,7 @@ import { fileURLToPath } from "node:url";
 import { connect, createServer, type Server } from "node:net";
 
 import { build } from "./build.ts";
-import { acquireOverControlPlane } from "./vice-broker-client.ts";
+import { acquireOverControlPlane, openBrokerControl } from "./vice-broker-client.ts";
 import { verifiedKill } from "./broker-kill.mts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -347,6 +347,120 @@ test(
 
       assert.equal(handle.child.exitCode, null, "the broker process itself must still be running after the respawn");
       assert.equal(handle.child.signalCode, null, "the broker process itself must not have been signalled");
+    } finally {
+      await stopBroker(handle);
+      rmSync(stateDir, { recursive: true, force: true });
+      rmSync(probeDir, { recursive: true, force: true });
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// 01.6.2.1-01-PLAN.md, Task 1 (P-01/P-04): the e2e half of Defect 5's close --
+// an acquire over the REAL control plane, against the REAL spawned broker
+// artifact, served from an already-warm instance rather than paying a cold
+// launch. A unit test cannot see an orphaned module (handleAcquire() could
+// be perfectly correct in isolation while the real entry point never reaches
+// it -- exactly 01.6.2's own crash-supervisor gap, and this plan's own
+// Defect 5); this is the proof a fully-controlled stub cannot give.
+//
+// BOTH fixtures below are pre-rename and pre-collapse ON PURPOSE, matching
+// the landed warm-floor supervision test above: VICE_BROKER_PROBE_CMD (the
+// external-command probe branch) retires in plan 02, and VICE_BROKER_SPARES
+// (this env var) renames to VICE_BROKER_WARM_FLOOR in plan 05 -- each of
+// those plans owns migrating THIS test in its own commit, not a pre-emptive
+// rename here.
+// ---------------------------------------------------------------------------
+
+test(
+  "wired warm floor: an acquire over the real control plane with one probe-live warm instance ready is served from it and spawns no second instance (Defect 5, P-01/P-04)",
+  { timeout: 20000 },
+  async () => {
+    build();
+    const WARM_FLOOR = 1;
+    const stateDir = mkdtempSync(join(tmpdir(), "broker-e2e-warm-acquire-"));
+    const probeDir = mkdtempSync(join(tmpdir(), "broker-e2e-warm-acquire-probe-"));
+    const probeScript = join(probeDir, "always-ready.sh");
+    writeFileSync(probeScript, "#!/bin/sh\nexit 0\n");
+    chmodSync(probeScript, 0o755);
+    const handle = startBroker(stateDir, {
+      VICE_BROKER_PROBE_CMD: probeScript,
+      VICE_BROKER_SPARES: String(WARM_FLOOR),
+    });
+    try {
+      await waitForBrokerJson(stateDir);
+
+      // The periodic evaluation pass, not this test, decides when the spare
+      // actually launches -- poll for its instance directory to appear
+      // rather than assuming a fixed number of poll intervals have elapsed.
+      const warmInstanceAppeared = await waitFor(() => {
+        const dirs = readdirSync(stateDir, { withFileTypes: true }).filter((d) => d.isDirectory() && /^\d+$/.test(d.name));
+        return dirs.length >= 1;
+      }, 10000);
+      assert.ok(warmInstanceAppeared, "a warm spare must be launched by the periodic evaluation pass within the deadline");
+
+      const portDirsBeforeAcquire = readdirSync(stateDir, { withFileTypes: true }).filter((d) => d.isDirectory() && /^\d+$/.test(d.name));
+      assert.equal(portDirsBeforeAcquire.length, 1, `expected exactly one warm instance directory before the acquire, found ${JSON.stringify(portDirsBeforeAcquire.map((d) => d.name))}`);
+      const warmPort = Number(portDirsBeforeAcquire[0].name);
+
+      // Wait for the warm instance's OWN epoch.json to actually carry a pid
+      // first (the instance directory can appear one launch step ahead of
+      // this), then wait for the record's own STATE to reach "ready" --
+      // maintainWarmFloor() only promotes "launching" -> "ready" via its own
+      // probe pass on a LATER poll tick (VICE_BROKER_POLL_MS), and
+      // handleAcquire()'s warm-instance selector only ever considers a
+      // record whose recorded state is "ready" (never merely "launching").
+      // Polled through a SEPARATE, never-acquiring control session (status
+      // is read-only) rather than the instance directory's own existence,
+      // which this test already confirmed above and which says nothing
+      // about the record's in-memory state.
+      const epochPath = join(stateDir, portDirsBeforeAcquire[0].name, "epoch.json");
+      const epochAppeared = await waitFor(() => {
+        try {
+          const parsed = JSON.parse(readFileSync(epochPath, "utf8"));
+          return typeof parsed.pid === "number";
+        } catch {
+          return false;
+        }
+      }, 5000);
+      assert.ok(epochAppeared, "the warm spare's epoch.json must carry a pid within the deadline");
+
+      const pollOutcome = await openBrokerControl(stateDir);
+      assert.ok(pollOutcome.ok, `openBrokerControl (status poll) failed: ${JSON.stringify(pollOutcome)}`);
+      let becameReady = false;
+      if (pollOutcome.ok) {
+        const deadline = Date.now() + 10000;
+        while (Date.now() < deadline && !becameReady) {
+          const statusResult = await pollOutcome.session.status();
+          if (statusResult.ok) {
+            const entry = statusResult.instances.find((i) => i.port === warmPort);
+            if (entry && entry.state === "ready") {
+              becameReady = true;
+              break;
+            }
+          }
+          await new Promise((r) => setTimeout(r, 25));
+        }
+        await pollOutcome.session.release();
+      }
+      assert.ok(becameReady, "the warm instance must reach recorded state \"ready\" within the deadline before the acquire is sent");
+
+      const acquired = await acquireOverControlPlane(stateDir);
+      const grant = acquired.grant;
+
+      assert.equal(grant.port, warmPort, "the grant must name the ALREADY-EXISTING warm instance's own port, not a freshly allocated one");
+
+      // The load-bearing assertion: still exactly ONE instance directory --
+      // no second instance was spawned to satisfy this acquire.
+      const portDirsAfterAcquire = readdirSync(stateDir, { withFileTypes: true }).filter((d) => d.isDirectory() && /^\d+$/.test(d.name));
+      assert.equal(
+        portDirsAfterAcquire.length,
+        1,
+        `expected exactly one instance directory to still exist after the acquire (served from the warm floor, no cold launch), found ${JSON.stringify(portDirsAfterAcquire.map((d) => d.name))}`,
+      );
+      assert.equal(Number(portDirsAfterAcquire[0].name), warmPort, "the sole remaining instance directory must be the SAME warm instance the grant named");
+
+      acquired.release();
     } finally {
       await stopBroker(handle);
       rmSync(stateDir, { recursive: true, force: true });
