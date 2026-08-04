@@ -2865,3 +2865,152 @@ than closed for exactly this reason.
 
 **Confidence:** HIGH that the code is absent (grep + two deletion commits). The right home for the
 rule is undecided.
+
+### 2026-08-04 — the widened vector sweep found the game's own NMI and RESET handlers, both at `$1116`, in both releases
+
+**Type:** shortcut (the sweep), plus two confirmations it produced on its first run
+**Evidence:** `derive.mjs vectors` extended from six pairs to all six vector blocks, run over all
+six committed gameentry captures (danish and saeger, runs 1-3 each). Every value below is identical
+across all three runs of its release, so none of it is drift.
+**Confidence:** HIGH for the values. LOW for the anti-tamper *interpretation* — see below.
+**Saves:** the six-pair table never printed `$FFFA`/`$FFFC` as findings, so two live handlers went
+unnoticed through all of phase 01. Sweeping every block is one command and costs nothing extra.
+
+| Vector | danish | saeger | Reading |
+|---|---|---|---|
+| `$FFFE/$FFFF` IRQ | `$1103` | `$1103` | Known — matches the live-established `$1103 → $1574 → $152C` chain |
+| `$FFFA/$FFFB` NMI | `$1116` | `$1116` | **New.** The game installs its own NMI handler under KERNAL ROM |
+| `$FFFC/$FFFD` RESET | `$1116` | `$1116` | **New.** RESET funnels to the *same* address as NMI |
+| `$8004` `CBM80` | absent | absent | Nothing catches a reset via the cartridge route |
+
+NMI and RESET sharing one entry point is the shape of an anti-tamper trap — RESTORE and reset are
+the two ways a user perturbs a running game, and both land in the same place. That reading is
+**LOW confidence and unexercised.** The experiment that settles it is cheap and specified: checkpoint
+`$1116`, press RESTORE with `vice_keyboard_restore` (a press→release *edge*; NMI will not retrigger
+until the line is released, and RESTORE is not in the keyboard matrix), then `vice_machine_reset`
+soft and hard, and record where the PC actually lands.
+
+The blocks now swept: `$0300-$030B` BASIC indirects, `$0314-$0319` IRQ/BRK/NMI, `$031A-$0333` KERNAL
+I/O indirects, `$8000`/`$8002`/`$8004` autostart, `$A000/$A002` BASIC ROM entry, `$FFFA-$FFFF`
+hardware. `$0328` STOP and `$0330`/`$0332` LOAD/SAVE are flagged as cracker-hook sites because both
+releases use custom raw-sector loaders that bypass the KERNAL.
+
+### 2026-08-04 — `$0328` (ISTOP) diverges between the releases — danish `$F6FC`, saeger stock `$F6ED` — but it is residue, not a hook
+
+**Type:** confirmation, and a hazard about how nearly it was misread
+**Evidence:** same six captures; stable across all three runs of each release, so not drift.
+**Confidence:** HIGH that the divergence exists and is stable. It is **not** established that a
+cracker wrote it.
+**Costs, if misread:** a confidently-wrong structural claim. The first version of the widened sweep
+printed `*** CRACKER-HOOK SITES DIVERTED ***` for this byte and was wrong to.
+
+`$01 = $40` in both releases, so HIRAM is 0 and the whole `$0300-$0333` block is **dormant** —
+nothing maintains it, and its bytes are the KERNAL's own boot-time values, partly overwritten. A
+non-default value in a dormant block is residue, not a divert. `$F6FC` is 15 bytes past the stock
+`$F6ED`, which is what leftover-and-partly-overwritten looks like, not what a hook looks like.
+
+**The rule this produced,** now in `c64-program-recon`: a vector block whose ROM is banked out is
+reported `DORMANT`, its non-default values are reported as *residue*, and a hook alarm fires only
+for a **live** block. A residue byte that differs between two releases is still worth something —
+but it is a provenance question for `c64-provenance-diff`, not a structural one.
+
+### 2026-08-04 — a vector target inside a ROM window is unresolved by a static image, and the fix is one extra live call
+
+**Type:** trick
+**Evidence:** doc-derived from `vice_memory_read`'s own schema (`bank`, "e.g. 'ram' to read RAM
+under ROM") plus `vice_memory_banks`. Not yet run.
+**Confidence:** MEDIUM — hypothesis with addresses attached.
+**Saves:** the previous method said "check `$01`" and stopped, which silently reads whichever bank
+happens to be mapped and can return a confidently wrong answer.
+
+A target in `$A000-$BFFF`, `$D000-$DFFF` or `$E000-$FFFF` is *either* ROM *or* the RAM underneath,
+decided by `$01` at the instant the vector is taken. Read the target twice — default bank, then
+`bank: "ram"` — and compare. Agreeing with stock ROM ⇒ the vector lands in ROM and the KERNAL path
+is in use. Differing ⇒ **the program has its own code hidden under ROM**, a large structural finding
+nobody was looking for. Record the stock bytes used as the baseline so the check is reproducible.
+`derive.mjs` marks such targets `bank-ambiguous` and refuses to resolve them from an image alone.
+
+### 2026-08-04 — `vice_diagnose` implements the checkpoint-trap hazard inside the MCP, and its two matching shapes may not cover the recorded incident
+
+**Type:** hazard (a duplication that is now a gap), from matching the crash findings against the
+rewritten MCP
+**Evidence:** `.claude/mcp/vice/vice-proxy.ts` read directly — `gatherCheckpointTrapEvidence()`,
+`DIAGNOSE_VERDICTS`. The live tool schemas were cross-checked against the description strings that
+same file builds, which is what establishes the running proxy is built from this source. **Not
+observed live: the host broker is not running.**
+**Confidence:** HIGH that the code has exactly two shapes. MEDIUM that a mid-handler arming reaches
+a `wedged` verdict in practice.
+**Costs:** the exact loss both the tool and the hazard exist to prevent — recycling a healthy
+instance.
+
+The tool now does by itself what `observation-hazards.md` § 2 tells the agent to do by hand:
+enumerate armed checkpoints, read the PC, resolve the live IRQ handler through `$01`, decide the
+verdict — with **no resume and no stopwatch call**. Strictly better than the manual route, which is
+why the skills now call it first.
+
+But it matches only two shapes: a stopping exec checkpoint whose `start` **equals** the PC, or one
+at the handler **entry** with `hit_count` exactly `0`. The hazard's own evidence describes the PC as
+pinned *"at or just past"* the checkpoint, and *just past* is not *exactly at*. A checkpoint armed
+mid-handler with a non-zero hit count matches neither, falls through to the cycle bracket, and
+returns `wedged` — whose documented response is recycle.
+
+Mitigated skill-side (a `wedged` verdict arriving with any checkpoint still armed gets hand-checked
+before recycling) and filed as
+`.planning/todos/pending/2026-08-04-vice-diagnose-checkpoint-trap-shapes-miss-mid-handler-arming.md`
+rather than fixed inline. **Directly reproducible once the broker is up:** arm a stopping exec
+checkpoint a few bytes inside `$1103`, let it fire, resume, call `vice_diagnose`. A `wedged` verdict
+confirms it.
+
+### 2026-08-04 — no exposed tool reads the restart epoch, so a standing skill instruction was unperformable
+
+**Type:** dead end (the instruction), plus the confirmation that replaces it
+**Evidence:** the session's own tool list has no epoch read; `.claude/mcp/vice/vice-proxy.ts`'s
+`checkEpochAndRebaseline()` runs a fresh `readEpoch()` comparison **before and after every forwarded
+call**, refusing the call or discarding its result and naming both values, then re-baselining so the
+session stays usable.
+**Confidence:** HIGH.
+**Costs:** `c64-ram-capture` said *"Read the restart epoch at the start of a capture and again at the
+end"* and its capture-record template had two rows for the values. Nothing could perform it. An
+instruction that cannot be followed is worse than none — it reads as a step someone skipped.
+
+An agent learns an epoch value from exactly two places: the drift error's own text, or
+`vice_diagnose`'s `restarted` report. The corrected instruction is **"record that no epoch-drift
+error appeared during the capture"** — performable, and strictly stronger than two sampled reads,
+because the guard is continuous rather than at two instants.
+
+Whether the absence is deliberate is an open decision, recorded in the same pending todo. One
+mechanism beats two, but `recovery/`'s void procedure asks a note for "both epoch values", which
+today are only obtainable if a drift error happened to fire.
+
+### 2026-08-04 — `vice_run_until` has no working timeout, so an unreachable address is indistinguishable from a wedge
+
+**Type:** hazard
+**Evidence:** its own tool schema documents `cycles` as *"Max cycles to run (timeout, not yet
+implemented)"*. Read off the schema; not reproduced.
+**Confidence:** MEDIUM.
+**Saves:** one wrong diagnosis. A run to an address the program never reaches has nothing bounding
+it, and presents exactly as the silent stall this project has lost sessions to.
+
+Prefer `vice_checkpoint_add` plus a bounded `vice_ping` poll whenever the target address is a
+hypothesis rather than a certainty. Before concluding "wedged", check whether you asked the machine
+to run somewhere it cannot reach.
+
+### 2026-08-04 — the wedge triage procedure is now a skill, and what it deliberately does not restate
+
+**Type:** shortcut
+**Evidence:** built from the four live 01-04 incidents already in this log (all HIGH) plus the
+`vice_diagnose`/`vice_recycle` schemas. The five-verdict path itself is **not exercised end to end**
+— the host broker is not running, so that half stays MEDIUM inside the skill's own provenance table.
+**Confidence:** HIGH for the incident-derived content, MEDIUM for the tool contract.
+**Saves:** the cost this log records four times over — every agent hitting a stall had to know the
+cycle-bracket trick, invent the same triage, and then discover there was no remedy. There is one now.
+
+`.claude/skills/vice-wedge-triage/` carries the ordering and the judgement: which of four
+look-alike states the machine is in, the one correct response to each verdict, that `vice_recycle`'s
+required `reason` **is** the evidence record (written to `.planning/incidents/` before anything is
+killed, so there is no separate ritual), what is not recoverable, and the manual cycle-bracket
+fallback for a session whose `vice_diagnose` cannot answer.
+
+It deliberately does **not** restate the tool schemas — that is the failure that deleted
+`vice-mcp-selector` — and it ships no script, because a helper that reached the emulator is the
+failure that deleted `c64-ram-capture`'s original `scripts/`.

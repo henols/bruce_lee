@@ -2,7 +2,7 @@
 created: 2026-08-02T12:10:44.677Z
 title: Supervisor skill to detect and recover a wedged (not crashed) VICE
 area: tooling
-severity: blocker
+severity: minor
 files:
   - .claude/mcp/vice/resources/vice-supervisor.sh
   - .claude/mcp/vice/resources/vice-pool.sh
@@ -142,3 +142,51 @@ Starting the broker is a host action; the tool's own error says to ask the human
 ### Unchanged
 
 Severity stays `blocker`. Nothing here builds the skill.
+
+## Status 2026-08-04 (quick task 260804-eu6) — part 1 is BUILT. Severity dropped to `minor`.
+
+`.claude/skills/vice-wedge-triage/` exists, is registered by hand in `.claude/CLAUDE.md`'s skills
+table, and passes the frontmatter checker. **Both halves of this todo are now discharged in the
+shape it predicted — skill for the procedure, MCP tools for the privileged actions.**
+
+The skill carries exactly what part 1 specified, and nothing the schemas already say:
+
+- The four look-alike states as the opening table, with the destructive-response trap
+  (`checkpoint_trap` → do **not** recycle) at the top rather than buried in troubleshooting, per
+  this todo's own reordering note.
+- Verdict → response, one row per verdict, because a verdict is not a suggestion to try things.
+- **`vice_recycle`'s required `reason` IS the evidence capture** — it is written verbatim into a
+  permanent, repo-tracked record under `.planning/incidents/` *before* anything is killed. That
+  answers this todo's "what evidence to capture before recovering" without inventing a ritual:
+  there is nothing separate to do, and a lazy `reason` is a lost incident.
+- What is not recoverable, with the recorded incident where delete → soft reset → hard reset →
+  single step all failed in sequence.
+- The manual cycle-bracket fallback, four calls, for a session where `vice_diagnose` cannot answer.
+- A per-claim provenance table, so the HIGH incident-derived content is not confused with the
+  MEDIUM tool contract.
+
+**Deliberately written despite this todo's "Blocked on".** That block said no part of the skill
+should be written *from the schema alone* — and it is not: the substance is the four live incidents
+already logged at HIGH, and every schema-derived claim is graded MEDIUM in the skill's own
+provenance table and labelled unexercised. The broker is still not running (`vice_diagnose` reports
+no `broker.json` record exists at all), so the alternative was leaving a `blocker` todo unactioned
+for an unknown period while the cost it names — every agent reinventing the triage — kept accruing.
+
+### What is genuinely left
+
+**Exercise the five-verdict path end to end against a live machine.** Until then those rows stay
+MEDIUM. Two of the five are cheap to force deliberately rather than waiting for an incident:
+
+- `checkpoint_trap` — arm a stopping exec checkpoint at the live IRQ handler entry (`$1103` on both
+  releases), let it stop the machine, then call `vice_diagnose`.
+- `live` — call it on a healthy instance, and confirm the bracket it reports is non-zero and that
+  the machine is left paused afterwards.
+
+`wedged` and `stale_read_path` cannot be manufactured on demand; take them opportunistically the
+next time an incident happens, which this log says will not be long.
+
+**A defect found while writing it, filed not fixed:**
+[[2026-08-04-vice-diagnose-checkpoint-trap-shapes-miss-mid-handler-arming]] — the trap verdict
+matches two shapes, and a checkpoint armed *mid*-handler with a non-zero hit count matches neither,
+falling through to `wedged`, whose response is the destructive one. Mitigated skill-side for now.
+That is also the first candidate for "move the remembered procedure into the tool" once decided.
