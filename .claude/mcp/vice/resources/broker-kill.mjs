@@ -6,15 +6,30 @@
 // rebuild.
 // broker-kill.mts
 //
-// D (minimal, this task -- the full shutdown wiring and the startup reap
-// are plan 04's). The identity-verified kill discipline, ported from
+// D (complete through this task -- Task 3 of this plan adds the startup
+// reap below): the identity-verified kill discipline, ported from
 // resources/vice-broker.sh's signal_recorded_pid()/signal_vice_child_pid():
 // zero-signal liveness check, identity check against the process's own
 // argument string, SIGTERM, poll-then-SIGKILL. The expected-identity string
 // always comes from the instance record (the resolved binary path recorded
 // at spawn time by broker-launch.mts), never a module constant -- this
 // broker spawns the emulator directly and there is no intermediate
-// supervising script for an identity check to match against.
+// supervising script for an identity check to match against. See this
+// module's own history: the bash original's PARAMETERISED sibling
+// (signal_vice_child_pid, matched against a caller-supplied binary) is the
+// model this ported; its hardcoded sibling (signal_recorded_pid, matched
+// against $SUPERVISOR_SCRIPT) is NOT -- there is no supervisor script in
+// this topology, so carrying that constant forward would make every kill
+// silently refuse while logging a plausible-looking pid-reuse warning.
+//
+// This task (Task 2, C5/D-25) adds shutdown()/registerShutdownHandlers():
+// every catchable teardown path (SIGTERM, SIGINT, SIGHUP, an uncaught
+// exception, an unhandled rejection, normal exit) converges on one
+// re-entrant-safe teardown that identity-verified-kills every instance and
+// clears the map unconditionally (kill-never-recycle). The uncatchable
+// signals (SIGKILL, SIGSTOP) are deliberately unhandled -- see
+// registerShutdownHandlers()'s own comment. Task 3 (criterion I, D-15) adds
+// the unconditional startup reap next.
 import { execFileSync } from "node:child_process";
 const defaultIsAlive = (pid) => {
     try {
@@ -48,6 +63,9 @@ function resolveKillWaitS(override) {
     const raw = process.env.VICE_BROKER_KILL_WAIT_S;
     const n = raw === undefined ? NaN : Number(raw);
     return Number.isFinite(n) ? n : 5;
+}
+function defaultLog(line) {
+    process.stderr.write(`${line}\n`);
 }
 /** Implements the discipline exactly as signal_recorded_pid()/
  * signal_vice_child_pid() do. An empty/null/non-positive pid, or a pid
@@ -89,4 +107,186 @@ export async function verifiedKill({ pid, expectedIdentity, deps = {} }) {
         waitedMs += 200;
     }
     return "sigterm";
+}
+/** The single shutdown sequence every catchable entry point converges on
+ * (mirrors resources/vice-broker.sh's own broker_shutdown() ->
+ * reap_all_instances()). For every instance currently recorded: set the
+ * deliberate-kill marker BEFORE any signal reaches it (T-01.6.2-21) -- done
+ * as its own pass over every instance FIRST, before any kill is attempted,
+ * so a slow kill on instance A can never race a later-arriving signal that
+ * finds instance B's marker still unset -- so a supervisor's exit handler
+ * (broker-launch.mts's superviseChild()) treats the death as a deliberate
+ * teardown, never a crash to respawn. Then kill it identity-verified through
+ * verifiedKill() (or the injected stand-in). Then remove it from the map
+ * UNCONDITIONALLY, whatever stage word came back -- that unconditional
+ * removal IS the kill-never-recycle structural guarantee: the only way an
+ * instance becomes grantable again is a fresh launch, never a reset of this
+ * entry (mirrors teardown()'s own header comment in the bash original).
+ * Never throws past an individual kill failure -- one instance's kill
+ * rejecting must not stop every other instance from being torn down. */
+export async function shutdown(deps) {
+    const kill = deps.kill ?? verifiedKill;
+    const log = deps.log ?? defaultLog;
+    const instances = Array.from(deps.state.instances.values());
+    for (const instance of instances) {
+        instance.deliberateKill = true;
+    }
+    let killed = 0;
+    for (const instance of instances) {
+        try {
+            const stage = await kill({ pid: instance.pid, expectedIdentity: instance.expectedIdentity });
+            if (stage === "sigterm" || stage === "sigkill")
+                killed++;
+        }
+        catch (e) {
+            log(`vice-broker: shutdown -- kill of port ${instance.port} threw: ${e.message}`);
+        }
+        finally {
+            deps.state.instances.delete(instance.port);
+        }
+    }
+    log(`vice-broker: shutdown complete -- ${instances.length} instance(s) processed, ${killed} signalled`);
+}
+/** The six catchable entry points every real broker process registers
+ * shutdown() against. Not exported: registerShutdownHandlers() below is the
+ * only caller, and no other module needs to enumerate these by name -- a
+ * structural test reads this array directly via a test-only re-export
+ * rather than duplicating the literal list. */
+const HANDLED_SIGNALS = ["SIGTERM", "SIGINT", "SIGHUP"];
+/** Exported ONLY for the structural test asserting no handler is registered
+ * for the uncatchable kill/stop signals -- reading this array is how that
+ * test enumerates "the registered signal names from the module's own
+ * registration function" without parsing source text. */
+export const _HANDLED_SIGNALS = HANDLED_SIGNALS;
+/** Registers the single shutdown sequence against every CATCHABLE entry
+ * point: SIGTERM, SIGINT, SIGHUP, an uncaught exception, an unhandled
+ * rejection, and normal exit -- six listeners, one shutdown function,
+ * mirroring the bash original's single `trap broker_shutdown EXIT HUP INT
+ * TERM` (extended here with the two JS-only failure modes bash has no
+ * equivalent of). Disarms re-entry FIRST, before any child is signalled --
+ * the bash version disarms its own trap (`trap - EXIT HUP INT TERM`) as its
+ * first statement for exactly this reason, and an interrupt followed by a
+ * terminate a hundred milliseconds later is a shape this project has
+ * already seen (2026-08-02).
+ *
+ * Registers NOTHING for SIGKILL or SIGSTOP, and builds no mechanism to
+ * prevent orphans after one -- both are UNCATCHABLE at the OS level; a
+ * process receiving either executes no handler, no exit hook, no cleanup
+ * block, and in a one-process design there is no supervisor left standing
+ * to be told anything happened. Orphaned emulators after such a kill are
+ * accepted and cleaned up by hand (T-01.6.2-29) -- the NEXT broker start's
+ * unconditional reap (Task 3's reapOrphanedInstances(), added below in a
+ * later commit) is the actual recovery mechanism, not anything registered
+ * here. Two kernel-level alternatives (a watchdog process, a cgroup-wide
+ * kill) were considered during this phase's own design discussion and
+ * dropped as over-engineering, not deferred.
+ *
+ * The 'exit' listener is registered identically to the other five, but
+ * carries an honest limitation worth stating rather than hiding: Node's
+ * 'exit' event fires synchronously and cannot keep the event loop alive for
+ * pending async work, so on a REAL process exit only shutdown()'s
+ * synchronous prefix (marking every instance deliberately-killed, issuing
+ * the initial SIGTERM to each) is guaranteed to run before the process is
+ * actually gone -- the SIGTERM-wait-then-SIGKILL escalation's own polling
+ * cannot complete there. This is a real Node platform limitation, not a gap
+ * in this module; it is why the 'exit' path is exercised in this module's
+ * own tests via the injectable `proc` seam (a plain EventEmitter, which CAN
+ * await async work in its own listeners) rather than a real process exit.
+ *
+ * Returns a cleanup function that removes every listener this call
+ * registered -- used by this module's own tests so successive test cases
+ * never accumulate listeners on the same `proc` object; a real broker
+ * process never calls it (registered once, for the process's whole life). */
+export function registerShutdownHandlers(deps) {
+    // Whether this call is wired to the REAL Node process global (true, the
+    // real-broker wiring site in vice-broker.mts) or a test's injected
+    // process-like stand-in (false). This is what the default `exit` below
+    // uses to decide whether it may actually call process.exit() -- see that
+    // default's own comment for why the answer differs by caller.
+    const usingRealProcess = deps.proc === undefined;
+    const proc = deps.proc ?? process;
+    // Default exit: always records the intended exit code on `proc.exitCode`
+    // first (matching this codebase's own "never process.exit(), always
+    // process.exitCode" convention used elsewhere, e.g. main()'s
+    // argument-parsing error paths, so any pending stdout/stderr write has a
+    // chance to flush) -- but ONLY when wired to the real Node process does it
+    // ALSO call the real process.exit(code) explicitly. This is deliberate,
+    // not an inconsistency: a long-lived broker keeps its heartbeat/poll
+    // setInterval timers alive for as long as the process lives, so merely
+    // setting `process.exitCode` after a signal would never actually end the
+    // process -- the event loop has nothing left that would let it drain on
+    // its own. A deliberate, fully-sequenced shutdown (every instance killed,
+    // every marker set, the log line written) is exactly the point at which an
+    // explicit process.exit() is the right primitive, not a shortcut around
+    // it. Tests that inject their own `proc` (a fake, never the real Node
+    // process) never take this branch, so emitting 'exit'/'uncaughtException'
+    // on a fake stand-in never terminates the actual test-runner process.
+    const exit = deps.exit ?? ((code) => {
+        proc.exitCode = code;
+        if (usingRealProcess) {
+            process.exit(code);
+        }
+    });
+    const log = deps.log ?? defaultLog;
+    let running = false;
+    const run = (reasonForLog, exitCode) => {
+        if (running)
+            return;
+        running = true;
+        shutdown(deps)
+            .catch((e) => {
+            log(`vice-broker: shutdown error during ${reasonForLog}: ${e.message}`);
+        })
+            .finally(() => {
+            exit(exitCode);
+        });
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- matches
+    // ProcessLike#once's own listener shape (node:events' EventEmitter#once).
+    const registrations = [];
+    const register = (event, listener) => {
+        proc.once(event, listener);
+        registrations.push([event, listener]);
+    };
+    for (const sig of HANDLED_SIGNALS) {
+        register(sig, () => run(`signal ${sig}`, 0));
+    }
+    register("uncaughtException", (err) => {
+        log(`vice-broker: uncaught exception: ${err && err.message ? err.message : String(err)}`);
+        run("uncaughtException", 1);
+    });
+    register("unhandledRejection", (reason) => {
+        log(`vice-broker: unhandled rejection: ${reason instanceof Error ? reason.message : String(reason)}`);
+        run("unhandledRejection", 1);
+    });
+    register("exit", () => run("exit", 0));
+    return () => {
+        const p = proc;
+        if (typeof p.removeListener === "function") {
+            for (const [event, listener] of registrations) {
+                p.removeListener(event, listener);
+            }
+        }
+    };
+}
+/** D-25's mandatory start-time banner: printed unconditionally, before the
+ * control listener begins accepting, naming exactly what a keyboard
+ * interrupt or a closed terminal destroys. On 2026-08-02 a `^C` produced
+ * "reap saw 4 recorded instance(s), terminated 4" and killed a live
+ * session -- the incident was not caused by missing machinery, it was
+ * caused by nobody being told. Detaching stays the operator's own
+ * nohup/setsid/systemd choice (D-25) -- this banner names that choice
+ * rather than offering a flag; the launcher stays thin. */
+export function startupBanner() {
+    return [
+        "vice-broker: WARNING -- this broker runs in the FOREGROUND of this process.",
+        "vice-broker: a keyboard interrupt (Ctrl-C), a closed terminal, or an ending SSH/VS Code",
+        "vice-broker: session will TERMINATE EVERY EMULATOR this broker launched -- including",
+        "vice-broker: instances leased to OTHER AGENTS' LIVE SESSIONS, which then lose their",
+        "vice-broker: accumulated context.",
+        "vice-broker: a broker that dies voids every session it was serving -- there is no",
+        "vice-broker: reconnect. A session whose broker dies must be restarted, not resumed.",
+        "vice-broker: to run this broker outside the current terminal session, use your own",
+        "vice-broker: nohup/setsid/systemd -- this launcher does not offer a --detach flag.",
+    ].join("\n");
 }

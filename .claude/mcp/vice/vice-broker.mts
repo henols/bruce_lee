@@ -26,7 +26,7 @@ import { spawn as nodeSpawn, type ChildProcess } from "node:child_process";
 import { containerGuardReport, containerGuardEnforce } from "./container-guard.mjs";
 import { createBrokerState, nextFreePort, countReady, countTotal, countLaunching, type BrokerState, type InstanceRecord } from "./broker-state.mjs";
 import { acquirePortAndLaunch, maintainWarmFloor, probeReady, runBrokerPass } from "./broker-launch.mjs";
-import { verifiedKill } from "./broker-kill.mjs";
+import { verifiedKill, registerShutdownHandlers, startupBanner } from "./broker-kill.mjs";
 import { writeEpochRecord, type EpochRecord } from "./broker-epoch.mjs";
 import { startControlListener, newControlToken, type AcquireGrant } from "./broker-control.mjs";
 
@@ -296,6 +296,11 @@ async function run(args: ParsedArgs): Promise<void> {
     return;
   }
 
+  // D-25: the mandatory start-time banner, printed unconditionally and
+  // BEFORE anything else in this function runs -- an operator must be told
+  // what a Ctrl-C costs before there is anything running for them to Ctrl-C.
+  process.stderr.write(`${startupBanner()}\n`);
+
   const state = createBrokerState();
   const token = newControlToken();
   const controlHost = process.env.VICE_BROKER_CONTROL_HOST ?? "0.0.0.0";
@@ -313,6 +318,14 @@ async function run(args: ParsedArgs): Promise<void> {
     process.exitCode = 1;
     return;
   }
+
+  // C5: every catchable shutdown path (SIGTERM/SIGINT/SIGHUP, an uncaught
+  // exception, an unhandled rejection, normal exit) converges on ONE
+  // re-entrant-safe teardown that identity-verified-kills every instance
+  // this broker launched and clears the map unconditionally
+  // (kill-never-recycle). Registered once the listener is up, since there is
+  // nothing to tear down before that point.
+  registerShutdownHandlers({ state });
 
   let record: BrokerRecord = {
     version: 1,

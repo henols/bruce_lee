@@ -2235,3 +2235,42 @@ control plane replaces is deleted, not disabled, so a change of mind after Task 
 rewriting the client, the listener, the discovery record and every test that drives them. Recording
 the two residual risks as accepted-not-verified, rather than silently treating them as closed,
 keeps `01.6.2-VALIDATION.md`'s backstop-truth bookkeeping honest.
+
+### 2026-08-04 — a long-lived Node server holding `setInterval` timers never actually exits on a signal unless the handler calls `process.exit()`; merely setting `process.exitCode` is not enough
+
+**Finding:** Phase 01.6.2 plan 04 wired `registerShutdownHandlers()` (`broker-kill.mts`) to every
+catchable shutdown path in `vice-broker.mts`. The first working version only set
+`proc.exitCode = code` after killing every instance — mirroring this codebase's own established
+convention elsewhere (`main()`'s argument-parsing error paths: "never call `process.exit()`,
+always set `process.exitCode` so pending I/O flushes first"). Against a real spawned broker
+process (`broker-e2e.test.ts`-style: build the artifact, spawn under bare `node`, send a real
+`SIGTERM`), the child pids it launched were correctly killed, but **the broker process itself
+never actually exited** — `child.exitCode`/`child.signalCode` stayed `null` past an 8-second
+poll deadline. Root cause: `vice-broker.mts`'s `run()` installs a heartbeat `setInterval` and a
+poll-pass `setInterval`, both of which keep the event loop alive for the process's entire life by
+design. Setting `process.exitCode` only tells Node *what code to exit with once the event loop
+naturally drains* — it does not itself stop anything, and an interval-based server's loop never
+drains on its own. The convention that "never `process.exit()`" is correct is scoped to a
+synchronous, short-lived code path with pending writes to flush before a natural exit; it does
+not extend to a deliberate, fully-sequenced shutdown of a process that would otherwise run
+forever.
+
+**Fix:** `registerShutdownHandlers()`'s default `exit` callback now distinguishes the real Node
+`process` global (the production wiring, `deps.proc` omitted) from an injected test stand-in
+(`deps.proc` supplied, e.g. a plain `EventEmitter`): it always sets `proc.exitCode` first, but
+calls the real `process.exit(code)` explicitly ONLY when operating against the real global
+process. A test's injected fake `proc` never takes that branch, so emitting `'exit'` /
+`'uncaughtException'` on a fake stand-in never terminates the actual test-runner process — while
+the real broker, wired with no `proc` override, genuinely exits after a signal.
+
+**Evidence:** live, in this container — reproduced via a real spawned `resources/vice-broker.mjs`
+process (VICE_BIN stubbed to `/bin/sleep`) sent a real `SIGTERM`/`SIGINT`/`SIGHUP`; failed
+(process never exited, deadline reached) before the fix, passed (child pids gone AND
+`exitCode === 0`) after it. Three separate signal-path tests in `broker-kill.test.ts` all exercise
+this.
+**Confidence:** HIGH — reproduced and fixed against a real Node process in this container, not
+inferred from documentation.
+**Saves:** the exact 8-second deadline-timeout failure mode this entry describes, for anyone who
+next adds a `setInterval`-based long-lived process in this codebase and reaches for the
+"never `process.exit()`" convention by reflex without checking whether it still applies once the
+event loop has something keeping it alive forever.
