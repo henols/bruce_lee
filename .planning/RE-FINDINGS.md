@@ -2573,6 +2573,85 @@ answers to the one shared setter.
 plan produced, and the two end-to-end tests exercise the exact failure mode (a release respawning)
 the conflation would have caused.
 
+### 2026-08-04 — Plan 14: making a concurrency window wide by construction, by pre-occupying the resources an allocator must probe before it succeeds
+
+**Finding (technique):** a test that needs a genuine "one request served, one request queued
+behind it" race against a REAL allocator, rather than an injected stand-in, can make that window
+wide BY CONSTRUCTION instead of hoping a race lands: bind a contiguous run of ordinary loopback
+TCP listeners at the allocator's own configured scan-band base, before starting the broker. The
+allocator's own port-in-use probe (`broker-state.mts`'s `defaultPortInUse()`) must then fail one
+real bind-and-release round trip per occupied candidate before it can succeed, so one allocation
+costs exactly as many round trips as candidates bound — a width the test chooses, not one it
+gets lucky with. The companion rule that makes this cheap: assert the precondition actually
+reproduced (here: exactly one of two connections received a grant, the other received nothing)
+and FAIL with a diagnostic naming the unreproduced window when it did not, rather than passing on
+an unreproduced precondition — a race test that silently stops reproducing its own precondition
+and passes forever is worse than no test at all, because it looks green while proving nothing.
+
+**Costs:** a handful of real loopback listeners and a cleanup path that must release every one of
+them, plus (see the hazard below) a real, if narrow, event-loop characteristic this technique
+exposed that had to be fixed in the allocator itself before the technique would reproduce at all
+in this container.
+
+**Confidence:** HIGH — verified live in this container: `broker-e2e.test.ts#"wired
+disconnect-while-queued: a genuinely queued acquire whose client disconnects leaves exactly one
+instance behind, not two"` reproduces the precondition (one served, one queued with no response)
+reliably across repeated runs once the hazard below was fixed, and the test's own precondition
+assertion was confirmed to fire correctly (fail with a diagnostic, not pass silently) when the
+window did not reproduce, both before AND after that fix.
+
+### 2026-08-04 — Plan 14 (HAZARD): a real allocator's own EADDRINUSE-driven scan can starve every OTHER connection on the same control listener for its entire duration, not merely a competing acquire
+
+**Finding:** while building the test above, the literal "widen the port scan" technique did NOT
+reproduce a queued second connection at all, no matter how many candidates were pre-occupied (60,
+80, then 500 in an isolated repro) — the second connection's acquire line was never read by the
+broker process until the FIRST connection's entire `handleAcquire()` chain (port scan, spawn, and
+epoch write) had already resolved. Confirmed directly against the shipped `nextFreePort()` /
+`defaultPortInUse()` (not a hand-rolled stand-in) in an isolated single-file repro: a second,
+ALREADY-ESTABLISHED, ALREADY-warmed connection's data was not read until the first connection's
+scan fully completed, regardless of scan width (60 vs. 500 candidates made no difference to
+whether interleaving happened, only to how long the wait was). Even the second connection's own
+TCP ACCEPT was delayed the same way when connected fresh mid-scan. Root cause, isolated with three
+minimal repros varying one thing at a time: `net.Server.listen()`'s EADDRINUSE failure settles a
+Promise without ever yielding to libuv's poll/check phase, and Node drains the microtask/nextTick
+queue completely after every I/O callback invocation before considering the next ready file
+descriptor — so a `for` loop of `await`s that all resolve this way runs to completion as one
+unbroken unit with respect to every OTHER socket on the process, including sockets that were
+already open, already read from once, and had no data-delivery jitter of their own. A REAL
+macrotask-boundary wait (`setTimeout`, or waiting for a real child process to actually exit)
+verifiably does NOT have this problem in the same repro harness — only the EADDRINUSE-settled
+probe does. This means, independent of any test: a broker scanning many already-bound candidates
+in a row cannot accept a new connection or read a request already sitting on an open one (a
+release, a recycle, a status query) for the scan's entire duration, not merely block a second
+acquire.
+
+**The fix:** `nextFreePort()` now yields via `await new Promise(setImmediate)` every few
+candidates (a cheap timer-phase turn, negligible against the real bind-and-release cost each
+candidate already pays), verified both by a new unit test (`broker-state.test.ts`, a macrotask
+queued before a long in-use run gets at least one turn while the scan is still in flight) and by
+the E2E test above only reproducing its own precondition reliably once this fix landed. This is
+in `broker-state.mts`, one file outside this plan's own originally declared file list (`broker-
+control.mts`, `broker-e2e.test.ts`, `vice-proxy.ts` and their tests) — recorded as a deviation in
+this plan's own SUMMARY under Rule 2 (a scan starving the whole control listener is a genuine
+liveness defect independent of this plan's own test, not merely a test-construction convenience).
+
+**Dead end, recorded so it is not re-tried:** connection-setup jitter (two freshly `connect()`'d
+sockets not becoming writable at identical times), `setNoDelay(true)`, and pre-warming the second
+connection with an unrelated round trip before sending the real request were all tried first and
+made no difference — the starvation is not about when the second connection's bytes arrive, it is
+about the first connection's own callback chain never yielding at all once started.
+
+**Evidence:** live, in this container: three isolated single-file Node scripts (varying scan
+width, an actual `spawn()`'s own 'spawn' event, and a real child-process exit wait, one variable
+at a time) plus one run against the actual `broker-state.mjs` build (not a stand-in), all
+confirming the same starvation with the shipped EADDRINUSE-driven probe and its absence with a
+genuine macrotask wait; the fix confirmed both by a new targeted unit test and by the E2E test's
+own precondition reproducing reliably across repeated runs afterward.
+
+**Confidence:** HIGH — reproduced from first principles with isolated, minimal repros before
+touching production code, and the fix's effect (precondition reproduces vs. does not) was verified
+by literally toggling it on and off against the same test.
+
 ## Tooling findings — the pure-Node modules in `tools/`
 
 ### 2026-08-04 — `d64-parse --json` decides directory fakery for you, with named reasons

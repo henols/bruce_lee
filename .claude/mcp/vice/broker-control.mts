@@ -327,13 +327,50 @@ function attachControlProtocol(server: Server, opts: StartControlListenerOptions
      * enqueueing itself and returning unsettled when a launch is already in
      * flight. Shared by the immediate first attempt and every later retry
      * `drainPendingAcquires()` drives, so the two paths can never answer
-     * differently for the same requestId. */
+     * differently for the same requestId.
+     *
+     * Gap closure (plan 14, WR-03/T-01.6.2-87/-88): two destroyed-socket
+     * checks guard a grant against outliving the connection that owns it,
+     * and they bound TWO DIFFERENT failures -- do not conflate them into one
+     * claim.
+     *
+     * Half one -- the pre-check immediately below, BEFORE onAcquire() is
+     * ever called -- closes the ALWAYS-REACHABLE leak: a client that
+     * disconnects while queued leaves its entry pending (nothing removes it,
+     * since it never held a grant id to release), and the next drain pass
+     * would otherwise call the launch callback anyway -- which on the real
+     * broker allocates a port, spawns a real child, writes an epoch record
+     * and records a grant that no connection owns. This half turns that
+     * always-reachable leak into a bounded race (half two, below).
+     *
+     * Half two -- the release-on-late-grant branch on the success path --
+     * bounds the NARROW race the pre-check cannot close: a disconnect
+     * landing between the pre-check passing and onAcquire()'s own
+     * completion. This half does NOT eliminate that race -- it cannot, the
+     * pre-check and the callback are separated by a real await -- it turns
+     * the race from a leak into a reclaim, by invoking the existing release
+     * callback with the same request id instead of silently dropping the
+     * grant it produced.
+     */
     function attemptAcquire(requestId: string): Promise<boolean> {
+      // Half one: a queued entry whose owning socket is already gone is
+      // settled immediately, WITHOUT ever calling onAcquire() -- this is
+      // what keeps a retried drain pass from performing a real, ownerless
+      // launch.
+      if (socket.destroyed) return Promise.resolve(true);
       return opts
         .onAcquire(requestId)
         .then((outcome) => {
-          if (socket.destroyed) return true; // nothing left to answer -- drop
           if (outcome.ok) {
+            // Half two: the pre-check above ran before this call; a
+            // disconnect landing DURING the await is still possible and is
+            // bounded, not eliminated, here -- a grant that settles for a
+            // socket that is now gone is released through the existing
+            // release path rather than dropped.
+            if (socket.destroyed) {
+              opts.onRelease(requestId);
+              return true;
+            }
             requestIdForThisConnection = requestId;
             writeLine(socket, {
               kind: "grant",
@@ -348,6 +385,7 @@ function attachControlProtocol(server: Server, opts: StartControlListenerOptions
           if (outcome.reason === "launch_in_flight") {
             return false; // still blocked -- caller re-queues
           }
+          if (socket.destroyed) return true; // no grant was produced -- nothing to release, nothing left to answer
           const code: ControlErrorCode = outcome.reason === "internal" ? "internal" : outcome.reason;
           writeLine(socket, { kind: "error", code, message: `acquire failed: ${outcome.reason}` });
           return true;

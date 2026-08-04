@@ -408,6 +408,154 @@ test("three acquires arriving while a launch is in flight are all present in the
   }
 });
 
+// ============================================================================
+// 01.6.2-14-PLAN.md, Task 1: a queued acquire whose owning connection is
+// already gone must never reach the launch callback at all (the
+// always-reachable leak), and a launch that settles after its own socket is
+// gone must be released through the existing release path rather than
+// dropped (the narrow, bounded race). Both drive a REAL listener over a REAL
+// TCP connection, per this file's own established idiom -- no test opens a
+// connection to the host VICE, and neither closure below is a hand-rolled
+// stand-in for attemptAcquire() itself, which stays private to
+// broker-control.mts and is exercised only through the wire.
+// ============================================================================
+
+test("attemptAcquire: a queued entry whose socket is already destroyed never calls the launch callback at all", async () => {
+  let calls = 0;
+  const { listener, token } = await startTestListener({
+    onAcquire: async () => {
+      calls++;
+      return { ok: false, reason: "launch_in_flight" };
+    },
+  });
+  // Observes the SERVER-SIDE socket directly -- attachControlProtocol()'s
+  // own "connection" listener (registered first, inside startControlListener())
+  // still runs unaffected; EventEmitter supports multiple listeners, and this
+  // one only reads .destroyed, never mutates anything.
+  let serverSocket: import("node:net").Socket | null = null;
+  listener.server.on("connection", (socket) => {
+    serverSocket = socket;
+  });
+  const client = makeClient(listener.port);
+  try {
+    client.send({ op: "acquire", id: "req-1", token });
+    await waitFor(() => listener.pendingAcquires.length === 1, 2000);
+    assert.equal(calls, 1, "the first (blocked) attempt must have called the launch callback once");
+
+    client.close();
+    await waitFor(() => serverSocket !== null && serverSocket.destroyed, 2000);
+
+    await drainPendingAcquires(listener.pendingAcquires);
+    assert.equal(calls, 1, "a drain pass over an entry whose socket is already destroyed must not call the launch callback again");
+  } finally {
+    listener.server.close();
+  }
+});
+
+test("attemptAcquire: a grant that settles after its own socket was destroyed is released through the release callback, not silently dropped", async () => {
+  let resolveLaunch: ((outcome: AcquireOutcome) => void) | null = null;
+  const { listener, token, releases } = await startTestListener({
+    onAcquire: () =>
+      new Promise<AcquireOutcome>((resolvePromise) => {
+        resolveLaunch = resolvePromise;
+      }),
+  });
+  let serverSocket: import("node:net").Socket | null = null;
+  const written: string[] = [];
+  listener.server.on("connection", (socket) => {
+    serverSocket = socket;
+    const originalWrite = socket.write.bind(socket);
+    socket.write = ((chunk: unknown, ...rest: unknown[]) => {
+      written.push(String(chunk));
+      return (originalWrite as (...a: unknown[]) => boolean)(chunk, ...rest);
+    }) as typeof socket.write;
+  });
+  const client = makeClient(listener.port);
+  try {
+    client.send({ op: "acquire", id: "req-1", token });
+    await waitFor(() => resolveLaunch !== null, 2000);
+
+    client.close();
+    await waitFor(() => serverSocket !== null && serverSocket.destroyed, 2000);
+
+    resolveLaunch!({ ok: true, grant: { port: 6600, url: "http://127.0.0.1:6600/mcp", epochFile: "/tmp/e.json", supervisorDir: "/tmp/6600" } });
+    await waitFor(() => releases.includes("req-1"), 2000);
+
+    assert.deepEqual(releases, ["req-1"], "the release callback must be invoked with the same request id as the late grant");
+    assert.ok(!written.some((line) => line.includes('"kind":"grant"')), "no grant response line may be written once the owning socket is destroyed");
+  } finally {
+    listener.server.close();
+  }
+});
+
+test("attemptAcquire: a queued entry whose socket is still connected behaves exactly as today -- the launch callback is invoked, the grant is written, and the entry settles", async () => {
+  let inFlight = true;
+  let calls = 0;
+  const { listener, token } = await startTestListener({
+    onAcquire: async () => {
+      calls++;
+      if (inFlight) return { ok: false, reason: "launch_in_flight" };
+      return { ok: true, grant: { port: 6600, url: "http://127.0.0.1:6600/mcp", epochFile: "/tmp/e.json", supervisorDir: "/tmp/6600" } };
+    },
+  });
+  const client = makeClient(listener.port);
+  try {
+    client.send({ op: "acquire", id: "req-1", token });
+    await waitFor(() => listener.pendingAcquires.length === 1, 2000);
+    assert.equal(calls, 1);
+
+    inFlight = false;
+    await drainPendingAcquires(listener.pendingAcquires);
+    assert.equal(calls, 2, "the still-connected retry must call the launch callback again");
+
+    const grant = await client.next();
+    assert.equal(grant.kind, "grant");
+    assert.equal(listener.pendingAcquires.length, 0);
+  } finally {
+    client.close();
+    listener.server.close();
+  }
+});
+
+test("structural: the destroyed-socket pre-check appears before the launch callback call, and a second destroyed-socket check appears on the success path, inside attemptAcquire()", () => {
+  const source = readFileSync(join(HERE, "broker-control.mts"), "utf8");
+  const startIdx = source.indexOf("function attemptAcquire(requestId: string): Promise<boolean> {");
+  assert.ok(startIdx !== -1, "attemptAcquire()'s own definition must be found in the source");
+  const endIdx = source.indexOf("\n    }\n", startIdx);
+  assert.ok(endIdx > startIdx, "could not isolate attemptAcquire()'s own closing brace");
+  const body = source.slice(startIdx, endIdx);
+
+  const preCheckIdx = body.indexOf("if (socket.destroyed) return Promise.resolve(true);");
+  const callbackCallIdx = body.indexOf(".onAcquire(requestId)");
+  assert.ok(preCheckIdx !== -1, "the pre-check must be present, matched verbatim");
+  assert.ok(callbackCallIdx !== -1, "the onAcquire() call must be present");
+  assert.ok(preCheckIdx < callbackCallIdx, "the pre-check must run BEFORE onAcquire() is ever called");
+
+  const successPathDestroyedCheck = body.indexOf("if (socket.destroyed) {", callbackCallIdx);
+  assert.ok(successPathDestroyedCheck !== -1 && successPathDestroyedCheck > callbackCallIdx, "a second destroyed-socket check must appear on the success path, after onAcquire() is called");
+
+  const releaseCallIdx = body.indexOf("opts.onRelease(requestId);", successPathDestroyedCheck);
+  assert.ok(releaseCallIdx !== -1 && releaseCallIdx > successPathDestroyedCheck, "the success-path destroyed-socket branch must call onRelease() with the same request id");
+});
+
+test("structural: attemptAcquire()'s own comment names which half bounds which failure, and does not claim the race is eliminated", () => {
+  const source = readFileSync(join(HERE, "broker-control.mts"), "utf8");
+  const startIdx = source.indexOf("Gap closure (plan 14, WR-03/T-01.6.2-87/-88)");
+  const endIdx = source.indexOf("function attemptAcquire(requestId: string): Promise<boolean> {");
+  assert.ok(startIdx !== -1 && endIdx !== -1 && startIdx < endIdx, "the gap-closure comment must precede attemptAcquire()'s own definition");
+  const comment = source.slice(startIdx, endIdx);
+  assert.match(comment, /always-reachable/i);
+  assert.match(comment, /bounded race/i);
+  assert.match(comment, /does NOT eliminate that race/i);
+});
+
+test("no new control-plane message kind was added by this gap closure -- ControlRequestKind still has exactly its original five members", () => {
+  const source = readFileSync(join(HERE, "broker-control.mts"), "utf8");
+  const match = source.match(/export type ControlRequestKind = ([^;]+);/);
+  assert.ok(match, "ControlRequestKind's own type declaration must be found");
+  assert.equal(match![1].trim(), '"acquire" | "release" | "recycle" | "status" | "host_state"', "the union's five members must be unchanged");
+});
+
 test("structural: broker-control.mts's pending-acquire region contains no re-ordering (sort) call anywhere in the file", () => {
   const source = readFileSync(join(HERE, "broker-control.mts"), "utf8");
   const count = (source.match(/\bsort\(/g) ?? []).length;
