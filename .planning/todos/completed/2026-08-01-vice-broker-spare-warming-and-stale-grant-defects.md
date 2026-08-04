@@ -134,3 +134,64 @@ See also `.planning/todos/pending/2026-08-01-vice-registers-frozen-after-reset-d
 for the stall that started this, and STATE.md's Blockers/Concerns entry recording that
 `vice_ping`'s `execution` field is **not** a liveness signal — it reported `"running"` while
 `vice_cycles_stopwatch` measured exactly 0 cycles elapsed.
+
+## CLOSED 2026-08-04 (01.6.2.1-06-PLAN.md, task 3) — all five rows dispositioned, gate passed
+
+**Gate check, performed before this move.** `01.6.2-VALIDATION.md`'s "Phase 01.6.2.1 Disposition —
+Criterion M" section's Section 2 ("the five-row defect mapping") was read in full immediately before
+this file was moved. All five rows carry an explicit disposition word and a named decision ID plus
+either a landed test or a `01.6.2-VERIFICATION.md` observable-truth number as evidence — no row's
+evidence column is a cross-reference alone. D-02's gate (*"deleting a phase without it is how a
+defect gets silently lost"*) passes. This file is moved to `completed/` only because that gate
+passed; had any row been incomplete, this move would not have happened and the incompleteness would
+have been reported instead.
+
+**The five dispositions, restated here so a reader of this file alone gets the answer without
+following a link:**
+
+1. **Defect 1 — parallel spare warming kills `x64sc`: PRESERVED, not re-fixed** (D-07). **This is
+   the row most likely to be misread as "not addressed," so it gets its own sentence:** the
+   serialised warming that prevents this defect was already the correct, current behaviour before
+   this phase started, and this phase's own non-preemption work (`01.6.2.1-03-PLAN.md`) confirmed it
+   still holds rather than re-implementing it. Re-implementing an already-correct mechanism would
+   have risked re-creating the exact concurrent-spawn window the 2026-08-01 outage came from — the
+   single riskiest thing this phase could have done to this defect was "fix" it a second time.
+2. **Defect 2 — stale `usage()` text: DISSOLVED** (the deletion under D-01/D-02). The file carrying
+   the stale prose was deleted in Phase 01.6.2's bash-retirement commit; there is no `usage()` text
+   left for the prose to be stale against.
+3. **Defect 3 — grants outlive their process: FIXED here** (D-05 as amended by P-05, plus P-02/P-03).
+   The grant path now re-probes the instance it is about to hand out, at grant time, dropping and
+   identity-verified-killing a failed candidate before ever handing it out.
+4. **Defect 4 — the proxy caches a dead grant for the session's life: FIXED in 01.6.2** (D-13). A
+   dead emulator now fails the triggering call loudly, naming the replacement, with the replacement
+   already in place.
+5. **Defect 5 — the new TypeScript broker never grants from its own warm floor at all: FIXED here**
+   (P-01). `handleAcquire()` now consults the warm floor before ever cold-launching.
+
+**Pointer to the full mapping with its evidence:** `01.6.2-VALIDATION.md`, section "Phase 01.6.2.1
+Disposition — Criterion M", "Section 2 — the five-row defect mapping" — the five-row table with
+decision IDs and named tests/truth numbers for every row.
+
+**Defect 5 was found after eleven of Phase 01.6.2's fifteen plans had shipped**, against a fully
+green suite (368/363/0/0/5 at the time) — while building that phase's own 61-test disposition
+ledger (`01.6.2-10-PLAN.md`), not by live host debugging like Defects 1–4 above. **What detects this
+class of defect, named here because a future reader searching for this defect is most likely to
+find it in this file, not in a phase artifact:** an end-to-end test against the real assembled
+artifact (not a unit test against an isolated function — a unit test proves the unit behaves, it
+does not prove the assembled system reaches it), and a structural assertion that the real entry
+point actually calls the module by name (not merely declares or imports it). Both are what
+`01.6.2.1-01-PLAN.md` added: `broker-e2e.test.ts`'s real-spawned-broker acquire test, and
+`broker-launch.test.ts`'s structural gate proving `vice-broker.mts`'s real acquire entry point
+invokes `selectWarmInstance()` by name. A purely unit-level proof — exactly what
+`maintainWarmFloor()` already had, correctly, before this defect was found — would not have caught
+this class the first time and would not catch a recurrence of it now.
+
+**Absorbing Phase 01.5 seals here, not at Phase 01.6.2's seal.** Phase 01.6.2's own verification
+(`01.6.2-VERIFICATION.md`) explicitly scoped criterion M out of its own score — "Criteria E, L, M
+... belong to Phase 01.6.2.1 ... None are scored here" — because 01.6.2 did not discharge Phase
+01.5's defects; it built the machine this phase's defect fixes and criterion-M disposition apply to.
+This closure, gated on all five rows above, is where absorbing Phase 01.5 actually seals.
+
+**Evidence:** direct read of `01.6.2-VALIDATION.md`'s five-row defect mapping (this plan's own Task
+1), each row's own cited test or truth number, and `01.6.2-VERIFICATION.md`'s scope note.
+**Confidence:** HIGH.
