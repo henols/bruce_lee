@@ -6,14 +6,16 @@
 // rebuild.
 // broker-control.mts
 //
-// N / D-01 (minimal, this task -- the remaining three request kinds
-// (recycle/status/host_state), the arrival-ordered queue and the singleton
-// guard are plan 05's). The subsystem's FIRST network listener: a TCP
-// control plane replacing the bash broker's requests/grants/denials/leases
-// directory tree entirely. One JSON object per line; the connection open IS
-// the claim, connection close IS the release (T-01.6.2-01 through -09).
+// N / D-01 (plan 01, tracer): the framing, the token gate, and acquire/
+// release. THIS PLAN (05) completes the message set: recycle, status,
+// host_state, the arrival-ordered pending-acquire structure, and the
+// kernel-enforced singleton guard's low-level bind primitive. The
+// subsystem's FIRST network listener: a TCP control plane replacing the
+// bash broker's requests/grants/denials/leases directory tree entirely. One
+// JSON object per line; the connection open IS the claim, connection close
+// IS the release (T-01.6.2-01 through -09).
 //
-// Wire format confirmed at this plan's blocking checkpoint:decision
+// Wire format confirmed at plan 01's blocking checkpoint:decision
 // (2026-08-03, `as-specified`, no amendments -- see .planning/RE-FINDINGS.md
 // for the full record, including the two accepted residual risks and the
 // unix-domain-socket dead end). Auth: per-boot capability token compared
@@ -32,7 +34,7 @@ export function newControlToken() {
     return randomBytes(32).toString("hex");
 }
 const MAX_LINE_BYTES = 65536;
-function resolveControlPort(override) {
+export function resolveControlPort(override) {
     if (typeof override === "number")
         return override;
     const raw = process.env.VICE_BROKER_CONTROL_PORT;
@@ -58,15 +60,51 @@ function writeLine(socket, obj) {
         socket.write(`${JSON.stringify(obj)}\n`);
     }
 }
-/** Starts the TCP control listener. Frames inbound bytes as
- * newline-delimited JSON: buffers, splits on "\n", parses each line with
- * the never-throw posture this codebase already uses for untrusted input --
- * a malformed line answers `bad_request` and the connection survives. A
- * connection exceeding MAX_LINE_BYTES without a newline is destroyed rather
- * than buffered further (T-01.6.2-04). */
+function defaultRequestId(prefix) {
+    return `${prefix}-${process.pid}-${Date.now()}`;
+}
+/** Appends to the BACK of the queue -- the only mutation this structure
+ * ever performs on receipt. Nothing here sorts or re-orders; arrival order
+ * falls out of the array's own insertion order. */
+export function enqueueAcquire(queue, entry) {
+    queue.push(entry);
+}
+/** Drains the queue from the front, strictly in the order this CALL found
+ * them: takes a snapshot of everything currently pending (`splice`, never a
+ * sort), then attempts each in that order. An entry whose launch is still
+ * in flight is pushed back onto the queue for the NEXT drain pass rather
+ * than retried immediately in a tight loop -- a later-arriving acquire that
+ * queued behind it during THIS pass is not overtaken (it is appended after
+ * the requeued entry, never before), so the array never needs re-ordering
+ * to stay correct; a genuinely adversarial retry pattern could still starve
+ * an entry across MULTIPLE passes, which is exactly the direct fairness
+ * proof this module deliberately does not author -- injecting N acquires
+ * and asserting grants return in that order is Phase 01.6.2.1's D-08
+ * deliverable. The original defect this queue replaces (a lexical iteration
+ * over `req-<pid>-<ms>-<hex>` filenames) cannot exist here regardless: there
+ * is no file, and no re-ordering call of any kind anywhere in this region. */
+export async function drainPendingAcquires(queue) {
+    const snapshot = queue.splice(0, queue.length);
+    for (const entry of snapshot) {
+        const settled = await entry.attempt();
+        if (!settled) {
+            queue.push(entry);
+        }
+    }
+}
+/** Starts the TCP control listener: binds, then wires the full
+ * newline-delimited-JSON protocol -- all five request kinds, the token
+ * gate, and the arrival-ordered pending-acquire queue this listener
+ * instance owns. Frames inbound bytes as newline-delimited JSON: buffers,
+ * splits on "\n", parses each line with the never-throw posture this
+ * codebase already uses for untrusted input -- a malformed line answers
+ * `bad_request` and the connection survives. A connection exceeding
+ * MAX_LINE_BYTES without a newline is destroyed rather than buffered
+ * further (T-01.6.2-04). */
 export function startControlListener(opts) {
     const host = opts.host ?? process.env.VICE_BROKER_CONTROL_HOST ?? "0.0.0.0";
     const port = resolveControlPort(opts.port);
+    const pendingAcquires = [];
     return new Promise((resolvePromise, reject) => {
         const server = createServer((socket) => {
             let buffer = "";
@@ -99,6 +137,44 @@ export function startControlListener(opts) {
                 // Per-connection error handling isolates one peer's failure from
                 // every other connection and from the server itself (T-01.6.2-06).
             });
+            /** Attempts one acquire over THIS connection/socket, writing the
+             * terminal response (grant or a non-queueing error) when settled, or
+             * enqueueing itself and returning unsettled when a launch is already in
+             * flight. Shared by the immediate first attempt and every later retry
+             * `drainPendingAcquires()` drives, so the two paths can never answer
+             * differently for the same requestId. */
+            function attemptAcquire(requestId) {
+                return opts
+                    .onAcquire(requestId)
+                    .then((outcome) => {
+                    if (socket.destroyed)
+                        return true; // nothing left to answer -- drop
+                    if (outcome.ok) {
+                        requestIdForThisConnection = requestId;
+                        writeLine(socket, {
+                            kind: "grant",
+                            id: requestId,
+                            port: outcome.grant.port,
+                            url: outcome.grant.url,
+                            epoch_file: outcome.grant.epochFile,
+                            supervisor_dir: outcome.grant.supervisorDir,
+                        });
+                        return true;
+                    }
+                    if (outcome.reason === "launch_in_flight") {
+                        return false; // still blocked -- caller re-queues
+                    }
+                    const code = outcome.reason === "internal" ? "internal" : outcome.reason;
+                    writeLine(socket, { kind: "error", code, message: `acquire failed: ${outcome.reason}` });
+                    return true;
+                })
+                    .catch(() => {
+                    if (!socket.destroyed) {
+                        writeLine(socket, { kind: "error", code: "internal", message: "acquire threw" });
+                    }
+                    return true;
+                });
+            }
             function handleLine(line) {
                 if (line.trim() === "")
                     return;
@@ -117,7 +193,7 @@ export function startControlListener(opts) {
                 const req = parsed;
                 // Token check BEFORE any state is read or written -- absence or
                 // mismatch is refused, the connection is destroyed, and nothing is
-                // allocated or spawned (T-01.6.2-01, T-01.6.2-03).
+                // allocated, spawned or signalled (T-01.6.2-01, T-01.6.2-03).
                 const token = typeof req.token === "string" ? req.token : "";
                 if (!tokensMatch(token, opts.token)) {
                     writeLine(socket, { kind: "error", code: "unauthorized", message: "missing or invalid control token" });
@@ -125,26 +201,11 @@ export function startControlListener(opts) {
                     return;
                 }
                 if (req.op === "acquire") {
-                    const requestId = typeof req.id === "string" && req.id !== "" ? req.id : `req-${process.pid}-${Date.now()}`;
-                    opts
-                        .onAcquire(requestId)
-                        .then((granted) => {
-                        if (!granted) {
-                            writeLine(socket, { kind: "error", code: "internal", message: "acquire failed" });
-                            return;
+                    const requestId = typeof req.id === "string" && req.id !== "" ? req.id : defaultRequestId("req");
+                    void attemptAcquire(requestId).then((settled) => {
+                        if (!settled) {
+                            enqueueAcquire(pendingAcquires, { requestId, attempt: () => attemptAcquire(requestId) });
                         }
-                        requestIdForThisConnection = requestId;
-                        writeLine(socket, {
-                            kind: "grant",
-                            id: requestId,
-                            port: granted.port,
-                            url: granted.url,
-                            epoch_file: granted.epochFile,
-                            supervisor_dir: granted.supervisorDir,
-                        });
-                    })
-                        .catch(() => {
-                        writeLine(socket, { kind: "error", code: "internal", message: "acquire threw" });
                     });
                 }
                 else if (req.op === "release") {
@@ -155,10 +216,60 @@ export function startControlListener(opts) {
                     }
                     writeLine(socket, { kind: "released" });
                 }
+                else if (req.op === "recycle") {
+                    const recycleId = typeof req.id === "string" && req.id !== "" ? req.id : defaultRequestId("recycle");
+                    const targetId = typeof req.target_id === "string" ? req.target_id : "";
+                    // T-01.6.2-31: a connection may only recycle the grant IT ITSELF
+                    // holds. This check happens here, before onRecycle() is ever
+                    // called, so a mismatched target never reaches the kill discipline
+                    // and never signals anything -- an injected signal recorder stays
+                    // empty for this case.
+                    if (requestIdForThisConnection === null || targetId !== requestIdForThisConnection) {
+                        writeLine(socket, {
+                            kind: "error",
+                            code: "denied",
+                            message: "recycle may only target the grant this connection itself holds",
+                        });
+                        return;
+                    }
+                    opts
+                        .onRecycle(targetId)
+                        .then((result) => {
+                        writeLine(socket, {
+                            kind: "recycle_ack",
+                            id: recycleId,
+                            target_id: targetId,
+                            port: result.port,
+                            x64sc_pid: result.pid,
+                            vice_bin: result.viceBin,
+                            kill_stage: result.killStage,
+                            epoch_before: result.epochBefore,
+                            outcome: result.outcome,
+                            reason: result.reason,
+                        });
+                    })
+                        .catch(() => {
+                        writeLine(socket, { kind: "error", code: "internal", message: "recycle threw" });
+                    });
+                }
+                else if (req.op === "status") {
+                    writeLine(socket, { kind: "status", instances: opts.onStatus() });
+                }
+                else if (req.op === "host_state") {
+                    const hs = opts.onHostState();
+                    writeLine(socket, {
+                        kind: "host_state",
+                        pid: hs.pid,
+                        started_at: hs.startedAt,
+                        node_version: hs.nodeVersion,
+                        vice_bin: hs.viceBin,
+                        warm_floor: hs.warmFloor,
+                        max_instances: hs.maxInstances,
+                        base_port: hs.basePort,
+                    });
+                }
                 else {
-                    // status/host_state/recycle -- plan 05's remaining three request
-                    // kinds. Unknown here, deliberately, per this task's scope.
-                    writeLine(socket, { kind: "error", code: "bad_request", message: `unknown or not-yet-implemented op: ${String(req.op)}` });
+                    writeLine(socket, { kind: "error", code: "bad_request", message: `unknown op: ${String(req.op)}` });
                 }
             }
         });
@@ -166,7 +277,7 @@ export function startControlListener(opts) {
         server.listen(port, host, () => {
             const addr = server.address();
             const boundPort = typeof addr === "object" && addr !== null ? addr.port : port;
-            resolvePromise({ server, port: boundPort, host });
+            resolvePromise({ server, port: boundPort, host, pendingAcquires });
         });
     });
 }

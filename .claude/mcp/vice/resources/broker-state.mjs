@@ -28,7 +28,12 @@ export const DEFAULT_BASE_PORT = 6600;
  * an exhausted host produces one explicit `no_free_port` result rather than
  * an unbounded scan. */
 const PORT_SCAN_CEILING = 100;
-function resolveBasePort() {
+/** Exported (plan 05): vice-broker.mts's host_state control-plane response
+ * and broker.json's own `base_port` field both need the SAME resolved base
+ * port this allocator itself uses -- reading it here rather than
+ * re-duplicating the env-var lookup a third time keeps the two values
+ * structurally unable to disagree. */
+export function resolveBasePort() {
     const raw = process.env.VICE_BROKER_BASE_PORT;
     if (raw === undefined || raw === "")
         return DEFAULT_BASE_PORT;
@@ -124,4 +129,21 @@ export function countLaunching(state) {
             n++;
     }
     return n;
+}
+function resolveCeiling(override) {
+    if (typeof override === "number")
+        return override;
+    const raw = process.env.VICE_BROKER_MAX;
+    if (raw === undefined || raw === "")
+        return 16;
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : 16;
+}
+/** True once countTotal() has reached the configured instance ceiling
+ * (VICE_BROKER_MAX, default 16, untouched by this phase). A cold acquire
+ * consults this BEFORE attempting to allocate a port or spawn (plan 05's
+ * control-plane `at_capacity` error code), so an at-capacity host answers
+ * without ever touching the port allocator. */
+export function atCapacity(state, ceiling) {
+    return countTotal(state) >= resolveCeiling(ceiling);
 }
