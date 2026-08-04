@@ -24,11 +24,30 @@ import { fileURLToPath } from "node:url";
 import { spawn as nodeSpawn, type ChildProcess } from "node:child_process";
 
 import { containerGuardReport, containerGuardEnforce } from "./container-guard.mjs";
-import { createBrokerState, nextFreePort, countReady, countTotal, countLaunching, type BrokerState, type InstanceRecord } from "./broker-state.mjs";
+import {
+  createBrokerState,
+  nextFreePort,
+  countReady,
+  countTotal,
+  countLaunching,
+  atCapacity,
+  resolveBasePort,
+  type BrokerState,
+  type InstanceRecord,
+} from "./broker-state.mjs";
 import { acquirePortAndLaunch, maintainWarmFloor, probeReady, runBrokerPass } from "./broker-launch.mjs";
 import { verifiedKill, registerShutdownHandlers, startupBanner, reapOrphanedInstances } from "./broker-kill.mjs";
 import { writeEpochRecord, epochPathFor, nextEpochFor, type EpochRecord } from "./broker-epoch.mjs";
-import { startControlListener, newControlToken, type AcquireGrant } from "./broker-control.mjs";
+import {
+  startControlListener,
+  newControlToken,
+  drainPendingAcquires,
+  resolveControlPort,
+  type AcquireOutcome,
+  type RecycleOutcome,
+  type StatusInstanceEntry,
+  type HostStateFields,
+} from "./broker-control.mjs";
 
 export interface ParsedArgs {
   repoRoot: string;
@@ -73,6 +92,17 @@ export function parseArgs(argv: string[]): ParsedArgs {
   return { repoRoot: repoRoot ?? "", stateDir: resolvedStateDir, checkContainer, dryRun };
 }
 
+// The final fourteen-field set (plan 05, D-27, G/K): version, written_by,
+// pid, started_at, heartbeat_at, node_version, control_host, control_port,
+// control_token, spares_target, max_instances, base_port, poll_ms, dry_run.
+// The bash original's `ttl_seconds` field is DELETED, not merely renamed --
+// it is one of criterion F's six retiring lease mechanisms; the connection
+// is the lease now, and keeping a TTL-shaped field here would advertise an
+// authority that no longer exists. Every other bash config-echo field is
+// kept even though no consumer parses it beyond a status message
+// (readBrokerLiveness() reads only `pid` and `heartbeat_at`) -- a human
+// reading this file by hand benefits from the full configuration echo,
+// which is why the bash version carried it and why this port keeps it.
 export interface BrokerRecord {
   version: number;
   written_by: string;
@@ -83,6 +113,11 @@ export interface BrokerRecord {
   control_host: string;
   control_port: number;
   control_token: string;
+  spares_target: number;
+  max_instances: number;
+  base_port: number;
+  poll_ms: number;
+  dry_run: boolean;
 }
 
 /** The deployed JavaScript broker artifact's own name -- D-26's entire
@@ -90,6 +125,62 @@ export interface BrokerRecord {
  * daemon), which was false the moment a real TypeScript broker existed.
  * It now names itself. */
 export const WRITTEN_BY = "vice-broker.mjs";
+
+// ---------------------------------------------------------------------------
+// Small, locally-duplicated env-var readers (plan 05) -- the SAME pattern
+// broker-kill.mts's own resolveBasePortForReap()/resolveViceBinForReap()
+// already established: this module cannot import broker-launch.mts's
+// PRIVATE resolveWarmFloor()/resolveCeiling() (they are not exported, and
+// this file is already the top-level wiring module value-importing every
+// sibling .mjs directly -- exporting them would widen broker-launch.mts's
+// own surface for a one-line env-var read this file can duplicate exactly
+// as cheaply). Both mirror broker-launch.mts's defaults precisely
+// (VICE_BROKER_SPARES/3, VICE_BROKER_MAX/16) so broker.json's config echo
+// and host_state's own answer can never disagree with what maintainWarmFloor
+// itself actually enforces.
+// ---------------------------------------------------------------------------
+function resolveWarmFloorForRecord(): number {
+  const raw = process.env.VICE_BROKER_SPARES;
+  if (raw === undefined || raw === "") return 3;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : 3;
+}
+
+function resolveCeilingForRecord(): number {
+  const raw = process.env.VICE_BROKER_MAX;
+  if (raw === undefined || raw === "") return 16;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : 16;
+}
+
+function resolveViceBinForHostState(): string {
+  return process.env.VICE_BIN ?? "x64sc";
+}
+
+/** Duplicates vice-broker-client.ts's readBrokerLiveness() classification
+ * logic (never_started / stale / alive against BROKER_STALE_MS) rather than
+ * importing it -- confirmed empirically (plan 02's own SUMMARY) that
+ * importing vice-broker-client.ts into a HOST-BOUND module pulls its
+ * transitive dependents (repo-root.ts, install-resources.ts, hostpath.ts)
+ * into the SAME tsc build program, which either fails to compile under
+ * tsconfig.build.json's allowImportingTsExtensions:false or forces those
+ * container-side files to be committed under resources/ as if host-bound.
+ * This is the SAME classification a test can drive the REAL
+ * readBrokerLiveness() over (broker-control.test.ts does exactly that,
+ * against records this function's own caller writes), proving the two never
+ * diverge -- this module only needs the classification NAME (never_started
+ * / stale / alive), never the pid/heartbeatAt fields readBrokerLiveness()
+ * also returns. */
+const BROKER_STALE_MS = Number(process.env.VICE_BROKER_STALE_MS || 180000);
+
+function classifyBrokerLivenessLocal(path: string): "never_started" | "stale" | "alive" {
+  const parsed = readBrokerRecordMaybe(path);
+  if (parsed === null) return "never_started";
+  const heartbeatAt = typeof parsed.heartbeat_at === "string" ? parsed.heartbeat_at : null;
+  const heartbeatMs = heartbeatAt ? Date.parse(heartbeatAt) : NaN;
+  if (!Number.isFinite(heartbeatMs)) return "never_started";
+  return Date.now() - heartbeatMs > BROKER_STALE_MS ? "stale" : "alive";
+}
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -110,20 +201,6 @@ export function readBrokerRecordMaybe(path: string): Record<string, unknown> | n
     return isPlainObject(parsed) ? parsed : null;
   } catch {
     return null;
-  }
-}
-
-/** Zero-signal liveness probe: true iff a process with this pid currently
- * exists. EPERM (exists, but this process lacks permission to signal it)
- * still counts as alive. */
-function pidIsAlive(pid: unknown): boolean {
-  if (typeof pid !== "number" || !Number.isFinite(pid) || pid <= 0) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (e) {
-    const code = (e as NodeJS.ErrnoException).code;
-    return code === "EPERM";
   }
 }
 
@@ -185,18 +262,29 @@ function writeEpochForLaunch(record: InstanceRecord, logRelPath: string): void {
 }
 
 /** Allocates a port, launches through tryLaunchOne() (the single in_flight
- * owner), writes the epoch record, and records the grant. Returns null on
- * a launch failure -- the caller reports that as an `internal` control
- * error; the full denied/no_free_port/at_capacity vocabulary is plan 05's. */
-async function handleAcquire(requestId: string, stateDir: string, state: BrokerState): Promise<AcquireGrant | null> {
+ * owner), writes the epoch record, and records the grant. Answers the full
+ * discriminated AcquireOutcome (plan 05): `at_capacity` when the instance
+ * ceiling is already reached (checked BEFORE ever touching the port
+ * allocator or spawning anything), `no_free_port`/`launch_in_flight` passed
+ * straight through from acquirePortAndLaunch()'s own typed failure, and
+ * `internal` only for a genuine, otherwise-unclassified fault. A
+ * `launch_in_flight` outcome is NOT a control-plane error -- broker-
+ * control.mts's own attemptAcquire()/enqueueAcquire() queue the request and
+ * retry it later rather than refusing it. */
+async function handleAcquire(requestId: string, stateDir: string, state: BrokerState): Promise<AcquireOutcome> {
+  if (atCapacity(state)) {
+    return { ok: false, reason: "at_capacity" };
+  }
+
   // acquirePortAndLaunch() holds the single in_flight owner across its own
   // async port allocation (not merely tryLaunchOne()'s synchronous spawn
   // instant) -- see that function's own header comment for the race this
   // closes between a cold acquire and a concurrent warm-floor pass. This
   // is also what restores vice-broker.sh's own process_requests() throttle:
   // a cold acquire that arrives while ANY launch (cold or warm) is already
-  // under way is refused here, matching the bash original's declined-to-
-  // change behaviour, rather than racing a second instance into existence.
+  // under way is queued here (plan 05), matching the bash original's
+  // declined-to-change behaviour of never racing a second instance into
+  // existence, but answered LATER instead of refused outright.
   let lastLogRelPath = "";
   const result = await acquirePortAndLaunch("acquire", {
     state,
@@ -210,8 +298,11 @@ async function handleAcquire(requestId: string, stateDir: string, state: BrokerS
     },
   });
 
-  if (!result.ok || result.record.pid === null) {
-    return null;
+  if (!result.ok) {
+    return { ok: false, reason: result.reason };
+  }
+  if (result.record.pid === null) {
+    return { ok: false, reason: "internal" };
   }
   const record = result.record;
 
@@ -220,7 +311,85 @@ async function handleAcquire(requestId: string, stateDir: string, state: BrokerS
   state.grants.set(requestId, { id: requestId, port: record.port, grantedAt: Date.now() });
   record.state = "granted";
 
-  return { port: record.port, url: record.url, epochFile: record.epochFile, supervisorDir: record.supervisorDir };
+  return {
+    ok: true,
+    grant: { port: record.port, url: record.url, epochFile: record.epochFile, supervisorDir: record.supervisorDir },
+  };
+}
+
+/** Answers the `status` control-plane request: one entry per instance,
+ * computed on demand from the SAME in-memory map every other count reads --
+ * strictly better than the dropped broker-instances.json projection, which
+ * could go stale between passes (D-24). */
+function handleStatus(state: BrokerState): StatusInstanceEntry[] {
+  return Array.from(state.instances.values()).map((r) => ({
+    port: r.port,
+    url: r.url,
+    state: r.state,
+    reason: r.reason,
+    epoch: typeof r.epoch === "number" ? r.epoch : null,
+  }));
+}
+
+/** Resolves a recycle target's emulator child pid from THIS broker's own
+ * in-memory instance record -- record.pid is, by construction, exactly the
+ * same value broker-epoch.mts's writer puts in epoch.json's own `pid` field
+ * (both are set from the same spawned child's own pid at launch time, and
+ * both are updated together on every respawn) -- so reading it here is
+ * reading "the epoch record's pid", never the supervising broker's own
+ * process.pid (T-01.6.2-17; there is no intermediate supervisor process in
+ * this topology at all, per broker-kill.mts's own header comment). A
+ * recycle's OWNERSHIP check (does this connection hold this grant) already
+ * happened in broker-control.mts before this function is ever called -- this
+ * function only resolves and kills, exactly mirroring
+ * handle_recycle_request()'s own division of labour in the bash original.
+ * Deliberately does NOT relaunch or mark deliberateKill: a recycle only
+ * kills, matching the bash handler's own scope; whether the killed instance
+ * comes back is the per-child supervisor's concern, unchanged by this
+ * function. */
+async function handleRecycleForRealBroker(targetId: string, state: BrokerState): Promise<RecycleOutcome> {
+  const grant = state.grants.get(targetId);
+  if (!grant) {
+    return {
+      port: null,
+      pid: null,
+      viceBin: null,
+      killStage: "no_signal",
+      epochBefore: null,
+      outcome: "grant_lookup_failed",
+      reason: `no grant record found for target ${targetId}`,
+    };
+  }
+  const instance = state.instances.get(grant.port);
+  if (!instance) {
+    return {
+      port: grant.port,
+      pid: null,
+      viceBin: null,
+      killStage: "no_signal",
+      epochBefore: null,
+      outcome: "epoch_lookup_failed",
+      reason: `no resolvable epoch record for target ${targetId} (port ${grant.port})`,
+    };
+  }
+  if (instance.pid === null) {
+    return {
+      port: instance.port,
+      pid: null,
+      viceBin: instance.viceBin,
+      killStage: "no_signal",
+      epochBefore: typeof instance.epoch === "number" ? instance.epoch : null,
+      outcome: "pid_lookup_failed",
+      reason: `epoch record carries no pid for target ${targetId}`,
+    };
+  }
+
+  const epochBefore = typeof instance.epoch === "number" ? instance.epoch : null;
+  const killStage = await verifiedKill({ pid: instance.pid, expectedIdentity: instance.expectedIdentity });
+  const outcome = killStage === "identity_refused" ? "identity_refused" : "ok";
+  const reason = killStage === "identity_refused" ? "process identity did not match the recorded emulator binary -- the target was NOT signalled and is still running" : "";
+
+  return { port: instance.port, pid: instance.pid, viceBin: instance.viceBin, killStage, epochBefore, outcome, reason };
 }
 
 /** The warm-floor concern of the fixed-order evaluation pass (D-24 drops
@@ -280,22 +449,19 @@ function handleRelease(requestId: string, state: BrokerState): void {
 async function run(args: ParsedArgs): Promise<void> {
   const finalPath = join(args.stateDir, "broker.json");
 
-  // Refuse-to-clobber: ONLY a currently-live pid blocks a (re)start. This is
-  // narrower than the tracer's own guard, which also refused on the mere
-  // PRESENCE of a heartbeat_at field -- that rule made sense for a
-  // write-once tracer (any heartbeat_at meant "a real broker already wrote
-  // this"), but this broker's OWN records always carry heartbeat_at, so
-  // keeping that rule would make it impossible to ever restart a broker
-  // that crashed or was stopped. This is NOT the CR-01 singleton guard
-  // (Phase 01.6.2 plan 05's, TCP-listener-enforced) -- it only stops one
-  // broker from clobbering the state of another that is still alive.
-  const existing = readBrokerRecordMaybe(finalPath);
-  if (existing && pidIsAlive(existing.pid)) {
-    process.stderr.write(`vice-broker: refusing to overwrite broker.json naming live pid ${String(existing.pid)}\n`);
-    process.exitCode = 1;
-    return;
-  }
-
+  // Plan 05 (criterion K, D-17): the tracer/plan-04-era "refuse to overwrite
+  // a record naming a currently-live pid" pre-check is GONE -- REPLACED by
+  // the bind-before-write singleton guard below, not merely extended
+  // alongside it (this phase's own plan-time note is explicit: the
+  // refuse-to-clobber heuristic is replaced, not extended). That old check
+  // read broker.json's OWN recorded pid and asked "is that process alive" --
+  // a heuristic that can never tell "a live broker legitimately holds this
+  // port" apart from "a live but unrelated process happens to share a pid
+  // number with a stale record" (pids get reused). The kernel-enforced bind
+  // below asks the ONLY question that actually matters -- "is the control
+  // port itself already held" -- and broker.json becomes a pure ARBITER of
+  // that question's two possible causes, never a gate in its own right.
+  //
   // D-25: the mandatory start-time banner, printed unconditionally and
   // BEFORE anything else in this function runs -- an operator must be told
   // what a Ctrl-C costs before there is anything running for them to Ctrl-C.
@@ -304,6 +470,9 @@ async function run(args: ParsedArgs): Promise<void> {
   const state = createBrokerState();
   const token = newControlToken();
   const controlHost = process.env.VICE_BROKER_CONTROL_HOST ?? "0.0.0.0";
+  const startedAt = new Date().toISOString(); // FIXED across every heartbeat refresh -- see writeBrokerRecordFile()'s callers below
+  const pollMs = Number(process.env.VICE_BROKER_POLL_MS) || 500;
+  const controlPort = resolveControlPort();
 
   // Criterion I / D-15: the unconditional startup reap runs BEFORE the
   // control listener accepts and before anything is launched. A SIGKILLed
@@ -311,6 +480,15 @@ async function run(args: ParsedArgs): Promise<void> {
   // "every emulator this project's port band could be squatting is either
   // ours or a human's own work" guarantee can be enforced -- no marker file
   // is consulted, per this reap's own header comment in broker-kill.mts.
+  //
+  // NOTE (plan 05): this reap runs UNCONDITIONALLY, before the bind attempt
+  // below -- including for a process that goes on to LOSE the singleton
+  // race a moment later (see the EADDRINUSE handling below). That ordering
+  // is D-15's own, already established and tested by plan 04
+  // (broker-kill.test.ts's own structural source-order check); this task
+  // does not change it. A losing second broker's own reap pass is an
+  // accepted, pre-existing consequence of "the reap is unconditional" --
+  // not something the singleton guard below is required to prevent.
   await reapOrphanedInstances({
     stateDir: args.stateDir,
     epochPathFor,
@@ -318,16 +496,64 @@ async function run(args: ParsedArgs): Promise<void> {
     writeEpochRecord,
   });
 
+  // D-18: the singleton guarantee holds only while the control port keeps its default -- two brokers deliberately configured onto different ports are two brokers, and no code prevents that.
   let listener: Awaited<ReturnType<typeof startControlListener>>;
   try {
     listener = await startControlListener({
       host: controlHost,
+      port: controlPort,
       token,
       onAcquire: (requestId) => handleAcquire(requestId, args.stateDir, state),
       onRelease: (requestId) => handleRelease(requestId, state),
+      onRecycle: (targetId) => handleRecycleForRealBroker(targetId, state),
+      onStatus: () => handleStatus(state),
+      onHostState: (): HostStateFields => ({
+        pid: process.pid,
+        startedAt,
+        nodeVersion: process.version,
+        viceBin: resolveViceBinForHostState(),
+        warmFloor: resolveWarmFloorForRecord(),
+        maxInstances: resolveCeilingForRecord(),
+        basePort: resolveBasePort(),
+      }),
     });
   } catch (e) {
-    process.stderr.write(`vice-broker: failed to start control listener: ${(e as Error).message}\n`);
+    // Criterion K / D-17 / D-18: CR-01 closes here. A well-known TCP port
+    // cannot be bound twice, so EADDRINUSE is the kernel enforcing the
+    // singleton -- but the guarantee holds only while the control port
+    // keeps its default (two brokers deliberately configured onto
+    // DIFFERENT ports are two brokers, and no code here or anywhere else
+    // prevents that). On EADDRINUSE, broker.json arbitrates via the SAME
+    // never_started/stale/alive classification vice-broker-client.ts's
+    // readBrokerLiveness() uses (duplicated locally above -- see
+    // classifyBrokerLivenessLocal()'s own header comment for why this
+    // cannot be a value import), and takes exactly one of two DISTINCT
+    // paths: a record classified alive means this process lost a genuine
+    // race against a live broker -- exit quietly, status 0, as designed.
+    // A record classified stale or never_started means the port is held by
+    // something that does not answer as a broker at all -- fail loudly,
+    // naming the port and what to check. Conflating these two would let a
+    // squatted port masquerade as a healthy singleton, permanently and
+    // silently (T-01.6.2-34). Neither path writes the discovery record,
+    // launches an instance, or reaps again -- both simply exit.
+    const err = e as NodeJS.ErrnoException;
+    if (err.code === "EADDRINUSE") {
+      const liveness = classifyBrokerLivenessLocal(finalPath);
+      if (liveness === "alive") {
+        process.stderr.write(
+          `vice-broker: another broker is already running and holds control port ${controlPort} -- exiting quietly as a second instance (record: ${finalPath})\n`,
+        );
+        process.exitCode = 0;
+        return;
+      }
+      process.stderr.write(
+        `vice-broker: FATAL -- control port ${controlPort} is held by something that does not answer as a broker (discovery record classified "${liveness}"). ` +
+          `Check what is bound to port ${controlPort} on the host (e.g. \`lsof -i :${controlPort}\` or \`ss -ltnp\`) before restarting. Record: ${finalPath}\n`,
+      );
+      process.exitCode = 1;
+      return;
+    }
+    process.stderr.write(`vice-broker: failed to start control listener: ${err.message}\n`);
     process.exitCode = 1;
     return;
   }
@@ -340,22 +566,38 @@ async function run(args: ParsedArgs): Promise<void> {
   // nothing to tear down before that point.
   registerShutdownHandlers({ state });
 
+  // A successful bind writes the record UNCONDITIONALLY, overwriting
+  // whatever was there -- the bind itself is the proof of singleton status
+  // (D-17). The fourteen-field set (D-27, criterion G): the lease
+  // time-to-live field the bash original carried is gone -- the connection
+  // is the lease now (D-12) -- and every other config-echo field survives
+  // even though no consumer parses it beyond a status message, because a
+  // human reading this file by hand benefits from the full echo.
   let record: BrokerRecord = {
     version: 1,
     written_by: WRITTEN_BY,
     pid: process.pid,
-    started_at: new Date().toISOString(),
+    started_at: startedAt,
     heartbeat_at: new Date().toISOString(),
     node_version: process.version,
     control_host: listener.host,
     control_port: listener.port,
     control_token: token, // never logged -- T-01.6.2-02
+    spares_target: resolveWarmFloorForRecord(),
+    max_instances: resolveCeilingForRecord(),
+    base_port: resolveBasePort(),
+    poll_ms: pollMs,
+    dry_run: args.dryRun,
   };
   writeBrokerRecordFile(args.stateDir, record);
   process.stderr.write(`vice-broker: wrote ${finalPath} (node ${record.node_version}); control listener bound on ${listener.host}:${listener.port}\n`);
 
   const heartbeatMs = Number(process.env.VICE_BROKER_HEARTBEAT_MS) || 30000;
   setInterval(() => {
+    // The refresh path goes through the SAME atomic tmp-then-rename choke
+    // point as the initial write (writeBrokerRecordFile() itself), and the
+    // mode is tightened to owner-read-write on EVERY write, refresh
+    // included -- never only on the first.
     record = { ...record, heartbeat_at: new Date().toISOString() };
     writeBrokerRecordFile(args.stateDir, record);
   }, heartbeatMs);
@@ -364,22 +606,21 @@ async function run(args: ParsedArgs): Promise<void> {
   // serve pending acquires, then maintain the warm floor -- mirroring
   // vice-broker.sh's own broker_once() ordering. Ticks on
   // VICE_BROKER_POLL_MS (default 500, the SAME env var name and semantics
-  // the bash daemon used). serveAcquires is a documented no-op here: under
-  // this phase's TCP control plane (plan 01), an acquire is already served
-  // immediately, per connection, by onAcquire above -- there is no
-  // file-based request queue left to iterate. It stays a named, orderable
-  // step because plan 05 adds the real arrival-ordered queue (D-08) here.
-  // Re-entrancy guarded: a pass that is still running (e.g. a slow external
-  // VICE_BROKER_PROBE_CMD) is never overlapped by the next tick.
-  const pollMs = Number(process.env.VICE_BROKER_POLL_MS) || 500;
+  // the bash daemon used). serveAcquires now drains the arrival-ordered
+  // pending-acquire structure this listener instance owns (D-08's
+  // mechanism; plan 02's own `serveAcquires: () => {}` comment reserved
+  // exactly this room) -- an acquire queued because a launch was already in
+  // flight is retried here, on the SAME pass that also maintains the warm
+  // floor, so a stalled pass shows up as a stale record rather than a
+  // silently wrong one. Re-entrancy guarded: a pass that is still running
+  // (e.g. a slow external VICE_BROKER_PROBE_CMD) is never overlapped by the
+  // next tick.
   let passInFlight = false;
   setInterval(() => {
     if (passInFlight) return;
     passInFlight = true;
     runBrokerPass({
-      serveAcquires: () => {
-        // no-op by construction -- see this block's own header comment.
-      },
+      serveAcquires: () => drainPendingAcquires(listener.pendingAcquires),
       maintainWarmFloor: () => maintainWarmFloorForRealBroker(args.stateDir, state),
     })
       .catch((e) => {
