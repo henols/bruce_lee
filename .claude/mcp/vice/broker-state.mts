@@ -110,7 +110,7 @@ export function createBrokerState(): BrokerState {
 // FINDING 1 (recorded per this plan's own acceptance criteria -- a positive
 // finding, not an oversight): vice-broker.sh's drop_dead_instance_records()
 // (resources/vice-broker.sh:1792-1831) -- the start-time validator that
-// dropped any grant/spare record whose pid was dead or mismatched, because a
+// dropped any grant/warm-instance record whose pid was dead or mismatched, because a
 // ghost record could otherwise survive a broker stop, a broker start, and a
 // full host restart -- HAS NO EQUIVALENT HERE, AND NEEDS NONE. A fresh
 // broker process starts with an EMPTY instances Map by construction
@@ -122,7 +122,7 @@ export function createBrokerState(): BrokerState {
 // own memory. Not a gap; a strengthening.
 //
 // FINDING 2 (also recorded per this plan's own acceptance criteria):
-// broker-instances.json -- the pure projection of grants+spares that
+// broker-instances.json -- the pure projection of grants+warm instances that
 // write_instances()/read_instance_field() (resources/vice-broker.sh:958-
 // 1043) rebuilt every single pass, with no confirmed consumer outside the
 // bash daemon's own `status` subcommand -- is DROPPED ENTIRELY per D-24.

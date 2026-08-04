@@ -337,7 +337,7 @@ test(
 // place of /bin/sleep (MIGRATED off the retiring external-command probe
 // fixture by 01.6.2.1-02-PLAN.md, Task 2 -- see writeProbeAnsweringStub()'s
 // own header comment). The warm floor is configured to 1 via
-// VICE_BROKER_SPARES so the instance-directory count assertions below are
+// VICE_BROKER_WARM_FLOOR so the instance-directory count assertions below are
 // unambiguous (recorded here and in the plan's own SUMMARY for
 // reproducibility).
 // ---------------------------------------------------------------------------
@@ -358,7 +358,7 @@ test(
       VICE_RESTART_BACKOFF_S: "0",
       VICE_BIN: stubPath,
       VICE_ARGS: undefined,
-      VICE_BROKER_SPARES: String(WARM_FLOOR),
+      VICE_BROKER_WARM_FLOOR: String(WARM_FLOOR),
     });
     try {
       await waitForBrokerJson(stateDir);
@@ -459,10 +459,10 @@ test(
 // it -- exactly 01.6.2's own crash-supervisor gap, and this plan's own
 // Defect 5); this is the proof a fully-controlled stub cannot give.
 //
-// This fixture is pre-rename ON PURPOSE, matching the landed warm-floor
-// supervision test above: VICE_BROKER_SPARES (this env var) renames to
-// VICE_BROKER_WARM_FLOOR in plan 05, which owns migrating THIS test in its
-// own commit, not a pre-emptive rename here. The OTHER retiring fixture
+// This fixture's env var is migrated in THIS plan's own commit
+// (01.6.2.1-05-PLAN.md, D-10/D-11): the retired predecessor variable's name
+// is gone, and this fixture now sets VICE_BROKER_WARM_FLOOR, matching the
+// landed warm-floor supervision test above. The OTHER retiring fixture
 // this test used to depend on (the external-command probe env var) is
 // MIGRATED as of 01.6.2.1-02-PLAN.md, Task 2 -- this test now reaches
 // `ready` through the surviving in-process HTTP mechanism via the
@@ -485,7 +485,7 @@ test(
     const handle = startBroker(stateDir, {
       VICE_BIN: stubPath,
       VICE_ARGS: undefined,
-      VICE_BROKER_SPARES: String(WARM_FLOOR),
+      VICE_BROKER_WARM_FLOOR: String(WARM_FLOOR),
     });
     try {
       await waitForBrokerJson(stateDir);
@@ -661,7 +661,7 @@ test(
   async () => {
     build();
     const stateDir = mkdtempSync(join(tmpdir(), "broker-e2e-recycle-"));
-    // VICE_BROKER_SPARES=0: this test's port-count and pid-stability
+    // VICE_BROKER_WARM_FLOOR=0: this test's port-count and pid-stability
     // assertions are only meaningful if NOTHING besides this test's own
     // acquire/recycle sequence ever launches or frees a port. Node's global
     // fetch gives maintainWarmFloor() a real HTTP readiness mechanism by
@@ -669,7 +669,7 @@ test(
     // default of 3 would auto-launch speculative spares on other free ports
     // during this test's own wait windows -- disabling it here isolates the
     // scenario this test is actually proving.
-    const handle = startBroker(stateDir, { VICE_RESTART_BACKOFF_S: "0", VICE_BROKER_POLL_MS: "100", VICE_BROKER_SPARES: "0" });
+    const handle = startBroker(stateDir, { VICE_RESTART_BACKOFF_S: "0", VICE_BROKER_POLL_MS: "100", VICE_BROKER_WARM_FLOOR: "0" });
     try {
       const brokerJson = await waitForBrokerJson(stateDir);
       const host = String(brokerJson.control_host);
@@ -752,12 +752,12 @@ test(
     build();
     const POLL_MS = 100;
     const stateDir = mkdtempSync(join(tmpdir(), "broker-e2e-release-"));
-    // VICE_BROKER_SPARES=0: same isolation reasoning as the recycle test
+    // VICE_BROKER_WARM_FLOOR=0: same isolation reasoning as the recycle test
     // above -- a release frees its port back to the allocator, and an
     // auto-warmed spare landing on that SAME now-free port would rewrite
     // this test's own epoch.json with an unrelated pid, corrupting the
     // exact "no replacement appears" assertion this test exists to make.
-    const handle = startBroker(stateDir, { VICE_RESTART_BACKOFF_S: "0", VICE_BROKER_POLL_MS: String(POLL_MS), VICE_BROKER_SPARES: "0" });
+    const handle = startBroker(stateDir, { VICE_RESTART_BACKOFF_S: "0", VICE_BROKER_POLL_MS: String(POLL_MS), VICE_BROKER_WARM_FLOOR: "0" });
     try {
       const brokerJson = await waitForBrokerJson(stateDir);
       const host = String(brokerJson.control_host);
@@ -879,7 +879,7 @@ test(
     const POLL_MS = 500;
     const stateDir = mkdtempSync(join(tmpdir(), "broker-e2e-disconnect-queued-"));
     const occupied = await bindOccupyingListeners(OCCUPIED_BASE_PORT, OCCUPIED_PORT_COUNT);
-    // VICE_BROKER_SPARES=0: same isolation reasoning as the recycle/release
+    // VICE_BROKER_WARM_FLOOR=0: same isolation reasoning as the recycle/release
     // tests above -- an auto-warmed spare (Node's global fetch makes the
     // warm floor's readiness mechanism real by default) could land on some
     // OTHER free candidate in this same widened scan region and add a
@@ -887,7 +887,7 @@ test(
     // instance" assertions.
     const handle = startBroker(stateDir, {
       VICE_BROKER_POLL_MS: String(POLL_MS),
-      VICE_BROKER_SPARES: "0",
+      VICE_BROKER_WARM_FLOOR: "0",
       VICE_BROKER_BASE_PORT: String(OCCUPIED_BASE_PORT),
     });
     try {

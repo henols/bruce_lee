@@ -282,9 +282,19 @@ export function registerShutdownHandlers(deps) {
  * session -- the incident was not caused by missing machinery, it was
  * caused by nobody being told. Detaching stays the operator's own
  * nohup/setsid/systemd choice (D-25) -- this banner names that choice
- * rather than offering a flag; the launcher stays thin. */
+ * rather than offering a flag; the launcher stays thin.
+ *
+ * D-25/P-13 (01.6.2.1-05-PLAN.md): the one place naming the retired
+ * warm-floor environment variable does not weaken D-10/D-11's clean break --
+ * the line added below reports the variable's mere PRESENCE, never its
+ * value, and no reader anywhere in this broker still consults it (the
+ * structural gate in broker-kill.test.ts proves that). Without it, an
+ * operator with the retired variable set in a shell profile would silently
+ * get the default instead of their configured value, with nothing saying
+ * so -- the exact failure mode the developer was shown when choosing the
+ * clean break over a fallback read. */
 export function startupBanner() {
-    return [
+    const lines = [
         "vice-broker: WARNING -- this broker runs in the FOREGROUND of this process.",
         "vice-broker: a keyboard interrupt (Ctrl-C), a closed terminal, or an ending SSH/VS Code",
         "vice-broker: session will TERMINATE EVERY EMULATOR this broker launched -- including",
@@ -294,7 +304,11 @@ export function startupBanner() {
         "vice-broker: reconnect. A session whose broker dies must be restarted, not resumed.",
         "vice-broker: to run this broker outside the current terminal session, use your own",
         "vice-broker: nohup/setsid/systemd -- this launcher does not offer a --detach flag.",
-    ].join("\n");
+    ];
+    if (process.env.VICE_BROKER_SPARES !== undefined) { // banner-only presence check (D-25/P-13) -- never reads the value
+        lines.push("vice-broker: NOTE -- the VICE_BROKER_SPARES environment variable is set and is IGNORED; it was retired with no alias or fallback. Use VICE_BROKER_WARM_FLOOR instead.");
+    }
+    return lines.join("\n");
 }
 /** Real default: `ps -eo pid=,args=` -- every process on the host, pid plus
  * its full argument string. Never throws: an unreadable `ps` (e.g. no

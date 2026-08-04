@@ -397,6 +397,24 @@ test("startupBanner: names the foreground lifetime, that every emulator launched
   assert.match(banner, /voids? every session|no.*reconnect/i);
 });
 
+test("startupBanner: names the retired VICE_BROKER_SPARES variable as set-and-ignored, naming VICE_BROKER_WARM_FLOOR as its replacement, only when the retired variable is set (D-25/P-13)", () => { // banner
+  const saved = process.env.VICE_BROKER_SPARES; // banner
+  try {
+    delete process.env.VICE_BROKER_SPARES; // banner
+    const withoutVar = startupBanner();
+    assert.doesNotMatch(withoutVar, /VICE_BROKER_SPARES/, "the retired-variable line must not appear when the variable is unset"); // banner
+
+    process.env.VICE_BROKER_SPARES = "3"; // banner
+    const withVar = startupBanner();
+    assert.match(withVar, /VICE_BROKER_SPARES/, "the retired variable must be named when it is set"); // banner
+    assert.match(withVar, /ignored/i, "the line must say the retired variable is ignored");
+    assert.match(withVar, /VICE_BROKER_WARM_FLOOR/, "the line must name the replacement variable");
+  } finally {
+    if (saved === undefined) delete process.env.VICE_BROKER_SPARES; // banner
+    else process.env.VICE_BROKER_SPARES = saved; // banner
+  }
+});
+
 test("structural: the real broker prints the banner before the control listener starts, and registers shutdown handling after the listener is up", () => {
   const source = readFileSync(join(HERE, "vice-broker.mts"), "utf8");
   const bannerIdx = source.indexOf("startupBanner()");
@@ -670,4 +688,97 @@ test("structural: the real broker's startup reap runs before its control listene
   const listenerIdx = source.indexOf("listener = await startControlListener(");
   assert.ok(reapIdx !== -1 && listenerIdx !== -1);
   assert.ok(reapIdx < listenerIdx);
+});
+
+// ----------------------------------------------------------------------------
+// Structural gate (D-10/D-11, 01.6.2.1-05-PLAN.md), companion to the banner
+// test above -- neither retired environment-variable name (banner: VICE_BROKER_SPARES) nor the other retired name (the discovery record's
+// old floor-field name, one word run together with an underscore) may
+// survive anywhere in tracked, NON-TEST TypeScript under .claude/mcp/vice/,
+// except startupBanner()'s own function body (checked immediately below),
+// so the clean break cannot be silently re-softened by a stray fallback
+// read or a half-done field rename landing later. Comment-stripped (the
+// same block-comment-aware technique broker-control.test.ts's own
+// structural gates already established, reused here rather than
+// re-derived) and scoped to source files only -- resources/ is generated
+// output, never hand-edited, and is excluded by construction.
+//
+// The retired FIELD name is deliberately never spelled as one contiguous
+// token anywhere in this gate's own source (built via string
+// concatenation below) -- unlike the retired ENV VAR name, it has no
+// banner exception at all, so this gate's own source must not be a hit
+// against itself.
+//
+// Deliberately excludes *.test.ts: a test file legitimately names the
+// retired variable as a STRING to exercise it (this gate's own source must
+// be able to search for it; the banner test above sets and deletes it to
+// prove the banner's two branches) -- neither is a "consumer reads the
+// retired variable" risk, which is what this gate exists to catch. The
+// non-test acceptance criteria (grep for a comment-stripped read of the
+// value in broker-launch.mts/vice-broker.mts) already cover the production
+// read sites directly; this gate is the broader, regression-proof net over
+// every OTHER non-test module.
+// ----------------------------------------------------------------------------
+
+function stripCommentsForRetiredNameGate(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
+}
+
+function walkTrackedNonTestSourceFiles(dir: string): string[] {
+  const out: string[] = [];
+  for (const dirent of readdirSync(dir, { withFileTypes: true })) {
+    if (dirent.name === "resources" || dirent.name === "node_modules") continue;
+    const abs = join(dir, dirent.name);
+    if (dirent.isDirectory()) {
+      out.push(...walkTrackedNonTestSourceFiles(abs));
+    } else if ((dirent.name.endsWith(".mts") || dirent.name.endsWith(".ts")) && !dirent.name.endsWith(".test.ts")) {
+      out.push(abs);
+    }
+  }
+  return out;
+}
+
+const RETIRED_ENV_VAR_NAME = "VICE_BROKER_SPARES"; // banner: this gate's own reference to the retired variable's name
+const RETIRED_RECORD_FIELD_NAME = "spares" + "_target"; // constructed, not literal -- see header comment above
+
+test("structural: neither the retired env var name nor the retired discovery-record field name survives anywhere in tracked, non-test TypeScript under .claude/mcp/vice/, except inside startupBanner()'s own function body (D-10/D-11)", () => { // banner
+  const files = walkTrackedNonTestSourceFiles(HERE);
+  const retiredNames = [RETIRED_ENV_VAR_NAME, RETIRED_RECORD_FIELD_NAME];
+  const violations: string[] = [];
+  let sawBannerException = false;
+
+  for (const file of files) {
+    const rel = file.slice(HERE.length + 1);
+    const raw = readFileSync(file, "utf8");
+    const stripped = stripCommentsForRetiredNameGate(raw);
+
+    // The ONE explicitly-allowed exception is named by REGION, not by a
+    // loose per-file or magic-count exemption: startupBanner()'s own
+    // function body (broker-kill.mts only) may reference the retired
+    // variable's NAME -- it reports presence, never reads the value -- but
+    // nothing OUTSIDE that region may, in this file or any other.
+    let bannerRegionStripped = "";
+    if (rel === "broker-kill.mts") {
+      const startMarker = "export function startupBanner(): string {";
+      const endMarker = "export interface ProcessListEntry";
+      const startIdx = raw.indexOf(startMarker);
+      const endIdx = raw.indexOf(endMarker, startIdx + startMarker.length);
+      assert.ok(startIdx !== -1 && endIdx !== -1 && endIdx > startIdx, "startupBanner()'s own region markers must both be found, in order");
+      bannerRegionStripped = stripCommentsForRetiredNameGate(raw.slice(startIdx, endIdx));
+    }
+
+    for (const name of retiredNames) {
+      const totalCount = stripped.split(name).length - 1;
+      if (totalCount === 0) continue;
+      const inBannerRegionCount = bannerRegionStripped ? bannerRegionStripped.split(name).length - 1 : 0;
+      if (inBannerRegionCount > 0) sawBannerException = true;
+      const outsideBannerCount = totalCount - inBannerRegionCount;
+      if (outsideBannerCount > 0) {
+        violations.push(`${rel}: ${name} (${outsideBannerCount}x outside startupBanner()'s own region)`);
+      }
+    }
+  }
+
+  assert.ok(sawBannerException, "startupBanner()'s own region must actually contain the retired variable's name -- if this is false, the banner itself regressed");
+  assert.deepEqual(violations, [], `no retired name may survive outside startupBanner()'s own region, found: ${JSON.stringify(violations)}`);
 });

@@ -286,7 +286,7 @@ export async function probeReady(port, deps = {}) {
 function resolveWarmFloor(override) {
     if (typeof override === "number")
         return override;
-    const raw = process.env.VICE_BROKER_SPARES;
+    const raw = process.env.VICE_BROKER_WARM_FLOOR;
     if (raw === undefined || raw === "")
         return 1;
     const n = Number(raw);
@@ -304,8 +304,8 @@ function resolveCeiling(override) {
 /** Promotes launching instances via probe, then -- unless a launch is
  * already in flight -- launches AT MOST ONE instance toward the warm floor
  * and returns. Never loops to reach the floor in one call: reaching
- * VICE_BROKER_SPARES this way costs one
- * additional CALL per spare instead of one call total, which is the exact
+ * VICE_BROKER_WARM_FLOOR this way costs one
+ * additional CALL per warm instance instead of one call total, which is the exact
  * trade the 2026-08-01 outage made non-negotiable (three simultaneous
  * x64sc launches: one SEGV, one exit 1, one exit 0 at the identical spawn
  * second). `async`/`await` makes launching everything needed in one go
@@ -387,17 +387,17 @@ export async function maintainWarmFloor(deps) {
         mcpHost: deps.mcpHost,
     });
     if (result.ok) {
-        log(`vice-broker: warmed 1 spare this pass -- ${ready + 1} of ${warmFloor} ready, remainder warmed on later passes`);
+        log(`vice-broker: warmed 1 warm instance this pass -- ${ready + 1} of ${warmFloor} ready, remainder warmed on later passes`);
         deps.onLaunched?.(result.record);
     }
     else if (result.reason === "no_free_port") {
-        log(`vice-broker: no free port available -- warming no further spares; ${ready} of ${warmFloor} ready`);
+        log(`vice-broker: no free port available -- warming no further warm instances; ${ready} of ${warmFloor} ready`);
     }
     else {
         // A launch started (cold or warm) between this function's own
         // countLaunching() check above and this call -- a narrow window
         // closed by the guard rather than assumed impossible.
-        log("vice-broker: spare warming attempted but a launch was already in flight -- deferring to a later pass");
+        log("vice-broker: a warm-floor launch was attempted but a launch was already in flight -- deferring to a later pass");
     }
 }
 /** The fixed pass order (mirrors vice-broker.sh's own broker_once(), whose
@@ -467,7 +467,7 @@ function resolveCount(envVar, defaultValue, override) {
  *   restored on the fresh record -- the relaunch primitive always creates a
  *   new record in the "launching" state, and leaving it there would let the
  *   warm floor's own ready-count numerator mistake a recycled session's own
- *   machine for an available spare.
+ *   machine for an available warm instance.
  * - deliberateKill set WITHOUT respawnAfterKill -> "deliberate_teardown":
  *   drop the instance, no respawn. This is T-01.6.2-21's whole point --
  *   without reading this flag, every deliberate teardown would respawn

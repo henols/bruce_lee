@@ -101,7 +101,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
 
 // The final fourteen-field set (plan 05, D-27, G/K): version, written_by,
 // pid, started_at, heartbeat_at, node_version, control_host, control_port,
-// control_token, spares_target, max_instances, base_port, poll_ms, dry_run.
+// control_token, warm_floor, max_instances, base_port, poll_ms, dry_run.
 // The bash original's `ttl_seconds` field is DELETED, not merely renamed --
 // it is one of criterion F's six retiring lease mechanisms; the connection
 // is the lease now, and keeping a TTL-shaped field here would advertise an
@@ -120,7 +120,7 @@ export interface BrokerRecord {
   control_host: string;
   control_port: number;
   control_token: string;
-  spares_target: number;
+  warm_floor: number;
   max_instances: number;
   base_port: number;
   poll_ms: number;
@@ -142,7 +142,7 @@ export const WRITTEN_BY = "vice-broker.mjs";
 // sibling .mjs directly -- exporting them would widen broker-launch.mts's
 // own surface for a one-line env-var read this file can duplicate exactly
 // as cheaply). Both mirror broker-launch.mts's defaults precisely
-// (VICE_BROKER_SPARES/1, VICE_BROKER_MAX/16) so broker.json's config echo
+// (VICE_BROKER_WARM_FLOOR/1, VICE_BROKER_MAX/16) so broker.json's config echo
 // and host_state's own answer can never disagree with what maintainWarmFloor
 // itself actually enforces. The floor default dropped from 3 to 1 in
 // 01.6.2.1-03-PLAN.md (D-06) -- BOTH readers changed together in that same
@@ -152,7 +152,7 @@ export const WRITTEN_BY = "vice-broker.mjs";
 // concurrency-ceiling spike's territory, not this phase's.
 // ---------------------------------------------------------------------------
 function resolveWarmFloorForRecord(): number {
-  const raw = process.env.VICE_BROKER_SPARES;
+  const raw = process.env.VICE_BROKER_WARM_FLOOR;
   if (raw === undefined || raw === "") return 1;
   const n = Number(raw);
   return Number.isFinite(n) ? n : 1;
@@ -254,9 +254,9 @@ function makeLoggingSpawn(logDir: string): { spawn: (cmd: string, args: string[]
  * launch paths so D-04's contract (format, location, atomic-write
  * discipline, all unchanged -- only the writer moves) is discharged from
  * exactly one place regardless of WHY the instance was launched. A
- * granted instance and a still-warm spare are equally real processes; both
+ * granted instance and a still-warm instance are equally real processes; both
  * need a real epoch.json the moment they exist, or plan 04's grant-time
- * re-probe (which reads a spare's recorded epoch_file, per
+ * re-probe (which reads a warm instance's recorded epoch_file, per
  * grant_from_spare()'s bash original) would carry forward a path to
  * nothing. */
 function writeEpochForLaunch(record: InstanceRecord, logRelPath: string): void {
@@ -345,7 +345,7 @@ export interface HandleAcquireDeps {
  * or `null` once every candidate has been tried and none answered, letting
  * the caller fall through to a cold launch (P-03). Regardless of
  * `record.reason`: per D-07, a waiting request takes an instance whichever
- * reason booted it, so a warm spare and a not-yet-granted instance are
+ * reason booted it, so a warm-floor instance and a not-yet-granted instance are
  * equally eligible. Kill-never-recycle needs no separate guard here --
  * handleRelease() below already deletes a released instance's record
  * outright, so a released instance is structurally absent from
@@ -583,7 +583,7 @@ async function handleRecycleForRealBroker(targetId: string, state: BrokerState):
  * (never reused across passes) wiring broker-state.mjs's real
  * allocatePort/counts and broker-launch.mjs's real probeReady, and hooks
  * onLaunched to write the SAME epoch record a cold acquire writes -- a
- * warm spare is a real process the moment it exists, per D-04. */
+ * warm instance is a real process the moment it exists, per D-04. */
 function maintainWarmFloorForRealBroker(stateDir: string, state: BrokerState): Promise<void> {
   return maintainWarmFloor({
     state,
@@ -782,7 +782,7 @@ async function run(args: ParsedArgs): Promise<void> {
     control_host: listener.host,
     control_port: listener.port,
     control_token: token, // never logged -- T-01.6.2-02
-    spares_target: resolveWarmFloorForRecord(),
+    warm_floor: resolveWarmFloorForRecord(),
     max_instances: resolveCeilingForRecord(),
     base_port: resolveBasePort(),
     poll_ms: pollMs,

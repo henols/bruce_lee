@@ -110,7 +110,7 @@ const BROKER_JSON_FOURTEEN_KEYS = [
   "control_host",
   "control_port",
   "control_token",
-  "spares_target",
+  "warm_floor",
   "max_instances",
   "base_port",
   "poll_ms",
@@ -149,7 +149,7 @@ test("emitted artifact starts a LONG-LIVED broker: writes the fourteen-field dis
     assert.ok((record.control_token as string).length > 0);
     assert.ok(!Number.isNaN(Date.parse(record.heartbeat_at as string)), "heartbeat_at must be a parseable timestamp");
     assert.ok(!Number.isNaN(Date.parse(record.started_at as string)));
-    assert.equal(record.spares_target, 1, "default warm floor, D-06 (01.6.2.1-03-PLAN.md) -- down from 3");
+    assert.equal(record.warm_floor, 1, "default warm floor, D-06 (01.6.2.1-03-PLAN.md) -- down from 3");
     assert.equal(record.max_instances, 16, "default instance ceiling, unchanged this phase");
     assert.equal(record.base_port, 6600, "default base port, D-18");
     assert.equal(record.poll_ms, 500, "default poll interval, unchanged this phase");
