@@ -10,11 +10,28 @@
 // enum/namespace/constructor parameter properties) so it can run unflagged
 // under bare `node`, exactly like vice-broker.mts.
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+
+/** Resolves an `outDir` option (or the CLI's `--out-dir` flag) to an absolute
+ * path: an absolute input is used as-is, a relative one is joined against
+ * this module's own directory. Shared by build() and the CLI success
+ * message below so the two never drift apart. */
+function resolveOutDirAbs(outDir: string): string {
+  return resolvePath(outDir).startsWith("/") && outDir.startsWith("/") ? outDir : join(HERE, outDir);
+}
 
 /** The literal expected emitted relative paths -- today exactly the one
  * broker artifact. This list IS the host-bound artifact set: build() asserts
@@ -78,12 +95,32 @@ export interface BuildOptions {
 }
 
 /**
- * Runs the pinned compiler against tsconfig.build.json with its out
- * directory overridden to `outDir` (default "resources", relative to this
- * module's own directory or an absolute path), asserts the emitted file set
- * is EXACTLY HOST_BOUND_ARTIFACTS (catches both a missing artifact and an
- * unexpected one), then prepends the generated-file banner to each. Fails
- * loudly, with the actual emitted file list, when the assertion fails.
+ * Runs the pinned compiler against tsconfig.build.json into a private,
+ * same-filesystem staging directory, asserts the emitted file set is
+ * EXACTLY HOST_BOUND_ARTIFACTS (catches both a missing artifact and an
+ * unexpected one), prepends the generated-file banner to each artifact
+ * WHILE STILL STAGED, then atomically `rename()`s each finished artifact
+ * into `outDir` (default "resources", relative to this module's own
+ * directory or an absolute path).
+ *
+ * Nothing lands at a path inside `outDir` until that path's final bytes
+ * (compiled output plus banner) already exist complete elsewhere, so a
+ * reader of `outDir` -- including a sibling `build()` call's own
+ * resources-sync-style comparison, or a process that spawns an artifact
+ * straight out of `outDir` -- can never observe a partial or banner-less
+ * file. This is per-file atomic replacement, not a lock: no caller in this
+ * repo mutates the .mts sources between builds, so every concurrent build
+ * emits byte-identical output and there is no "which generation wins"
+ * question to answer, only "never expose a half-written file", which
+ * `rename()` onto a fully-finished path already guarantees.
+ *
+ * The staging directory is a SIBLING of `outDir` (never inside it -- a
+ * directory walk over `outDir`, such as resources-sync.test.ts's, must
+ * never see it) on `outDir`'s own filesystem (never `os.tmpdir()`, which
+ * may be a different mount and would make the final rename fail EXDEV). Its
+ * name carries exactly one leading dot and no dot in the tail, so it stays
+ * invisible to this directory's shallow extension-filtered listing gates
+ * (`/\.[cm]?[jt]s$/`). It is removed on every path, success or failure.
  *
  * Takes an --out-dir-shaped option rather than always writing to
  * resources/, so the sync test can build into a scratch directory through
@@ -91,37 +128,74 @@ export interface BuildOptions {
  * implementations.
  */
 export function build({ outDir = "resources" }: BuildOptions = {}): void {
-  const outDirAbs = resolvePath(outDir).startsWith("/") && outDir.startsWith("/") ? outDir : join(HERE, outDir);
+  const outDirAbs = resolveOutDirAbs(outDir);
+  // Runs first, and MUST: the staging dir below is a sibling of outDirAbs
+  // (dirname(outDirAbs)), and recursive mkdirSync of outDirAbs is what
+  // guarantees that parent directory exists before mkdtempSync needs it.
   mkdirSync(outDirAbs, { recursive: true });
 
-  const tscBin = join(HERE, "node_modules", ".bin", "tsc");
-  execFileSync(tscBin, ["-p", join(HERE, "tsconfig.build.json"), "--outDir", outDirAbs], {
-    cwd: HERE,
-    stdio: "inherit",
-  });
+  const stagingDir = mkdtempSync(join(dirname(outDirAbs), ".build-tmp-" + process.pid + "-"));
+  try {
+    const tscBin = join(HERE, "node_modules", ".bin", "tsc");
+    execFileSync(tscBin, ["-p", join(HERE, "tsconfig.build.json"), "--outDir", stagingDir], {
+      cwd: HERE,
+      stdio: "inherit",
+    });
 
-  const emitted = emittedMjsFilesUnder(outDirAbs);
-  const expected = [...HOST_BOUND_ARTIFACTS].sort();
-  const missing = expected.filter((f) => !emitted.includes(f));
-  const unexpected = emitted.filter((f) => !expected.includes(f));
+    const emitted = emittedMjsFilesUnder(stagingDir);
+    const expected = [...HOST_BOUND_ARTIFACTS].sort();
+    const missing = expected.filter((f) => !emitted.includes(f));
+    const unexpected = emitted.filter((f) => !expected.includes(f));
 
-  if (missing.length > 0 || unexpected.length > 0) {
-    throw new Error(
-      "build: emitted file set does not match HOST_BOUND_ARTIFACTS.\n" +
-        `  expected:   ${JSON.stringify(expected)}\n` +
-        `  emitted:    ${JSON.stringify(emitted)}\n` +
-        `  missing:    ${JSON.stringify(missing)}\n` +
-        `  unexpected: ${JSON.stringify(unexpected)}`
-    );
-  }
-
-  for (const rel of HOST_BOUND_ARTIFACTS) {
-    const target = join(outDirAbs, rel);
-    const banner = GENERATED_BANNER(sourceRelForEmitted(rel));
-    const content = readFileSync(target, "utf8");
-    if (!content.startsWith(banner)) {
-      writeFileSync(target, banner + content);
+    if (missing.length > 0 || unexpected.length > 0) {
+      throw new Error(
+        "build: emitted file set does not match HOST_BOUND_ARTIFACTS.\n" +
+          `  expected:   ${JSON.stringify(expected)}\n` +
+          `  emitted:    ${JSON.stringify(emitted)}\n` +
+          `  missing:    ${JSON.stringify(missing)}\n` +
+          `  unexpected: ${JSON.stringify(unexpected)}`
+      );
     }
+
+    // Banner every staged artifact BEFORE any rename -- a half-bannered
+    // file must never become reachable at an `outDir` path.
+    for (const rel of HOST_BOUND_ARTIFACTS) {
+      const staged = join(stagingDir, rel);
+      const banner = GENERATED_BANNER(sourceRelForEmitted(rel));
+      const content = readFileSync(staged, "utf8");
+      if (!content.startsWith(banner)) {
+        writeFileSync(staged, banner + content);
+      }
+    }
+
+    // Move each finished artifact into place. Iterates the artifact list,
+    // not a walk of stagingDir, so a hand-authored file that also lives
+    // under outDir (resources/vice-launcher.sh) is never a rename source or
+    // target -- it was never staged and is left untouched.
+    for (const rel of HOST_BOUND_ARTIFACTS) {
+      const from = join(stagingDir, rel);
+      const to = join(outDirAbs, rel);
+      try {
+        renameSync(from, to);
+      } catch (e) {
+        const detail = (e as NodeJS.ErrnoException).code === "EXDEV" ? " (EXDEV: staging dir and outDir are on different filesystems -- outDir must be reachable via a same-filesystem sibling)" : "";
+        throw new Error(`build: failed to move staged artifact into place: ${from} -> ${to}${detail}`, { cause: e });
+      }
+    }
+
+    // tsc emits exactly HOST_BOUND_ARTIFACTS today (verified). A leftover
+    // here means the compiler started emitting something this list does not
+    // describe -- fail loudly rather than silently drop a file that used to
+    // reach outDir.
+    const leftovers = readdirSync(stagingDir);
+    if (leftovers.length > 0) {
+      throw new Error(
+        `build: staging directory still holds file(s) after moving every HOST_BOUND_ARTIFACTS entry -- ` +
+          `the compiler emitted something not in that list: ${JSON.stringify(leftovers)}`
+      );
+    }
+  } finally {
+    rmSync(stagingDir, { recursive: true, force: true });
   }
 }
 
@@ -141,7 +215,7 @@ if (process.argv[1] && resolvePath(process.argv[1]) === fileURLToPath(import.met
   const opts = parseCliArgs(process.argv.slice(2));
   try {
     build(opts);
-    const outDirAbs = opts.outDir ? (opts.outDir.startsWith("/") ? opts.outDir : join(HERE, opts.outDir)) : join(HERE, "resources");
+    const outDirAbs = resolveOutDirAbs(opts.outDir ?? "resources");
     process.stderr.write(`build: wrote ${HOST_BOUND_ARTIFACTS.length} artifact(s) to ${outDirAbs}\n`);
   } catch (e) {
     process.stderr.write(`build: FAILED -- ${(e as Error).message}\n`);
