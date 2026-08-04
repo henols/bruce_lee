@@ -4,15 +4,15 @@ milestone: v1.1
 milestone_name: insertion note
 current_phase: 01.6.2
 current_phase_name: the-one-process-host-broker
-status: executed_gaps_found
-stopped_at: "Phase 01.6.2 EXECUTED (11/11 plans, all merged to main) but NOT SEALED — verification returned gaps_found at 16/20. Four gaps, all provable from wiring without a live emulator: (1) superviseChild() is never called by vice-broker.mts, so crash-respawn is unreachable; (2) vice_recycle kills without respawning, contradicting its own tool description; (3) attemptAcquire() leaks a real launch for an already-abandoned connection; (4) 01.6.2-VALIDATION.md ledger row 51 mis-dispositions the recycle-respawn test. Next: /gsd-plan-phase 01.6.2 --gaps"
-last_updated: "2026-08-04T06:30:00.000Z"
+status: executing
+stopped_at: "Phase 01.6.2 executed 11/11 but NOT SEALED — verification returned gaps_found at 16/20. Four gap-closure plans (12–15) are now authored, checker-passed and committed (9c26fbf), covering all four failed truths plus WR-01 and WR-03. Nothing from them is executed yet. Next: /gsd-execute-phase 01.6.2 — it picks up waves 12–15."
+last_updated: "2026-08-04T06:58:04.925Z"
 last_activity: 2026-08-04
-last_activity_desc: "Phase 01.6.2 executed end to end — 11 plans / 11 waves, both blocking checkpoints resolved by the developer (wire format as-specified; four-file deletion approved). Bash host daemon replaced by an in-process TypeScript broker + TCP control plane; file protocol deleted; 5,530 lines of bash retired; exactly one shell script left in the module. Suite 275 -> 368 (363 pass, 0 fail, 0 skipped, 5 todo). Code review: 2 critical / 4 warning / 1 info. Verification: gaps_found 16/20 — phase NOT complete."
+last_activity_desc: "Phase 01.6.2 gap closure planned — 4 plans (12–15), waves 12–15, all four failed verification truths carried into must_haves verbatim; plan-checker returned VERIFICATION PASSED with 0 issues. Plans 01–11 untouched (additive-only, developer decision at the planning gate)."
 progress:
   total_phases: 11
   completed_phases: 4
-  total_plans: 44
+  total_plans: 48
   completed_plans: 29
   percent: 36
 ---
@@ -155,34 +155,47 @@ Phase 01 (recovery-provenance) — **PARKED mid-execution, not abandoned.** 4 of
 
 **Phase 01.6's host-`node` gate is CLEARED (2026-08-02).** The host has `node` on PATH — confirmed by the developer, who has host access; the container cannot verify this by construction. The TCP control plane is in scope and the bash-broker fallback is off the table. Still unknown and worth establishing in 01.6's first plan: the host's `node` **version**, and the shell→Node call boundary, since this repo has no host-side Node precedent to copy.
 
-**Next step, and why it is the right one.** `/gsd-plan-phase 01.6.2` — no phase dir exists yet. Two
-things to carry in: (1) the decision-coverage re-surfacing rule recorded above **will** fire on 01.6.2
-for inherited `01.6-CONTEXT.md` decisions it does not own — check the ROADMAP ownership table before
-treating it as a finding; (2) 01.6.2's hardest deliverable is not a port. `vice-broker.test.mjs` is
-2,685 lines / 61 tests that verify the daemon **by spawning it and reading on-disk state**, and that
-mechanism stops existing once the daemon becomes an in-process TypeScript event loop — a redesign,
-alongside the single-`in_flight`-owner race test (the guard behind the 2026-08-01 triple-launch
-outage) and D-04's epoch file.
+**Next step, and why it is the right one (updated 2026-08-04, after gap-closure planning).**
+`/gsd-execute-phase 01.6.2` — waves 1–11 are executed and merged; waves 12–15 are authored and
+unexecuted. Three things to carry in: (1) **the four gaps share one root**, and it is a planning-scope
+root, not a coding mistake — plan 03 built and exhaustively unit-tested `superviseChild()`, but
+`vice-broker.mts` was outside that plan's `files_modified`, so *wiring* it was nobody's task and a
+green 368-test suite reported nothing wrong. Every acceptance criterion in plans 12–15 is therefore
+checkable against the **wired** system (the spawned broker artifact, or a structural assertion that the
+real entry point calls the thing); an executor that satisfies one with a fresh isolated unit test has
+reproduced the defect, not closed it. (2) **Waves 12→13 are coupled and must not be split across a
+pause**: wave 12 wires crash supervision, and until wave 13 splits the `deliberateKill` marker into
+"the broker ordered this death" plus a separate respawn answer, a released instance can be misread as
+a crash — REVIEW.md's WR-01 says so explicitly. (3) The decision-coverage gate is green (31/31), so a
+re-surfacing on 01.6.2 would be new, not inherited.
 
 **Outstanding on 01.6.1, neither blocking 01.6.2:** `01.6.1-VALIDATION.md` is still `status: draft` /
 `nyquist_compliant: false` (`/gsd-validate-phase 01.6.1`), and learnings have not been extracted
 (`/gsd-extract-learnings 01.6.1` — the TypeScript closure-narrowing hazard, the negated-clause gate
 false positives, and the tracer-vs-daemon distinction are all worth harvesting).
 
-Status: Executing Phase 01.6.2
+Status: Ready to execute
 
-> `gsd-tools query state.planned-phase` returned `updated: []` and changed nothing here, so this line
-> and the Last-activity line below were written by hand. Same family as the `phase insert` /
-> `roadmap analyze` parser defects already filed under `.planning/todos/pending/` — the read verbs
-> resolve this ROADMAP fine, the write verbs do not see its phases. `roadmap.annotate-dependencies`
-> was correctly a no-op (`updated: false`): the planner had already written the wave headers and the
-> per-plan list into § Phase 01.6.2.
+> **2026-08-03 run:** `gsd-tools query state.planned-phase` returned `updated: []` and changed nothing
+> here, so this line and the Last-activity line below were written by hand. Same family as the
+> `phase insert` / `roadmap analyze` parser defects already filed under `.planning/todos/pending/` —
+> the read verbs resolve this ROADMAP fine, the write verbs do not see its phases.
+>
+> **2026-08-04 gap-closure run:** the same verb returned `updated: ["Status"]` — it *did* rewrite this
+> Status line correctly this time. The damage moved to the **frontmatter** instead: its post-write
+> re-sync derived `last_activity: 2026-08-03` and `last_activity_desc: "Phase 01.6.2 execution
+> started"` from a disk snapshot, silently overwriting curated, more-recent, more-accurate values with
+> a stale description of a *different* event. `total_plans: 44 → 48` was correct. Frontmatter repaired
+> by hand; filed as `.planning/todos/pending/2026-08-04-state-planned-phase-frontmatter-resync-
+> overwrites-curated-activity.md`. `roadmap.annotate-dependencies` was correctly a no-op
+> (`updated: false`) on both runs: the planner had already written the wave headers and the per-plan
+> list into § Phase 01.6.2.
 
 **Known-failing check, carried forward for whoever resumes 01-04:** the plan's own Task 3 automated verification fails today — `saeger`'s `death` milestone is recorded `reached: true` with `cycles_advanced: null` and an explicit `evidentiary_gap` (no screen-matrix SHA-256 captured, attempt 4). Attempt 6 must re-capture that signature, not merely reach the two remaining milestones. danish's five milestones all carry full mechanical proof and pass.
 
-Last activity: 2026-08-03 — Phase 01.6.2 execution started
+Last activity: 2026-08-04 — Phase 01.6.2 gap closure planned (plans 12–15, waves 12–15)
 
-Progress (v1.1): 17 of 29 authored plans done — 01.6 complete (4/4), 01.6.1 complete (8/8), 01.3 paused at 5/6 (01.3-06 outstanding), **01.6.2 authored 0/11**. **No percentage given on purpose:** 01.6.2.1, 01.6.3 and 01.4 are not yet broken into plans, so the denominator is still not knowable and any bar here would overstate progress. (01.5 and 01.7 are `ABSORBED` and contribute no plans.)
+Progress (v1.1): 28 of 33 authored plans done — 01.6 complete (4/4), 01.6.1 complete (8/8), 01.3 paused at 5/6 (01.3-06 outstanding), **01.6.2 executed 11/15 — the four gap-closure plans (12–15) are authored and unexecuted, and the phase is NOT sealed.** **No percentage given on purpose:** 01.6.2.1, 01.6.3 and 01.4 are not yet broken into plans, so the denominator is still not knowable and any bar here would overstate progress. (01.5 and 01.7 are `ABSORBED` and contribute no plans.)
 Progress (v1.0, paused): [████░░░░░░] 40% — 8/20 plans
 Progress (overall): [██░░░░░░░░] 23% — 8/35 plans
 
