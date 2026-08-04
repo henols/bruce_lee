@@ -197,7 +197,11 @@ the tools handle the boundary.
   `mcp__vice__vice_disk_read_sector` when the emulated drive's own view is what matters.
 - Most state reads pause the emulator. Read state first, poll with `mcp__vice__vice_ping`, and
   resume exactly once at the end.
-- Compare the restart epoch across a bracket. A changed epoch voids the run.
+- Do not try to read the restart epoch — **no exposed tool does.** The proxy compares it around
+  every forwarded call and refuses the call, or discards its result, with a loud error naming both
+  values. A clean run is one during which no epoch-drift error appeared; record that, not a pair of
+  hand-read numbers. `mcp__vice__vice_recycle` changes the epoch by design, so it voids any run in
+  flight. See the `vice-wedge-triage` skill.
 - Synchronise input on checkpoint hits and frame counts. Never on wall-clock delay.
 - `tools/` holds pure logic only — resolution, attribution, ordering, rendering — over data the
   agent fetched through the tools and passed in. Nothing under `tools/` contacts the emulator.
