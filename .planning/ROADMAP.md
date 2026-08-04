@@ -888,7 +888,7 @@ Plans:
 
 **Risks**: **The split's whole value is the seal boundary, and it is only real if this phase actually verifies** — a phase that seals on "the five tasks exist" rather than "each has a passing test" gives back exactly what the split bought. **Nothing here is live-verifiable either**, so criterion E's carry-forward list is this phase's most load-bearing deliverable, not its cleanup step. **The cross-phase ordering constraint is easy to lose across a phase boundary**: D-07 depends on a test that lives in 01.6.2's plans, so it must be a stated prerequisite in this phase's plan text and not an assumption that 01.6.2 sealed green. **Criterion M is where a defect gets silently lost if the disposition is treated as paperwork** — the two unsettled items above are the specific place that happens, and both arrive with a proposed answer precisely so "not settled" cannot quietly become "not addressed".
 
-**Plans:** 5/6 plans executed
+**Plans:** 6/6 plans executed
 
 Plans:
 **Wave 1**
@@ -913,7 +913,7 @@ Plans:
 
 **Wave 6** *(blocked on Wave 5)*
 
-- [ ] 01.6.2.1-06-PLAN.md — **Criteria M and E.** All seven of Phase 01.5's criteria dispositioned one by one with a decision ID and named evidence; the **five**-row defect mapping and its todo closed on that gate; criterion E's equivalence framing **replaced** not annotated with the genuinely-unchanged set named separately; D-20's per-change proof table; and criterion E's **carry-forward list** into `01.6.2-VALIDATION.md` — mechanically harvested, stable `CF-01.4-NN` IDs, a concrete discharge route per row, both phases covered, **Phase 01.4 named as owner** (criteria E/M, D-02, D-19…D-22, P-05, P-09, P-10)
+- [x] 01.6.2.1-06-PLAN.md — **Criteria M and E.** All seven of Phase 01.5's criteria dispositioned one by one with a decision ID and named evidence; the **five**-row defect mapping and its todo closed on that gate; criterion E's equivalence framing **replaced** not annotated with the genuinely-unchanged set named separately; D-20's per-change proof table; and criterion E's **carry-forward list** into `01.6.2-VALIDATION.md` — mechanically harvested, stable `CF-01.4-NN` IDs, a concrete discharge route per row, both phases covered, **Phase 01.4 named as owner** (criteria E/M, D-02, D-19…D-22, P-05, P-09, P-10)
 
 **Waves:** strictly sequential, 1 → 6. **Deliberately no parallelism**, and one place where it was available and declined: plans 03 and 04 have disjoint source files (`broker-launch.mts`/`vice-broker.mts` versus `vice-broker-client.ts`/`.mcp.json`, and `vice-broker-client.ts` is not host-bound so plan 04 touches no generated artifact), so they could have shared a wave — but both append to the append-only findings log, which is the same forced-ordering cause 01.6.2's waves 12–14 recorded. Recorded so a future reader does not read wave 4 as a missed parallelism. Every other ordering is a real `files_modified` overlap.
 
