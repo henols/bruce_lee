@@ -888,7 +888,7 @@ Plans:
 
 **Risks**: **The split's whole value is the seal boundary, and it is only real if this phase actually verifies** — a phase that seals on "the five tasks exist" rather than "each has a passing test" gives back exactly what the split bought. **Nothing here is live-verifiable either**, so criterion E's carry-forward list is this phase's most load-bearing deliverable, not its cleanup step. **The cross-phase ordering constraint is easy to lose across a phase boundary**: D-07 depends on a test that lives in 01.6.2's plans, so it must be a stated prerequisite in this phase's plan text and not an assumption that 01.6.2 sealed green. **Criterion M is where a defect gets silently lost if the disposition is treated as paperwork** — the two unsettled items above are the specific place that happens, and both arrive with a proposed answer precisely so "not settled" cannot quietly become "not addressed".
 
-**Plans:** 3/6 plans executed
+**Plans:** 4/6 plans executed
 
 Plans:
 **Wave 1**
@@ -905,7 +905,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3)*
 
-- [ ] 01.6.2.1-04-PLAN.md — The acquire deadline's default 25 000 → 120 000 ms, with `.mcp.json`'s vice timeout raised 60 000 → 150 000 in the same commit so the landed ordering-invariant test passes **unedited**, and the never-started fail-fast bound re-anchored from a fraction of the deadline to an absolute value; 01.5 criterion 6 adopted and its todo closed as **done-on-the-successor**, overruling the ROADMAP's proposed "dissolved" wording (criterion L/M, P-08, P-09)
+- [x] 01.6.2.1-04-PLAN.md — The acquire deadline's default 25 000 → 120 000 ms, with `.mcp.json`'s vice timeout raised 60 000 → 150 000 in the same commit so the landed ordering-invariant test passes **unedited**, and the never-started fail-fast bound re-anchored from a fraction of the deadline to an absolute value; 01.5 criterion 6 adopted and its todo closed as **done-on-the-successor**, overruling the ROADMAP's proposed "dissolved" wording (criterion L/M, P-08, P-09)
 
 **Wave 5** *(blocked on Wave 4)*
 
