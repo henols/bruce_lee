@@ -2,20 +2,23 @@
 // survive D-02 -- rescued from vice-pool.test.mjs (quick-260801-qpq Task 3)
 // before that file is deleted wholesale in plan 04. vice-pool.sh itself is
 // deleted per D-02 and dropped from this file entirely; vice-supervisor.sh
-// and the bash broker (resources/vice-broker.sh) keep the assertions
-// vice-pool.sh used to share, and the launcher (resources/vice-launcher.sh,
-// created in plan 01) joins the shared script list. Plan 03 extends this
-// file with the one-shell-script allowlist and the ignore-set parity gate.
+// and the bash broker (resources/vice-broker.sh) kept the assertions
+// vice-pool.sh used to share for a while, and the launcher
+// (resources/vice-launcher.sh, created in plan 01) joined the shared script
+// list. Plan 03 extended this file with the one-shell-script allowlist and
+// the ignore-set parity gate. Plan 11 deletes both retiring daemons: the
+// one-shell-script allowlist now holds exactly one entry (the launcher), and
+// every assertion whose subject was one of the two retiring scripts is gone
+// with them -- see the two comment blocks below for exactly what and why.
 //
 // Nothing here imports vice-pool.mjs or vice-session.mjs, or drives the real
-// emulator -- every process spawned below is a stub (`/bin/sleep`) or the
-// script itself run with `--dry-run`/`--print-paths`/`-n`.
+// emulator -- every process spawned below is the script itself run with
+// `--dry-run`/`--print-paths`/`-n`.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, existsSync, readFileSync, readdirSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
-import { execFile, spawn, type ChildProcess } from "node:child_process";
+import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 
@@ -59,128 +62,40 @@ function findRepoRoot(from: string): string {
 
 const REPO_ROOT = findRepoRoot(HERE);
 
-/** Poll `predicate` (a zero-arg function returning truthy/falsy) to a
- * bounded deadline rather than sleeping a fixed duration -- checkpoint/frame
- * synchronisation, never wall-clock delay (this project's own stack
- * pattern). Returns the predicate's own truthy result, or null on timeout. */
-async function waitFor<T>(
-  predicate: () => T | null | undefined,
-  { timeoutMs = 8000, pollMs = 20 }: { timeoutMs?: number; pollMs?: number } = {}
-): Promise<T | null> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const result = predicate();
-    if (result) return result;
-    await new Promise((r) => setTimeout(r, pollMs));
-  }
-  return null;
-}
-
-// The one shared list of tracked host scripts surviving D-02 -- plan 03 and
-// 01.6.2 shrink THIS array rather than hunting individual assertions as
-// scripts fold into the TypeScript broker.
-const SURVIVING_HOST_SCRIPTS = ["vice-supervisor.sh", "vice-broker.sh", "vice-launcher.sh"];
-
 // ============================================================================
-// quick-260801-qpq Task 3: vice-supervisor.sh terminates what it spawned on
-// SIGINT, SIGTERM, SIGHUP and on any other exit path -- not just
-// SIGINT/SIGTERM as before. It registers a two-entry-point trap: a signal
-// entry point (INT/TERM/HUP) and an EXIT entry point that captures $? as its
-// first statement and re-exits with it, so the crash-loop give-up path's
-// exit 4 survives unchanged.
+// Plan 11: the retiring per-instance supervisor's signal-handling test
+// (vice-supervisor.sh: a SIGHUP terminates the running child...), the
+// trap-registration loop (both retiring daemons registering EXIT/HUP/INT/
+// TERM), and the syntax-check loop (bash -n over every surviving script) are
+// ALL removed here -- their common driver, the SURVIVING_HOST_SCRIPTS array,
+// enumerated exactly the two retiring daemons plus the launcher, and two of
+// those three no longer exist. Dispositions, per 01.6.2-VALIDATION.md's own
+// ledger (row 11 and neighbours):
+//   - The SIGHUP signal-handling test: RE-OBSERVED by broker-kill.test.ts's
+//     own shutdown()/registerShutdownHandlers() tests, which cover every
+//     catchable signal path (SIGTERM/SIGINT/SIGHUP) against the real broker
+//     process, not one signal against a per-instance shell supervisor.
+//   - The trap-registration loop: DELETED outright for the two retiring
+//     daemons (no subject survives); the ONE assertion in that loop whose
+//     subject survives -- vice-launcher.sh execing into node, which is what
+//     makes signal delivery pass straight through to the broker process with
+//     no bash trap of its own needed -- is kept below as its own standalone
+//     test, load-bearing in its own right.
+//   - The syntax-check loop: DELETED as redundant. vice-broker-launch.test.ts
+//     already has its own "bash -n exits 0 for the launcher" test covering
+//     the one surviving script's syntax.
 // ============================================================================
 
-test("vice-supervisor.sh: a SIGHUP terminates the running child before the supervisor itself exits", async () => {
-  const supervisorScript = join(HERE, "resources", "vice-supervisor.sh");
-  const supervisorDir = mkdtempSync(join(tmpdir(), "vice-supervisor-sighup-"));
-  const epochFile = join(supervisorDir, "epoch.json");
-  let child: ChildProcess | undefined;
-  try {
-    child = spawn("bash", [supervisorScript], {
-      env: {
-        ...process.env,
-        VICE_SUPERVISOR_ALLOW_CONTAINER: "1",
-        VICE_SUPERVISOR_DIR: supervisorDir,
-        VICE_BIN: "/bin/sleep",
-        VICE_ARGS: "300",
-      },
-      stdio: "ignore",
-    });
-
-    const epoch = await waitFor(() => {
-      if (!existsSync(epochFile)) return null;
-      try {
-        const rec = JSON.parse(readFileSync(epochFile, "utf8"));
-        return typeof rec.pid === "number" ? rec : null;
-      } catch {
-        return null;
-      }
-    });
-    assert.ok(epoch, "the supervisor must write an epoch record naming its child's pid");
-    const childPid = epoch.pid;
-
-    const childAliveBefore = await waitFor(() => {
-      try {
-        process.kill(childPid, 0);
-        return true;
-      } catch {
-        return false;
-      }
-    });
-    assert.ok(childAliveBefore, "the sleep child must be alive before the signal");
-
-    child.kill("SIGHUP");
-
-    const childGone = await waitFor(() => {
-      try {
-        process.kill(childPid, 0);
-        return false;
-      } catch {
-        return true;
-      }
-    });
-    assert.ok(childGone, "SIGHUP must terminate the running child before the supervisor exits");
-
-    const supervisorExited = await waitFor(() => child!.exitCode !== null);
-    assert.ok(supervisorExited, "the supervisor itself must exit after handling SIGHUP");
-    assert.equal(child.exitCode, 0, "a signal-triggered shutdown is a clean, deliberate exit -- status 0");
-  } finally {
-    if (child && child.exitCode === null) {
-      try {
-        child.kill("SIGKILL");
-      } catch {
-        /* already gone */
-      }
-    }
-    rmSync(supervisorDir, { recursive: true, force: true });
-  }
-});
-
-test("structural: vice-supervisor.sh and the bash broker (vice-broker.sh) register EXIT and HUP alongside INT and TERM; vice-launcher.sh execs into node instead, so signals reach the broker process directly with no trap of its own needed", () => {
-  for (const name of SURVIVING_HOST_SCRIPTS) {
-    const src = readFileSync(join(HERE, "resources", name), "utf8");
-
-    if (name === "vice-launcher.sh") {
-      // vice-launcher.sh's final action is `exec node "$BROKER_ARTIFACT" ...`
-      // -- exec REPLACES the process image in place (same pid), so INT/TERM/
-      // HUP/EXIT are delivered straight to the node process with no bash
-      // trap in between. Asserting a trap here would assert something the
-      // script deliberately does not do; the real invariant is the exec.
-      assert.match(src, /\bexec\s+node\b/, `${name} must exec into node so signal delivery passes through unchanged`);
-      continue;
-    }
-
-    assert.match(src, /trap\s+\S+\s+EXIT\b|trap\s+\S+[^\n]*\bEXIT\b/, `${name} must register a trap on EXIT`);
-    assert.match(src, /trap\s+\S+[^\n]*\bHUP\b/, `${name} must register a trap naming HUP`);
-    assert.match(src, /trap\s+\S+[^\n]*\bINT\b/, `${name} must still register a trap naming INT`);
-    assert.match(src, /trap\s+\S+[^\n]*\bTERM\b/, `${name} must still register a trap naming TERM`);
-  }
-});
-
-test("structural: bash -n exits 0 for every surviving tracked host script", async () => {
-  for (const name of SURVIVING_HOST_SCRIPTS) {
-    await execFileP("bash", ["-n", join(HERE, "resources", name)]);
-  }
+test("structural: vice-launcher.sh execs into the node entry point, so signal delivery passes straight through to the broker process with no bash trap of its own needed", () => {
+  const src = readFileSync(join(HERE, "resources", "vice-launcher.sh"), "utf8");
+  // exec REPLACES the process image in place (same pid), so INT/TERM/HUP/
+  // EXIT are delivered straight to the node process with no bash trap in
+  // between. This is the one assertion the retiring trap-registration loop
+  // carried whose subject survives the deletion -- the other two entries
+  // (the retiring bash broker and per-instance supervisor) registered their
+  // own traps, which have no equivalent shape to keep once neither script
+  // exists.
+  assert.match(src, /\bexec\s+node\b/, "vice-launcher.sh must exec into node so signal delivery passes through unchanged");
 });
 
 // ============================================================================
@@ -249,17 +164,13 @@ test("`.gitignore` and install-resources.ts's deployed set (resourceEntries() + 
 // ============================================================================
 
 // Named constant per plan 03's instruction: this array SHRINKS as scripts
-// retire -- by one in plan 04 (vice-pool.sh's deletion), down to a single
-// entry once Phase 01.6.2 folds the remaining bash daemons into the
-// TypeScript broker. Every change to it must be a deliberate edit with a
-// commit behind it, not a silent widening to make a red gate pass.
-const EXPECTED_TRACKED_SHELL_SCRIPTS = [
-  ".claude/mcp/vice/resources/lib/container-guard.sh",
-  ".claude/mcp/vice/resources/lib/repo-root.sh",
-  ".claude/mcp/vice/resources/vice-broker.sh",
-  ".claude/mcp/vice/resources/vice-launcher.sh",
-  ".claude/mcp/vice/resources/vice-supervisor.sh",
-].sort();
+// retire -- by one in plan 04 (vice-pool.sh's deletion), down to this single
+// entry now that plan 11 folds the remaining bash daemons (and their two
+// shared libraries) into the TypeScript broker. This is the single entry the
+// array's own history has been anticipating since it was first written.
+// Every change to it must be a deliberate edit with a commit behind it, not
+// a silent widening to make a red gate pass.
+const EXPECTED_TRACKED_SHELL_SCRIPTS = [".claude/mcp/vice/resources/vice-launcher.sh"].sort();
 
 test("structural: git ls-files enumerates the tracked shell-script set as exactly EXPECTED_TRACKED_SHELL_SCRIPTS plus the container-provisioning scripts", async () => {
   const { stdout } = await execFileP("git", ["ls-files", "--", "*.sh"], { cwd: REPO_ROOT });
@@ -301,16 +212,21 @@ test("structural: git ls-files enumerates the tracked shell-script set as exactl
 // use), so a future message reintroducing a dead filename is caught the
 // moment it lands, with no test file to remember to update.
 //
-// DELIBERATELY OUT OF SCOPE THIS WAVE: resources/ (a subdirectory, never
-// enumerated by this shallow, non-recursive readdirSync(HERE)) still holds
-// both retiring scripts' actual bytes -- they are not deleted until plan
-// 11. This gate polices the AUTHORED TYPESCRIPT SOURCE (the messages that
-// quote a host path), not the shell-script inventory itself; the still-open
-// EXPECTED_TRACKED_SHELL_SCRIPTS array above continues to police that.
+// WIDENED, plan 11: resources/ used to be DELIBERATELY OUT OF SCOPE (a
+// subdirectory this shallow, non-recursive readdirSync(HERE) never reached)
+// because it still held both retiring scripts' own bytes -- of course their
+// own filenames appeared there, that was never a violation. That reason is
+// gone now that both files are deleted, so the exclusion goes with it: the
+// gate now also scans resources/'s surviving files (the compiled broker
+// artifacts and the one hand-authored launcher) as defense-in-depth against
+// a dead filename being reintroduced anywhere this module tree deploys from.
 //
 // Comment lines are filtered out before matching, so a header sentence
 // NAMING a retiring filename (as this very comment does, deliberately, to
-// explain what changed and why) cannot make the gate self-invalidating.
+// explain what changed and why -- and as vice-launcher.sh's own header does,
+// recording what it copied from the retiring bash broker) cannot make the
+// gate self-invalidating. resources/'s one surviving shell file uses `#`
+// comments, not `//`/`/* */`, so it gets its own stripping pass.
 // ============================================================================
 
 const RETIRING_DAEMON_FILENAMES: string[] = ["vice-supervisor.sh", "vice-broker.sh"];
@@ -329,15 +245,41 @@ function stripCommentsForDaemonGate(source: string): string {
     .join("\n");
 }
 
-test("structural: neither retiring daemon filename (vice-supervisor.sh, vice-broker.sh) appears anywhere in the module's non-test TypeScript source", () => {
-  const files = readdirSync(HERE)
+/** Strips `#` line comments -- the shell equivalent of
+ * stripCommentsForDaemonGate() above, deliberately just as simple (no
+ * attempt to skip a `#` inside a string literal; this gate's retiring
+ * filenames never legitimately appear inside one). Applied only to
+ * resources/'s one surviving `.sh` file, which uses shell comment syntax,
+ * not the double-slash or slash-star style the flat TypeScript module set
+ * uses. */
+function stripShellCommentsForDaemonGate(source: string): string {
+  return source
+    .split("\n")
+    .map((line) => line.replace(/#.*$/, ""))
+    .join("\n");
+}
+
+test("structural: neither retiring daemon filename (vice-supervisor.sh, vice-broker.sh) appears anywhere in the module's non-test TypeScript source or in resources/'s surviving deployed files", () => {
+  const flatFiles = readdirSync(HERE)
     .filter((f) => /\.[cm]?[jt]s$/.test(f) && !/\.test\.[cm]?[jt]s$/.test(f))
-    .sort();
-  assert.ok(files.length > 0, "module directory enumerated as empty -- glob or path resolution is broken");
+    .sort()
+    .map((f) => ({ file: f, text: stripCommentsForDaemonGate(readFileSync(join(HERE, f), "utf8")) }));
+  assert.ok(flatFiles.length > 0, "module directory enumerated as empty -- glob or path resolution is broken");
+
+  const resourcesDir = join(HERE, "resources");
+  const resourcesDirents = readdirSync(resourcesDir, { withFileTypes: true }).filter((d) => d.isFile());
+  assert.ok(resourcesDirents.length > 0, "resources/ enumerated as empty -- glob or path resolution is broken");
+  const resourceFiles = resourcesDirents
+    .map((d) => d.name)
+    .sort()
+    .map((name) => {
+      const text = readFileSync(join(resourcesDir, name), "utf8");
+      const stripped = name.endsWith(".sh") ? stripShellCommentsForDaemonGate(text) : stripCommentsForDaemonGate(text);
+      return { file: `resources/${name}`, text: stripped };
+    });
 
   const offenders: { file: string; filename: string }[] = [];
-  for (const file of files) {
-    const stripped = stripCommentsForDaemonGate(readFileSync(join(HERE, file), "utf8"));
+  for (const { file, text: stripped } of [...flatFiles, ...resourceFiles]) {
     for (const filename of RETIRING_DAEMON_FILENAMES) {
       const escaped = filename.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       if (new RegExp(escaped).test(stripped)) {

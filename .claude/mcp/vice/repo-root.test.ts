@@ -100,26 +100,32 @@ test("repoRoot() last-resort fallback (quick-260731-p8a, path-anchor regression)
 });
 
 // ============================================================================
-// Path agreement (D-2, D-3, quick-260730-oga Task 2, narrowed for D-02):
-// proves the Node side (repo-root.mjs's supervisorDir(), plus vice.mjs's
-// EPOCH_FILE) and the shell side (tools/vice-supervisor.sh's, tools/vice-
-// broker.sh's and tools/vice-launcher.sh's --print-paths) resolve the SAME
-// .vice-supervisor directory.
+// Path agreement (D-2, D-3, quick-260730-oga Task 2, narrowed for D-02,
+// narrowed AGAIN for plan 11's deletion of vice-supervisor.sh/vice-broker.sh):
+// proves the Node side (repo-root.ts's supervisorDir(), plus vice.ts's
+// EPOCH_FILE) and the shell side (tools/vice-launcher.sh's --print-paths,
+// via its own now-inlined resolve_repo_root()) resolve the SAME repo root,
+// and therefore the same .vice-supervisor directory.
 //
-// NARROWED from the original vice-pool.test.mjs version: that version also
-// cross-checked vice-pool.sh and Node's poolDir()/sessionFilePath() (from
-// vice-pool.mjs/vice-session.mjs). Both modules and vice-pool.sh are deleted
-// per D-02 -- this rewrite compares the THREE scripts that survive:
-// vice-supervisor.sh, vice-broker.sh (the bash broker; its own --print-paths
-// still reports pool_dir=, the SAME .vice-supervisor directory, by shared
-// default) and vice-launcher.sh (created in plan 01). Every structural
-// property of the original regression is kept: the VICE_-prefixed env strip,
-// the fresh-child-process Node evaluation, the self-sufficient
-// installResources() call, the .git-walk-only variant, and the final
-// not-under-.claude assertion.
+// NARROWED again from the vice-supervisor.sh/vice-broker.sh-era version:
+// that version also cross-checked the two retiring daemons' own
+// supervisor_dir/pool_dir fields, which had a direct Node-side counterpart
+// to compare byte-for-byte. Neither retiring script survives plan 11's
+// deletion, and the surviving launcher has no supervisor_dir/pool_dir
+// concept of its own (it only resolves repo_root, self_dir and
+// broker_artifact -- see vice-launcher.sh's own header). The property this
+// test proves is unchanged (Node and the shell agree on one repo root, and
+// therefore on one state directory) -- only the shell-side anchor moves from
+// "compare two scripts' own printed state-dir fields" to "derive the
+// expected state dir from the launcher's own printed repo_root and compare
+// against Node's directly", since the launcher is the only shell-side
+// resolver left. Every structural property of the original regression is
+// kept: the VICE_-prefixed env strip, the fresh-child-process Node
+// evaluation, the self-sufficient installResources() call, the
+// .git-walk-only variant, and the final not-under-.claude assertion.
 // ============================================================================
 
-test("path agreement (D-3, D-6, THE regression this task exists to catch): supervisor_dir === pool_dir (from the bash broker) === supervisorDir() === dirname(EPOCH_FILE), the resources/ and tools/ copies of the supervisor, the bash broker and the launcher agree with each other, and the agreed path is not under .claude", async () => {
+test("path agreement (D-3, D-6, THE regression this task exists to catch): the launcher's own repo_root (resources/ and tools/ copies) agrees with Node's supervisorDir()/dirname(EPOCH_FILE), and the agreed path is not under .claude", async () => {
   // Self-sufficient about the deployed copies (quick-260730-q4b): this makes
   // the test pass in a fresh clone that has never run any skill .mjs file,
   // rather than depending on whether the runner happened to set
@@ -128,17 +134,13 @@ test("path agreement (D-3, D-6, THE regression this task exists to catch): super
   // tools/ copies already exist (and were hand-verified moments ago).
   installResources({ root: repoRoot() });
 
-  const supervisorScript = join(repoRoot(), "tools", "vice-supervisor.sh");
-  const brokerScript = join(repoRoot(), "tools", "vice-broker.sh");
   const launcherScript = join(repoRoot(), "tools", "vice-launcher.sh");
-  const resourcesSupervisorScript = join(repoRoot(), ".claude", "mcp", "vice", "resources", "vice-supervisor.sh");
-  const resourcesBrokerScript = join(repoRoot(), ".claude", "mcp", "vice", "resources", "vice-broker.sh");
   const resourcesLauncherScript = join(repoRoot(), ".claude", "mcp", "vice", "resources", "vice-launcher.sh");
-  for (const p of [supervisorScript, brokerScript, launcherScript, resourcesSupervisorScript, resourcesBrokerScript, resourcesLauncherScript]) {
+  for (const p of [launcherScript, resourcesLauncherScript]) {
     assert.ok(existsSync(p), `expected ${p} to exist (resolved via repoRoot())`);
   }
 
-  // Strip every VICE_* env var so neither the shell scripts nor the Node
+  // Strip every VICE_* env var so neither the shell script nor the Node
   // child below can be pointed anywhere by a sibling test's leftover
   // override -- this test asserts on the TRUE no-configuration defaults.
   const cleanEnv = { ...process.env };
@@ -146,30 +148,18 @@ test("path agreement (D-3, D-6, THE regression this task exists to catch): super
     if (k.startsWith("VICE_")) delete cleanEnv[k];
   }
 
-  const { stdout: supOut } = await execFileP("bash", [supervisorScript, "--print-paths"], { env: cleanEnv });
-  const { stdout: brokerOut } = await execFileP("bash", [brokerScript, "--print-paths"], { env: cleanEnv });
   const { stdout: launcherOut } = await execFileP("bash", [launcherScript, "--print-paths"], { env: cleanEnv });
-  const { stdout: resourcesSupOut } = await execFileP("bash", [resourcesSupervisorScript, "--print-paths"], { env: cleanEnv });
-  const { stdout: resourcesBrokerOut } = await execFileP("bash", [resourcesBrokerScript, "--print-paths"], { env: cleanEnv });
   const { stdout: resourcesLauncherOut } = await execFileP("bash", [resourcesLauncherScript, "--print-paths"], { env: cleanEnv });
-  const supVals = parseKeyValueLines(supOut);
-  const brokerVals = parseKeyValueLines(brokerOut);
   const launcherVals = parseKeyValueLines(launcherOut);
 
-  // D-6: the resources/ copy (the tracked source of truth) and the deployed
-  // tools/ copy must print byte-identical --print-paths output per script --
-  // the regression a repo-root derivation that is wrong from one of the two
-  // locations would introduce.
-  assert.equal(resourcesSupOut, supOut, "resources/vice-supervisor.sh and tools/vice-supervisor.sh --print-paths must be byte-identical");
-  assert.equal(resourcesBrokerOut, brokerOut, "resources/vice-broker.sh and tools/vice-broker.sh --print-paths must be byte-identical");
   // The launcher's --print-paths output is NOT expected to be byte-identical
   // between the two copies: self_dir/broker_artifact are deliberately
   // resolved as SIBLINGS of whichever copy is actually running (see vice-
   // launcher.sh's own header comment -- a launcher run from resources/ must
   // launch the resources/ broker artifact, not silently reach across to a
   // possibly-stale tools/ copy). Only repo_root, the one key derived purely
-  // from repoRoot() rather than from the running script's own location, must
-  // agree between the two copies.
+  // from resolve_repo_root() rather than from the running script's own
+  // location, must agree between the two copies.
   const resourcesLauncherVals = parseKeyValueLines(resourcesLauncherOut);
   assert.equal(
     resourcesLauncherVals.repo_root,
@@ -179,10 +169,10 @@ test("path agreement (D-3, D-6, THE regression this task exists to catch): super
 
   // Node-side values computed in a FRESH child process, not via this test
   // file's own already-imported modules -- immune to env mutation or
-  // module-load ordering from sibling tests sharing this process. Narrowed
-  // from the original: poolDir() (vice-pool.mjs) and sessionFilePath()
-  // (vice-session.mjs) are gone with D-02; supervisorDir() (repo-root.mjs)
-  // and EPOCH_FILE (vice.mjs) are the two Node-side derivations that survive.
+  // module-load ordering from sibling tests sharing this process.
+  // supervisorDir() (repo-root.ts) and EPOCH_FILE (vice.ts) are the two
+  // Node-side derivations that survive from the original (poolDir()/
+  // sessionFilePath() went with D-02).
   const nodeSrc = `
     import { supervisorDir } from ${JSON.stringify(REPO_ROOT_MODULE_URL)};
     import { EPOCH_FILE } from ${JSON.stringify(VICE_MODULE_URL)};
@@ -198,29 +188,23 @@ test("path agreement (D-3, D-6, THE regression this task exists to catch): super
   const nodeLines = nodeOut.trim().split("\n").filter(Boolean);
   const nodeVals = JSON.parse(nodeLines[nodeLines.length - 1]);
 
-  // vice-broker.sh's own pool_dir defaults to the SAME $REPO_ROOT/.vice-supervisor
-  // directory as vice-supervisor.sh's supervisor_dir (both read/write the one
-  // shared state directory) -- confirmed by reading both scripts' own
-  // `VICE_POOL_DIR="${VICE_POOL_DIR:-$REPO_ROOT/.vice-supervisor}"` /
-  // `VICE_SUPERVISOR_DIR="${VICE_SUPERVISOR_DIR:-$REPO_ROOT/.vice-supervisor}"` defaults.
-  assert.equal(brokerVals.pool_dir, supVals.supervisor_dir, "the bash broker's pool_dir must equal the supervisor's supervisor_dir");
-  assert.equal(nodeVals.supervisorDir, supVals.supervisor_dir, "Node supervisorDir() must equal the shell's supervisor_dir");
-  assert.equal(nodeVals.epochDir, supVals.supervisor_dir, "dirname(EPOCH_FILE) must equal the shell's supervisor_dir");
-  // The launcher has no supervisor_dir/pool_dir concept of its own (it only
-  // resolves repo_root, self_dir and broker_artifact) -- its repo_root must
-  // still agree with the supervisor's, proving all three scripts share one
-  // repoRoot() derivation even though only two of them also share a state
-  // directory.
-  assert.equal(launcherVals.repo_root, supVals.repo_root, "the launcher's repo_root must agree with the supervisor's repo_root");
+  // The expected state directory is derived from the launcher's own printed
+  // repo_root (the launcher has no supervisor_dir/pool_dir field of its
+  // own) -- this is the direct successor of the old byte-for-byte
+  // supervisor_dir/pool_dir/supervisorDir()/EPOCH_FILE cross-check, now that
+  // the launcher is the only shell-side repo-root resolver left.
+  const expectedStateDir = join(launcherVals.repo_root, ".vice-supervisor");
+  assert.equal(nodeVals.supervisorDir, expectedStateDir, "Node supervisorDir() must equal <launcher repo_root>/.vice-supervisor");
+  assert.equal(nodeVals.epochDir, expectedStateDir, "dirname(EPOCH_FILE) must equal <launcher repo_root>/.vice-supervisor");
   assert.ok(
-    !supVals.supervisor_dir.includes(".claude"),
-    `the agreed directory must not sit under .claude -- got ${supVals.supervisor_dir} (the exact regression a naive move would introduce)`
+    !nodeVals.supervisorDir.includes(".claude"),
+    `the agreed directory must not sit under .claude -- got ${nodeVals.supervisorDir} (the exact regression a naive move would introduce)`
   );
 });
 
 test("path agreement without CONTAINER_WORKSPACE_PATH (D-6): the .git-walk branch -- the ONLY branch that ever runs on the real host -- still agrees between resources/ and tools/", async () => {
-  const resourcesSupervisorScript = join(repoRoot(), ".claude", "mcp", "vice", "resources", "vice-supervisor.sh");
-  const supervisorScript = join(repoRoot(), "tools", "vice-supervisor.sh");
+  const resourcesLauncherScript = join(repoRoot(), ".claude", "mcp", "vice", "resources", "vice-launcher.sh");
+  const launcherScript = join(repoRoot(), "tools", "vice-launcher.sh");
 
   const hostEnv = { ...process.env };
   for (const k of Object.keys(hostEnv)) {
@@ -228,8 +212,14 @@ test("path agreement without CONTAINER_WORKSPACE_PATH (D-6): the .git-walk branc
   }
   delete hostEnv.CONTAINER_WORKSPACE_PATH;
 
-  const { stdout: resourcesOut } = await execFileP("bash", [resourcesSupervisorScript, "--print-paths"], { env: hostEnv });
-  const { stdout: toolsOut } = await execFileP("bash", [supervisorScript, "--print-paths"], { env: hostEnv });
-  assert.equal(resourcesOut, toolsOut, "with CONTAINER_WORKSPACE_PATH unset, resources/ and tools/ must still agree via the .git walk");
-  assert.match(parseKeyValueLines(resourcesOut).repo_root, /bruce_lee$/, "the .git walk must still land on the real repo root");
+  const { stdout: resourcesOut } = await execFileP("bash", [resourcesLauncherScript, "--print-paths"], { env: hostEnv });
+  const { stdout: toolsOut } = await execFileP("bash", [launcherScript, "--print-paths"], { env: hostEnv });
+  const resourcesVals = parseKeyValueLines(resourcesOut);
+  const toolsVals = parseKeyValueLines(toolsOut);
+  assert.equal(
+    resourcesVals.repo_root,
+    toolsVals.repo_root,
+    "with CONTAINER_WORKSPACE_PATH unset, resources/ and tools/ copies of the launcher must still agree on repo_root via the .git walk"
+  );
+  assert.match(resourcesVals.repo_root, /bruce_lee$/, "the .git walk must still land on the real repo root");
 });

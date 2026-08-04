@@ -2274,3 +2274,38 @@ inferred from documentation.
 next adds a `setInterval`-based long-lived process in this codebase and reaches for the
 "never `process.exit()`" convention by reflex without checking whether it still applies once the
 event loop has something keeping it alive forever.
+
+### 2026-08-04 — Plan 11 Task 1 checkpoint:decision resolved: `delete` (the four retiring bash files and the retiring test suite, in one commit)
+
+**Decision:** Confirmed at plan 11's blocking `checkpoint:decision` (reversibility: one-way).
+Selected `delete` over `delete-scripts-keep-suite` and `defer` — delete
+`resources/vice-broker.sh` (2,103 lines), `resources/vice-supervisor.sh` (443 lines),
+`resources/lib/container-guard.sh` (184 lines), `resources/lib/repo-root.sh` (103 lines, plus the
+then-empty `resources/lib/` directory), and `vice-broker.test.mjs` (2,697 lines, 61 tests) — all
+in one commit, together with the structural arrays in `host-scripts.test.ts` that enumerate them.
+No amendments, no partial variant.
+
+**What backs it:** plan 10's disposition ledger gives every one of the 61 retiring tests a named
+disposition (4 REPLACED, 31 RE-OBSERVED, 26 DELETED-with-reason), each REPLACED/RE-OBSERVED row's
+named replacement confirmed to exist and pass; plan 10's function disposition table gives every
+retiring shell function a PORTED/DELETED/ABSORBED outcome; plan 07's structural closure gate
+already proved the file-protocol deletion holds; the frozen epoch/broker fixtures from plan 01
+preserve the on-disk contracts as evidence independent of the scripts; plan 09 repointed every
+host-instruction message at the surviving `vice-launcher.sh` before this deletion could land.
+
+**What is knowingly given up:** the bash implementation stops being available as a live reference
+for comparison during the rest of this sub-phase. No live host-session verification exists until
+Phase 01.4 — this checkpoint does not re-open that acceptance (already recorded, D-03), it is only
+the last point at which the retiring implementation could still be diffed against.
+
+**Precedent followed:** the equivalent deletion in Phase 01.6 plan 04 sat behind the same kind of
+blocking decision checkpoint.
+
+**Re-dispatch note:** a prior agent reached this same checkpoint in a since-reaped worktree,
+correctly halted having made zero commits, and lost nothing (git history + all five retiring
+files were untouched). This entry is written by the re-dispatched agent recording the developer's
+already-made decision before proceeding to Tasks 2 and 3, rather than re-asking.
+
+**Confidence:** HIGH — a developer decision at a blocking checkpoint:decision gate, not a coded
+behavior a test can prove; recorded here per the precedent `01.6.2-01-SUMMARY.md` set for its own
+Task 2 wire-format checkpoint.
