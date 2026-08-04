@@ -1,10 +1,10 @@
 # `recovery/PROVENANCE.md` -- the provenance ledger
 
-Two tiers, one direction of truth. The **generated tier** below is machine-produced by `tools/diff-images.mjs`'s `renderLedger` and is regenerable at any time from the committed dumps plus the recorded offset -- never hand-edit it. The **prose tier** underneath states the facts a table cannot hold. This file is the ledger; `docs/provenance.md` will be a summary pointer and inline `; PROVENANCE:` tags in `src/` will be the point-of-use copy -- one direction only, and no downstream copy is ever edited independently (per ARCHITECTURE.md).
+Two tiers, one direction of truth. The **generated tier** below is machine-produced by `.claude/skills/c64-provenance-diff/scripts/diff-images.mjs`'s `renderLedger` and is regenerable at any time from the committed dumps plus the recorded offset -- never hand-edit it. The **prose tier** underneath states the facts a table cannot hold. This file is the ledger; `docs/provenance.md` will be a summary pointer and inline `; PROVENANCE:` tags in `src/` will be the point-of-use copy -- one direction only, and no downstream copy is ever edited independently (per ARCHITECTURE.md).
 
 ## Generated tier
 
-<!-- GENERATED, DO NOT HAND-EDIT. Regenerate with: node tools/diff-images.mjs ledger --gap-tolerance 16 -->
+<!-- GENERATED, DO NOT HAND-EDIT. Regenerate with: node .claude/skills/c64-provenance-diff/scripts/diff-images.mjs ledger --gap-tolerance 16 -->
 
 | Start | End | Kind | Verdict | Confidence | Agreeing releases | Evidence / Reason |
 |---|---|---|---|---|---|---|
@@ -524,12 +524,12 @@ Two tiers, one direction of truth. The **generated tier** below is machine-produ
 The diff above runs at an **anchor-proven** offset per release (D-17), never an assumed one. Several
 long, distinctive byte runs were selected from the reference release's primary dump, located in each
 other release's primary dump with `Buffer.indexOf`, and a global offset was accepted only when every
-anchor's computed delta agreed -- see `tools/diff-images.mjs`'s `proveOffset`. The neighbour bytes at
+anchor's computed delta agreed -- see `.claude/skills/c64-provenance-diff/scripts/diff-images.mjs`'s `proveOffset`. The neighbour bytes at
 each anchor's resolved position (one before, at, and one after) were inspected so an off-by-one would be
 visible rather than assumed; none was found.
 
 - **danish** (reference release): offset 0 by definition -- every other release's offset is proven against this one's primary dump.
-- **saeger**: proven offset **0**, from 8 anchor(s), all agreeing (see `recovery/saeger/NOTES.md` for the full narrative and `recovery/RELEASES.json`'s `provenance_offset` field for the machine record). Proven 2026-08-01T22:29:28.205Z.
+- **saeger**: proven offset **0**, from 8 anchor(s), all agreeing (see `recovery/saeger/NOTES.md` for the full narrative and `recovery/RELEASES.json`'s `provenance_offset` field for the machine record). Proven 2026-08-04T11:30:39.856Z.
 
 ### The fully-loaded state both images were normalised to
 
@@ -553,7 +553,7 @@ inflation actually occurs, but the tolerance is retained as the stated, justifie
 ### The three-bucket partition
 
 Every range manifest named by a `dumps[]` entry in `recovery/RELEASES.json` is bucketed into D-02's
-five kinds -- `game`, `loader`, `cracktro`, `io`, `unused` -- by `tools/diff-images.mjs`'s
+five kinds -- `game`, `loader`, `cracktro`, `io`, `unused` -- by `.claude/skills/c64-provenance-diff/scripts/diff-images.mjs`'s
 `bucketManifest`:
 
 - **`loader`** is seeded from each release's own earned `loader_ranges` in `recovery/RELEASES.json`

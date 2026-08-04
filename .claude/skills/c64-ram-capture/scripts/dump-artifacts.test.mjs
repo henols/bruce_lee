@@ -12,7 +12,7 @@ import { dirname, join, resolve } from "node:path";
 import { assembleImage, sha256Buffer, buildChipState, vicBank, screenBase, buildRangeManifest } from "./dump-artifacts.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = resolve(HERE, "..");
+const REPO_ROOT = resolve(HERE, "..", "..", "..", "..");  // scripts -> skill -> skills -> .claude -> repo root
 
 function chunkOf(address, byte, length) {
   // `byte` is a 2-hex-char octet (e.g. "00"); repeating it `length` times

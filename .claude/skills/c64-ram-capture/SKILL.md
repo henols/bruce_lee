@@ -14,8 +14,8 @@ failure and it is invisible in a hex dump. Two committed modules do that byte wo
 and name the offending address when it is wrong.
 
 ```bash
-P=tools/d64-parse.mjs                            # from the repo root
-A=tools/dump-artifacts.mjs
+P=.claude/skills/c64-ram-capture/scripts/d64-parse.mjs      # from the repo root
+A=.claude/skills/c64-ram-capture/scripts/dump-artifacts.mjs
 C=.claude/skills/c64-ram-capture/scripts/compare.mjs
 
 node $P directory --image disks/danish.d64       # what's on the disk (--json flags faked entries)
@@ -23,7 +23,7 @@ node $P bam       --image disks/danish.d64       # disk name, DOS type, occupied
 node $A assemble  --chunks chunks.json           # size + digest, writes nothing
 node $A write-set --release danish --label gameentry-run1 \
                   --chunks chunks.json --raw raw.json    # the four committed artifacts
-node tools/releases.mjs list                     # the valid --release ids
+node .claude/skills/c64-ram-capture/scripts/releases.mjs list                     # the valid --release ids
 
 node $C digest  dump.bin                         # sha256 + size, for the capture record
 node $C compare a.bin b.bin                      # classify every difference, exit 1 on FAIL
@@ -45,7 +45,7 @@ own `mcp__vice__*` calls. They contact nothing.
 
 ## Read the disk first
 
-`tools/d64-parse.mjs` parses `.d64` bytes directly, so it answers what is on the
+`scripts/d64-parse.mjs` parses `.d64` bytes directly, so it answers what is on the
 disk whether or not the emulator is up:
 
 ```bash
@@ -66,7 +66,7 @@ file never written to disk.
 
 Both of this project's images come back `suspicious: false` — their `BRUCE LEE`
 entries are genuinely well-formed, not faked, asserted against the real images as
-committed fixture tests in `tools/d64-parse.test.mjs`. A non-null `chain_error` is
+committed fixture tests in `scripts/d64-parse.test.mjs`. A non-null `chain_error` is
 the separate failure: a directory chain that leaves the image or loops, reported
 instead of hanging. **Confidence: HIGH** (fixture tests over the real images).
 
@@ -279,8 +279,8 @@ split: the workflow fits in one file, which is the right call when it does.
 |---|---|
 | `scripts/compare.mjs` | Difference classification and the drift floor. Pure logic over captures you already have — `node $C` with no arguments prints the rules. |
 | `templates/capture-record.template.md` | The per-capture record: identity, machine state read in the same paused window, the void checklist, and the per-pairing comparison table. |
-| `tools/d64-parse.mjs` | `.d64` directory, BAM, and `--json` fakery detection. Fixture-tested against both real images by `tools/d64-parse.test.mjs`. |
-| `tools/dump-artifacts.mjs` | `assemble` / `chip-state` / `manifest` / `write-set` — the guarded byte work, and the source of every `assembleImage:` message in the table below. |
+| `scripts/d64-parse.mjs` | `.d64` directory, BAM, and `--json` fakery detection. Fixture-tested against both real images by `scripts/d64-parse.test.mjs`. |
+| `scripts/dump-artifacts.mjs` | `assemble` / `chip-state` / `manifest` / `write-set` — the guarded byte work, and the source of every `assembleImage:` message in the table below. |
 
 Findings that make RE faster go in `.planning/RE-FINDINGS.md` **at the moment you
 find them**, graded with `Evidence:` and `Confidence:`. Promote by re-logging with

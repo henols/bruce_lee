@@ -12,10 +12,11 @@ import { fileURLToPath } from "node:url";
 import { dirname, join, resolve, relative } from "node:path";
 
 import { releaseDir } from "./releases.mjs";
+import { projectRoot } from "./project-paths.mjs";
 import { addrNum, hex4 } from "./watch-loads.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = resolve(HERE, "..");
+const REPO_ROOT = projectRoot();
 
 const die = (m) => { console.error(`error: ${m}`); process.exit(1); };
 

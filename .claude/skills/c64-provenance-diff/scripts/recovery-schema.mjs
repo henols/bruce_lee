@@ -18,13 +18,22 @@ import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve, relative, extname } from "node:path";
 
-import { loadRegistry, registryPath } from "./releases.mjs";
+import { loadRegistry, registryPath } from "../../c64-ram-capture/scripts/releases.mjs";
+import { projectRoot, dataRoot, disksRoot } from "../../c64-ram-capture/scripts/project-paths.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = resolve(HERE, "..");
-const RECOVERY_DIR = join(REPO_ROOT, "recovery");
-const DISKS_DIR = join(REPO_ROOT, "disks");
-const TOOLS_DIR = HERE;
+const REPO_ROOT = projectRoot();
+const RECOVERY_DIR = dataRoot();
+const DISKS_DIR = disksRoot();
+// The parameterisation gate must cover EVERY module of the recovery pipeline, not
+// just the ones sitting next to this file. When the six modules moved out of
+// `tools/` into the two skills that use them (2026-08-04), a `HERE`-only scan
+// silently stopped covering `d64-parse.mjs` and `dump-artifacts.mjs` -- a static
+// guard that keeps passing while checking less is worse than one that fails.
+const SCAN_DIRS = [
+  HERE, // .claude/skills/c64-provenance-diff/scripts
+  resolve(REPO_ROOT, ".claude", "skills", "c64-ram-capture", "scripts"),
+];
 
 const die = (m) => { console.error(`error: ${m}`); process.exit(1); };
 
@@ -278,10 +287,11 @@ function conditionalPatternsFor(id) {
 // deny-list array literal.
 const DENY_LIST_CALL_PATTERN = /\bcall(?:Tool)?\s*\(\s*["'`]vice_disk_list["'`]/;
 
-export function checkParameterisation({ toolsDir = TOOLS_DIR } = {}) {
+export function checkParameterisation({ toolsDir = SCAN_DIRS } = {}) {
   const registry = loadRegistry();
   const ids = registry.releases.map((r) => r.id);
-  const files = listMjsFiles(toolsDir);
+  const dirs = (Array.isArray(toolsDir) ? toolsDir : [toolsDir]).filter((d) => existsSync(d));
+  const files = dirs.flatMap((d) => listMjsFiles(d));
 
   const violations = [];
   const denyListCallViolations = [];
@@ -336,7 +346,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       if (jsonFlag) {
         console.log(JSON.stringify(result, null, 2));
       } else {
-        console.log(`check-parameterisation: scanned ${result.filesScanned} file(s) under tools/ against release ids [${result.releaseIds.join(", ")}]`);
+        console.log(`check-parameterisation: scanned ${result.filesScanned} file(s) across the pipeline scripts dirs against release ids [${result.releaseIds.join(", ")}]`);
         for (const v of result.violations) {
           console.error(`  - ${v.file}: release id "${v.release}" appears in a conditional (matched /${v.pattern}/)`);
         }

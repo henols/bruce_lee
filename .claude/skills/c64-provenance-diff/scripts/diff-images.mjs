@@ -18,12 +18,13 @@ import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve, relative } from "node:path";
 
-import { loadRegistry, registryPath, upsertRelease } from "./releases.mjs";
-import { addrNum, hex4 } from "./watch-loads.mjs";
+import { loadRegistry, registryPath, upsertRelease } from "../../c64-ram-capture/scripts/releases.mjs";
+import { addrNum, hex4 } from "../../c64-ram-capture/scripts/watch-loads.mjs";
+import { projectRoot, dataRoot } from "../../c64-ram-capture/scripts/project-paths.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = resolve(HERE, "..");
-const RECOVERY_DIR = join(REPO_ROOT, "recovery");
+const REPO_ROOT = projectRoot();
+const RECOVERY_DIR = dataRoot();
 
 const die = (m) => { console.error(`error: ${m}`); process.exit(1); };
 
@@ -689,7 +690,7 @@ export function renderLedger({ generatedRanges, gapTolerance, prose }) {
     throw new Error(`renderLedger: refusing to emit -- generated tier stops at ${hex4(expected - 1)}, does not reach $FFFF`);
   }
 
-  let generated = `<!-- GENERATED, DO NOT HAND-EDIT. Regenerate with: node tools/diff-images.mjs ledger --gap-tolerance ${gapTolerance} -->\n\n`;
+  let generated = `<!-- GENERATED, DO NOT HAND-EDIT. Regenerate with: node .claude/skills/c64-provenance-diff/scripts/diff-images.mjs ledger --gap-tolerance ${gapTolerance} -->\n\n`;
   generated += `| Start | End | Kind | Verdict | Confidence | Agreeing releases | Evidence / Reason |\n`;
   generated += `|---|---|---|---|---|---|---|\n`;
   for (const r of sorted) {
@@ -704,7 +705,7 @@ export function renderLedger({ generatedRanges, gapTolerance, prose }) {
 
   const header = `# \`recovery/PROVENANCE.md\` -- the provenance ledger\n\n` +
     `Two tiers, one direction of truth. The **generated tier** below is machine-produced by ` +
-    `\`tools/diff-images.mjs\`'s \`renderLedger\` and is regenerable at any time from the committed ` +
+    `\`.claude/skills/c64-provenance-diff/scripts/diff-images.mjs\`'s \`renderLedger\` and is regenerable at any time from the committed ` +
     `dumps plus the recorded offset -- never hand-edit it. The **prose tier** underneath states the ` +
     `facts a table cannot hold. This file is the ledger; \`docs/provenance.md\` will be a summary ` +
     `pointer and inline \`; PROVENANCE:\` tags in \`src/\` will be the point-of-use copy -- one ` +
@@ -779,7 +780,7 @@ const VERBS = {
           anchor_count: anchors.length,
           anchors_agreeing: proof.usable.length,
           proven_at: provenAt,
-          method: "anchor-proven via tools/diff-images.mjs anchor-search -- see NOTES.md for the full narrative",
+          method: "anchor-proven via .claude/skills/c64-provenance-diff/scripts/diff-images.mjs anchor-search -- see NOTES.md for the full narrative",
         });
       }
     }
@@ -882,7 +883,7 @@ function buildProse({ reg, images, gapTolerance, referenceId }) {
         return `- **${img.id}** (reference release): offset 0 by definition -- every other release's offset is proven against this one's primary dump.`;
       }
       if (!po) {
-        return `- **${img.id}**: no provenance_offset recorded yet -- run \`node tools/diff-images.mjs anchor-search\` first.`;
+        return `- **${img.id}**: no provenance_offset recorded yet -- run \`node .claude/skills/c64-provenance-diff/scripts/diff-images.mjs anchor-search\` first.`;
       }
       return `- **${img.id}**: proven offset **${po.offset}**, from ${po.anchor_count} anchor(s), all agreeing (see \`recovery/${img.id}/NOTES.md\` for the full narrative and \`recovery/RELEASES.json\`'s \`provenance_offset\` field for the machine record). Proven ${po.proven_at}.`;
     })
@@ -898,7 +899,7 @@ function buildProse({ reg, images, gapTolerance, referenceId }) {
 The diff above runs at an **anchor-proven** offset per release (D-17), never an assumed one. Several
 long, distinctive byte runs were selected from the reference release's primary dump, located in each
 other release's primary dump with \`Buffer.indexOf\`, and a global offset was accepted only when every
-anchor's computed delta agreed -- see \`tools/diff-images.mjs\`'s \`proveOffset\`. The neighbour bytes at
+anchor's computed delta agreed -- see \`.claude/skills/c64-provenance-diff/scripts/diff-images.mjs\`'s \`proveOffset\`. The neighbour bytes at
 each anchor's resolved position (one before, at, and one after) were inspected so an off-by-one would be
 visible rather than assumed; none was found.
 
@@ -925,7 +926,7 @@ inflation actually occurs, but the tolerance is retained as the stated, justifie
 ### The three-bucket partition
 
 Every range manifest named by a \`dumps[]\` entry in \`recovery/RELEASES.json\` is bucketed into D-02's
-five kinds -- \`game\`, \`loader\`, \`cracktro\`, \`io\`, \`unused\` -- by \`tools/diff-images.mjs\`'s
+five kinds -- \`game\`, \`loader\`, \`cracktro\`, \`io\`, \`unused\` -- by \`.claude/skills/c64-provenance-diff/scripts/diff-images.mjs\`'s
 \`bucketManifest\`:
 
 - **\`loader\`** is seeded from each release's own earned \`loader_ranges\` in \`recovery/RELEASES.json\`

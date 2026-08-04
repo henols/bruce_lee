@@ -1854,7 +1854,7 @@
         "offset": 0,
         "anchor_count": null,
         "anchors_agreeing": null,
-        "proven_at": "2026-08-01T22:29:28.205Z",
+        "proven_at": "2026-08-04T11:30:39.856Z",
         "method": "reference release -- every other release's offset is proven against this one's primary dump"
       }
     },
@@ -3687,14 +3687,14 @@
         "offset": 0,
         "anchor_count": 8,
         "anchors_agreeing": 7,
-        "proven_at": "2026-08-01T22:29:28.205Z",
-        "method": "anchor-proven via tools/diff-images.mjs anchor-search -- see NOTES.md for the full narrative"
+        "proven_at": "2026-08-04T11:30:39.856Z",
+        "method": "anchor-proven via .claude/skills/c64-provenance-diff/scripts/diff-images.mjs anchor-search -- see NOTES.md for the full narrative"
       }
     }
   ],
   "ledger": {
-    "generated_tier_sha256": "dde5db52d2dad4aa8aba5fa84e0d1739c459475076d14770c039285f0eebd0ec",
+    "generated_tier_sha256": "dc7eb08005077765b8e54ec0b7417240557f308d4b527da6bf78644f56d6b3a4",
     "gap_tolerance": 16,
-    "generated_at": "2026-08-01T22:43:34.127Z"
+    "generated_at": "2026-08-04T11:31:51.307Z"
   }
 }

@@ -18,10 +18,11 @@ import { fileURLToPath } from "node:url";
 import { dirname, join, resolve, relative } from "node:path";
 
 import { loadRegistry, release as getReleaseEntry, upsertRelease } from "./releases.mjs";
+import { projectRoot, dataRoot } from "./project-paths.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = resolve(HERE, "..");
-const RECOVERY_DIR = join(REPO_ROOT, "recovery");
+const REPO_ROOT = projectRoot();
+const RECOVERY_DIR = dataRoot();
 
 const die = (m) => { console.error(`error: ${m}`); process.exit(1); };
 
@@ -451,7 +452,7 @@ export function renderLoading(entries) {
     "This document is the absence-as-evidence record: per release, the armed set with its justification, the " +
     "idle calibration result, the coverage reached with a mechanical arrival proof per milestone, the states not " +
     "reached, the attributed hits, and the teardown enumeration. Every measurement below was fetched by the " +
-    "executing agent's own `mcp__vice__*` tool calls; `tools/watch-loads.mjs` and `tools/dump-artifacts.mjs` hold " +
+    "executing agent's own `mcp__vice__*` tool calls; `.claude/skills/c64-ram-capture/scripts/watch-loads.mjs` and `.claude/skills/c64-ram-capture/scripts/dump-artifacts.mjs` hold " +
     "only the pure logic that resolves, attributes, orders and renders it -- neither module contacted the " +
     "emulator.\n\n";
   for (const { id, log } of entries) {

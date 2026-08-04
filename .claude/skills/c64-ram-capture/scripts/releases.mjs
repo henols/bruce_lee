@@ -1,18 +1,20 @@
 #!/usr/bin/env node
-// N-way release registry accessor.  This is the only file in `tools/` that
-// reads a release identifier out of `recovery/RELEASES.json` -- every other
-// tool takes the id as an argument and never touches the registry file
-// directly.  `release` was promoted to the primary noun over "the canonical
-// image" for exactly this reason (see 01-01-PLAN.md's assumption_delta_decision):
-// there are N releases, each owning a set of dumps, with `canonical` demoted
-// to a single boolean field on one entry.
+// N-way release registry accessor. This is the only module that reads a release
+// identifier out of the registry -- every other module takes the id as an
+// argument and never touches the registry file directly. `release` is the
+// primary noun rather than "the canonical image": there are N releases, each
+// owning a set of dumps, with `canonical` demoted to a boolean on one entry.
+//
+// Portable: the registry's location comes from `project-paths.mjs`, so a project
+// with a different data layout points the toolkit at its own via
+// `C64RE_DATA_DIR` / `C64RE_REGISTRY` rather than editing this file.
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { dirname, join, resolve } from "node:path";
+import { resolve } from "node:path";
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = resolve(HERE, "..");
-export const registryPath = join(REPO_ROOT, "recovery", "RELEASES.json");
+import { registryFile, releaseDataDir } from "./project-paths.mjs";
+
+export const registryPath = registryFile();
 
 const die = (m) => { console.error(`error: ${m}`); process.exit(1); };
 
@@ -58,7 +60,7 @@ export function schemaNotes() {
 export function releaseDir(id) {
   const reg = loadRegistry();
   assertKnownRelease(id, reg);
-  return join(REPO_ROOT, "recovery", id);
+  return releaseDataDir(id);
 }
 
 /** Dies with the list of known ids on a miss -- see plan Layer 2. */

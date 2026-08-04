@@ -27,7 +27,7 @@ import {
 } from "./diff-images.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = resolve(HERE, "..");
+const REPO_ROOT = resolve(HERE, "..", "..", "..", "..");  // scripts -> skill -> skills -> .claude -> repo root
 
 // ------------------------------------------------------------ anchorSearch
 
@@ -619,17 +619,37 @@ function importSpecifiers(src) {
   return specs;
 }
 
-test("every import specifier in diff-images.mjs is a node: built-in or a sibling file inside tools/ -- the mechanical proof of the one permitted route", () => {
+// The invariant here is NOT "imports must be siblings" -- it is "this module
+// cannot acquire an outside dependency", which is the mechanical proof that it
+// never reaches the emulator by importing a transport module and never pulls a
+// third-party package. The toolkit ships as a bundle of skills that may import
+// each other, so a sibling *skill*'s scripts dir is legitimate; anything beyond
+// the skills tree is not. Widened deliberately when the recovery pipeline moved
+// out of `tools/` into the skills (2026-08-04) -- widened to the bundle boundary,
+// not removed.
+const SKILLS_ROOT = resolve(HERE, "..", "..");
+
+test("every import specifier in diff-images.mjs is a node: built-in or a module inside the skills bundle -- the mechanical proof of the one permitted route", () => {
   const src = stripComments(readFileSync(join(HERE, "diff-images.mjs"), "utf8"));
   const specs = importSpecifiers(src);
   assert.ok(specs.length > 0, "diff-images.mjs should have at least one import specifier");
   for (const spec of specs) {
     const isNodeBuiltin = spec.startsWith("node:");
-    const isSiblingPath = spec.startsWith("./") || spec.startsWith("../");
-    assert.ok(isNodeBuiltin || isSiblingPath, `diff-images.mjs imports "${spec}", which is neither a node: built-in nor a relative path`);
-    if (isSiblingPath) {
+    const isRelativePath = spec.startsWith("./") || spec.startsWith("../");
+    assert.ok(
+      isNodeBuiltin || isRelativePath,
+      `diff-images.mjs imports "${spec}", which is neither a node: built-in nor a relative path -- a bare specifier means a third-party package`,
+    );
+    if (isRelativePath) {
       const resolvedPath = resolve(HERE, spec);
-      assert.ok(resolvedPath.startsWith(HERE), `diff-images.mjs's sibling import "${spec}" must resolve inside tools/`);
+      assert.ok(
+        resolvedPath.startsWith(SKILLS_ROOT + "/"),
+        `diff-images.mjs's import "${spec}" resolves to ${resolvedPath}, outside the skills bundle at ${SKILLS_ROOT}`,
+      );
+      assert.ok(
+        /\/scripts\//.test(resolvedPath),
+        `diff-images.mjs's import "${spec}" must resolve into some skill's scripts/ dir, not ${resolvedPath}`,
+      );
     }
   }
 });
