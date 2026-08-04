@@ -19,6 +19,16 @@ import { supervisorDir } from "./repo-root.ts";
 // Renamed from ENDPOINT to DEFAULT_ENDPOINT (D-5): a pool lease redirects
 // the seam to a DIFFERENT endpoint at runtime via useInstance() below, so
 // this is only the starting value, never assumed to be the active one.
+//
+// PORT TRIAGE (01.6.2-09, D-18): this 6510 is a KEPT, CORRECT value, not an
+// oversight. 6510-6599 is the band reserved by convention for an x64sc a
+// human launches on the host for their OWN work; when no broker grant
+// exists and no explicit VICE_MCP_URL override is set, this fallback
+// describes exactly that human-launched instance -- which is what the
+// reserved band is now for. Do not "fix" this into the broker's own
+// allocated band (6600+, DEFAULT_BASE_PORT in broker-state.mts) -- that
+// would be the broker squatting a port a human wants, the exact defect
+// D-18 exists to prevent.
 const DEFAULT_ENDPOINT: string = process.env.VICE_MCP_URL || "http://host.docker.internal:6510/mcp";
 const DEFAULT_TIMEOUT_MS: number = Number(process.env.VICE_MCP_TIMEOUT_MS || 30000);
 
@@ -76,6 +86,11 @@ let activeEpochFile: string = EPOCH_FILE;
 // UNCONDITIONALLY (D-4) and must never produce a "no port" name just because
 // nothing redirected the seam. Falls back to 6510 only if the URL has no
 // parseable port at all.
+//
+// PORT TRIAGE (01.6.2-09, D-18): kept, same reasoning as DEFAULT_ENDPOINT
+// above -- this fallback describes the same human-launched, reserved-band
+// (6510-6599) instance, never a broker-allocated one, so 6510 stays correct
+// here too.
 let activePort: number = (() => {
   try {
     const p = Number(new URL(DEFAULT_ENDPOINT).port);
