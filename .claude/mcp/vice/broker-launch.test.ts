@@ -14,6 +14,8 @@ import { writeFileSync, mkdtempSync, rmSync, existsSync, readFileSync, chmodSync
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { spawn as realSpawn } from "node:child_process";
+import { EventEmitter } from "node:events";
 import type { ChildProcess } from "node:child_process";
 
 import { HOST_BOUND_ARTIFACTS } from "./build.ts";
@@ -26,9 +28,57 @@ import {
   type InstanceRecord,
   type PortAllocationResult,
 } from "./broker-state.mts";
-import { tryLaunchOne, isLaunchInFlight, probeReady, maintainWarmFloor, runBrokerPass, acquirePortAndLaunch } from "./broker-launch.mts";
+import { tryLaunchOne, isLaunchInFlight, probeReady, maintainWarmFloor, runBrokerPass, acquirePortAndLaunch, superviseChild } from "./broker-launch.mts";
+// Direct SOURCE import (".mts", not ".mjs") -- safe for a test file, which
+// always references the literal extension the file is actually saved
+// under, regardless of the same-module-to-sibling-module ".mjs"-only
+// constraint superviseChild() itself is subject to (see broker-launch.mts's
+// own header comment). These are the REAL broker-epoch.mts functions,
+// injected into superviseChild()'s EpochWriterDeps below exactly like
+// vice-broker.mts's real wiring will eventually inject them.
+import { epochPathFor, instanceLogDirFor, nextEpochFor, writeEpochRecord } from "./broker-epoch.mts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+
+/** Poll `predicate` to a bounded deadline rather than sleeping a fixed
+ * duration -- this project's own stack pattern (checkpoint/frame
+ * synchronisation, never wall-clock delay), reused here for "wait for an
+ * async respawn chain to reach an observable state" the same way
+ * host-scripts.test.ts's own waitFor() is used for a real spawned child. */
+async function waitFor<T>(
+  predicate: () => T | null | undefined,
+  { timeoutMs = 8000, pollMs = 10 }: { timeoutMs?: number; pollMs?: number } = {},
+): Promise<T | null> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const result = predicate();
+    if (result) return result;
+    await new Promise((r) => setTimeout(r, pollMs));
+  }
+  return null;
+}
+
+function makeEpochDeps() {
+  return { epochPathFor, instanceLogDirFor, nextEpochFor, writeEpochRecord };
+}
+
+/** A fully-controlled stand-in ChildProcess for the deterministic
+ * backoff/crash-window/give-up tests below: a real EventEmitter (so
+ * superviseChild()'s own `child.once("exit", ...)` wiring works exactly as
+ * it would against a real ChildProcess), with a FAKE pid and no real OS
+ * process behind it at all -- the test itself decides exactly when this
+ * "child" exits by calling `.emit("exit", ...)` on it, giving the precise
+ * ordering control the backoff-sequence and crash-window-exclusion
+ * assertions need. Real subprocesses (`/bin/true`, `/bin/sleep`) are used
+ * instead, per host-scripts.test.ts's own idiom, wherever a REAL pid is the
+ * point (the "no orphaned child" liveness check; the plain
+ * exits-on-its-own case). */
+let fakePidCounter = 90000;
+function fakeChild(): ChildProcess {
+  const emitter = new EventEmitter();
+  (emitter as unknown as { pid: number }).pid = fakePidCounter++;
+  return emitter as unknown as ChildProcess;
+}
 
 function stubChild(pid = 4242): ChildProcess {
   return { pid } as unknown as ChildProcess;
@@ -508,3 +558,342 @@ test("criterion C: a warming pass overlapping a cold acquire's still-in-flight l
 // remains in the committed source. This mirrors Phase 01.6.1's own
 // practice of proving a guard's tests against an injected regression
 // before trusting them.
+
+// ===========================================================================
+// Plan 03, Task 2: superviseChild() -- the per-child supervisor absorbed
+// wholesale from resources/vice-supervisor.sh (C2/D-23). No real emulator
+// runs anywhere in this file: `/bin/true`/`/bin/sleep` stand in for a REAL
+// pid wherever a genuine liveness check is the point; a fully test-
+// controlled EventEmitter stands in wherever exact backoff/crash-window
+// ordering is the point.
+// ===========================================================================
+
+function makeSuperviseDeps(stateDir: string, overrides: Partial<Parameters<typeof superviseChild>[2]> = {}) {
+  return {
+    state: createBrokerState(),
+    stateDir,
+    epoch: makeEpochDeps(),
+    sleepMs: async () => {}, // instant by default -- tests that care override this
+    now: () => 1000,
+    initialBackoffMs: 5,
+    maxBackoffMs: 20,
+    maxRestarts: 50, // high by default so give-up never fires unless a test wants it to
+    crashWindowMs: 60000,
+    log: () => {},
+    ...overrides,
+  };
+}
+
+test("superviseChild: a stub child that exits on its own is respawned, and the instance's epoch record advances by one", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "supervise-respawn-"));
+  try {
+    // The FIRST spawn exits immediately (/bin/true) to trigger exactly one
+    // crash; every spawn AFTER that is a long-lived process (/bin/sleep)
+    // so the chain settles at epoch 2 instead of racing uncontrolled
+    // through further crashes (maxRestarts is high specifically so THIS
+    // test is about "a crash is respawned," not about give-up).
+    let spawnCount = 0;
+    const deps = makeSuperviseDeps(dir, {
+      spawn: () => {
+        spawnCount++;
+        return spawnCount === 1 ? realSpawn("/bin/true", []) : realSpawn("/bin/sleep", ["300"]);
+      },
+    });
+    const record = superviseChild("acquire", 6600, deps);
+    assert.ok(record, "the initial launch must succeed");
+    assert.equal(record!.epoch, 1, "the first launch records epoch 1");
+
+    const supervisorDir = join(dir, "6600");
+    const respawned = await waitFor(() => {
+      const rec = deps.state.instances.get(6600);
+      return rec && rec.epoch === 2 ? rec : null;
+    });
+    assert.ok(respawned, "the instance must be respawned (epoch advances to 2) after the child exits on its own");
+
+    const epochOnDisk = JSON.parse(readFileSync(join(supervisorDir, "epoch.json"), "utf8"));
+    assert.equal(epochOnDisk.epoch, 2, "the epoch.json on disk must also reflect the respawn's bumped epoch");
+
+    // Clean up the long-lived respawned /bin/sleep so it doesn't linger.
+    // Mark deliberateKill FIRST -- exactly like T-01.6.2-21's own
+    // discipline -- so this cleanup kill is read as a deliberate teardown,
+    // not another crash; killing it without that flag would trigger
+    // ANOTHER automatic respawn (correctly, per this module's own crash
+    // handling) and leak a fresh, untracked /bin/sleep in its place.
+    const finalRecord = deps.state.instances.get(6600);
+    if (finalRecord) {
+      finalRecord.deliberateKill = true;
+      if (typeof finalRecord.pid === "number") {
+        try {
+          process.kill(finalRecord.pid, "SIGKILL");
+        } catch {
+          /* already gone */
+        }
+      }
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("superviseChild: a stub child whose instance carries the deliberate-kill marker causes zero respawns and the instance is absent from _snapshotState() afterwards", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "supervise-deliberate-kill-"));
+  try {
+    const deps = makeSuperviseDeps(dir, {
+      spawn: () => realSpawn("/bin/sleep", ["300"]),
+    });
+    const record = superviseChild("acquire", 6600, deps);
+    assert.ok(record, "the initial launch must succeed");
+    const pid = record!.pid as number;
+
+    const aliveBefore = await waitFor(() => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+    assert.ok(aliveBefore, "the sleep child must be alive before the deliberate kill");
+
+    // Mark deliberate-kill BEFORE sending any signal -- exactly the
+    // ordering T-01.6.2-21 requires: the exit handler must see this flag
+    // set by the time the exit event it is racing against actually fires.
+    deps.state.instances.get(6600)!.deliberateKill = true;
+    process.kill(pid, "SIGTERM");
+
+    const gone = await waitFor(() => (deps.state.instances.has(6600) ? null : true));
+    assert.ok(gone, "a deliberately-killed instance must be dropped from the map, never respawned");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("superviseChild: the first respawn waits the configured initial backoff; the second waits twice that; the delay is clamped at the configured ceiling however many crashes follow", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "supervise-backoff-"));
+  try {
+    const spawnedChildren: ChildProcess[] = [];
+    const delays: number[] = [];
+    const deps = makeSuperviseDeps(dir, {
+      initialBackoffMs: 100,
+      maxBackoffMs: 250,
+      maxRestarts: 50,
+      sleepMs: async (ms: number) => {
+        delays.push(ms);
+      },
+      spawn: () => {
+        const child = fakeChild();
+        spawnedChildren.push(child);
+        return child;
+      },
+    });
+
+    superviseChild("acquire", 6600, deps);
+    assert.equal(spawnedChildren.length, 1, "the initial launch must spawn exactly one child");
+
+    // Crash #1 -> respawn #1 (initial backoff).
+    (spawnedChildren[0] as unknown as EventEmitter).emit("exit", 1, null);
+    await waitFor(() => (spawnedChildren.length >= 2 ? true : null));
+    // Crash #2 -> respawn #2 (doubled).
+    (spawnedChildren[1] as unknown as EventEmitter).emit("exit", 1, null);
+    await waitFor(() => (spawnedChildren.length >= 3 ? true : null));
+    // Crash #3 -> respawn #3 (clamped at the ceiling, NOT 400).
+    (spawnedChildren[2] as unknown as EventEmitter).emit("exit", 1, null);
+    await waitFor(() => (spawnedChildren.length >= 4 ? true : null));
+
+    assert.deepEqual(delays, [100, 200, 250], "the observed delays must be the initial value, twice it, then the clamped ceiling");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("superviseChild: an instance crashing one more than the configured maximum inside the configured window is absent from _snapshotState() afterwards and a give-up line naming it appears in the captured log output", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "supervise-giveup-"));
+  try {
+    const spawnedChildren: ChildProcess[] = [];
+    const logs: string[] = [];
+    const deps = makeSuperviseDeps(dir, {
+      initialBackoffMs: 1,
+      maxBackoffMs: 10,
+      maxRestarts: 3,
+      crashWindowMs: 60000,
+      log: (l: string) => logs.push(l),
+      spawn: () => {
+        const child = fakeChild();
+        spawnedChildren.push(child);
+        return child;
+      },
+    });
+
+    superviseChild("acquire", 6600, deps);
+    assert.equal(spawnedChildren.length, 1);
+
+    // Crash #1 (count 1, <3 -> respawn), crash #2 (count 2, <3 -> respawn),
+    // crash #3 (count 3, >=3 -> GIVE UP; one more than "2 respawns
+    // allowed" mirrors vice-supervisor.sh's own `>= VICE_MAX_RESTARTS`
+    // check exactly).
+    (spawnedChildren[0] as unknown as EventEmitter).emit("exit", 1, null);
+    await waitFor(() => (spawnedChildren.length >= 2 ? true : null));
+    (spawnedChildren[1] as unknown as EventEmitter).emit("exit", 1, null);
+    await waitFor(() => (spawnedChildren.length >= 3 ? true : null));
+    (spawnedChildren[2] as unknown as EventEmitter).emit("exit", 1, null);
+
+    const gone = await waitFor(() => (deps.state.instances.has(6600) ? null : true));
+    assert.ok(gone, "the instance must be given up on and dropped from the map");
+    // No fourth spawn must ever occur -- give-up means give-up, not "one
+    // more attempt."
+    assert.equal(spawnedChildren.length, 3, "no spawn beyond the give-up point may occur");
+
+    const giveUpLine = logs.find((l) => /giving up/.test(l));
+    assert.ok(giveUpLine, "a give-up line must appear in the captured log output");
+    assert.match(giveUpLine!, /6600/, "the give-up line must name the port");
+    assert.match(giveUpLine!, /3 crashes/, "the give-up line must name the crash count");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("superviseChild: a crash whose timestamp falls outside the configured window does not push the instance over the give-up threshold", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "supervise-window-"));
+  try {
+    const spawnedChildren: ChildProcess[] = [];
+    let currentTime = 0;
+    const deps = makeSuperviseDeps(dir, {
+      initialBackoffMs: 1,
+      maxBackoffMs: 10,
+      maxRestarts: 2,
+      crashWindowMs: 1000,
+      now: () => currentTime,
+      spawn: () => {
+        const child = fakeChild();
+        spawnedChildren.push(child);
+        return child;
+      },
+    });
+
+    superviseChild("acquire", 6600, deps);
+    assert.equal(spawnedChildren.length, 1);
+
+    // Crash #1 at t=0 -- crashTimes=[0], length 1 < maxRestarts(2) -> respawn.
+    currentTime = 0;
+    (spawnedChildren[0] as unknown as EventEmitter).emit("exit", 1, null);
+    await waitFor(() => (spawnedChildren.length >= 2 ? true : null));
+
+    // Crash #2 at t=5000 -- FAR outside the 1000ms window relative to the
+    // first crash at t=0, so it must be filtered OUT rather than pushing
+    // the count to 2. If the window logic were broken (never excluding
+    // old crashes), this would incorrectly reach the give-up threshold
+    // here instead of on crash #3 below.
+    currentTime = 5000;
+    (spawnedChildren[1] as unknown as EventEmitter).emit("exit", 1, null);
+    await waitFor(() => (spawnedChildren.length >= 3 ? true : null));
+    assert.equal(spawnedChildren.length, 3, "the distant first crash must not count toward give-up -- a third spawn must occur");
+    assert.ok(deps.state.instances.has(6600), "the instance must still be alive after the second crash");
+
+    // Crash #3 at t=5001 -- now WITHIN the window of crash #2 (t=5000), so
+    // the pruned count reaches 2 (>= maxRestarts) and give-up fires.
+    currentTime = 5001;
+    (spawnedChildren[2] as unknown as EventEmitter).emit("exit", 1, null);
+    const gone = await waitFor(() => (deps.state.instances.has(6600) ? null : true));
+    assert.ok(gone, "two crashes within the window must trigger give-up");
+    assert.equal(spawnedChildren.length, 3, "no fourth spawn may occur once given up");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("superviseChild: for every spawn and respawn in a test run, the captured log output contains a line naming the resolved binary and its full argument vector", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "supervise-logging-"));
+  try {
+    const spawnedChildren: ChildProcess[] = [];
+    const logs: string[] = [];
+    const deps = makeSuperviseDeps(dir, {
+      initialBackoffMs: 1,
+      maxBackoffMs: 10,
+      maxRestarts: 50,
+      viceBin: "x64sc",
+      log: (l: string) => logs.push(l),
+      spawn: () => {
+        const child = fakeChild();
+        spawnedChildren.push(child);
+        return child;
+      },
+    });
+
+    superviseChild("acquire", 6600, deps);
+    (spawnedChildren[0] as unknown as EventEmitter).emit("exit", 1, null);
+    await waitFor(() => (spawnedChildren.length >= 2 ? true : null));
+    (spawnedChildren[1] as unknown as EventEmitter).emit("exit", 1, null);
+    await waitFor(() => (spawnedChildren.length >= 3 ? true : null));
+
+    const launchLines = logs.filter((l) => /^vice-broker: launching x64sc /.test(l));
+    assert.equal(launchLines.length, 3, "every spawn AND every respawn must log its own resolved command line");
+    for (const line of launchLines) {
+      assert.match(line, /-mcpserverport 6600/, "the logged line must name the full resolved argument vector");
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("superviseChild: after a spawn, a file exists inside that instance's logs directory and the epoch record's log field names exactly that file relative to the instance directory", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "supervise-logfile-"));
+  try {
+    const deps = makeSuperviseDeps(dir, {
+      spawn: () => realSpawn("/bin/true", []),
+    });
+    const record = superviseChild("acquire", 6600, deps);
+    assert.ok(record);
+    assert.ok(record!.logPath, "the record must carry a logPath");
+
+    const supervisorDir = join(dir, "6600");
+    const epochOnDisk = JSON.parse(readFileSync(join(supervisorDir, "epoch.json"), "utf8"));
+    const resolvedLogPath = join(supervisorDir, epochOnDisk.log);
+    assert.ok(existsSync(resolvedLogPath), "the log file the epoch record names must actually exist on disk");
+    assert.equal(resolvedLogPath, record!.logPath, "the record's own logPath must match the epoch record's log field, joined onto the instance directory");
+    assert.ok(epochOnDisk.log.startsWith("logs/"), "the epoch record's log field must be relative, starting with the per-instance logs directory name");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("superviseChild: the give-up path leaves no live child pid, asserted by a zero-signal liveness check on every pid the test's stub spawn handed out", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "supervise-no-orphan-"));
+  try {
+    const pids: number[] = [];
+    const deps = makeSuperviseDeps(dir, {
+      initialBackoffMs: 1,
+      maxBackoffMs: 10,
+      maxRestarts: 2,
+      crashWindowMs: 60000,
+      spawn: () => {
+        const child = realSpawn("/bin/true", []);
+        if (typeof child.pid === "number") pids.push(child.pid);
+        return child;
+      },
+    });
+
+    const record = superviseChild("acquire", 6600, deps);
+    assert.ok(record);
+
+    const gone = await waitFor(() => (deps.state.instances.has(6600) ? null : true), { timeoutMs: 10000 });
+    assert.ok(gone, "the instance must eventually be given up on (each /bin/true exits immediately, exceeding maxRestarts quickly)");
+    assert.ok(pids.length >= 2, "at least two real children must have been spawned across the crash sequence");
+
+    for (const pid of pids) {
+      const deadline = Date.now() + 2000;
+      let alive = true;
+      while (Date.now() < deadline) {
+        try {
+          process.kill(pid, 0);
+        } catch {
+          alive = false;
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 20));
+      }
+      assert.ok(!alive, `pid ${pid} must not still be alive after give-up -- /bin/true always exits on its own, and give-up must not leave anything running`);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

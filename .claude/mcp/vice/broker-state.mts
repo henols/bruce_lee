@@ -30,6 +30,38 @@ export interface InstanceRecord {
   viceBin: string;
   viceArgs: string[];
   dryRun: boolean;
+  // ------------------------------------------------------------------
+  // Plan 03 (C2/D-23): the per-child supervisor's own bookkeeping fields.
+  // Optional -- a record created through a path that does not supervise
+  // (e.g. a caller with its own lifecycle) remains a valid InstanceRecord
+  // without them; broker-launch.mts's superviseChild() is the one writer
+  // that always sets all five together, immediately after every launch.
+  // ------------------------------------------------------------------
+  /** The current epoch integer for this instance -- mirrored into the
+   * epoch.json record broker-epoch.mts writes (D-04). */
+  epoch?: number;
+  /** Set BEFORE any signal is sent to this instance's child (T-01.6.2-21)
+   * -- the exit handler reads this to distinguish a deliberate teardown
+   * (no respawn, dropped) from a crash (respawn). Without this
+   * distinction every deliberate teardown would respawn exactly what it
+   * just killed, silently breaking kill-never-recycle. */
+  deliberateKill?: boolean;
+  /** Timestamps (ms, per the injected clock) of this instance's recent
+   * crashes still inside the crash window -- carried FORWARD across
+   * respawns (a fresh InstanceRecord is created on every relaunch) so the
+   * give-up threshold is evaluated against the instance's whole crash
+   * history, not just its latest incarnation. */
+  crashTimes?: number[];
+  /** The CURRENT backoff delay (ms) this instance would wait before its
+   * NEXT respawn -- starts at the configured initial delay, doubles on
+   * each consecutive crash, clamped at the configured ceiling
+   * (T-01.6.2-20). */
+  backoffMs?: number;
+  /** Absolute path to this instance's current boot/crash log file --
+   * derived from the SAME per-instance log-directory function
+   * (broker-epoch.mts's instanceLogDirFor) the epoch record's own `log`
+   * field is derived from, so the two can never disagree. */
+  logPath?: string;
 }
 
 export interface GrantRecord {
