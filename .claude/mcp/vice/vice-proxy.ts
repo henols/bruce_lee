@@ -743,10 +743,20 @@ const handleRecycle: (args: Record<string, unknown>) => Promise<ToolCallResult> 
   const { url, port: instancePort } = activeInstance();
   const probe = await probeInstance({ url, port: instancePort });
 
+  // 2026-08-05 defect fix: the persisted record's own epoch_after must never
+  // carry a stale value equal to epoch_before -- that pair reads as
+  // "confirmed unchanged" to a future reader, which is a false claim for a
+  // kill that just genuinely succeeded (killStage is one of the three
+  // successful-kill stages here, by construction of the guard above). Only
+  // the poll loop's own epochMoved() -- not merely afterEpoch.present -- may
+  // promote the read into the record; anything else stays the honest `null`
+  // ("not yet known", per renderIncidentRecord()'s existing rendering) so a
+  // future investigation is never handed a pair that looks complete but
+  // isn't.
   finaliseIncidentRecord(recordPath, {
     outcome: "ok",
     kill_stage: killStage,
-    epoch_after: afterEpoch.present ? afterEpoch.epoch : null,
+    epoch_after: epochMoved() ? afterEpoch.epoch : null,
   });
 
   // Immediately before returning success -- the deliberate identity change
@@ -2273,6 +2283,36 @@ function adoptGrant(grant: Record<string, unknown>): void {
  * no second notion of a voided run). States the three facts an agent needs,
  * literally: the machine was REPLACED, the replacement is FRESH, and prior
  * state on the old instance is GONE.
+ *
+ * 2026-08-05 defect fix, two parts, both kept INLINE here (not extracted to
+ * a helper) so this function's own body still literally contains the
+ * `epochDriftMessage(` call the structural test
+ * ("the replaced-machine report is built from the existing voided-run
+ * vocabulary") pins:
+ *
+ *   1. Epoch sentence -- three cases, not two. The old code called
+ *      epochDriftMessage() whenever BOTH epochs were merely present,
+ *      with no inequality check -- so an unmoved-but-both-present pair
+ *      (oldEpoch.epoch === newEpoch.epoch) rendered the literally false
+ *      "epoch changed from 1 to 1" (the exact sighting on file). Now:
+ *      both present AND different -> epochDriftMessage(), unchanged; both
+ *      present but EQUAL -> an honest "did not change" sentence (each
+ *      port's epoch file is an independent counter, so a coincidental
+ *      match is expected, not evidence of anything -- and a genuinely
+ *      reused port can still read stale-equal if the host had not yet
+ *      written its post-respawn bump at the moment this was sampled); not
+ *      both present -> unchanged from before, "could not both be
+ *      compared".
+ *   2. Port sentence -- when oldPort === newPort (a real, legitimate
+ *      outcome in this broker's fixed-slot design: a "replacement" can
+ *      land back on the exact port it replaced), the OLD wording named
+ *      that single port number as both "the old instance (port X)" and
+ *      "the replacement instance (port X)" -- two different entities
+ *      sharing one label, which a reader cannot reconcile ("one port
+ *      cannot be both"). Now branches on whether the port actually
+ *      changed: same port says so plainly ("replaced in place"), rather
+ *      than implying two distinct ports that happen to print the same
+ *      digits.
  */
 function machineReplacedMessage(opts: {
   where: string;
@@ -2283,16 +2323,33 @@ function machineReplacedMessage(opts: {
   newEpoch: EpochResult;
 }): string {
   const { where, reason, oldPort, oldEpoch, newPort, newEpoch } = opts;
-  const driftSentence =
-    oldEpoch.present && newEpoch.present
-      ? epochDriftMessage(where, oldEpoch, newEpoch)
-      : `vice: treat every result since the previous call as void and redo that work -- the old instance ` +
-        `(port ${oldPort}) and the new instance (port ${newPort}) could not both be compared by epoch ` +
-        `(old epoch present: ${oldEpoch.present}, new epoch present: ${newEpoch.present}).`;
+  let driftSentence: string;
+  if (oldEpoch.present && newEpoch.present) {
+    driftSentence =
+      oldEpoch.epoch !== newEpoch.epoch
+        ? epochDriftMessage(where, oldEpoch, newEpoch)
+        : `vice: the epoch recorded ${where} did not change (still ${oldEpoch.epoch}) -- this is NOT evidence ` +
+          `the machine stayed the same: each port's epoch counter is independent, so a coincidental match is ` +
+          `expected between two unrelated files, and a genuinely reused port can still read stale-equal if the ` +
+          `host had not yet recorded its post-respawn bump at the moment this was sampled. Treat every result ` +
+          `since the previous call as void and redo that work regardless -- the replacement itself (below) is ` +
+          `the operative fact here, not this epoch read.`;
+  } else {
+    driftSentence =
+      `vice: treat every result since the previous call as void and redo that work -- the old instance's ` +
+      `epoch and the new instance's epoch could not both be compared ` +
+      `(old epoch present: ${oldEpoch.present}, new epoch present: ${newEpoch.present}).`;
+  }
+  const portSentence =
+    oldPort === newPort
+      ? `The instance behind port ${oldPort} was REPLACED IN PLACE -- the process is a FRESH emulator (this ` +
+        `broker's fixed-slot design can hand the replacement the SAME port back), and all prior state from ` +
+        `before the replacement is GONE (${reason}).`
+      : `The machine was REPLACED, the replacement is a FRESH emulator, and all prior state on the old ` +
+        `instance (port ${oldPort}) is GONE (${reason}).`;
   return (
-    `${driftSentence} The machine was REPLACED, the replacement is a FRESH emulator, and all prior state ` +
-    `on the old instance (port ${oldPort}) is GONE (${reason}). Make this call again -- it will run on ` +
-    `the replacement instance (port ${newPort}), already acquired and adopted for this session.`
+    `${driftSentence} ${portSentence} Make this call again -- it will run on the replacement instance ` +
+    `(port ${newPort}), already acquired and adopted for this session.`
   );
 }
 

@@ -2999,6 +2999,83 @@ test("D-13: a dead granted instance costs exactly one replacement acquisition; t
   }
 });
 
+test("D-13: a replacement that lands back on the SAME port as the unreachable original, with an epoch read that never advances, is reported honestly -- never a false 'changed from N to N' and never one port number labelled as two different instances", async () => {
+  // 2026-08-05 defect (.planning/todos/pending/2026-08-05-epoch-drift-and-
+  // replacement-messages-name-impossible-values.md, findings 1+2): this
+  // broker's fixed-slot design can legitimately hand a replacement the
+  // EXACT SAME port the unreachable original held -- and when it does, the
+  // old and new reads may come from the SAME epoch file, sampled before any
+  // write ever bumped it, so both reads land on the same number. The old
+  // wording called that "epoch changed from 1 to 1" (a false claim) and
+  // labelled the single port number as both "the old instance (port X)" and
+  // "the replacement instance (port X)" (a contradiction "cannot both be").
+  // Reproduces exactly that: one epoch file, shared by both grants because
+  // they share a port, containing epoch: 1 and never rewritten.
+  const dir = mkdtempSync(join(tmpdir(), "vice-proxy-d13-sameport-"));
+  const samePort = await reserveFreePort(); // nothing listening yet -- the pre-flight probe against grant 1 must fail
+  const sharedEpochFile = join(dir, "shared-epoch.json");
+  writeFileSync(sharedEpochFile, JSON.stringify({ epoch: 1, spawned_at: new Date().toISOString(), pid: 40001 }));
+
+  let acquireCount = 0;
+  let workingServer: Server | null = null;
+  const proxy = startProxy({ VICE_POOL_DIR: dir, VICE_MCP_HOST: "127.0.0.1" });
+  let controlServer: NetServer | null = null;
+  try {
+    await handshake(proxy);
+    const acquired = await startControlBroker(dir, {
+      onAcquire: async () => {
+        acquireCount++;
+        if (acquireCount === 2) {
+          // Bring the SAME port up for real before handing back the
+          // replacement grant -- the broker respawning in place on its
+          // existing slot, not this test picking a coincidentally-equal
+          // number.
+          const standIn = startStandInServer();
+          workingServer = standIn.server;
+          await new Promise<void>((resolvePromise, reject) => {
+            workingServer!.once("error", reject);
+            workingServer!.listen(samePort, "127.0.0.1", () => resolvePromise());
+          });
+        }
+        return {
+          ok: true,
+          grant: {
+            port: samePort,
+            url: `http://127.0.0.1:${samePort}/mcp`,
+            epochFile: sharedEpochFile,
+            supervisorDir: join(dir, "shared-supervisor"),
+          },
+        };
+      },
+    });
+    controlServer = acquired.server;
+
+    proxy.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
+    const resp = await proxy.nextMessage(10000);
+    assert.equal(resp.result.isError, true, "the triggering call must still fail loudly, even though the replacement is confirmed reachable");
+    const text = resp.result.content[0].text;
+
+    assert.equal(acquireCount, 2, "exactly two acquires: the original and one replacement");
+    assert.doesNotMatch(text, /changed from 1 to 1/, "an equal epoch pair must never be worded as a change");
+    assert.doesNotMatch(
+      text,
+      /old instance \(port \d+\).*replacement instance \(port \d+\)/s,
+      "must not label the single shared port as if it were two distinguishable instances"
+    );
+    assert.match(text, /REPLACED IN PLACE/i, "a same-port replacement must say so plainly, not imply a second distinct port");
+    assert.match(text, new RegExp(`port ${samePort}`), "must still name the actual port involved");
+    assert.match(text, /did not change/i, "the epoch sentence must say the epoch did not change, not that it changed");
+    assert.match(text, /REPLACED/);
+    assert.match(text, /FRESH/);
+    assert.match(text, /GONE/);
+  } finally {
+    proxy.child.kill("SIGKILL");
+    if (controlServer) await new Promise((resolveClose) => controlServer!.close(resolveClose));
+    if (workingServer) await new Promise((resolveClose) => workingServer!.close(resolveClose));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("D-13: the epoch baseline after a replacement is re-based to the replacement's OWN epoch, proven by a later drift comparing against it", async () => {
   const dir = mkdtempSync(join(tmpdir(), "vice-proxy-d13-epoch-"));
   const refusedPort = await reserveFreePort();
@@ -4132,6 +4209,63 @@ test("vice_recycle: after a confirmed recycle, a subsequent forwarded call succe
     assert.equal(pingResp.result.isError, false, "a forwarded call after a confirmed recycle must not fail the epoch drift guard");
     const requestsAfter = requests.filter((r) => r && r.method === "tools/call").length;
     assert.ok(requestsAfter > requestsBefore, "the forwarded call must actually have reached the stand-in host, not been refused pre-flight");
+  } finally {
+    proxy.child.kill("SIGKILL");
+    await new Promise((resolve) => server.close(resolve));
+    if (controlServer) await new Promise((resolve) => controlServer!.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(incidentsDir, { recursive: true, force: true });
+  }
+});
+
+test("vice_recycle: a confirmed kill whose epoch file never advances within the poll deadline persists epoch_after as null, never the stale value equal to epoch_before", async () => {
+  // 2026-08-05 defect (.planning/todos/pending/2026-08-05-epoch-drift-and-
+  // replacement-messages-name-impossible-values.md, "FOURTH artifact"): a
+  // successful kill whose epoch read never actually advances used to
+  // persist epoch_after equal to epoch_before (both "1") into the permanent
+  // incident record, self-described as evidence_complete -- a record that
+  // looks complete but carries a claim that cannot be true for a genuinely
+  // successful kill. This test never bumps the epoch fixture after the ack,
+  // simulating exactly that "sampled too early / never observed to move"
+  // case, and asserts the persisted record is left honestly null ("not yet
+  // known") rather than silently equal to epoch_before.
+  const dir = mkdtempSync(join(tmpdir(), "vice-proxy-recycle-epochstale-"));
+  const incidentsDir = tmpIncidentsDir();
+  const { server } = startStandInServer();
+  const port = await listen(server);
+  const recycle = makeControllableRecycle();
+  let controlServer: NetServer | null = null;
+  const proxy = startProxy({
+    VICE_POOL_DIR: dir,
+    VICE_MCP_HOST: "127.0.0.1",
+    VICE_INCIDENTS_DIR: incidentsDir,
+    VICE_BROKER_RECYCLE_TIMEOUT_MS: "300", // keep the post-kill epoch poll fast -- it must never observe a move
+  });
+  try {
+    await handshake(proxy);
+    const acquired = await acquireLeaseViaBroker(proxy, dir, port, 3, recycle.onRecycle);
+    controlServer = acquired.controlServer;
+    writeEpochFileFixture(dir, port, { epoch: 1 });
+
+    proxy.send({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "vice_recycle", arguments: { reason: "stale epoch test" } } });
+    await recycle.waitForCall();
+
+    // Deliberately NOT bumping the epoch fixture here (contrast with the
+    // rebaseline test above, which writes epoch: 2 at this exact point) --
+    // the kill succeeds, but the epoch file this session reads stays at 1
+    // for the whole poll window.
+    recycle.respond({ port, pid: 40001, viceBin: "x64sc", killStage: "sigterm", epochBefore: 1, outcome: "ok", reason: "" });
+
+    const resp = await proxy.nextMessage(5000);
+    assert.equal(resp.result.isError, false, "a successful kill stage is still success even when the epoch never moved");
+    assert.match(resp.result.content[0].text, /did not move within the timeout/);
+
+    const incidentPath = join(incidentsDir, readdirSync(incidentsDir)[0]);
+    const incidentContent = readFileSync(incidentPath, "utf8");
+    assert.match(incidentContent, /epoch_before: 1/);
+    assert.match(incidentContent, /epoch_after: null/, "epoch_after must be persisted as null, never the stale value equal to epoch_before");
+    assert.doesNotMatch(incidentContent, /epoch_after: 1\b/, "the persisted record must never carry a false equal epoch_before/epoch_after pair");
+    assert.match(incidentContent, /epoch after recycle: \(not yet known\)/, "the rendered body must say 'not yet known', matching renderIncidentRecord()'s own null handling");
   } finally {
     proxy.child.kill("SIGKILL");
     await new Promise((resolve) => server.close(resolve));

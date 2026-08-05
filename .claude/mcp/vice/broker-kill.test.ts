@@ -555,18 +555,51 @@ for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"] as const) {
   });
 }
 
-test("end-to-end: the broker prints its start-time banner on stderr before broker.json (and therefore before the listener accepts)", { timeout: 20000 }, async () => {
+test("end-to-end: the broker prints its start-time banner on stderr before the control listener accepts a connection", { timeout: 20000 }, async () => {
+  // quick-260805 (todo: 2026-08-05-broker-kill-banner-ordering-test-is-
+  // flaky-under-full-suite-load.md): the RETIRED version of this test
+  // compared `bannerIdx < listenerBoundIdx`, both read from the SAME
+  // `handle.stderr` buffer -- textually deterministic once both lines have
+  // arrived, but nothing forced the SECOND line ("control listener bound")
+  // to have arrived across the child's stdout/stderr PIPE by the moment the
+  // assertion ran. That line is written (vice-broker.mts) only AFTER
+  // broker.json is already on disk, so under full-suite CPU load the
+  // cross-process pipe delivery of that one stderr line could still be in
+  // flight at the exact instant `waitForBrokerJson()` resolved from a plain,
+  // fast filesystem poll -- producing `listenerBoundIdx === -1` and a false
+  // red on an otherwise-healthy broker. The banner line itself was never the
+  // flaky half (it is written far earlier, before startControlListener() is
+  // even called, so it has a large head start) -- it was comparing against a
+  // second, later stderr line's ARRIVAL TIME that raced the file poll.
+  //
+  // Fix (option 1, the filed preference order's first choice): assert the
+  // CAUSAL property the test's own name promises -- the listener actually
+  // ACCEPTS a connection -- by performing a real acquire over the control
+  // plane (acquireOverControlPlane(), the same call the SIGTERM/SIGINT/
+  // SIGHUP tests above already use against this same startBroker() harness)
+  // rather than grepping stderr for a second log line. A successful acquire
+  // can only happen if the listener genuinely accepted and answered, so this
+  // is deterministic under any load: it is not racing a pipe against a
+  // filesystem poll, it is the accept itself.
   build();
   const stateDir = mkdtempSync(join(tmpdir(), "broker-kill-banner-"));
   const handle = startBroker(stateDir);
   try {
     await waitForBrokerJson(stateDir);
-    assert.match(handle.stderr, /foreground/i);
+
+    // The causal fact: the control listener accepts a connection and
+    // completes a real acquire handshake over it.
+    const acquired = await acquireOverControlPlane(stateDir);
+    void acquired; // deliberately left unreleased -- the broker's own SIGKILL teardown below cleans it up, same as the SIGTERM/SIGINT/SIGHUP tests above
+
+    // Only now check the banner -- by this point a full request/response
+    // round trip has already crossed the control socket, which gives the
+    // (much earlier-written) banner line every opportunity to have arrived
+    // too. This assertion no longer needs any second line's arrival time:
+    // it only needs THIS ONE line, which is written long before the listener
+    // is even created (see the structural source-order test below).
+    assert.match(handle.stderr, /foreground/i, `banner missing from stderr, stderr:\n${handle.stderr}`);
     assert.match(handle.stderr, /terminate every emulator/i);
-    const bannerIdx = handle.stderr.search(/foreground/i);
-    const listenerBoundIdx = handle.stderr.indexOf("control listener bound");
-    assert.ok(bannerIdx !== -1 && listenerBoundIdx !== -1);
-    assert.ok(bannerIdx < listenerBoundIdx, "the banner must appear before the control-listener-bound log line");
   } finally {
     if (handle.child.exitCode === null && handle.child.signalCode === null) {
       handle.child.kill("SIGKILL");
