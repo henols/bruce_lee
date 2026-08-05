@@ -91,20 +91,48 @@ test("installResources(): no-op-when-present -- a second run reports nothing ins
   assert.equal(statSync(target).mtimeMs, mtimeBefore, "mtime must be untouched by a no-op run");
 });
 
-test("installResources(): no-overwrite-when-diverged -- a hand-edited target is reported diverged and left byte-for-byte unchanged", () => {
-  const root = mkdtempSync(join(tmpdir(), "vice-install-diverged-"));
+test("installResources(): no-overwrite-when-diverged (hand-authored) -- a hand-edited HAND-AUTHORED target (vice-launcher.sh) is reported diverged, left byte-for-byte unchanged, and the refusal is logged loudly (260805 stale-deploy fix)", () => {
+  const root = mkdtempSync(join(tmpdir(), "vice-install-diverged-handauthored-"));
   installResources({ root, log: () => {} });
-  const target = join(installTargetDir(root), "vice-broker.mjs");
-  writeFileSync(target, "// edited by hand\n");
+  const target = join(installTargetDir(root), "vice-launcher.sh");
+  writeFileSync(target, "#!/usr/bin/env bash\n# edited by hand\n");
 
-  const result = installResources({ root, log: () => {} });
+  const warnings: string[] = [];
+  const result = installResources({ root, log: (m) => warnings.push(m) });
 
-  assert.ok(result.diverged.includes("vice-broker.mjs"), "expected the hand-edited entry to be reported diverged");
-  assert.equal(result.installed.length, 0, "a divergence must never be auto-overwritten");
-  assert.equal(readFileSync(target, "utf8"), "// edited by hand\n", "the hand edit must survive byte-for-byte");
+  assert.ok(result.diverged.includes("vice-launcher.sh"), "expected the hand-edited HAND-AUTHORED entry to be reported diverged");
+  assert.equal(result.installed.length, 0, "a hand-authored divergence must never be auto-overwritten");
+  assert.equal(readFileSync(target, "utf8"), "#!/usr/bin/env bash\n# edited by hand\n", "the hand edit must survive byte-for-byte");
+  assert.ok(
+    warnings.some((w) => /refus/i.test(w) && w.includes("vice-launcher.sh")),
+    "expected the per-entry refusal to be logged loudly, naming the entry"
+  );
+  assert.ok(
+    warnings.some((w) => /1 hand-authored entrie\(s\) refused/.test(w)),
+    "expected the count-carrying summary warning so a refused divergence can never read as silent success"
+  );
 });
 
-test("installResources({ force: true }): restores a diverged target to the resources/ content", () => {
+test("installResources(): diverged GENERATED artifact is overwritten by DEFAULT, no force needed -- staleness is the only thing divergence can mean for a generated file (260805 stale-deploy fix)", () => {
+  const root = mkdtempSync(join(tmpdir(), "vice-install-diverged-generated-"));
+  installResources({ root, log: () => {} });
+  const target = join(installTargetDir(root), "vice-broker.mjs");
+  const original = readFileSync(target);
+  writeFileSync(target, "// stale -- predates the current resources/ content\n");
+
+  const notes: string[] = [];
+  const result = installResources({ root, log: (m) => notes.push(m) });
+
+  assert.ok(result.installed.includes("vice-broker.mjs"), "expected the diverged GENERATED entry to be auto-refreshed without force");
+  assert.equal(result.diverged.length, 0, "a generated artifact's divergence must never be reported as refused");
+  assert.ok(readFileSync(target).equals(original), "the stale generated artifact must be restored to resources/ content");
+  assert.ok(
+    notes.some((n) => n.includes("vice-broker.mjs") && /refreshing it automatically/.test(n)),
+    "expected the auto-refresh to be logged, distinguishing it from a silent no-op"
+  );
+});
+
+test("installResources({ force: true }): restores a diverged GENERATED target to the resources/ content, unchanged from before this fix", () => {
   const root = mkdtempSync(join(tmpdir(), "vice-install-force-"));
   installResources({ root, log: () => {} });
   const target = join(installTargetDir(root), "vice-broker.mjs");
@@ -115,6 +143,20 @@ test("installResources({ force: true }): restores a diverged target to the resou
 
   assert.ok(result.installed.includes("vice-broker.mjs"), "expected the forced overwrite to be reported as installed");
   assert.ok(readFileSync(target).equals(original), "forced install must restore the exact resources/ content");
+});
+
+test("installResources({ force: true }): still overwrites a diverged HAND-AUTHORED target too -- force strips protection from vice-launcher.sh exactly as before this fix", () => {
+  const root = mkdtempSync(join(tmpdir(), "vice-install-force-handauthored-"));
+  installResources({ root, log: () => {} });
+  const target = join(installTargetDir(root), "vice-launcher.sh");
+  const original = readFileSync(target);
+  writeFileSync(target, "#!/usr/bin/env bash\n# edited by hand\n");
+
+  const result = installResources({ root, force: true, log: () => {} });
+
+  assert.ok(result.installed.includes("vice-launcher.sh"), "expected the forced overwrite of the hand-authored entry to be reported as installed");
+  assert.equal(result.diverged.length, 0, "force must never report anything as refused");
+  assert.ok(readFileSync(target).equals(original), "forced install must restore the exact resources/ content even for the hand-authored entry");
 });
 
 test("installResources(): executable bit preserved -- the surviving launcher arrives executable, a compiled broker artifact non-executable like its tracked source", () => {
