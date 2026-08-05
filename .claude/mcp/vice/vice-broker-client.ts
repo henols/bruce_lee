@@ -30,6 +30,20 @@ import { join, resolve } from "node:path";
 import { connect, type Socket } from "node:net";
 
 import { supervisorDir } from "./repo-root.ts";
+// The module tree's ONE definition of the container-visible host alias
+// (vice.ts:49), carrying its own VICE_MCP_HOST override -- consumed below by
+// resolveControlTarget() rather than a fourth `host.docker.internal` literal
+// (vice.ts:35-48 names the three duplicate copies that predated that
+// function; this file must not become a fourth). Deliberately NOT
+// `containerpath.ts`'s `containerHost()`: that function rewrites URL
+// *strings*, not bare hostnames; its own loopback matcher structurally
+// EXCLUDES `0.0.0.0` (a wildcard bind is not loopback, so the very address
+// at fault here would pass through it untouched); `containerpath.ts:32-37`
+// states outright that it does not know the container-visible host alias;
+// and importing it would pull `hostpath.ts` into this module, which this
+// file's own header (lines 23-26) forbids and which the host-path
+// consumer-set assertion polices.
+import { mcpHost } from "./vice.ts";
 
 // -------------------------------------------------------------- request ids
 //
@@ -164,6 +178,115 @@ export function readBrokerLiveness(path: string = brokerJsonPath()): BrokerLiven
 // either is, or the broker's own "close" handler has already reclaimed the
 // instance.
 
+// -------------------------------------------------------- dial resolution
+//
+// `broker.json`'s `control_host` field is the broker's BIND address
+// (vice-broker.mts:782 writes `listener.host` into it, which is
+// deliberately `0.0.0.0` per broker-control.mts:16-20's own rule: "Bind:
+// 0.0.0.0 explicitly, never 127.0.0.1 -- host.docker.internal is the bridge
+// address, not loopback"). A bind address is not a dial address: `0.0.0.0`
+// dialed from inside THIS container reaches this container's own network
+// stack, where nothing listens. Both connect sites below (the tracer's own
+// acquireOverControlPlane() and openBrokerControl() further down) resolve
+// their target through resolveControlTarget() and never read `control_host`
+// as anything but diagnostic text.
+//
+// `VICE_BROKER_CONTROL_DIAL_HOST` is a NEW variable, deliberately not a
+// homonym of the EXISTING `VICE_BROKER_CONTROL_HOST` (the broker's own BIND
+// host, set on the HOST side -- vice-broker.mts:671, broker-control.mts:507,
+// driven in broker-control.test.ts:949). Collapsing the two into one
+// variable would reproduce this exact defect in env-var form: one name
+// cannot correctly answer both "what should I bind" and "what should I
+// dial", for the same reason `control_host` itself cannot -- those are two
+// different consumers wanting two different addresses.
+export interface ResolvedControlTarget {
+  host: string;
+  port: number;
+  source: "dial_override" | "bridge_alias";
+  /** The record's OWN `control_host` value -- carried through for the
+   * diagnostic only. Never a candidate dial target. */
+  recorded: string;
+}
+
+export type ResolveControlTargetResult =
+  | { ok: true; target: ResolvedControlTarget }
+  | { ok: false; kind: "unreachable_control_plane"; message: string; target: string };
+
+const IPV4_LOOPBACK_RE = /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
+// Fully-expanded IPv6 "::" (all eight groups zero) and "::1" (seven zero
+// groups then 1) -- the WHATWG URL parser's own bracketed short forms are
+// matched as literals below; this regex pair only needs to catch the
+// long-hand spellings a bare hostname string might still carry.
+const IPV6_ALL_ZEROS_RE = /^(0{1,4}:){7}0{1,4}$/;
+const IPV6_LOOPBACK_FULL_RE = /^(0{1,4}:){7}0{0,3}1$/;
+
+function stripBrackets(host: string): string {
+  return host.replace(/^\[/, "").replace(/\]$/, "");
+}
+
+function isWildcardBindHost(host: string): boolean {
+  const bare = stripBrackets(host);
+  return bare === "0.0.0.0" || bare === "::" || IPV6_ALL_ZEROS_RE.test(bare);
+}
+
+function isLoopbackConnectHost(host: string): boolean {
+  const bare = stripBrackets(host);
+  return bare === "localhost" || bare === "::1" || IPV4_LOOPBACK_RE.test(bare) || IPV6_LOOPBACK_FULL_RE.test(bare);
+}
+
+/** Classifies a bare hostname (never a full URL) the same way
+ * `containerpath.ts`'s `isLoopbackHostname()` classifies loopback --
+ * matched STRUCTURALLY, whole address classes rather than single literals,
+ * deliberately RE-STATED here rather than imported (see this section's own
+ * header comment for why `containerpath.ts` is off-limits to this module).
+ * `wildcard_bind` covers the IPv4/IPv6 "listen on everything" addresses in
+ * their bracketed, unbracketed and fully-expanded spellings; `loopback`
+ * covers the whole 127.0.0.0/8 block, `localhost`, and IPv6 loopback in the
+ * same three spellings; everything else is `routable`. */
+export function classifyConnectHost(host: string): "wildcard_bind" | "loopback" | "routable" {
+  if (isWildcardBindHost(host)) return "wildcard_bind";
+  if (isLoopbackConnectHost(host)) return "loopback";
+  return "routable";
+}
+
+/** Resolves the address this process will actually DIAL for the control
+ * plane -- never the record's own `control_host`, which flows through only
+ * as `recorded`, never as a candidate target. Precedence:
+ * `VICE_BROKER_CONTROL_DIAL_HOST` when set and non-empty (`source:
+ * "dial_override"`), otherwise `mcpHost()` (`source: "bridge_alias"`) --
+ * the SAME default source `vice-proxy.test.ts` already configures via
+ * `VICE_MCP_HOST` at ~30 call sites, which is exactly why that source was
+ * chosen: every one of those fixtures stays green with zero edits.
+ *
+ * Refuses -- before any connect is attempted -- when the resolved host
+ * classifies as `wildcard_bind`: that class is an address to listen on,
+ * never one to dial. Does NOT refuse `loopback`: an explicitly configured
+ * loopback host is a statement that the listener lives inside THIS
+ * container, which is the only topology the project's hard rule (nothing
+ * may dial the real host directly) permits a test to exercise -- and a
+ * loopback value can now only ever arrive from explicit configuration,
+ * never from the record, since the record's own value is never treated as
+ * a candidate. */
+export function resolveControlTarget(record: Record<string, unknown>, port: number): ResolveControlTargetResult {
+  const recorded = typeof record.control_host === "string" ? record.control_host : "";
+  const override = process.env.VICE_BROKER_CONTROL_DIAL_HOST;
+  const useOverride = typeof override === "string" && override.length > 0;
+  const host = useOverride ? override : mcpHost();
+  const source: "dial_override" | "bridge_alias" = useOverride ? "dial_override" : "bridge_alias";
+
+  if (classifyConnectHost(host) === "wildcard_bind") {
+    return {
+      ok: false,
+      kind: "unreachable_control_plane",
+      message:
+        `openBrokerControl: the resolved dial target ${host}:${port} is a wildcard-bind address -- ` +
+        `it is valid to listen on but structurally impossible to dial. Refusing to attempt a connection.`,
+      target: `${host}:${port}`,
+    };
+  }
+  return { ok: true, target: { host, port, source, recorded } };
+}
+
 // ---------------------------------------------------- TCP control plane
 //
 // The container-side half of the TCP control plane (broker-control.mts is
@@ -216,13 +339,20 @@ export function acquireOverControlPlane(dir: string = brokerRootDir()): Promise<
       reject(new Error("acquireOverControlPlane: broker.json not present or unreadable"));
       return;
     }
-    const host = typeof broker.control_host === "string" ? broker.control_host : null;
+    const controlHost = typeof broker.control_host === "string" ? broker.control_host : null;
     const port = typeof broker.control_port === "number" ? broker.control_port : null;
     const token = typeof broker.control_token === "string" ? broker.control_token : null;
-    if (host === null || port === null || token === null) {
+    if (controlHost === null || port === null || token === null) {
       reject(new Error("acquireOverControlPlane: broker.json missing control_host/control_port/control_token"));
       return;
     }
+
+    const targetResult = resolveControlTarget(broker, port);
+    if (!targetResult.ok) {
+      reject(new Error(targetResult.message));
+      return;
+    }
+    const { host } = targetResult.target;
 
     const socket = connect({ host, port });
     let buffer = "";
@@ -369,6 +499,7 @@ export const CONTROL_CONNECT_TIMEOUT_MS = 5000;
 export type ControlFailureKind =
   | "never_started"
   | "stale"
+  | "unreachable_control_plane"
   | "connect_refused"
   | "deadline"
   | "broker_gone"
@@ -445,7 +576,9 @@ export interface OpenBrokerControlOptions {
   connectTimeoutMs?: number;
 }
 
-export type OpenBrokerControlOutcome = { ok: true; session: BrokerControlSession } | { ok: false; kind: ControlFailureKind; message: string };
+export type OpenBrokerControlOutcome =
+  | { ok: true; session: BrokerControlSession }
+  | { ok: false; kind: ControlFailureKind; message: string; target?: string };
 
 /** One in-flight request's settlement callback -- pushed onto the session's
  * FIFO pending queue in sendAndAwaitLine() below, and shifted off it by
@@ -698,10 +831,10 @@ export function openBrokerControl(dir: string = brokerRootDir(), opts: OpenBroke
       resolvePromise({ ok: false, kind: "never_started", message: "openBrokerControl: broker.json unexpectedly absent" });
       return;
     }
-    const host = typeof parsed.control_host === "string" ? parsed.control_host : null;
+    const controlHost = typeof parsed.control_host === "string" ? parsed.control_host : null;
     const port = typeof parsed.control_port === "number" ? parsed.control_port : null;
     const token = typeof parsed.control_token === "string" ? parsed.control_token : null;
-    if (host === null || port === null || token === null) {
+    if (controlHost === null || port === null || token === null) {
       resolvePromise({
         ok: false,
         kind: "protocol",
@@ -709,6 +842,13 @@ export function openBrokerControl(dir: string = brokerRootDir(), opts: OpenBroke
       });
       return;
     }
+
+    const targetResult = resolveControlTarget(parsed, port);
+    if (!targetResult.ok) {
+      resolvePromise({ ok: false, kind: targetResult.kind, message: targetResult.message, target: targetResult.target });
+      return;
+    }
+    const { host } = targetResult.target;
 
     let settled = false;
     const socket = connect({ host, port });
@@ -722,7 +862,8 @@ export function openBrokerControl(dir: string = brokerRootDir(), opts: OpenBroke
       resolvePromise({
         ok: false,
         kind: "connect_refused",
-        message: `openBrokerControl: no connection within ${connectTimeoutMs}ms`,
+        message: `openBrokerControl: no connection to ${host}:${port} within ${connectTimeoutMs}ms`,
+        target: `${host}:${port}`,
       });
     }, connectTimeoutMs);
     if (typeof connectTimer.unref === "function") connectTimer.unref();
@@ -740,7 +881,12 @@ export function openBrokerControl(dir: string = brokerRootDir(), opts: OpenBroke
       settled = true;
       clearTimeout(connectTimer);
       socket.removeListener("connect", onConnect);
-      resolvePromise({ ok: false, kind: "connect_refused", message: `openBrokerControl: connection failed -- ${err.message}` });
+      resolvePromise({
+        ok: false,
+        kind: "connect_refused",
+        message: `openBrokerControl: connection to ${host}:${port} failed -- ${err.message}`,
+        target: `${host}:${port}`,
+      });
     }
 
     socket.once("connect", onConnect);

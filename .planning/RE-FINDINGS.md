@@ -3229,3 +3229,66 @@ three tiers and their landing plans (01, 03, 05) named above.
 disagreement — either land the wire/on-disk surfaces first, or land the whole rename in one
 commit as this plan's own D-11 requires, rather than letting "internals already renamed" read as
 "the rename is done."
+
+### 2026-08-05 — a healthy broker read as dead twice over: a discovery record's own BIND address
+dialed as a CONNECT target, and the resulting failure blamed on heartbeat age that was never
+actually stale
+
+**Type:** hazard
+
+**Fact 1 — bind vs. connect.** A discovery record written by a host-side process records the
+address that process BINDS, and a container-side reader that connects to it verbatim is dialing
+its own network stack, not the host. `vice-broker.mts:782` writes `control_host: listener.host` —
+the broker's own BIND address, `0.0.0.0` (`broker-control.mts:16-20`'s own documented rule: bind
+`0.0.0.0` explicitly, never `127.0.0.1`, because `host.docker.internal` is the bridge address, not
+loopback). `vice-broker-client.ts`'s two connect sites (`acquireOverControlPlane()`,
+`openBrokerControl()`) read that field verbatim and dialed it: `0.0.0.0` from inside the container
+reaches the container's OWN network stack, where nothing listens (`ss -ltn` showed no listener on
+the control port in-container), so the connect could never succeed. `control_host` has two
+legitimate readers wanting two different answers — host-side tooling, for which the recorded bind
+address is correct, and this container-side client, which must resolve its own route across the
+bridge (`vice.ts`'s `mcpHost()`, already correct for the DATA plane) — so the fix belongs on the
+CONSUMER side; the record itself is correct as written and was deliberately left unchanged.
+**Saves:** the next "why does a live X read as dead" investigation in this project from
+re-deriving the bind-vs-connect distinction from scratch — check whether the failing read is a
+CONNECT to an address the OTHER side merely BOUND, before chasing the liveness/heartbeat logic
+that consumed the record.
+
+**Fact 2 — the mis-attributing message.** A failure message that names a cause already satisfied
+by an earlier layer sends the reader to the wrong fix, and the cost is measured in tool calls, not
+correctness. `ensureBrokerLease()`'s `openBrokerControl()` failure branch unconditionally read
+EVERY failure kind as `brokerDeadOrHungMessage()` — heartbeat-older-than-stale-threshold wording —
+regardless of what actually failed. `broker.json` is read from the shared filesystem, not over the
+control connection, so the freshness computation had a perfectly good, fresh timestamp and would
+have returned `alive`; the real failure was one layer later, at the TCP connect (fact 1 above).
+The prior session spent roughly a dozen tool calls re-verifying the heartbeat threshold was not
+exceeded (recomputing elapsed time against `BROKER_STALE_MS`, confirming the running proxy's code
+matched its start commit, ruling out clock skew) before the developer pointed at the actual root
+cause — every one of those checks was aimed at a hypothesis the message itself had created, not
+at the connect failure that was the real cause. Fixed by adding a distinct
+`unreachable_control_plane` failure kind and routing `ensureBrokerLease()`'s dead-or-hung message
+to ONLY the two kinds (`never_started`/`stale`) that actually come from a liveness re-read, with
+every other kind reaching a new message (`brokerControlUnreachableMessage()`) that names the
+resolved address and port instead, and states plainly that the heartbeat is fresh. **Saves:** the
+next control-plane connectivity failure in this project from being misread as a broker-health
+problem — check which failure KIND a diagnostic routes through before trusting its wording, and
+prefer a message that names the specific address/resource that failed over one that names a
+plausible-sounding but unverified cause.
+
+**Evidence:** found live, via the incident this entry closes
+(`.planning/todos/completed/2026-08-04-proxy-reports-a-live-broker-as-stale-blocking-all-emulator-access.md`):
+every forwarded `mcp__vice__*` call failed with a "broker appears to be dead or hung" verdict while
+`.vice-supervisor/broker.json`'s own `heartbeat_at` was observed advancing every 60s with three
+warm spares idle — no in-container listener on the recorded control port, independently confirmed
+via `ss -ltn`, while the broker's own heartbeat and three warm spares were independently confirmed
+healthy. Fact 2's mis-attribution is the developer's own root-cause correction, recorded in the
+closed todo's "Correction to an earlier diagnosis" section. Fixed and proven green by `node --test
+'.claude/mcp/vice/'*.test.*`, 406/406 non-todo tests (quick task 260805-9ha), including a test
+asserting BOTH the address's presence and the heartbeat-age phrase's absence in the new message,
+with that phrase named as an explicit constant so a future refactor cannot silently reintroduce
+the mis-attribution.
+
+**Confidence:** HIGH for fact 1 (the address mechanic — verified live: no in-container listener
+on the control port while the broker was independently confirmed healthy). HIGH for fact 2 (the
+mis-attribution is a direct read of the pre-fix source plus the developer's own recorded
+correction, not an inference).

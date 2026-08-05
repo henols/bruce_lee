@@ -2220,7 +2220,16 @@ test("broker three states: each broker-absent shape gets its own message and fix
   const { server: controlServer3 } = await startControlBroker(dir, {
     onAcquire: async () => ({ ok: false, reason: "no_free_port" }),
   });
-  const proxy3 = startProxy({ VICE_POOL_DIR: dir, VICE_EPOCH_FILE: join(dir, "epoch3.json") });
+  const proxy3 = startProxy({
+    VICE_POOL_DIR: dir,
+    VICE_EPOCH_FILE: join(dir, "epoch3.json"),
+    // quick-260805-9ha: openBrokerControl() no longer dials broker.json's
+    // own control_host (startControlBroker() writes "127.0.0.1", the
+    // broker's BIND address, never a dial target) -- without this, the
+    // client would instead resolve the real bridge alias and this test's
+    // in-container listener would never be reached.
+    VICE_BROKER_CONTROL_DIAL_HOST: "127.0.0.1",
+  });
   let launchFailedText;
   try {
     await handshake(proxy3);
@@ -2257,6 +2266,50 @@ test("broker three states: each broker-absent shape gets its own message and fix
   }
 
   rmSync(dir, { recursive: true, force: true });
+});
+
+// -----------------------------------------------------------------------
+// quick-260805-9ha: a fresh, healthy heartbeat but a DEAD control-plane
+// connect must never be misreported as broker liveness -- the exact
+// incident this plan closes (see vice-proxy.ts's own
+// brokerControlUnreachableMessage() header comment for the full record:
+// broker.json is read from the shared filesystem, not over the control
+// connection, so the freshness check had already passed while the real
+// failure was one layer later, at the connect). This distinctive phrase is
+// named as a constant so a future refactor cannot silently reintroduce the
+// mis-attribution this test guards against.
+// -----------------------------------------------------------------------
+const HEARTBEAT_AGE_PHRASE = "heartbeat is older than the stale threshold";
+
+test("control-plane unreachable: a fresh heartbeat but a dead connect names the address and port, never the heartbeat-age wording", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vice-proxy-control-unreachable-"));
+  const { server, port } = await startControlBroker(dir, {});
+  // Close the listener BEFORE the forwarded call -- startControlBroker()
+  // already wrote broker.json with a heartbeat taken just now, and nothing
+  // re-writes it, so readBrokerLiveness() still classifies `alive` when the
+  // proxy reads it below. Only the CONNECT is dead.
+  await new Promise<void>((r) => server.close(() => r()));
+
+  const proxy = startProxy({
+    VICE_POOL_DIR: dir,
+    VICE_EPOCH_FILE: join(dir, "epoch.json"),
+    // Matches the record's own recorded control_host ("127.0.0.1", written
+    // by startControlBroker()) -- so the closed port, not a mismatched dial
+    // target, is the only reason this connect fails.
+    VICE_MCP_HOST: "127.0.0.1",
+  });
+  try {
+    await handshake(proxy);
+    proxy.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
+    const resp = await proxy.nextMessage(10000);
+    assert.equal(resp.result.isError, true);
+    const text = resp.result.content[0].text;
+    assert.match(text, new RegExp(`127\\.0\\.0\\.1:${port}`), `message must name the dial address and port: ${text}`);
+    assert.doesNotMatch(text, new RegExp(HEARTBEAT_AGE_PHRASE, "i"), `message must NOT attribute the failure to heartbeat age: ${text}`);
+  } finally {
+    proxy.child.kill("SIGKILL");
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("broker never-cache: absent-then-alive-and-granted succeeds on the SAME process, no restart", async () => {
@@ -2340,6 +2393,9 @@ test("broker warming: an acquire deadline with no grant or error is a warming-an
     VICE_POOL_DIR: dir,
     VICE_EPOCH_FILE: join(dir, "epoch.json"),
     VICE_BROKER_ACQUIRE_TIMEOUT_MS: "300", // short deadline -- nothing will ever grant or deny this request
+    // quick-260805-9ha: see the "broker three states" proxy3 comment above --
+    // openBrokerControl() no longer dials broker.json's own control_host.
+    VICE_BROKER_CONTROL_DIAL_HOST: "127.0.0.1",
   });
   try {
     await handshake(proxy);
@@ -2377,6 +2433,15 @@ test("containerize: a loopback grant url is rewritten so the forwarded call actu
     VICE_POOL_DIR: dir,
     VICE_MCP_HOST: eth0, // the alias this test's rewrite must land on
     VICE_EPOCH_FILE: join(dir, "epoch.json"),
+    // quick-260805-9ha deviation (Rule 3): VICE_MCP_HOST above governs the
+    // DATA-plane alias this test is actually about (the grant url rewrite);
+    // it is ALSO resolveControlTarget()'s default source, which would now
+    // send the CONTROL-plane connect to eth0 too -- but startControlBroker()
+    // below binds its real listener to 127.0.0.1 only, so that connect
+    // would fail with nothing listening on eth0. This override keeps the
+    // control-plane dial on loopback (where the listener actually is)
+    // without touching the eth0 alias the rest of this test exercises.
+    VICE_BROKER_CONTROL_DIAL_HOST: "127.0.0.1",
   });
   let controlServer: NetServer | null = null;
   try {
@@ -2439,6 +2504,10 @@ test("containerize: a host-rooted grant epoch_file is rewritten so epoch drift i
     VICE_MCP_HOST: eth0,
     // Deliberately NOT setting VICE_EPOCH_FILE -- the granted epoch_file
     // must be the only path in play.
+    // quick-260805-9ha deviation (Rule 3): see the sibling loopback-url test
+    // above for why this is needed alongside VICE_MCP_HOST -- the control
+    // listener startControlBroker() binds below is loopback-only.
+    VICE_BROKER_CONTROL_DIAL_HOST: "127.0.0.1",
   });
   let controlServer: NetServer | null = null;
   try {

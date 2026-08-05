@@ -65,6 +65,7 @@ import {
   openBrokerControl,
   type BrokerLivenessResult,
   type BrokerControlSession,
+  type ControlFailureKind,
 } from "./vice-broker-client.ts";
 // The recycle path's own incident record (plan 01.3-01) -- written BEFORE
 // anything is killed (D-17), never through any network call of its own.
@@ -1518,6 +1519,46 @@ function brokerWarmingMessage(elapsedMs: number): string {
   );
 }
 
+/** State: readBrokerLiveness() just classified broker.json as `alive` (a
+ * FRESH heartbeat), yet openBrokerControl() still failed -- a control-plane
+ * CONNECTIVITY failure, never a dead or hung broker. This is the fix for
+ * the exact incident recorded in
+ * .planning/todos/pending/2026-08-04-proxy-reports-a-live-broker-as-stale-blocking-all-emulator-access.md:
+ * `broker.json` is read from the shared filesystem, not over the control
+ * connection, so the freshness computation had a perfectly good timestamp
+ * and would have returned `alive` -- the failure was one layer later, at
+ * the connect (dialing `0.0.0.0`, the broker's own BIND address, from
+ * inside this container). Reporting that connect failure with the
+ * heartbeat/stale-threshold wording sent the reader chasing a threshold
+ * that was never exceeded, costing that session roughly a dozen tool
+ * calls. This message names the address and port instead: from
+ * `opened.target` when the outcome resolved one (every connect-adjacent
+ * failure kind sets it), degrading to the outcome's own `message` for a
+ * kind that never got that far (missing broker.json fields). States
+ * plainly that `broker.json`'s own `control_host` field is the broker's
+ * BIND address -- valid on the host where the broker wrote it, structurally
+ * undialable from inside this container -- so a reader is pointed at the
+ * connectivity problem, never at broker health. Carries NO secret: not
+ * `control_token`, not any other field of the record, only the resolved
+ * target and the fixed prose below. Follows the broker-absent family's own
+ * stated conventions (quotes `brokerHostPath()` purely as a reference, the
+ * shared `ONLY_ROUTE_NOTE`, never a second only-route sentence) -- mirroring
+ * brokerLaunchFailedMessage() above rather than the never-started/
+ * dead-or-hung pair, since (like a launch denial) the broker here is
+ * alive and answering correctly; restarting it would be the wrong fix. */
+function brokerControlUnreachableMessage(opened: { kind: ControlFailureKind; message: string; target?: string }, liveness: BrokerLivenessResult): string {
+  const pidNote = liveness && liveness.pid != null ? ` (pid ${liveness.pid})` : "";
+  const hostRef = brokerHostPath().split("\n")[0];
+  const targetNote = opened.target ?? opened.message;
+  return (
+    `vice-proxy: the on-demand VICE broker${pidNote} (running via the host-side launcher at ${hostRef}) has ` +
+    `a fresh, healthy heartbeat -- this is NOT a dead or hung broker. This proxy could not reach the ` +
+    `control plane at ${targetNote}. broker.json's own control_host field records the broker's BIND ` +
+    `address, valid on the host where the broker wrote it and structurally undialable from inside this ` +
+    `container -- a control-plane connectivity failure, not a broker health problem. ${ONLY_ROUTE_NOTE}`
+  );
+}
+
 // removeRequestFile() (requests/<id>.json cleanup on a denial or a warming
 // timeout) is GONE, not merely unused -- its subject directory ceases to
 // exist under the control-plane acquisition below. There is nothing left to
@@ -2135,11 +2176,25 @@ async function ensureBrokerLease(): Promise<BrokerLeaseResult> {
   const acquireStartedAt = Date.now();
   const opened = await openBrokerControl();
   if (!opened.ok) {
-    // A race (the broker died between the classification above and this
-    // connection attempt) or a refused connection -- either way there is no
-    // session to acquire over. Read as dead-or-hung using the liveness this
-    // call already fetched, rather than re-reading broker.json a third time.
-    return { ok: false, message: brokerDeadOrHungMessage(liveness) };
+    // openBrokerControl() re-classifies liveness from its OWN read of
+    // broker.json before ever connecting -- never_started/stale here means
+    // that SECOND read found a genuine race (the broker died between the
+    // classification above and this one), so both route to their usual two
+    // messages, unchanged. EVERY other kind (unreachable_control_plane,
+    // connect_refused, protocol, broker_gone, ...) is reached only when that
+    // second read agreed the broker is alive -- reading those as
+    // dead-or-hung was the exact mis-attribution this plan closes (see
+    // brokerControlUnreachableMessage()'s own header comment for the full
+    // incident record): a connect failure against a healthy heartbeat is a
+    // control-plane CONNECTIVITY problem, not a broker liveness one, so it
+    // gets its own message naming the address and port instead.
+    if (opened.kind === "never_started") {
+      return { ok: false, message: brokerNeverStartedMessage() };
+    }
+    if (opened.kind === "stale") {
+      return { ok: false, message: brokerDeadOrHungMessage(liveness) };
+    }
+    return { ok: false, message: brokerControlUnreachableMessage(opened, liveness) };
   }
   const session = opened.session;
 
