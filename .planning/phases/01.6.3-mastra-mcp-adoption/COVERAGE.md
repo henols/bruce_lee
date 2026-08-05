@@ -50,3 +50,18 @@ the shipped implementation, 2026-08-05, Plan 01.6.3-03 (per this plan's own must
 shipped rather than what was intended at plan time — see each row's own reason column for the
 specific correction. Every other row (stdio transport shape aside, already updated) still
 accurately describes the shipped code unchanged.*
+
+*Final confirmation, 2026-08-05, Plan 01.6.3-04 (phase close-out): re-read against the fully
+closed-out implementation after Plan 01.6.3-04's Task 1 full-regression run — the complete
+`vice-proxy.test.ts` suite (106/106) and the full `.claude/mcp/vice/` directory suite (434/429/0/5)
+both passed with zero code changes required in this plan, confirming Plan 01.6.3-03's
+re-confirmation still holds byte-for-byte against the final shipped code. No row needed further
+correction. The two costs already on record — `skipLibCheck: true` (tsconfig.json, plan
+01.6.3-02) and the pre-existing, unwidened generic-surface deny-list gap (`tools_call`'s own
+nested `vice_disk_list` argument, Phase 01.4 criterion 3, tracked in
+`.planning/todos/pending/2026-08-05-generic-surface-deny-list-gap-tools-call-nested-vice-disk-list.md`)
+— are carried forward unchanged, not fixed by this plan (out of its own scope) and not worsened
+by it. This matrix is now sealed: every capability row carries a decision, and this footer
+distinguishes planning-time intent (2026-08-02), interim shipped-code correction (2026-08-05,
+Plan 03), and final shipped-and-verified fact (2026-08-05, Plan 04) as three separate, dated
+layers.*
