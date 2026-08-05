@@ -37,7 +37,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { build, HOST_BOUND_ARTIFACTS } from "./build.ts";
+import { build, HOST_BOUND_ARTIFACTS, resolveStagingParent } from "./build.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -222,3 +222,40 @@ test(
     }
   }
 );
+
+// ------------------------------------------------- staging location (walk safety)
+//
+// The atomic-write fix (quick-260804-o09) staged at `dirname(outDir)`, which for
+// the default outDir is `.claude/mcp/vice/` itself. vice-mcp-selector-docs.test.ts's
+// walkFiles() recurses every directory there except node_modules, so a concurrent
+// walk descended into the transient staging dir and died ENOENT when the rename
+// removed it -- one race traded for another. These pin the corrected location.
+
+test("resolveStagingParent(): the DEFAULT outDir stages inside node_modules/.cache -- the one directory the project's recursive walks structurally exclude", () => {
+  const parent = resolveStagingParent(join(HERE, "resources"));
+  assert.equal(parent, join(HERE, "node_modules", ".cache"));
+  // The point is not the path spelling but that it is NOT the walked tree root.
+  assert.notEqual(parent, HERE);
+});
+
+test("resolveStagingParent(): falls back to the adjacent sibling for an outDir on another device, so renameSync() can never throw EXDEV", () => {
+  // /proc is guaranteed to be a different filesystem from the workspace, and
+  // exists on every Linux host this project supports -- a stable way to prove
+  // the device check actually branches rather than always returning the
+  // preferred path.
+  const foreign = "/proc/self";
+  if (statSync(foreign).dev === statSync(HERE).dev) {
+    // Cannot construct the cross-device case on this host; skip rather than
+    // assert something the environment makes untestable.
+    return;
+  }
+  assert.equal(resolveStagingParent(join(foreign, "resources")), foreign);
+});
+
+test("a real default build leaves no .build-tmp-* directory in the walked tree, before or after", () => {
+  const strayBefore = readdirSync(HERE).filter((n) => n.startsWith(".build-tmp-"));
+  assert.deepEqual(strayBefore, [], "precondition: no leaked staging dir from an earlier run");
+  build();
+  const strayAfter = readdirSync(HERE).filter((n) => n.startsWith(".build-tmp-"));
+  assert.deepEqual(strayAfter, [], "a build must not leave a staging dir in the walked tree");
+});

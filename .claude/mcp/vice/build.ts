@@ -19,6 +19,7 @@ import {
   renameSync,
   rmSync,
   writeFileSync,
+  statSync,
 } from "node:fs";
 import { dirname, join, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -127,14 +128,57 @@ export interface BuildOptions {
  * this EXACT code path -- the banner must never exist in two
  * implementations.
  */
+/** Where to stage a build before renaming artifacts into `outDirAbs`.
+ *
+ * Two constraints pull in opposite directions, which is why this is its own
+ * function rather than an inline `join`:
+ *
+ * 1. **Same filesystem as `outDirAbs`.** The atomic-replacement guarantee is a
+ *    `renameSync()` per artifact, and `rename(2)` fails `EXDEV` across mounts.
+ *    That is why the original implementation staged at `dirname(outDirAbs)`.
+ * 2. **Outside any directory a test walks.** Staging at `dirname(outDirAbs)`
+ *    put a transient `.build-tmp-*` inside `.claude/mcp/vice/`, and
+ *    `vice-mcp-selector-docs.test.ts`'s `walkFiles()` recurses through every
+ *    directory there except `node_modules` — so a concurrent walk descended
+ *    into the staging dir and died `ENOENT` when the rename removed it. That
+ *    is a race this very function introduced while fixing a different one
+ *    (quick-260804-o09), and constraint 1 is why the obvious fix of "just move
+ *    it somewhere else" is not obvious.
+ *
+ * `node_modules/.cache/` satisfies both **when the default `outDir` is in
+ * play**: it is under `HERE`, so same-filesystem; it is the one directory that
+ * walk structurally excludes; and `build()` already requires
+ * `node_modules/.bin/tsc` to exist, so it can never be absent when a build can
+ * run at all.
+ *
+ * When a caller passes an `outDir` on a *different* device — `resources-sync`
+ * builds into a scratch dir, which may be another mount — the preferred
+ * location would make every `renameSync()` throw `EXDEV`, so this falls back
+ * to the adjacent sibling. That fallback keeps correctness and gives up only
+ * walk-invisibility, which costs nothing there: no test walks a scratch dir's
+ * parent. Device identity is compared via `statSync().dev` rather than assumed
+ * from the path shape. */
+export function resolveStagingParent(outDirAbs: string): string {
+  const adjacent = dirname(outDirAbs);
+  const preferred = join(HERE, "node_modules", ".cache");
+  try {
+    mkdirSync(preferred, { recursive: true });
+    if (statSync(preferred).dev === statSync(adjacent).dev) return preferred;
+  } catch {
+    // node_modules absent or unwritable -- fall through to the adjacent
+    // sibling, which is where this always used to stage.
+  }
+  return adjacent;
+}
+
 export function build({ outDir = "resources" }: BuildOptions = {}): void {
   const outDirAbs = resolveOutDirAbs(outDir);
-  // Runs first, and MUST: the staging dir below is a sibling of outDirAbs
-  // (dirname(outDirAbs)), and recursive mkdirSync of outDirAbs is what
-  // guarantees that parent directory exists before mkdtempSync needs it.
+  // Runs first, and MUST: when resolveStagingParent() falls back to the
+  // adjacent sibling, recursive mkdirSync of outDirAbs is what guarantees that
+  // parent directory exists before mkdtempSync needs it.
   mkdirSync(outDirAbs, { recursive: true });
 
-  const stagingDir = mkdtempSync(join(dirname(outDirAbs), ".build-tmp-" + process.pid + "-"));
+  const stagingDir = mkdtempSync(join(resolveStagingParent(outDirAbs), ".build-tmp-" + process.pid + "-"));
   try {
     const tscBin = join(HERE, "node_modules", ".bin", "tsc");
     execFileSync(tscBin, ["-p", join(HERE, "tsconfig.build.json"), "--outDir", stagingDir], {
