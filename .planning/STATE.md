@@ -5,16 +5,16 @@ milestone_name: insertion note
 current_phase: 01.6.2.1
 current_phase_name: broker-lifecycle-policy
 status: executing
-stopped_at: Phase 01.6.2.1 executed 6/6 — verification gaps_found (8/9), CR-01 BLOCKER open; build-concurrency flake fixed (quick 260804-o09)
-last_updated: "2026-08-04T18:05:00.000Z"
-last_activity: 2026-08-04
+stopped_at: Phase 01.6.2.1 SEALED 9/9 (CR-01 closed by gap plan 07); emulator access restored and proven live; next 01.6.3
+last_updated: "2026-08-05T10:30:00.000Z"
+last_activity: 2026-08-05
 progress:
   total_phases: 12
-  completed_phases: 5
+  completed_phases: 6
   total_plans: 54
-  completed_plans: 50
+  completed_plans: 51
   percent: 42
-last_activity_desc: Phase 01.6.2.1 plans complete but gaps_found; CR-01 concurrency blocker open
+last_activity_desc: Phase 01.6.2.1 sealed passed 9/9; live emulator access proven end-to-end
 ---
 
 # Project State
