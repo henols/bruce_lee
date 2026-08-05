@@ -418,6 +418,18 @@ and the phase record needs the hunt's denominator. Waves are 1 through 6, one pl
 
 **Risks**: **The cause may be outside this repo.** Criteria 2 and 4 both point at harness or upstream behaviour rather than at `vice-proxy.mjs`, and a phase can end with "identified, not fixable here" as an honest result — but criterion 3 must be closed regardless, because a reachable `vice_disk_list` is a hazard this project has already paid for once. **A green suite is actively misleading here** — 268/268 passing while three tools are uncallable is the shape of the problem, so verification for this phase is a live session call and nothing else.
 
+**Plans**: 5 plans
+
+Plans:
+
+- [ ] 01.4-01-PLAN.md — Tracer: close the generic-dispatch deny-list gap (criterion 3) — `tools_list` first, then `tools_call`/`initialize`/`notifications_initialized`, with a live before/after refusal proof
+- [ ] 01.4-02-PLAN.md — Criteria 2 and 4: a real `gsd-executor` dispatch self-reports its own `mcp__vice__*` tool surface; the bypass route is named in writing against today's live evidence
+- [ ] 01.4-03-PLAN.md — Criterion 5: rewrite every agent-visible proxy message per the existing de-architecture spec, plus a permanent regression guard
+- [ ] 01.4-04-PLAN.md — Criterion 1's remaining two live proofs: a deliberate `vice_recycle` and a deliberately-produced oversized result exercising `vice_result_continue`
+- [ ] 01.4-05-PLAN.md — Discharges Phase 01.8's HV-06: walks all 35 `CF-01.4-NN` carry-forward rows in `01.6.2-VALIDATION.md` to a real disposition (discharged / blocked-on-HV-08 / permanently-unverifiable-from-container)
+
+**Wave 1** — 01.4-01 · **Wave 2** — 01.4-02 ∥ 01.4-03 (disjoint files; both depend on 01.4-01) · **Wave 3** — 01.4-04 (depends on 01.4-02, 01.4-03) · **Wave 4** — 01.4-05 (depends on 01.4-04)
+
 ---
 
 ### Phase 01.5: Session and Broker Survivability — **ABSORBED INTO PHASE 01.6.2**
