@@ -5,16 +5,16 @@ milestone_name: insertion note
 current_phase: 01.6.2.1
 current_phase_name: broker-lifecycle-policy
 status: executing
-stopped_at: Phase 01.6.2.1 SEALED 9/9 (CR-01 closed by gap plan 07); emulator access restored and proven live; next 01.6.3
+stopped_at: 01.6.2.1 SEALED 9/9; 01.6.3 waves 1-3 merged (mastra installed, wire layer swapped, all tools registered); wave 4 close-out in flight
 last_updated: "2026-08-05T10:30:00.000Z"
 last_activity: 2026-08-05
 progress:
   total_phases: 12
   completed_phases: 6
   total_plans: 54
-  completed_plans: 51
+  completed_plans: 54
   percent: 42
-last_activity_desc: Phase 01.6.2.1 sealed passed 9/9; live emulator access proven end-to-end
+last_activity_desc: 01.6.3 waves 1-3 merged at 434/429/0 fail; first runtime dependency in the repo
 ---
 
 # Project State
