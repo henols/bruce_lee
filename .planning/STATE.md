@@ -5,16 +5,16 @@ milestone_name: insertion note
 current_phase: 01.6.2.1
 current_phase_name: broker-lifecycle-policy
 status: executing
-stopped_at: v1.1 phase work COMPLETE + all no-restart-needed fixes landed. Host tools/ REDEPLOYED (restart alone now suffices). Remaining: HV-05, HV-08 (restart only), HV-09
+stopped_at: 01.4 SEALED 5/5. HV-08 and HV-09 both CLOSED live. Only HV-05 (honesty gate) remains developer-owned. Next: revisit the 11 previously-deploy-blocked carry-forward rows
 last_updated: "2026-08-05T10:30:00.000Z"
 last_activity: 2026-08-05
 progress:
   total_phases: 12
-  completed_phases: 8
+  completed_phases: 9
   total_plans: 54
   completed_plans: 63
   percent: 42
-last_activity_desc: redeployed host tools/, fixed epoch sampling + banner flake + installer stale-deploy default; suite 446/441/0
+last_activity_desc: 01.4 sealed 5/5; post-01.6.2.1 broker running (warm_floor=1); HV-08/HV-09 closed
 ---
 
 # Project State
