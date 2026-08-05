@@ -61,3 +61,37 @@ destabilising the existing grant-time-probe-failure log-ordering test for a boun
 currently bite at this project's own default warm floor. Whoever next configures a warm floor above 1
 (the one circumstance where this bound actually bites) has both fix options and the reasoning already
 written down here, rather than just the bare finding.
+
+## Resolution (2026-08-05, quick task 260805)
+
+**Decided: fix option 1** ("make the kill fire-and-forget, matching `handleRelease()`'s own
+posture") over option 2 (capping how many failed candidates a walk will wait through). Option 1
+matches an idiom already local to this file (`handleRelease()`'s
+`verifiedKill(...).catch(() => {})` a few hundred lines below `selectWarmInstance()`) rather than
+inventing a new bound, and removes the wait entirely instead of merely capping it.
+
+Implementation (`selectWarmInstance()`, `vice-broker.mts`): the drop (`markDeliberateDeath()` +
+`state.instances.delete()`) still happens synchronously, in the same tick as the failed probe,
+strictly BEFORE `deps.kill(...)` is even invoked — this is exactly what CR-01's identity recheck
+depends on, and it is unchanged by this fix. Only the kill's own settlement is decoupled: `deps.kill(...)`
+is invoked and its promise attached to a `.then()`/`.catch()` chain (never awaited by the walk), so
+the walk moves on to the next candidate immediately. The grant-time-probe-failure log line is split
+in two: an immediate line (no kill stage, since nothing here waits for one) logged right after the
+drop, and a second line — logged once the kill's promise actually settles — naming the resolved
+kill stage, for the same log-file-reconstructs-an-incident property D-07 already required.
+
+Verified: the pre-existing CR-01 regression test (`vice-broker-acquire.test.ts`) stays green
+unmodified — it passes for the SAME reason as before (the drop's ordering relative to the kill
+never changed), not a different one. Two new tests prove the timing property directly with a
+deferred kill promise: one shows `handleAcquire()` settles into a cold-launch grant while the
+kill's own promise is still pending (the actual regression this fix closes), the other shows the
+settled-kill log line only appears once that promise is later resolved. The pre-existing
+log-wording test was updated to match the new (split) message shape rather than left to rot.
+
+The structural single-grant-recording-call-site gate (`broker-launch.test.ts`) and the identity-
+verified-kill discipline (`deps.kill`, unchanged — never replaced by a bare, unverified signal) are
+both untouched by this fix.
+
+**Evidence:** live `node --test` runs of `vice-broker-acquire.test.ts` and the full `.claude/mcp/vice/`
+suite, before and after; a hand-read diff of the regenerated `resources/vice-broker.mjs` against the
+source edit. **Confidence:** HIGH.

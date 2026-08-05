@@ -459,10 +459,105 @@ test("handleAcquire: the grant-time-probe-failure log line is distinct from brok
   assert.ok(failureLine, `expected a grant-time-probe-failure log line, got: ${JSON.stringify(logs)}`);
   assert.match(failureLine!, /port 6600/);
   assert.match(failureLine!, /pid 5001/);
-  assert.match(failureLine!, /dropped the record and identity-verified-killed the pid/);
+  // WR-02: the kill is fire-and-forget, so this immediate line can no
+  // longer name a resolved kill stage synchronously -- it only reports that
+  // a kill was kicked off, not awaited by the walk.
+  assert.match(failureLine!, /kicked off an identity-verified kill of the pid/);
+  assert.doesNotMatch(
+    failureLine!,
+    /kill stage/,
+    "the immediate drop line must not name a kill stage -- nothing here waits for deps.kill(...) to resolve (WR-02)",
+  );
   for (const line of logs) {
     assert.doesNotMatch(line, /shutdown complete/, "the grant-time-probe-failure line must never read like the shutdown kill's own line");
   }
+});
+
+// ---------------------------------------------------------------------------
+// WR-02 (.planning/todos/pending/2026-08-05-wr-02-*, decision: fix now): the
+// grant-time probe failure's kill must be fire-and-forget, matching
+// handleRelease()'s own posture, so the acquiring request never waits up to
+// VICE_BROKER_KILL_WAIT_S per dead candidate before the walk can move on.
+// These two tests prove the timing property directly, with a deferred kill
+// promise this test controls -- not merely that the OUTCOME is still
+// correct (the tests above already prove that), but that handleAcquire()
+// genuinely never awaited deps.kill(...)'s own resolution.
+// ---------------------------------------------------------------------------
+
+test("handleAcquire: WR-02 -- falls through to a cold launch without ever awaiting the dropped candidate's kill", async () => {
+  const { handleAcquire } = await loadBrokerModule();
+  const state = createState();
+  state.instances.set(6600, makeReadyInstance({ port: 6600, pid: 5001, expectedIdentity: "x64sc" }));
+
+  const order: string[] = [];
+  let resolveKill!: (stage: KillStage) => void;
+  const killDeferred = new Promise<KillStage>((resolve) => {
+    resolveKill = resolve;
+  });
+
+  const outcome = await handleAcquire("req-wr02a", "/tmp/vice-broker-acquire-test", state, {
+    probe: () => Promise.resolve(false),
+    kill: () => {
+      order.push("kill-called");
+      return killDeferred;
+    },
+    buildColdSpawnFactory: stubColdSpawnFactory([]),
+  });
+  order.push("acquire-settled");
+
+  assert.equal(outcome.ok, true, `expected a successful cold-launch grant, got ${JSON.stringify(outcome)}`);
+  // If selectWarmInstance() still awaited deps.kill(...) (the pre-fix
+  // shape), handleAcquire()'s own await chain could not possibly settle
+  // before killDeferred does -- killDeferred is still PENDING at this
+  // point, proven by "acquire-settled" landing in `order` while the kill's
+  // own promise remains unresolved.
+  assert.deepEqual(
+    order,
+    ["kill-called", "acquire-settled"],
+    "the acquire must settle while the kill promise is still pending, proving the walk never awaited it",
+  );
+
+  // Resolve it now, purely so this test leaves no dangling unhandled
+  // rejection warning behind for the next test in the file.
+  resolveKill("sigterm");
+  await Promise.resolve();
+  await Promise.resolve();
+});
+
+test("handleAcquire: WR-02 -- once the fire-and-forget kill settles, a separate log line names the resolved kill stage", async () => {
+  const { handleAcquire } = await loadBrokerModule();
+  const state = createState();
+  state.instances.set(6600, makeReadyInstance({ port: 6600, pid: 5001, expectedIdentity: "x64sc" }));
+
+  const logs: string[] = [];
+  let resolveKill!: (stage: KillStage) => void;
+  const killDeferred = new Promise<KillStage>((resolve) => {
+    resolveKill = resolve;
+  });
+
+  const outcome = await handleAcquire("req-wr02b", "/tmp/vice-broker-acquire-test", state, {
+    probe: () => Promise.resolve(false),
+    kill: () => killDeferred,
+    buildColdSpawnFactory: stubColdSpawnFactory([]),
+    log: (line: string) => logs.push(line),
+  });
+  assert.equal(outcome.ok, true);
+
+  assert.ok(
+    !logs.some((l) => /kill stage/.test(l)),
+    "no settled-kill line must exist yet -- the kill's own promise has not resolved",
+  );
+
+  resolveKill("sigkill");
+  // Flush the microtask queue so the fire-and-forget .then() callback runs.
+  await Promise.resolve();
+  await Promise.resolve();
+
+  const settledLine = logs.find((l) => /kill stage/.test(l));
+  assert.ok(settledLine, `expected a settled-kill log line once the kill resolved, got: ${JSON.stringify(logs)}`);
+  assert.match(settledLine!, /port 6600/);
+  assert.match(settledLine!, /pid 5001/);
+  assert.match(settledLine!, /kill stage: sigkill/);
 });
 
 // ---------------------------------------------------------------------------
