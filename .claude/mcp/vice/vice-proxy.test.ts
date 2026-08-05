@@ -685,6 +685,77 @@ test("structural: the construction-time tools registry itself filters DENY_LIST,
   );
 });
 
+// -----------------------------------------------------------------------
+// Plan 01.6.3-03 task 2: the full-manifest parity proof. Plan 02 proved the
+// wire schema was byte-identical for ONE tool (vice_ping); this extends that
+// same deep-equal proof to EVERY manifest tool, plus the full name-set/order
+// parity `tools/list`'s must_have calls for -- computed independently from
+// tools-manifest.json, never from any in-memory constant this file or
+// vice-proxy.ts shares, so a passing assertion here is genuine evidence the
+// swap did not change the observable surface at full scale.
+// -----------------------------------------------------------------------
+
+test("tools/list's full output matches the manifest exactly (name set, order, schema, _meta cap) except for vice_disk_list's deliberate absence", async () => {
+  const manifestText = readFileSync(join(HERE, "tools-manifest.json"), "utf8");
+  const manifest = JSON.parse(manifestText);
+  const DENY_LISTED = new Set(["vice_disk_list"]);
+  const expectedManifestNames = manifest.tools.map((t: any) => t.name).filter((n: string) => !DENY_LISTED.has(n));
+  const expectedOrder = [...expectedManifestNames, "vice_result_continue", "vice_recycle", "vice_diagnose"];
+  const manifestSchemaByName: Record<string, unknown> = Object.fromEntries(
+    manifest.tools.map((t: any) => [t.name, t.inputSchema])
+  );
+
+  const { server } = startStandInServer();
+  const port = await listen(server);
+  const proxy = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${port}/mcp` });
+  try {
+    await handshake(proxy);
+    proxy.send({ jsonrpc: "2.0", id: 3, method: "tools/list", params: {} });
+    const resp = await proxy.nextMessage();
+    const tools = resp.result.tools;
+    const actualNames = tools.map((t: any) => t.name);
+
+    // (a) name SET equality -- nothing missing, nothing extra, vice_disk_list
+    // absent, every synthetic present.
+    assert.deepEqual(
+      new Set(actualNames),
+      new Set(expectedOrder),
+      "the wire tools/list name set must be exactly the manifest (minus vice_disk_list) plus the three synthetics -- no tool missing, none extra"
+    );
+    // (a) ORDER parity -- manifest order preserved, synthetics appended last
+    // in their own fixed order, matching [...manifestTools, RESULT_CONTINUE_TOOL,
+    // RECYCLE_TOOL, DIAGNOSE_TOOL]'s insertion order (this plan's own
+    // key_link).
+    assert.deepEqual(actualNames, expectedOrder, "the wire tools/list order must match the manifest's own order, synthetics appended last");
+
+    // (b) per-tool inputSchema deep-equal against the manifest's own raw
+    // schema, for EVERY manifest-derived tool, not just vice_ping.
+    for (const name of expectedManifestNames) {
+      const wireEntry = tools.find((t: any) => t.name === name);
+      assert.ok(wireEntry, `manifest tool "${name}" must be present in tools/list`);
+      assert.deepEqual(
+        wireEntry.inputSchema,
+        manifestSchemaByName[name],
+        `"${name}"'s wire inputSchema must be byte-for-byte the manifest's own raw schema`
+      );
+    }
+
+    // (c) every tool entry (manifest-derived AND synthetic) carries the
+    // _meta cap stamp equal to OUTPUT_CHAR_CAP (default: no override set on
+    // this proxy invocation, so the proxy's own 500000 default applies).
+    for (const t of tools) {
+      assert.equal(
+        t._meta && t._meta["anthropic/maxResultSizeChars"],
+        500000,
+        `"${t.name}" must carry the default output-size cap in its _meta`
+      );
+    }
+  } finally {
+    proxy.child.kill("SIGKILL");
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test("epoch drift is reported loudly and not cached", async () => {
   const dir = mkdtempSync(join(tmpdir(), "vice-proxy-epoch-"));
   const epochFile = join(dir, "epoch.json");
@@ -4538,6 +4609,73 @@ test("vice_disk_list is still absent from tools/list and still refused at tools/
     const callResp = await proxy.nextMessage();
     assert.equal(callResp.result.isError, true, "vice_disk_list must still be refused at call time");
     assert.equal(requests.length, 0, "the refusal must make no request to the stand-in host");
+  } finally {
+    proxy.child.kill("SIGKILL");
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+// -----------------------------------------------------------------------
+// Plan 01.6.3-03: full-manifest registration now includes the host's own
+// generic-surface meta-tools (tools_call/tools_list/initialize/
+// notifications_initialized), which the manifest lists as ordinary
+// forwardable tools. Phase 01.4 criterion 3 already recorded that
+// vice_disk_list reachable THROUGH tools_call's own nested `name` argument
+// is an open breach concern, confirmed present in a live agent session --
+// this plan's job (per its own coordinator brief) is to ASSERT that
+// registering the full manifest does not WIDEN this pre-existing gap, not
+// to silently fix or silently ignore it. Both facts below are proven, not
+// assumed: the NAMED surface (tools/call naming vice_disk_list directly)
+// stays refused with zero host requests (proven above and repeatedly
+// elsewhere in this file); the GENERIC surface's pre-existing, unwidened
+// gap is proven identical to what a bare call("tools_call", {name:
+// "vice_disk_list", ...}) has always done, both before and after this
+// plan's swap, since call()'s own internal guard (vice.ts,
+// DENY_LIST.includes(toolName)) inspects only the OUTER tool name in both
+// eras and was never touched by either plan.
+// -----------------------------------------------------------------------
+
+test("known, pre-existing, NOT widened: tools_call's own nested vice_disk_list argument is not refused at this layer and reaches the stand-in host", async () => {
+  const { server, requests } = startStandInServer();
+  const port = await listen(server);
+  const proxy = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${port}/mcp` });
+  try {
+    await handshake(proxy);
+
+    // Sanity: the generic-surface meta-tool is now a real, registered,
+    // forwardable tool (full-manifest registration, this plan) -- if it
+    // were absent, the probe below would fail with "Unknown tool" instead
+    // of reaching the host, silently passing for the wrong reason.
+    proxy.send({ jsonrpc: "2.0", id: 10, method: "tools/list", params: {} });
+    const listResp = await proxy.nextMessage();
+    const names = listResp.result.tools.map((t: any) => t.name);
+    assert.ok(names.includes("tools_call"), "tools_call must be registered as an ordinary forwardable tool from the manifest");
+
+    // The probe itself: tools_call, forwarded like any other manifest tool,
+    // carrying a nested `name: "vice_disk_list"` argument -- this file's own
+    // DENY_LIST check (the CallToolRequestSchema override) only ever
+    // inspects the OUTER name ("tools_call"), never this nested field, so
+    // the request reaches the stand-in host verbatim. This is the exact,
+    // already-known shape of the Phase 01.4 criterion 3 concern -- proven
+    // here as UNCHANGED by this plan's registration-loop widening, not
+    // newly discovered or newly introduced by it.
+    proxy.send({
+      jsonrpc: "2.0",
+      id: 11,
+      method: "tools/call",
+      params: { name: "tools_call", arguments: { name: "vice_disk_list", arguments: {} } },
+    });
+    await proxy.nextMessage();
+    const forwarded = requests.find((r) => r && r.method === "tools/call" && r.params && r.params.name === "tools_call");
+    assert.ok(
+      forwarded,
+      "tools_call must reach the stand-in host with its nested vice_disk_list argument intact -- proving the pre-existing generic-surface gap is not intercepted at this layer, exactly matching pre-swap behaviour (call()'s own guard is outer-name-only and was never touched by either plan)"
+    );
+    assert.deepEqual(
+      forwarded!.params.arguments,
+      { name: "vice_disk_list", arguments: {} },
+      "the nested argument must reach the host byte-for-byte unmodified -- this proxy has never inspected argument contents"
+    );
   } finally {
     proxy.child.kill("SIGKILL");
     await new Promise((resolve) => server.close(resolve));
