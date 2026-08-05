@@ -351,14 +351,33 @@ export interface HandleAcquireDeps {
  * outright, so a released instance is structurally absent from
  * `state.instances` and can never be a candidate.
  *
- * A candidate whose grant-time probe FAILS is dropped and identity-
- * verified-killed before the walk continues to the next candidate --
- * read-a-record-is-bookkeeping, a probe-that-answers-now is evidence (the
- * todo's own wording this decision comes from). The marker is set BEFORE
- * any signal reaches the child (markDeliberateDeath()'s own contract), with
- * a FALSE respawn-after-kill answer -- this arm never wants a replacement
- * on the SAME port; a replacement, if any, comes from either the next
- * candidate in this same walk or the caller's own cold-launch fall-through.
+ * A candidate whose grant-time probe FAILS is dropped -- de-registered from
+ * `state.instances` -- and identity-verified-killed BEFORE the walk
+ * continues to the next candidate, but per WR-02
+ * (`.planning/todos/pending/2026-08-05-wr-02-*`, decision: fix now rather
+ * than defer further) the kill itself is fire-and-forget, matching
+ * handleRelease()'s own posture a few hundred lines below
+ * (`verifiedKill(...).catch(...)`, never awaited by that call site either):
+ * the acquiring request must not wait up to `VICE_BROKER_KILL_WAIT_S`
+ * (default 5s) of SIGTERM-then-poll-then-SIGKILL PER DEAD CANDIDATE before
+ * the walk can move on -- that wait is exactly what turns a warm floor's
+ * fast, in-memory grant into a multi-second serial teardown on a single
+ * request's hot path once the warm floor is configured above its default
+ * of 1 (WR-02's own bounding condition). The drop -- `markDeliberateDeath()`
+ * plus `state.instances.delete()` -- still happens SYNCHRONOUSLY, in the
+ * same tick as the probe failure, before `deps.kill(...)` is even invoked;
+ * only the kill's own SETTLEMENT is decoupled from this walk. This is
+ * WR-02's fix option 1, not option 2 (capping how many failed candidates a
+ * single acquire will wait through): option 1 matches an idiom the file
+ * already uses elsewhere rather than inventing a new bound, and removes the
+ * wait entirely rather than merely capping it. The grant-time-probe-failure
+ * log line's own ordering is decoupled accordingly (see below) -- it can no
+ * longer name the kill's resolved stage synchronously, since nothing here
+ * waits for it to resolve. The marker is set BEFORE any signal reaches the
+ * child (markDeliberateDeath()'s own contract), with a FALSE
+ * respawn-after-kill answer -- this arm never wants a replacement on the
+ * SAME port; a replacement, if any, comes from either the next candidate in
+ * this same walk or the caller's own cold-launch fall-through.
  *
  * Re-checks `record.state === "ready"` AND map membership by identity
  * immediately after every `await` (the probe call itself) and BEFORE ever
@@ -403,17 +422,45 @@ async function selectWarmInstance(
       return record;
     }
 
+    // Drop and de-register FIRST, synchronously, before the kill is even
+    // invoked -- this is what CR-01's identity recheck above depends on:
+    // the record must already be gone from state.instances by the time a
+    // concurrent sibling's own probe on this same candidate resolves.
+    // WR-02 only changes what happens to the kill's own PROMISE next, never
+    // this ordering.
     markDeliberateDeath(record, false);
     state.instances.delete(record.port);
-    const killStage = await deps.kill({ pid: record.pid, expectedIdentity: record.expectedIdentity });
     // Distinct wording from shutdown()'s own "shutdown complete" line
     // (broker-kill.mts) and from handleRecycleForRealBroker's own log-free
     // path -- D-07's standing constraint that a lifecycle decision must be
     // reconstructable from the log after an incident (both 2026-08-01 and
-    // 2026-08-02 were diagnosed from broker log lines).
+    // 2026-08-02 were diagnosed from broker log lines). Logged BEFORE the
+    // kill settles (WR-02): the walk does not wait for deps.kill(...) to
+    // resolve, so this line can no longer name the kill's resolved stage --
+    // that gets its own, separately-logged line once the kill settles,
+    // below.
     deps.log(
-      `vice-broker: grant-time probe failed for port ${record.port} (pid ${record.pid ?? "null"}) -- dropped the record and identity-verified-killed the pid (kill stage: ${killStage})`,
+      `vice-broker: grant-time probe failed for port ${record.port} (pid ${record.pid ?? "null"}) -- dropped the record and kicked off an identity-verified kill of the pid (not awaited by the acquire walk, WR-02)`,
     );
+    // Fire-and-forget, matching handleRelease()'s own posture
+    // (`verifiedKill(...).catch(...)`, a few hundred lines below in this
+    // same file) -- the acquire walk moves on to the next candidate (or
+    // returns null to the cold-launch fall-through) without waiting up to
+    // VICE_BROKER_KILL_WAIT_S per dead candidate. Still identity-verified:
+    // this is the SAME deps.kill, never replaced by a bare, unverified
+    // signal. The settlement is only OBSERVED asynchronously, via its own
+    // log line, never awaited.
+    void deps
+      .kill({ pid: record.pid, expectedIdentity: record.expectedIdentity })
+      .then((killStage) => {
+        deps.log(
+          `vice-broker: grant-time-probe-failure kill for port ${record.port} (pid ${record.pid ?? "null"}) settled (kill stage: ${killStage})`,
+        );
+      })
+      .catch(() => {
+        // best-effort; nothing further to report on this path, matching
+        // handleRelease()'s own posture at its own verifiedKill(...).catch(...) call site.
+      });
   }
   return null;
 }
