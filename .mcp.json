@@ -3,7 +3,10 @@
     "vice": {
       "command": "node",
       "args": [".claude/mcp/vice/vice-proxy.ts"],
-      "timeout": 150000
+      "timeout": 150000,
+      "env": {
+        "MASTRA_TELEMETRY_DISABLED": "1"
+      }
     }
   }
 }

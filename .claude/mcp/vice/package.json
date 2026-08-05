@@ -7,6 +7,10 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "build": "node build.ts"
   },
+  "dependencies": {
+    "@mastra/mcp": "1.15.0",
+    "@mastra/core": "1.55.0"
+  },
   "devDependencies": {
     "@types/node": "24.13.3",
     "typescript": "7.0.2"
