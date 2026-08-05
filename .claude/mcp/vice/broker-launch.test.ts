@@ -223,6 +223,39 @@ test("structural: vice-broker.mts records a grant in exactly one place, and its 
   );
 });
 
+// ===========================================================================
+// 01.6.2.1-07-PLAN.md, Task 3: WR-04's structural anti-regression gate --
+// the warm-launch log-path variable must no longer sit at module scope
+// (the cross-call-sharing risk the review names), and must instead be
+// declared, indented, inside maintainWarmFloorForRealBroker()'s own body --
+// proving it MOVED rather than merely vanished.
+// ===========================================================================
+
+test("structural: vice-broker.mts's warm-launch log-path variable is declared inside maintainWarmFloorForRealBroker()'s own body, not at module scope (WR-04)", () => {
+  const brokerSource = stripComments(readFileSync(join(HERE, "vice-broker.mts"), "utf8"));
+
+  // The identifier must NOT be declared at module scope (column zero).
+  const moduleScopeDeclaration = /^let\s+lastWarmLaunchLogRelPath\b/m.test(brokerSource);
+  assert.equal(
+    moduleScopeDeclaration,
+    false,
+    "the warm-launch log-path variable must no longer be declared at module scope (column zero) -- WR-04's cross-call-sharing risk",
+  );
+
+  // The identifier must still exist, indented, inside a function body.
+  const indentedDeclaration = /^[ \t]+let\s+lastWarmLaunchLogRelPath\b/m.test(brokerSource);
+  assert.ok(
+    indentedDeclaration,
+    "the warm-launch log-path variable must still be declared, indented, inside maintainWarmFloorForRealBroker()'s own body -- proving it MOVED rather than merely vanished",
+  );
+
+  // Sanity: the declaration, the write site and the read site all still
+  // reference the SAME identifier -- a regression that renamed rather than
+  // relocated it would otherwise pass the two checks above vacuously.
+  const referenceCount = (brokerSource.match(/\blastWarmLaunchLogRelPath\b/g) ?? []).length;
+  assert.ok(referenceCount >= 3, `expected at least 3 references (declaration, write, read) to lastWarmLaunchLogRelPath, found ${referenceCount}`);
+});
+
 function makeInstance(overrides: Partial<InstanceRecord> = {}): InstanceRecord {
   return {
     port: 6600,
@@ -1330,6 +1363,54 @@ test("superviseChild: a recycled instance that was granted comes back granted, n
 
     const after = deps.state.instances.get(6600)!;
     assert.equal(after.state, "granted", "a recycled granted instance must come back granted, never launching or ready");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// 01.6.2.1-07-PLAN.md, Task 2 (T-01.6.2.1-28): the recycle branch keeps the
+// matching grant's own recorded pid in sync with the respawned record's pid
+// -- without this, vice-broker.mts's handleRelease() own grant-pid identity
+// check would misfire against a legitimate recycle (the ONE case where the
+// SAME grant continues to own a DIFFERENT pid on the SAME port) and refuse
+// to tear down the very instance the grant now legitimately owns.
+test("superviseChild: a recycle updates the matching grant's own recorded pid to the respawned record's pid, not the pre-recycle pid", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "supervise-recycle-pid-sync-"));
+  try {
+    const spawnedChildren: ChildProcess[] = [];
+    const deps = makeSuperviseDeps(dir, {
+      spawn: () => {
+        const child = fakeChild();
+        spawnedChildren.push(child);
+        return child;
+      },
+    });
+
+    const record = superviseChild("acquire", 6600, deps);
+    assert.ok(record, "the initial launch must succeed");
+    const preRecyclePid = record!.pid as number;
+
+    // Seed a grant naming the PRE-recycle pid, exactly like
+    // vice-broker.mts's handleAcquire() would have recorded at grant time.
+    deps.state.grants.set("req-recycle-sync", { id: "req-recycle-sync", port: 6600, grantedAt: Date.now(), pid: preRecyclePid });
+
+    const before = deps.state.instances.get(6600)!;
+    before.state = "granted";
+    before.deliberateKill = true;
+    before.respawnAfterKill = true;
+
+    (spawnedChildren[0] as unknown as EventEmitter).emit("exit", null, "SIGTERM");
+    // The SAME waitFor(epoch advance) idiom the existing recycle tests
+    // already use.
+    await waitFor(() => (deps.state.instances.get(6600)?.epoch === 2 ? true : null));
+
+    const after = deps.state.instances.get(6600)!;
+    assert.notEqual(after.pid, preRecyclePid, "the respawned record must carry a FRESH pid, distinct from the pre-recycle pid");
+
+    const grant = deps.state.grants.get("req-recycle-sync")!;
+    assert.ok(grant, "the grant must still be present -- a recycle never touches grant bookkeeping beyond its pid field");
+    assert.equal(grant.pid, after.pid, "the grant's own recorded pid must now equal the RESPAWNED record's pid");
+    assert.notEqual(grant.pid, preRecyclePid, "the grant's own recorded pid must no longer equal the pre-recycle pid");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

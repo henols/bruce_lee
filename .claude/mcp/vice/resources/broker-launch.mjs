@@ -504,6 +504,19 @@ async function handleExit(reason, port, deps) {
             if (respawned && preKillState === "granted") {
                 respawned.state = "granted";
             }
+            // Keep the matching grant's own recorded pid in sync with the
+            // respawned record's pid -- the ONE legitimate case where the SAME
+            // grant continues to own a DIFFERENT pid on the SAME port. Without
+            // this, vice-broker.mts's handleRelease() own grant-pid identity
+            // check (T-01.6.2.1-28) would misfire and refuse to tear down the
+            // very instance the grant now legitimately owns.
+            if (respawned) {
+                for (const grant of deps.state.grants.values()) {
+                    if (grant.port === port) {
+                        grant.pid = respawned.pid;
+                    }
+                }
+            }
             deps.onOutcome?.("recycled", port);
             return;
         }

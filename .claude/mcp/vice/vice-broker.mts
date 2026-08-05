@@ -360,14 +360,23 @@ export interface HandleAcquireDeps {
  * on the SAME port; a replacement, if any, comes from either the next
  * candidate in this same walk or the caller's own cold-launch fall-through.
  *
- * Re-checks `record.state === "ready"` immediately after every `await` (the
- * probe call itself) and BEFORE ever treating a probe-live candidate as the
- * winner -- this is what makes the caller's own "no await between selection
- * and the grant-recording step" property (T-01.6.2.1-03) actually hold
- * under two concurrent acquires: a candidate's own probe response cannot
- * change because a sibling acquire granted it first, but its RECORDED state
- * does, the instant that sibling's synchronous grant step runs -- and that
- * recorded state is the only signal this function is willing to trust. */
+ * Re-checks `record.state === "ready"` AND map membership by identity
+ * immediately after every `await` (the probe call itself) and BEFORE ever
+ * treating a probe-live candidate as the winner -- this is what makes the
+ * caller's own "no await between selection and the grant-recording step"
+ * property (T-01.6.2.1-03) actually hold under two concurrent acquires. A
+ * candidate's own probe response cannot change because a sibling acquire
+ * granted it first, but its RECORDED state does, the instant that sibling's
+ * synchronous grant step runs -- recorded state alone catches that case.
+ * It does NOT catch a sibling that has already DROPPED this exact candidate
+ * (a failed grant-time probe: markDeliberateDeath() + state.instances.delete(),
+ * which never touches record.state -- the drop path a few lines below) --
+ * 01.6.2.1-VERIFICATION.md's CR-01 finding, re-confirmed here: a state-only
+ * recheck is blind to a concurrent drop, letting a second caller's stale
+ * object reference win a grant for a record that is no longer in
+ * state.instances at all, orphaning the grant. Rechecking
+ * `state.instances.get(record.port) === record` (identity, not merely a
+ * port-number lookup) closes that case too. */
 async function selectWarmInstance(
   state: BrokerState,
   deps: {
@@ -381,9 +390,14 @@ async function selectWarmInstance(
 
     const isReady = await deps.probe(record.port);
 
-    // Claimed by a concurrent acquire while this probe was in flight -- not
-    // a candidate any more, and never a failure to log or kill over.
-    if (record.state !== "ready") continue;
+    // A sibling acquire may have granted OR dropped this exact candidate
+    // while this probe was in flight. "Granted" changes record.state;
+    // "dropped" removes the record from state.instances outright and never
+    // touches record.state -- so map membership must be rechecked too, not
+    // merely the state field (CR-01, 01.6.2.1-REVIEW.md/01.6.2.1-VERIFICATION.md).
+    if (record.state !== "ready" || state.instances.get(record.port) !== record) {
+      continue;
+    }
 
     if (isReady) {
       return record;
@@ -408,23 +422,28 @@ async function selectWarmInstance(
  * obtaining one, not the only one (this task's own assumption-delta
  * decision: "resolve a grantable instance" is now the primary operation).
  * The warm-instance selection arm (selectWarmInstance(), P-01) runs BEFORE
- * the cold-launch arm; `atCapacity()` runs before EITHER arm, so a full host
- * refuses before ever walking the pool or touching the port allocator.
- * Both arms converge on exactly ONE `state.grants.set()` call -- load-
- * bearing for task 2's structural anti-regression gate, which counts it --
- * fed by whichever arm produced a record. Answers the full discriminated
- * AcquireOutcome (plan 05): `at_capacity` when the instance ceiling is
- * already reached, `no_free_port`/`launch_in_flight` passed straight
- * through from acquirePortAndLaunch()'s own typed failure (the cold arm
- * only), and `internal` only for a genuine, otherwise-unclassified fault. A
+ * the cold-launch arm; `atCapacity()` gates ONLY the cold-launch arm --
+ * checked only once selectWarmInstance() has already answered `null` (no
+ * probe-live candidate available) -- NOT before either arm (WR-01,
+ * 01.6.2.1-REVIEW.md). A full host still refuses a fresh cold launch before
+ * ever touching the port allocator, but a ready, probe-live warm candidate
+ * is grantable even when the ceiling is already reached: granting it
+ * creates no NEW instance and does not raise `countTotal()`, so refusing to
+ * hand out an already-existing idle one was a real availability bug, not a
+ * correct interpretation of the ceiling's own purpose (bounding concurrent
+ * emulator *processes*, not bounding how many of those processes may be
+ * *handed out*). Both arms converge on exactly ONE `state.grants.set()`
+ * call -- load-bearing for task 2's structural anti-regression gate, which
+ * counts it -- fed by whichever arm produced a record. Answers the full
+ * discriminated AcquireOutcome (plan 05): `at_capacity` when the ceiling is
+ * already reached AND no warm candidate could be served,
+ * `no_free_port`/`launch_in_flight` passed straight through from
+ * acquirePortAndLaunch()'s own typed failure (the cold arm only), and
+ * `internal` only for a genuine, otherwise-unclassified fault. A
  * `launch_in_flight` outcome is NOT a control-plane error -- broker-
  * control.mts's own attemptAcquire()/enqueueAcquire() queue the request and
  * retry it later rather than refusing it. */
 export async function handleAcquire(requestId: string, stateDir: string, state: BrokerState, deps: HandleAcquireDeps = {}): Promise<AcquireOutcome> {
-  if (atCapacity(state)) {
-    return { ok: false, reason: "at_capacity" };
-  }
-
   const probe = deps.probe ?? ((port: number) => probeReady(port));
   // Textually a verifiedKill( call site, not merely a reference -- reused
   // UNCHANGED from broker-kill.mts (Phase 01.6.2 criterion 6), never
@@ -437,6 +456,8 @@ export async function handleAcquire(requestId: string, stateDir: string, state: 
   let record: InstanceRecord;
   if (winner) {
     record = winner;
+  } else if (atCapacity(state)) {
+    return { ok: false, reason: "at_capacity" };
   } else {
     // acquirePortAndLaunch() holds the single in_flight owner across its own
     // async port allocation (not merely tryLaunchOne()'s synchronous spawn
@@ -466,6 +487,14 @@ export async function handleAcquire(requestId: string, stateDir: string, state: 
       return { ok: false, reason: result.reason };
     }
     if (result.record.pid === null) {
+      // WR-03 (01.6.2.1-REVIEW.md): the spawn never forked a real process
+      // (e.g. a bad VICE_BIN path), so there is nothing to signal -- the
+      // fix is deleting the just-created broken record alone. Without this,
+      // a configuration failure would silently occupy a port slot and count
+      // toward countTotal()/atCapacity() until crash supervision's own
+      // delayed respawn/give-up machinery eventually noticed and freed it,
+      // even though the caller was already told "internal" right now.
+      state.instances.delete(result.record.port);
       return { ok: false, reason: "internal" };
     }
     record = result.record;
@@ -483,7 +512,7 @@ export async function handleAcquire(requestId: string, stateDir: string, state: 
   // synchronous pair, so two concurrent acquires can never both grant the
   // SAME record (T-01.6.2.1-03; see selectWarmInstance()'s own re-check for
   // the other half of that guarantee).
-  state.grants.set(requestId, { id: requestId, port: record.port, grantedAt: Date.now() });
+  state.grants.set(requestId, { id: requestId, port: record.port, grantedAt: Date.now(), pid: record.pid });
   record.state = "granted";
 
   return {
@@ -583,8 +612,21 @@ async function handleRecycleForRealBroker(targetId: string, state: BrokerState):
  * (never reused across passes) wiring broker-state.mjs's real
  * allocatePort/counts and broker-launch.mjs's real probeReady, and hooks
  * onLaunched to write the SAME epoch record a cold acquire writes -- a
- * warm instance is a real process the moment it exists, per D-04. */
+ * warm instance is a real process the moment it exists, per D-04.
+ *
+ * WR-04 (01.6.2.1-REVIEW.md): the log-path stash below is a LOCAL variable,
+ * declared fresh once per call to THIS function -- exactly mirroring how
+ * handleAcquire()'s own equivalent cold-launch log-path variable
+ * (`lastLogRelPath`) is already scoped locally rather than to the module.
+ * Both the write site (the spawn-wrapping closure) and the read site (the
+ * `onLaunched` callback) live inside this SAME function body, so this is a
+ * pure relocation with no behavioural change -- it removes the
+ * cross-call-sharing risk a module-level `let` carried (correct only
+ * because of invariants -- at most one launch per call, never invoked
+ * concurrently with itself -- enforced elsewhere and never checked at the
+ * point the variable used to be declared). */
 function maintainWarmFloorForRealBroker(stateDir: string, state: BrokerState): Promise<void> {
+  let lastWarmLaunchLogRelPath = "";
   return maintainWarmFloor({
     state,
     stateDir,
@@ -616,33 +658,68 @@ function maintainWarmFloorForRealBroker(stateDir: string, state: BrokerState): P
     log: (line: string) => process.stderr.write(`${line}\n`),
   });
 }
-let lastWarmLaunchLogRelPath = "";
 
-/** Releases a grant and identity-verified-kills its instance. Marks the
- * death as broker-ordered with a FALSE respawn-after-kill answer BEFORE the
- * kill -- the opposite answer from the recycle handler above, since a
- * release wants no replacement. The instance entry is still deleted here on
- * purpose, exactly as before: the exit handler's own final-death branch
- * would also delete it, and both deleting is harmless, whereas neither
- * deleting would leak the record if the exit event were never delivered.
- * Fire-and-forget from the control listener's close handler's own
- * perspective -- the full shutdown wiring and the startup reap are plan
- * 04's; this task only needs release-on-close to actually tear the child
- * down. */
+/** Releases a grant and identity-verified-kills its instance -- but ONLY
+ * when the port's CURRENT occupant is proven to be the SAME process this
+ * grant was actually issued for (its own recorded `pid`, set at grant time
+ * by handleAcquire()'s single state.grants.set() call site), not merely
+ * "whatever now holds this port number." This is Task 2's own closure of
+ * CR-01's cross-session-kill blast radius (T-01.6.2.1-28): even after Task
+ * 1 closes the specific concurrent-acquire race, this lookup was ALREADY
+ * unsafe against any OTHER event that swaps a port's occupant without also
+ * clearing the grant -- the clearest independent example being an ordinary
+ * (non-deliberate) crash of a GRANTED instance that hits the give-up
+ * threshold: broker-launch.mts's handleExit() deletes the record from
+ * state.instances regardless of record.state, freeing the port for
+ * nextFreePort() to hand to a brand-new, unrelated cold launch, while the
+ * original grant sits untouched in state.grants.
+ *
+ * On a pid MATCH: unchanged from before this task -- marks the death as
+ * broker-ordered with a FALSE respawn-after-kill answer BEFORE the kill
+ * (the opposite answer from the recycle handler above, since a release
+ * wants no replacement), deletes the instance entry (harmless double-delete
+ * if the exit handler's own final-death branch also runs), and
+ * fire-and-forget identity-verified-kills it.
+ *
+ * On a pid MISMATCH -- including when there is no instance at all at that
+ * port: the grant's own bookkeeping is still removed (a release always
+ * retires its OWN request's bookkeeping), but the mismatched CURRENT
+ * occupant is left running, untouched -- neither deleted nor signalled in
+ * any way -- and a distinct log line names the request id, the port, the
+ * grant's own recorded pid, and the current occupant's pid (or "none" when
+ * the port is empty), worded distinctly from both the shutdown-complete
+ * line (broker-kill.mts) and the grant-time-probe-failure line this same
+ * file already emits (D-07's standing constraint that a lifecycle decision
+ * must be reconstructable from the log after an incident).
+ *
+ * A legitimate recycle (broker-launch.mts's handleExit() recycle branch)
+ * keeps this grant's `pid` in sync with the respawned record's own pid, so
+ * this check never misfires against a recycled instance the grant still
+ * legitimately owns. */
 export function handleRelease(requestId: string, state: BrokerState): void {
   const grant = state.grants.get(requestId);
   if (!grant) return;
   const instance = state.instances.get(grant.port);
-  if (instance) {
+
+  if (instance && instance.pid === grant.pid) {
     markDeliberateDeath(instance, false);
-  }
-  state.grants.delete(requestId);
-  state.instances.delete(grant.port);
-  if (instance) {
+    state.grants.delete(requestId);
+    state.instances.delete(grant.port);
     verifiedKill({ pid: instance.pid, expectedIdentity: instance.expectedIdentity }).catch(() => {
       // best-effort; nothing further to report on this path this task
     });
+    return;
   }
+
+  // Stale/orphaned grant: the port's current occupant (if any) is NOT the
+  // same process this grant was issued for. Retire the grant's own
+  // bookkeeping only -- the mismatched occupant, if any, is left running.
+  state.grants.delete(requestId);
+  process.stderr.write(
+    `vice-broker: release for request ${requestId} found a different instance at port ${grant.port} than the one this grant was issued for ` +
+      `(grant pid ${grant.pid ?? "null"}, current occupant pid ${instance ? instance.pid ?? "null" : "none"}) -- the grant's own bookkeeping was retired, ` +
+      `and the current occupant was left untouched\n`,
+  );
 }
 
 async function run(args: ParsedArgs): Promise<void> {
