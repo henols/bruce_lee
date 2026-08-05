@@ -5,7 +5,7 @@ milestone_name: insertion note
 current_phase: 01.6.2.1
 current_phase_name: broker-lifecycle-policy
 status: executing
-stopped_at: v1.1 phase work COMPLETE. 01.6/01.6.1/01.6.2/01.6.2.1/01.6.3 sealed; 01.4 human_needed (HV-09); 01.3 gate open (HV-05). 3 developer-owned rows remain
+stopped_at: v1.1 phase work COMPLETE + all no-restart-needed fixes landed. Host tools/ REDEPLOYED (restart alone now suffices). Remaining: HV-05, HV-08 (restart only), HV-09
 last_updated: "2026-08-05T10:30:00.000Z"
 last_activity: 2026-08-05
 progress:
@@ -14,7 +14,7 @@ progress:
   total_plans: 54
   completed_plans: 63
   percent: 42
-last_activity_desc: 01.6 re-verified 14/14 off HV-01's closure; all 49 v1.1 plans have summaries
+last_activity_desc: redeployed host tools/, fixed epoch sampling + banner flake + installer stale-deploy default; suite 446/441/0
 ---
 
 # Project State
@@ -244,6 +244,22 @@ test 3 **is answerable today on exactly the evidence that sealed 01.6 at 14/14**
 `01.6.1-VERIFICATION.md` is already `passed` at 13/13 and does not need to change — this note exists so
 the skip does not sit permanently on a stale premise, which is how a skipped test quietly becomes
 permanent. Whoever next touches 01.6.1 can close it by reading `.vice-supervisor/broker.json`.
+
+
+**Host deploy REFRESHED 2026-08-05, so HV-08 is now a restart alone.** `tools/` matches committed
+`resources/` for all seven generated artifacts — **CR-01's cross-session-kill fix and the `warm_floor`
+rename are in the copy the host will load on its next start.** The running broker still holds the old
+code (a disk swap is inert until restart; confirmed — the live record still reported `spares_target` and
+the emulator kept answering throughout). **Rollback needs no saved copy:** check out an earlier commit of
+`resources/` and force-install from it.
+
+The refresh required `force: true`, which exposed the reason the deploy had gone 11 hours stale — the
+installer's default refused every `diverged` artifact, so a routine redeploy after any source change was a
+silent no-op reporting `failed: []`. **Now fixed**: a diverged *generated* artifact overwrites by default
+(divergence there can only mean stale, per `tools/`'s own never-hand-edited contract), while the one
+genuinely hand-authored entry, `resources/vice-launcher.sh`, still refuses on divergence — loudly. The
+generated/hand-authored split derives from `build.ts`'s `HOST_BOUND_ARTIFACTS`, an already-enforced list,
+rather than a hardcoded filename.
 
 Status: Executing Phase 01.6.2.1
 
