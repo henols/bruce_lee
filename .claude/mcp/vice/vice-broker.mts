@@ -360,14 +360,23 @@ export interface HandleAcquireDeps {
  * on the SAME port; a replacement, if any, comes from either the next
  * candidate in this same walk or the caller's own cold-launch fall-through.
  *
- * Re-checks `record.state === "ready"` immediately after every `await` (the
- * probe call itself) and BEFORE ever treating a probe-live candidate as the
- * winner -- this is what makes the caller's own "no await between selection
- * and the grant-recording step" property (T-01.6.2.1-03) actually hold
- * under two concurrent acquires: a candidate's own probe response cannot
- * change because a sibling acquire granted it first, but its RECORDED state
- * does, the instant that sibling's synchronous grant step runs -- and that
- * recorded state is the only signal this function is willing to trust. */
+ * Re-checks `record.state === "ready"` AND map membership by identity
+ * immediately after every `await` (the probe call itself) and BEFORE ever
+ * treating a probe-live candidate as the winner -- this is what makes the
+ * caller's own "no await between selection and the grant-recording step"
+ * property (T-01.6.2.1-03) actually hold under two concurrent acquires. A
+ * candidate's own probe response cannot change because a sibling acquire
+ * granted it first, but its RECORDED state does, the instant that sibling's
+ * synchronous grant step runs -- recorded state alone catches that case.
+ * It does NOT catch a sibling that has already DROPPED this exact candidate
+ * (a failed grant-time probe: markDeliberateDeath() + state.instances.delete(),
+ * which never touches record.state -- the drop path a few lines below) --
+ * 01.6.2.1-VERIFICATION.md's CR-01 finding, re-confirmed here: a state-only
+ * recheck is blind to a concurrent drop, letting a second caller's stale
+ * object reference win a grant for a record that is no longer in
+ * state.instances at all, orphaning the grant. Rechecking
+ * `state.instances.get(record.port) === record` (identity, not merely a
+ * port-number lookup) closes that case too. */
 async function selectWarmInstance(
   state: BrokerState,
   deps: {
@@ -381,9 +390,14 @@ async function selectWarmInstance(
 
     const isReady = await deps.probe(record.port);
 
-    // Claimed by a concurrent acquire while this probe was in flight -- not
-    // a candidate any more, and never a failure to log or kill over.
-    if (record.state !== "ready") continue;
+    // A sibling acquire may have granted OR dropped this exact candidate
+    // while this probe was in flight. "Granted" changes record.state;
+    // "dropped" removes the record from state.instances outright and never
+    // touches record.state -- so map membership must be rechecked too, not
+    // merely the state field (CR-01, 01.6.2.1-REVIEW.md/01.6.2.1-VERIFICATION.md).
+    if (record.state !== "ready" || state.instances.get(record.port) !== record) {
+      continue;
+    }
 
     if (isReady) {
       return record;

@@ -220,6 +220,183 @@ test("handleAcquire: an instance released through handleRelease() is never promo
 // distinguishable from the shutdown kill's own line.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// CR-01 (01.6.2.1-REVIEW.md, filed BLOCKER; 01.6.2.1-VERIFICATION.md's sole
+// gap): selectWarmInstance()'s post-probe recheck rejects a candidate a
+// concurrent sibling has already GRANTED (record.state flips synchronously),
+// but NOT one a sibling has already DROPPED (markDeliberateDeath() +
+// state.instances.delete() never touches record.state). Two concurrent
+// handleAcquire() calls sharing ONE ready candidate, where the first
+// caller's probe resolves false (drop) and the second's resolves true
+// STRICTLY AFTER the first has already deleted the record, must both fall
+// through to a fresh cold launch -- neither may receive a grant naming the
+// deleted record.
+// ---------------------------------------------------------------------------
+
+test("CR-01: two overlapping selectWarmInstance() walks over one shared ready candidate -- the first caller's failed probe drops+kills it before the second caller's probe resolves true, so both fall through to fresh cold launches instead of the second reusing the dropped record", async () => {
+  const { handleAcquire } = await loadBrokerModule();
+  const state = createState();
+  const originalPid = 5001;
+  state.instances.set(6600, makeReadyInstance({ port: 6600, pid: originalPid, expectedIdentity: "x64sc" }));
+  const originalRecord = state.instances.get(6600);
+
+  // A probe shared by both handleAcquire() calls -- selected strictly by
+  // invocation ORDER via a call counter (the race is about invocation
+  // order, not about which request id happens to run first).
+  let probeCallCount = 0;
+  let resolveFirst!: (value: boolean) => void;
+  let resolveSecond!: (value: boolean) => void;
+  const firstDeferred = new Promise<boolean>((resolve) => {
+    resolveFirst = resolve;
+  });
+  const secondDeferred = new Promise<boolean>((resolve) => {
+    resolveSecond = resolve;
+  });
+  const sharedProbe = (_port: number): Promise<boolean> => {
+    probeCallCount += 1;
+    return probeCallCount === 1 ? firstDeferred : secondDeferred;
+  };
+
+  // Only the two PROBE gates need controlled ordering -- the kill's own
+  // timing is not part of the race, so it resolves immediately.
+  const killCalls: Array<{ pid: number | null; expectedIdentity: string }> = [];
+  const sharedKill = (opts: { pid: number | null; expectedIdentity: string }): Promise<KillStage> => {
+    killCalls.push(opts);
+    return Promise.resolve("sigterm" as KillStage);
+  };
+
+  // A variant of stubColdSpawnFactory that mints a distinct, incrementing
+  // fake pid per call, keyed per caller, so each caller's own cold-launched
+  // record is distinguishable from the original candidate's seeded pid and
+  // from the OTHER caller's cold-launched record.
+  let pidCounter = 9000;
+  function keyedColdSpawnFactory(spawnCalls: number[]): (port: number) => (command: string, args: string[]) => ChildProcess {
+    return (port: number) => {
+      return (): ChildProcess => {
+        pidCounter += 1;
+        spawnCalls.push(port);
+        return { pid: pidCounter } as unknown as ChildProcess;
+      };
+    };
+  }
+
+  const spawnCallsA: number[] = [];
+  const spawnCallsB: number[] = [];
+
+  // acquirePortAndLaunch()'s single in_flight owner is a REAL, pre-existing
+  // guard that handleAcquire()'s cold-launch arm always goes through via the
+  // PRODUCTION nextFreePort() (HandleAcquireDeps has no allocatePort override
+  // -- only probe/kill/buildColdSpawnFactory are injectable), so it is not
+  // stubbed away by this test. Once BOTH callers fall through to a cold
+  // launch (the CR-01 fix's own correct outcome), whichever reaches
+  // acquirePortAndLaunch() first legitimately holds the slot and the other
+  // is refused `launch_in_flight` -- exactly the single-owner serialisation
+  // criterion C already proves, unrelated to CR-01. handleAcquire()'s own
+  // header comment documents that this is NOT a control-plane error: "the
+  // control-plane's own attemptAcquire()/enqueueAcquire() queue the request
+  // and retry it later rather than refusing it." This test calls
+  // handleAcquire() directly, bypassing that control-plane retry layer, so
+  // it performs the SAME retry itself -- this is the one deviation from the
+  // plan's literal test mechanics (recorded in 01.6.2.1-07-SUMMARY.md): a
+  // single handleAcquire() call per caller deterministically collides with
+  // this unrelated, correct guard, given the exact probe-ordering this test
+  // requires.
+  async function acquireWithRetryOnLaunchInFlight(requestId: string, deps: HandleAcquireDeps): Promise<AcquireOutcome> {
+    for (let attempt = 0; attempt < 50; attempt++) {
+      const outcome = await handleAcquire(requestId, "/tmp/vice-broker-acquire-test", state, deps);
+      if (!(outcome.ok === false && outcome.reason === "launch_in_flight")) {
+        return outcome;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    throw new Error(`handleAcquire(${requestId}) never cleared launch_in_flight after 50 retries`);
+  }
+
+  // Call handleAcquire("race-a", ...) and handleAcquire("race-b", ...) back
+  // to back WITHOUT awaiting either call before starting the next -- both
+  // run synchronously up to their own `await deps.probe(...)` suspension
+  // point over the SAME snapshotted record before either yields, reproducing
+  // two real concurrent connections racing the same candidate.
+  const outcomeAPromise = acquireWithRetryOnLaunchInFlight("race-a", {
+    probe: sharedProbe,
+    kill: sharedKill,
+    buildColdSpawnFactory: keyedColdSpawnFactory(spawnCallsA),
+  });
+  const outcomeBPromise = acquireWithRetryOnLaunchInFlight("race-b", {
+    probe: sharedProbe,
+    kill: sharedKill,
+    buildColdSpawnFactory: keyedColdSpawnFactory(spawnCallsB),
+  });
+
+  // Resolve the FIRST invocation's deferred to `false` (the drop path).
+  resolveFirst(false);
+
+  // Poll in a small bounded loop (await Promise.resolve() repeated, not a
+  // real timer) until the shared candidate's record is confirmed absent
+  // from state.instances -- proving the first caller's drop path
+  // (markDeliberateDeath + the delete) has already executed. This removes
+  // any dependence on undocumented microtask-scheduling order.
+  let ticks = 0;
+  while (state.instances.get(6600) === originalRecord && ticks < 10000) {
+    await Promise.resolve();
+    ticks++;
+  }
+  assert.notEqual(
+    state.instances.get(6600),
+    originalRecord,
+    "the first caller's drop path (markDeliberateDeath + delete) must have already removed the original record before the second caller's probe resolves",
+  );
+
+  // THEN resolve the SECOND invocation's deferred to `true`.
+  resolveSecond(true);
+
+  const [outcomeA, outcomeB] = await Promise.all([outcomeAPromise, outcomeBPromise]);
+
+  // Both outcomes report ok: true.
+  assert.equal(outcomeA.ok, true, `expected race-a to succeed, got ${JSON.stringify(outcomeA)}`);
+  assert.equal(outcomeB.ok, true, `expected race-b to succeed, got ${JSON.stringify(outcomeB)}`);
+
+  // EACH caller's own buildColdSpawnFactory stub is invoked exactly once --
+  // both callers fall through to a fresh cold launch, since the one shared
+  // candidate failed its probe for the first caller and was gone by the
+  // time the second caller's probe resolved. This is the assertion that
+  // fails pre-fix: race-b's own selectWarmInstance() walk (unfixed) returns
+  // the stale, already-deleted record as a "winner" via the state-only
+  // recheck, so race-b's cold-launch arm is never reached and spawnCallsB
+  // reads 0 instead of 1.
+  assert.equal(spawnCallsA.length, 1, "race-a's own cold-spawn factory must be invoked exactly once");
+  assert.equal(spawnCallsB.length, 1, "race-b's own cold-spawn factory must be invoked exactly once");
+
+  // The identity-verified kill stub is invoked exactly ONCE total, for the
+  // ORIGINAL candidate's own seeded pid, never a second time.
+  assert.equal(killCalls.length, 1, "the identity-verified kill must be invoked exactly once total");
+  assert.deepEqual(killCalls[0], { pid: originalPid, expectedIdentity: "x64sc" }, "the kill must target the ORIGINAL candidate's own recorded pid, never a second time");
+
+  // Neither outcome's granted port resolves (via state.instances.get(...))
+  // to the ORIGINAL (now-dropped) record object or its original pid -- and
+  // every granted port must actually correspond to a REAL instance record
+  // (never an orphaned grant naming a deleted record, which is exactly
+  // CR-01's own cross-session-kill blast radius).
+  for (const [label, outcome] of [["race-a", outcomeA], ["race-b", outcomeB]] as const) {
+    if (outcome.ok) {
+      assert.ok(
+        state.instances.has(outcome.grant.port),
+        `${label}'s granted port ${outcome.grant.port} must correspond to an actual instance record in state.instances -- an orphaned grant naming a deleted record is CR-01's own failure shape`,
+      );
+      const grantedRecord = state.instances.get(outcome.grant.port);
+      assert.notEqual(grantedRecord, originalRecord, `${label}'s granted record must not be the original (now-dropped) record`);
+      assert.notEqual(grantedRecord?.pid, originalPid, `${label}'s granted record must not carry the original (now-killed) pid`);
+    }
+  }
+
+  // state.instances no longer contains the original record at all, only
+  // whichever fresh cold-launched record(s) ended up occupying ports
+  // afterward.
+  for (const record of state.instances.values()) {
+    assert.notEqual(record, originalRecord, "state.instances must no longer contain the original record at all");
+  }
+});
+
 test("handleAcquire: the grant-time-probe-failure log line is distinct from broker-kill.mts's shutdown wording", async () => {
   const { handleAcquire } = await loadBrokerModule();
   const state = createState();
