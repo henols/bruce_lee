@@ -2936,11 +2936,15 @@ function buildViceTool(def: ToolDefinition, run: (args: Record<string, unknown>)
 // (TRACER_MANIFEST_TOOL_NAMES, since removed). Plan 01.6.3-03 widens the
 // input set to the FULL manifest -- the loop body itself is unchanged from
 // the tracer: no per-tool special case, only the same DENY_LIST filter
-// already proven in Plan 02. This includes the host's own generic-surface
-// meta-tools (`tools_call`/`tools_list`/`initialize`/`notifications_initialized`,
-// which the manifest lists as ordinary tools) -- see this file's own header
-// note near DENY_LIST below on why registering them here does not change
-// the pre-existing generic-surface risk one layer down in call().
+// already proven in Plan 02. The manifest also lists the host's own
+// generic-surface meta-tools (`tools_call`/`tools_list`/`initialize`/
+// `notifications_initialized`) as ordinary tools; 01.6.3-03 registered them
+// like any other manifest entry (a real, disclosed generic-dispatch risk it
+// did not itself widen -- see the CallToolRequestSchema override below for
+// the historical shape of that risk), and 01.4-01 (tasks 1+2) closed it by
+// adding all four to DENY_LIST itself, so this SAME skip now filters them
+// out of `tools` at construction time exactly like vice_disk_list always
+// was.
 //
 // Construction-time, not read-time -- a deliberate, disclosed narrowing this
 // plan records explicitly: tools/list is now served entirely by MCPServer's
@@ -2988,27 +2992,27 @@ server.getServer().setRequestHandler(CallToolRequestSchema, async (request) => {
       isError: true,
     };
   }
-  // PARTIALLY CLOSED BY 01.4-01 TASK 1 (tracking Phase 01.4 criterion 3's
-  // already-recorded open breach concern): this check inspects only the
-  // OUTER `name` -- the literal MCP tool being called. The manifest also
-  // lists the host's own generic-surface meta-tools (`tools_call`/
-  // `tools_list`/`initialize`/`notifications_initialized`) as ordinary
-  // forwardable tools. `tools_list` is now itself on DENY_LIST (refused by
-  // the check immediately above, closing the NAMED path for it), but
-  // NOTHING at this layer, in the retired handleToolsCall() before it, or in
-  // call()'s own internal guard (vice.ts, DENY_LIST.includes(toolName) --
-  // same outer-name-only shape) yet inspects a nested `arguments.name` when
-  // the outer tool being forwarded is `tools_call` itself. Calling
-  // `tools_call` with `arguments: {name: "vice_disk_list", ...}` is
-  // therefore STILL NOT refused here and still reaches the host's OWN
-  // tools_call dispatch verbatim -- proven byte-for-byte unchanged from
-  // pre-swap behaviour by a dedicated test (vice-proxy.test.ts). 01.4-01
-  // task 2 closes this the same way task 1 closed tools_list: by adding
-  // `tools_call` itself (and initialize/notifications_initialized, if that
-  // task's grep clears them) to DENY_LIST -- one array, no new mechanism,
-  // not a nested-argument parser. Recorded in 01.6.3-03-SUMMARY.md and
-  // .planning/todos/pending/ for the history of why this was deferred past
-  // the registration-loop-scoped plan that first surfaced it.
+  // CLOSED BY 01.4-01 (tasks 1+2), closing Phase 01.4 criterion 3's
+  // already-recorded open breach concern. This check inspects only the
+  // OUTER `name` -- the literal MCP tool being called -- and always has;
+  // that outer-name-only shape is unchanged by this fix and is NOT itself
+  // the hazard. The hazard was that the manifest also lists the host's own
+  // generic-surface meta-tools (`tools_call`/`tools_list`/`initialize`/
+  // `notifications_initialized`) as ordinary forwardable tools, and
+  // `tools_call` specifically could carry a forbidden name (e.g.
+  // `vice_disk_list`) as a NESTED `arguments.name`, bypassing this exact
+  // guard by never presenting the forbidden name as the OUTER one. All four
+  // meta-tool names are now themselves on DENY_LIST (task 1 added
+  // `tools_list`; task 2 added `tools_call`, `initialize` and
+  // `notifications_initialized` after confirming, via a repo-wide grep, that
+  // none has a sanctioned caller): `tools_call` itself is refused before its
+  // own nested argument is ever read, closing the bypass without teaching
+  // this guard to parse nested argument shapes -- one array, no new
+  // mechanism, exactly 01.4-RESEARCH.md's own Pattern 1 and primary
+  // recommendation. The historical bypass-proving test in
+  // vice-proxy.test.ts is repointed (not deleted) to assert this closure.
+  // Full history in 01.6.3-03-SUMMARY.md and
+  // .planning/todos/pending/2026-08-05-generic-surface-deny-list-gap-tools-call-nested-vice-disk-list.md.
   const tool = tools[name];
   if (!tool || !tool.execute) {
     return { content: [{ type: "text", text: `Unknown tool: ${name}` }], isError: true };

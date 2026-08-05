@@ -182,7 +182,29 @@ export function activeInstance(): ActiveInstance {
 // + CallToolRequestSchema override) -- no new mechanism, per 01.4-RESEARCH.md
 // Pattern 1 ("one array, no new mechanism"). See denyListRefusalMessage()
 // below for why this entry's hazard shape differs from vice_disk_list's own.
-export const DENY_LIST: readonly string[] = ["vice_disk_list", "tools_list"];
+//
+// "tools_call", "initialize", "notifications_initialized" added (01.4-01
+// task 2): closes the fix in full rather than partially, per
+// 01.4-RESEARCH.md's own primary recommendation. A repo-wide grep (.claude/,
+// .planning/, and this package's own test file) for any SANCTIONED caller of
+// any of these four names AS A TOOL -- i.e. dispatched through tools/call,
+// not the unrelated MCP-protocol "initialize" JSON-RPC method vice.ts's own
+// ensureInitialized() sends, which is the transport handshake, never a tool
+// lookup through this DENY_LIST -- found none. Every recorded hit is either
+// this phase's own research/todo documents and incident records (excluded by
+// the plan's own instruction), or the pre-existing stand-in-host test
+// fixture proving the nested-argument bypass this task closes (repointed
+// below to assert closure, not deleted). 01.4-RESEARCH.md's Open Question 1
+// and Assumption A2 both predicted this: every recorded use on file is an ad
+// hoc fallback probe performed because a named tool went missing, not a
+// designed dependency -- confirmed still true by this grep.
+export const DENY_LIST: readonly string[] = [
+  "vice_disk_list",
+  "tools_list",
+  "tools_call",
+  "initialize",
+  "notifications_initialized",
+];
 
 /**
  * Renders an accurate refusal message for a DENY_LIST entry, keyed by hazard

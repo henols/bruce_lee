@@ -4662,66 +4662,153 @@ test("vice_disk_list is still absent from tools/list and still refused at tools/
 });
 
 // -----------------------------------------------------------------------
-// Plan 01.6.3-03: full-manifest registration now includes the host's own
-// generic-surface meta-tools (tools_call/tools_list/initialize/
+// HISTORY (read before editing further): Plan 01.6.3-03's full-manifest
+// registration widened the registry to include the host's own generic-
+// surface meta-tools (tools_call/tools_list/initialize/
 // notifications_initialized), which the manifest lists as ordinary
-// forwardable tools. Phase 01.4 criterion 3 already recorded that
-// vice_disk_list reachable THROUGH tools_call's own nested `name` argument
-// is an open breach concern, confirmed present in a live agent session --
-// this plan's job (per its own coordinator brief) is to ASSERT that
-// registering the full manifest does not WIDEN this pre-existing gap, not
-// to silently fix or silently ignore it. Both facts below are proven, not
-// assumed: the NAMED surface (tools/call naming vice_disk_list directly)
-// stays refused with zero host requests (proven above and repeatedly
-// elsewhere in this file); the GENERIC surface's pre-existing, unwidened
-// gap is proven identical to what a bare call("tools_call", {name:
-// "vice_disk_list", ...}) has always done, both before and after this
-// plan's swap, since call()'s own internal guard (vice.ts,
-// DENY_LIST.includes(toolName)) inspects only the OUTER tool name in both
-// eras and was never touched by either plan.
+// forwardable tools. That plan's own job was narrowly scoped -- ASSERT that
+// registering the full manifest did not WIDEN the pre-existing
+// nested-argument bypass Phase 01.4 criterion 3 had already recorded as a
+// live, confirmed breach concern, not to fix or ignore it (a genuine design
+// decision, deliberately left to whoever owned criterion 3 -- see
+// .planning/todos/pending/2026-08-05-generic-surface-deny-list-gap-tools-call-nested-vice-disk-list.md).
+// This test used to prove exactly that: a bare tools_call, forwarded like
+// any other manifest tool, carrying a nested `name: "vice_disk_list"`
+// argument, reached the stand-in host with that argument intact, because
+// the DENY_LIST check inspected only the OUTER name ("tools_call") and never
+// the nested field.
+//
+// 01.4-01 (this plan, tasks 1+2) is that criterion-3 owner, and closed the
+// gap: `tools_call` itself is now on DENY_LIST (Task 2), alongside
+// `tools_list` (Task 1), `initialize` and `notifications_initialized`
+// (Task 2). The nested argument is never even read now, because the OUTER
+// name is refused first -- one array, no nested-argument parser. This test
+// is REPOINTED, not deleted, to assert that closure directly against the
+// exact scenario it used to prove was open: the same nested-vice_disk_list
+// payload, now producing isError with zero requests reaching the stand-in.
 // -----------------------------------------------------------------------
 
-test("known, pre-existing, NOT widened: tools_call's own nested vice_disk_list argument is not refused at this layer and reaches the stand-in host", async () => {
+test("tools_call carrying a nested vice_disk_list argument is now refused before any request reaches the stand-in host (closes the gap the prior test proved)", async () => {
   const { server, requests } = startStandInServer();
   const port = await listen(server);
   const proxy = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${port}/mcp` });
   try {
     await handshake(proxy);
 
-    // Sanity: the generic-surface meta-tool is now a real, registered,
-    // forwardable tool (full-manifest registration, this plan) -- if it
-    // were absent, the probe below would fail with "Unknown tool" instead
-    // of reaching the host, silently passing for the wrong reason.
+    // Sanity, inverted from the historical version: tools_call must now be
+    // ABSENT from tools/list -- the SAME construction-time DENY_LIST skip
+    // that has always kept vice_disk_list out of the registry now keeps
+    // tools_call out too. If it were still present, the probe below would
+    // reach `tools[name].execute()` instead of being refused at Layer 1,
+    // silently passing for the wrong reason (an "Unknown tool" mismatch, not
+    // a genuine refusal).
     proxy.send({ jsonrpc: "2.0", id: 10, method: "tools/list", params: {} });
     const listResp = await proxy.nextMessage();
     const names = listResp.result.tools.map((t: any) => t.name);
-    assert.ok(names.includes("tools_call"), "tools_call must be registered as an ordinary forwardable tool from the manifest");
+    assert.ok(!names.includes("tools_call"), "tools_call must now be absent from tools/list, exactly like vice_disk_list");
 
-    // The probe itself: tools_call, forwarded like any other manifest tool,
-    // carrying a nested `name: "vice_disk_list"` argument -- this file's own
-    // DENY_LIST check (the CallToolRequestSchema override) only ever
-    // inspects the OUTER name ("tools_call"), never this nested field, so
-    // the request reaches the stand-in host verbatim. This is the exact,
-    // already-known shape of the Phase 01.4 criterion 3 concern -- proven
-    // here as UNCHANGED by this plan's registration-loop widening, not
-    // newly discovered or newly introduced by it.
+    // The probe itself: the EXACT payload the historical test used to prove
+    // reached the stand-in -- now refused before any forwarding is even
+    // attempted, because the OUTER name ("tools_call") is on DENY_LIST. The
+    // nested `name: "vice_disk_list"` argument is never inspected at all;
+    // it does not need to be, since the outer refusal fires first.
     proxy.send({
       jsonrpc: "2.0",
       id: 11,
       method: "tools/call",
       params: { name: "tools_call", arguments: { name: "vice_disk_list", arguments: {} } },
     });
-    await proxy.nextMessage();
+    const resp = await proxy.nextMessage();
+    assert.equal(resp.result.isError, true, "tools_call must always be refused, regardless of its nested arguments");
+    assert.match(resp.result.content[0].text, /tools_call/);
+    assert.match(
+      resp.result.content[0].text,
+      /bypass|nested/i,
+      "tools_call's refusal wording must name the bypass hazard shape, not the vice_disk_list crash wording verbatim"
+    );
     const forwarded = requests.find((r) => r && r.method === "tools/call" && r.params && r.params.name === "tools_call");
     assert.ok(
-      forwarded,
-      "tools_call must reach the stand-in host with its nested vice_disk_list argument intact -- proving the pre-existing generic-surface gap is not intercepted at this layer, exactly matching pre-swap behaviour (call()'s own guard is outer-name-only and was never touched by either plan)"
+      !forwarded,
+      "the gap the prior test proved is now closed: tools_call must NOT reach the stand-in host, with or without a nested vice_disk_list argument"
     );
-    assert.deepEqual(
-      forwarded!.params.arguments,
-      { name: "vice_disk_list", arguments: {} },
-      "the nested argument must reach the host byte-for-byte unmodified -- this proxy has never inspected argument contents"
-    );
+    assert.equal(requests.length, 0, "the stand-in server's request counter must be unchanged -- no request of any kind was made");
+  } finally {
+    proxy.child.kill("SIGKILL");
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+// -----------------------------------------------------------------------
+// 01.4-01 task 2: the benign-nested-name refusal test the plan's own
+// <behavior> calls for -- {name: "vice_ping", arguments: {}}, never
+// vice_disk_list, mirroring task 1's tools_list refusal test in shape.
+// -----------------------------------------------------------------------
+
+test("tools_call is refused at tools/call with no request made, even with a benign nested name", async () => {
+  const { server, requests } = startStandInServer();
+  const port = await listen(server);
+  const proxy = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${port}/mcp` });
+
+  try {
+    await handshake(proxy);
+
+    proxy.send({
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tools/call",
+      params: { name: "tools_call", arguments: { name: "vice_ping", arguments: {} } },
+    });
+    const resp = await proxy.nextMessage();
+    assert.equal(resp.result.isError, true, "tools_call must always be refused, even carrying a wholly benign nested name");
+    assert.match(resp.result.content[0].text, /tools_call/);
+    assert.equal(requests.length, 0, "the stand-in server's request counter must be unchanged");
+  } finally {
+    proxy.child.kill("SIGKILL");
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+// -----------------------------------------------------------------------
+// 01.4-01 task 2: initialize / notifications_initialized refusal tests,
+// mirroring task 1's tools_list refusal test in shape -- both are now on
+// DENY_LIST (this task's grep found no sanctioned caller for either as a
+// TOOL; vice.ts's own MCP-protocol handshake calls rpc("initialize", ...)
+// directly, a different code path that never goes through this DENY_LIST
+// check at all, so this refusal cannot and does not affect it).
+// -----------------------------------------------------------------------
+
+test("initialize is refused at tools/call with no request made", async () => {
+  const { server, requests } = startStandInServer();
+  const port = await listen(server);
+  const proxy = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${port}/mcp` });
+
+  try {
+    await handshake(proxy);
+
+    proxy.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "initialize", arguments: {} } });
+    const resp = await proxy.nextMessage();
+    assert.equal(resp.result.isError, true, "initialize (as a tool name) must always be refused");
+    assert.match(resp.result.content[0].text, /initialize/);
+    assert.equal(requests.length, 0, "the stand-in server's request counter must be unchanged");
+  } finally {
+    proxy.child.kill("SIGKILL");
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("notifications_initialized is refused at tools/call with no request made", async () => {
+  const { server, requests } = startStandInServer();
+  const port = await listen(server);
+  const proxy = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${port}/mcp` });
+
+  try {
+    await handshake(proxy);
+
+    proxy.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "notifications_initialized", arguments: {} } });
+    const resp = await proxy.nextMessage();
+    assert.equal(resp.result.isError, true, "notifications_initialized (as a tool name) must always be refused");
+    assert.match(resp.result.content[0].text, /notifications_initialized/);
+    assert.equal(requests.length, 0, "the stand-in server's request counter must be unchanged");
   } finally {
     proxy.child.kill("SIGKILL");
     await new Promise((resolve) => server.close(resolve));
