@@ -46,26 +46,53 @@ It returned `stale` twice, with fresh heartbeats both times.
 - **Not gross clock skew.** Container `date` ran ~10-11 s ahead of the host-written `heartbeat_at`
   across three samples, nowhere near 180 s.
 
-## The strongest remaining lead
+## ROOT CAUSE — found 2026-08-05, pointed at by the developer
 
-**The running proxy process predates the broker by more than six hours.** `ps -eo lstart` shows
-`node .claude/mcp/vice/vice-proxy.ts` processes started at 06:21, 07:07, 10:30, 12:06 and **13:23**;
-the broker started at **19:56**. `vice-broker-client.ts` *was* modified later the same day by
-01.6.2.1 plan 04 (acquire deadline 25 000 → 120 000 ms, and the never-started fail-fast bound
-re-anchored from *half the acquire deadline* to an absolute value), and `.mcp.json`'s vice `timeout`
-went 60 000 → 150 000 in the same commit. The running process loaded none of that.
+**The broker records its *bind* address into a field the container-side client consumes as a *connect*
+address.** `0.0.0.0` is a valid bind target and a meaningless connect target: dialing it from inside
+the container reaches the container's own network stack, where nothing listens
+(`ss -ltn` shows no listener on 19510 in-container). The connection cannot succeed, and the failure
+surfaces under the misleading "heartbeat older than the stale threshold" wording.
 
-So the next diagnostic step is: **restart the vice MCP server (or the session) and re-ping.** If a
-freshly-started proxy reports `alive`, the defect is that a long-lived proxy cannot see a broker that
-starts after it — which is a *real* operational bug (the broker is on-demand by design, so it will
-routinely start mid-session), not merely a stale-process artifact. If a fresh proxy *also* reports
-`stale`, the bug is in the liveness comparison itself and the 05:43 host deploy becomes the suspect.
+| Where | What it does |
+|---|---|
+| `vice-broker.mts:782` | writes `control_host: listener.host` — i.e. **`0.0.0.0`**, the bind address |
+| `vice-broker-client.ts:219`, `:701` | reads `control_host` **verbatim** and connects to it |
+| `.devcontainer/devcontainer.json:16-17` | `--add-host=host.docker.internal:host-gateway` → `172.17.0.1` — **the dedicated route out of the container** |
+| `vice.ts:32` | the **data plane already gets this right**: `http://host.docker.internal:6510/mcp` |
+| `broker-control.mts:16-20` | **documents the exact rule being broken**: *"Bind: 0.0.0.0 explicitly, never 127.0.0.1 — host.docker.internal is the bridge address, not loopback, so a loopback-only listener is structurally unreachable from the container"* |
 
-Note the pre-plan-04 fail-fast bound was **half the acquire deadline = 12 500 ms**. A bound of
-12 500 ms against a **60 s** heartbeat cadence can essentially never be satisfied — the record is
-older than 12.5 s for 47 of every 60 seconds. Worth checking whether that bound, not
-`BROKER_STALE_MS`, is what the running proxy is actually applying; the plan-04 notes flag exactly
-this self-loosening-fraction shape as a defect they found and fixed.
+So the **bind** half of that documented rule was implemented and the **connect** half was not. The
+asymmetry is the trap: `control_host` has two consumers with two different correct answers — the
+host-side tooling runs on the host, where the recorded bind address is fine, while the container-side
+proxy must cross the bridge. One field cannot serve both.
+
+**Fix direction:** the container-side client must not treat `control_host` as a dialable address. It
+should resolve the host as `host.docker.internal` (with an env override for symmetry with
+`VICE_MCP_URL`/`VICE_MCP_HOST`), exactly as `vice.ts` already does for the data plane — and ideally
+reject `0.0.0.0`/`127.0.0.1`/`localhost` loudly rather than attempting a doomed connect, so this
+failure can never again present as a liveness verdict. Note `containerpath` already performs
+host-alias rewriting for URL fields (`containerpath.test.ts` exercises
+`alias: "host.docker.internal"`), so the machinery exists and this path simply bypasses it.
+
+## Correction to an earlier diagnosis in this same file
+
+An earlier revision named *"the running proxy process predates the broker by six hours"* as the
+strongest lead and proposed a proxy restart as the decisive experiment. **That was wrong** and is
+retained here as a correction rather than deleted, because it is the more instructive record: the
+proxy's age is real (processes at 06:21…13:23 versus a 19:56 broker) but causally irrelevant, and a
+restart would not have fixed anything. The stale-`BROKER_STALE_MS` and 12 500 ms fail-fast-bound
+theories were both dead ends.
+
+**Why the threshold theories were doomed, stated precisely:** `broker.json` is read from the *shared
+filesystem*, not over the control connection, so the freshness computation had a perfectly good
+timestamp and would have returned `alive`. The failure is one layer later — the **connect** to
+`0.0.0.0:19510`. What made this hard to see is that a connect failure is *reported* with the
+heartbeat/stale-threshold wording, so the error message names a cause that had already been satisfied.
+**That mis-attributing message is itself a defect worth fixing alongside the address bug:** it cost
+this session roughly a dozen tool calls chasing a threshold that was never exceeded, and it will
+mislead the next reader the same way. An "I could not reach the control plane at `<addr>:<port>`"
+message would have made the real cause obvious on the first ping.
 
 ## Impact
 
