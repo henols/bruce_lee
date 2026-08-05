@@ -13,6 +13,72 @@
 //
 // Sibling import, no longer cross-skill: `vice-session` has been retired
 // (plan 01.1-04) and its transport module tree lives here now.
+//
+// D-01 / ROLLBACK PATH (Phase 01.6.3, plans 01.6.3-01..04): this file's
+// stdio-server-facing wire layer is `@mastra/mcp`'s `MCPServer` +
+// `startStdio()`, adopted per a developer decision AGAINST 01.6-RESEARCH.md
+// §B6's HIGH-confidence recommendation to stay fully hand-rolled. The
+// ROADMAP rates this adoption "reversible but costly -- not one-way": the
+// ~88-94% of hand-rolled logic below (broker leasing, epoch/liveness,
+// recycle/diagnose, deny-list enforcement, path rewriting, incident
+// capture, the ten broker-state message builders -- enumerated exhaustively
+// in 01.6-PATTERNS.md's "Pattern: The D-01 Seam") never moved and is not
+// part of what a rollback touches.
+//
+// (a) What @mastra/mcp now owns, deleted from this file by the swap:
+//     writeMessage() / respond() / errorResponse() / handleInitialize() /
+//     handleToolsList() / handleMessage() / handleLine() / the stdin
+//     read loop / ProtocolError -- the entire hand-rolled JSON-RPC 2.0
+//     framing and protocol-version-negotiation layer (~140-300 lines,
+//     6-12% of the pre-swap file, per RESEARCH.md §B4's structural
+//     measurement). Superseded by `new MCPServer({name, version, tools})`
+//     + `await server.startStdio()`, plus a `CallToolRequestSchema`
+//     override installed via `server.getServer().setRequestHandler(...)`
+//     immediately after `startStdio()` resolves (tools/call is NOT
+//     answered by MCPServer's own dispatch -- see COVERAGE.md's
+//     `tools/call routing skeleton` row for why: MCPServer's dispatch
+//     forces `isError:false` on success and prepends "Error: " on
+//     failure, neither of which matches this proxy's `{content,isError}`
+//     contract or the deny-list's pinned refusal text).
+// (b) Rollback steps, concretely, for a future session that needs to
+//     execute this rather than re-derive it:
+//     1. Re-author writeMessage()/respond()/errorResponse()/
+//        handleInitialize()/handleToolsList()/handleMessage()/
+//        handleLine()/the stdin loop/ProtocolError from
+//        01.6-PATTERNS.md's "Pattern: The D-01 Seam" section, which
+//        quotes their pre-swap bodies verbatim, cross-checked against
+//        this file's own git history at commits a27628b (the swap that
+//        deleted them) and its parent (the last commit where they still
+//        existed).
+//     2. Re-point every tool's dispatch: each tool's `execute` body
+//        (`forwardToVice(name, args)`, UNCHANGED by the rollback -- it
+//        predates and outlives the swap) currently runs inside the
+//        `CallToolRequestSchema` override's per-tool lookup; re-wire that
+//        same lookup into a single hand-rolled `handleToolsCall()`
+//        dispatcher called from the resurrected `handleMessage()`.
+//     3. Remove `@mastra/mcp`/`@mastra/core` from package.json's
+//        `dependencies` (added Phase 01.6.3 plan 01) and revert
+//        tsconfig.json's `skipLibCheck: true` (added plan 01.6.3-02 --
+//        see note below; safe to revert once nothing imports either
+//        package, since this project's own files typecheck clean with
+//        or without the flag).
+//     4. Re-run the full vice-proxy.test.ts suite; the ~5,300-line suite
+//        exercises the wire layer directly (initialize/tools-list/
+//        tools-call shapes, the deny-list, malformed-input handling) so
+//        a clean rollback shows as 0 new failures against this same
+//        suite, not merely "it builds".
+// (c) Recorded, permanent cost of D-01 that a rollback would UNDO:
+//     tsconfig.json's `skipLibCheck: true` (plan 01.6.3-02) is a genuine
+//     reduction in this directory's own type-checking strictness --
+//     @mastra/core@1.55.0 bundles internal ai-sdk-provider/zod-v4
+//     declaration files with real cross-version inconsistencies, visible
+//     to `tsc` only once anything imports from the package. This
+//     project's own source typechecks clean with or without the flag,
+//     but the flag means a future third-party dependency's OWN bundled
+//     `.d.ts` errors would no longer surface here either -- a protection
+//     every other file in this repo had by default before this phase.
+//     A rollback restores that protection as a side effect of removing
+//     the only import that ever needed the flag.
 import {
   call,
   activeInstance,
