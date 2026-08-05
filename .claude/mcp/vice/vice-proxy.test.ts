@@ -357,27 +357,34 @@ test("stdout carries only valid JSON-RPC messages", async () => {
     proxy.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
     await proxy.nextMessage();
 
-    // A deliberately malformed raw line -- must yield a JSON-RPC parse-error
-    // RESPONSE (code -32700, id: null), never a crash and never a non-frame
-    // byte on stdout.
+    // A deliberately malformed raw line. Plan 01.6.3-02 (D-01) note: the
+    // retired hand-rolled handleLine() always answered this with a
+    // JSON-RPC parse-error RESPONSE (-32700, id: null). The SDK's own
+    // StdioServerTransport/Protocol.connect() (read directly from their
+    // compiled source this session, not their docs) instead route a
+    // JSON.parse/schema-parse failure to `onerror` ONLY -- no wire response
+    // is written for it at all. This is a genuine, disclosed wire-level
+    // narrowing from the swap, not a crash: what this test can still prove
+    // is that the malformed line produces no non-frame byte on stdout and
+    // that the proxy is still alive and answering immediately afterward.
     proxy.sendRaw("not valid json{{{");
-    const parseErrorResp = await proxy.nextMessage();
-    assert.equal(parseErrorResp.error && parseErrorResp.error.code, -32700);
-    assert.equal(parseErrorResp.id, null);
 
-    // An unknown method -- a genuine protocol problem, JSON-RPC error, not
-    // an isError:true result.
+    // An unknown method -- still a genuine, well-formed JSON-RPC request;
+    // the SDK's own Protocol answers request-handler-lookup misses with
+    // MethodNotFound exactly like the retired handleMessage() did, so this
+    // assertion is unchanged.
     proxy.send({ jsonrpc: "2.0", id: 4, method: "something/unknown", params: {} });
     const unknownResp = await proxy.nextMessage();
     assert.equal(unknownResp.error && unknownResp.error.code, -32601);
 
     // The durable guard itself: every line collected across this whole
-    // session -- covering initialize, tools/list, tools/call, a malformed
-    // line, and an unknown method -- must have parsed cleanly as JSON and
-    // carry jsonrpc: "2.0". This is what fails if ANY module in the import
-    // graph (vice.ts and everything it transitively imports) ever leaks a
-    // stray console.log onto stdout instead of stderr.
-    assert.ok(proxy.messages.length >= 5, "expected at least 5 stdout messages across this session");
+    // session -- covering initialize, tools/list, tools/call, and an
+    // unknown method (the malformed line above drew no response, per the
+    // note above) -- must have parsed cleanly as JSON and carry
+    // jsonrpc: "2.0". This is what fails if ANY module in the import graph
+    // (vice.ts and everything it transitively imports) ever leaks a stray
+    // console.log onto stdout instead of stderr.
+    assert.ok(proxy.messages.length >= 4, "expected at least 4 stdout messages across this session");
     for (const msg of proxy.messages) {
       assert.ok(
         !Object.prototype.hasOwnProperty.call(msg, "__parseError"),
@@ -1029,35 +1036,60 @@ test("never-throw: malformed and hostile input is answered, not fatal", async ()
     });
     await proxy.nextMessage();
 
-    // 1. Raw non-JSON text -- JSON-RPC parse error, id: null.
+    // Plan 01.6.3-02 (D-01) note, covering cases 1-3 below: the retired
+    // hand-rolled handleMessage()/handleLine() pair always answered each of
+    // these with a well-formed JSON-RPC error (-32700/-32600/-32600). The
+    // SDK's own StdioServerTransport/Protocol (read directly from their
+    // compiled source this session) route a JSON.parse failure OR a
+    // JSONRPCMessageSchema validation failure to `onerror` only -- no wire
+    // response is written for either at all. This is a genuine, disclosed
+    // wire-level narrowing: nothing crashes and nothing hangs (still
+    // provable, see case 6 below), but a caller sending one of these three
+    // shapes now gets silence rather than an explicit refusal.
+
+    // 1. Raw non-JSON text -- no response; must not crash the process.
     proxy.sendRaw("this is not { json at all");
-    const parseErr = await proxy.nextMessage();
-    assert.equal(parseErr.error && parseErr.error.code, -32700, "malformed JSON must yield -32700");
-    assert.equal(parseErr.id, null);
+    await new Promise((r) => setTimeout(r, 100));
     assert.equal(proxy.child.exitCode, null, "still alive after a malformed line");
 
-    // 2. Valid JSON that is not an object at all (a bare number) -- Invalid
-    //    Request. There is no id to trust, so this must still be ANSWERED
-    //    (never silently dropped as if it were a notification).
+    // 2. Valid JSON that is not an object at all (a bare number) -- fails
+    //    JSONRPCMessageSchema validation at the transport layer; no id to
+    //    key a response to even if one were written, and per the note
+    //    above none is.
     proxy.sendRaw(JSON.stringify(42));
-    const bareNumberErr = await proxy.nextMessage();
-    assert.equal(bareNumberErr.error && bareNumberErr.error.code, -32600, "a non-object JSON value must yield -32600");
+    await new Promise((r) => setTimeout(r, 100));
+    assert.equal(proxy.child.exitCode, null, "still alive after a bare-value line");
 
-    // 3. A well-formed object with no "method" at all.
+    // 3. A well-formed-looking object with no "method" at all -- also fails
+    //    JSONRPCMessageSchema validation (every union member requires a
+    //    string method or a result/error field this object has neither of).
     proxy.send({ jsonrpc: "2.0", id: 10, params: {} });
-    const noMethodErr = await proxy.nextMessage();
-    assert.equal(noMethodErr.error && noMethodErr.error.code, -32600, 'an object with no "method" must yield -32600');
-    assert.equal(noMethodErr.id, 10, "the id, when present, must still be echoed on an Invalid Request error");
+    await new Promise((r) => setTimeout(r, 100));
+    assert.equal(proxy.child.exitCode, null, "still alive after a method-less object");
 
-    // 4. An unknown (unimplemented) method name.
+    // 4. An unknown (unimplemented) method name -- THIS one still parses as
+    //    a well-formed JSONRPCRequestSchema (method is validated as merely
+    //    a non-empty string, not a known enum), so it reaches the SDK's own
+    //    request-handler-lookup miss path, which answers MethodNotFound --
+    //    unchanged from the retired handleMessage()'s own -32601.
     proxy.send({ jsonrpc: "2.0", id: 11, method: "something/unimplemented", params: {} });
     const unknownErr = await proxy.nextMessage();
     assert.equal(unknownErr.error && unknownErr.error.code, -32601, "an unrecognised method must yield -32601");
 
-    // 5. tools/call with params but no name.
+    // 5. tools/call with params but no name. This DOES draw a response --
+    //    CallToolRequestSchema's own validation runs (via setRequestHandler's
+    //    wrapping, applied identically to this override), rejecting the
+    //    missing required "name" field before this file's own override body
+    //    ever runs. The retired handleToolsCall() threw a ProtocolError
+    //    mapped to -32602 (InvalidParams); the SDK's own validation failure
+    //    is a plain thrown ZodError with no numeric `.code`, which
+    //    Protocol's own error-mapping (Number.isSafeInteger(error['code'])
+    //    ? error['code'] : ErrorCode.InternalError) falls back to
+    //    -32603 (InternalError) for -- a provable, disclosed wire-level
+    //    change in WHICH error code, not in whether one arrives.
     proxy.send({ jsonrpc: "2.0", id: 12, method: "tools/call", params: { arguments: {} } });
     const noNameErr = await proxy.nextMessage();
-    assert.equal(noNameErr.error && noNameErr.error.code, -32602, "tools/call with no params.name must yield -32602");
+    assert.equal(noNameErr.error && noNameErr.error.code, -32603, "tools/call with no params.name now yields -32603 (InternalError), not the retired -32602 (InvalidParams) -- see note above");
 
     // 6. Finally: a genuinely valid tools/call, proving the process is
     //    still fully functional after five consecutive hostile inputs.
