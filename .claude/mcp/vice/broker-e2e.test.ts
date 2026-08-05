@@ -24,6 +24,19 @@ import { verifiedKill } from "./broker-kill.mts";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BROKER_ARTIFACT = join(HERE, "resources", "vice-broker.mjs");
 
+// quick-260805-9ha: the broker this file spawns (startBroker() below) binds
+// its control listener INSIDE this container -- nothing here may ever dial
+// the real host. openBrokerControl()/acquireOverControlPlane() no longer
+// dial broker.json's own control_host field (that field is the broker's
+// BIND address, "0.0.0.0", never a dial target); this override is the
+// CLIENT's (this test process's) own dial knob, set once at module scope so
+// every acquireOverControlPlane()/openBrokerControl() call below resolves
+// to the real in-container listener instead of the bridge alias. It is
+// deliberately NOT passed into the spawned broker's own env (startBroker()
+// below) -- that process's bind address is governed by the separate,
+// existing VICE_BROKER_CONTROL_HOST/VICE_BROKER_CONTROL_PORT knobs.
+process.env.VICE_BROKER_CONTROL_DIAL_HOST = "127.0.0.1";
+
 function isAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -68,6 +81,12 @@ function startBroker(stateDir: string, extraEnv: Record<string, string | undefin
     VICE_BIN: "/bin/sleep",
     VICE_ARGS: "600",
     VICE_BROKER_CONTROL_PORT: "0",
+    // quick-260805-9ha: this file's own module-scope override is a CLIENT
+    // (this test process's) dial knob -- unset it here so the SPAWNED
+    // broker's env never carries it, even though process.env above would
+    // otherwise leak it in. The broker's own bind address is governed by
+    // the separate VICE_BROKER_CONTROL_HOST/VICE_BROKER_CONTROL_PORT knobs.
+    VICE_BROKER_CONTROL_DIAL_HOST: undefined,
     ...extraEnv,
   };
   const env: Record<string, string> = {};
@@ -221,6 +240,10 @@ test(
     try {
       const brokerJson = await waitForBrokerJson(stateDir);
       assert.equal(brokerJson.control_host, "0.0.0.0", `container.json contents: ${JSON.stringify(brokerJson)}`);
+      // This assertion now documents the whole point of the fix (quick-260805-9ha):
+      // the record says "0.0.0.0" -- the broker's own BIND address -- and the
+      // client below dials elsewhere (this file's own VICE_BROKER_CONTROL_DIAL_HOST
+      // override), never that recorded value.
 
       const acquired = await acquireOverControlPlane(stateDir);
       const grant = acquired.grant;

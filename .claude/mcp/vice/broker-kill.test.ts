@@ -39,6 +39,16 @@ import { acquireOverControlPlane } from "./vice-broker-client.ts";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BROKER_ARTIFACT = join(HERE, "resources", "vice-broker.mjs");
 
+// quick-260805-9ha: the broker this file spawns binds its control listener
+// INSIDE this container -- nothing here may ever dial the real host.
+// acquireOverControlPlane() no longer dials broker.json's own control_host
+// field (the broker's BIND address, never a dial target); this override is
+// the CLIENT's (this test process's) own dial knob, set once at module
+// scope. It is deliberately NOT passed into the spawned broker's own env --
+// that process's bind address is governed by the separate, existing
+// VICE_BROKER_CONTROL_HOST/VICE_BROKER_CONTROL_PORT knobs.
+process.env.VICE_BROKER_CONTROL_DIAL_HOST = "127.0.0.1";
+
 /** Poll `predicate` to a bounded deadline rather than sleeping a fixed
  * duration -- this project's own stack pattern (checkpoint/frame
  * synchronisation, never wall-clock delay), matching host-scripts.test.ts's
@@ -469,6 +479,13 @@ function startBroker(stateDir: string): BrokerHandle {
       VICE_BIN: "/bin/sleep",
       VICE_ARGS: "600",
       VICE_BROKER_CONTROL_PORT: "0",
+      // quick-260805-9ha: this file's own module-scope override is a CLIENT
+      // (this test process's) dial knob -- unset it here so the SPAWNED
+      // broker's env never carries it, even though process.env above would
+      // otherwise leak it in. child_process.spawn() drops an undefined-
+      // valued key rather than passing it through as the literal string
+      // "undefined" (verified: Node strips it before execve).
+      VICE_BROKER_CONTROL_DIAL_HOST: undefined,
     },
   });
   const handle: BrokerHandle = { child, stateDir, stderr: "" };
