@@ -35,6 +35,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join, isAbsolute, resolve, sep } from "node:path";
 
 import { hostPath, SET_ENV_HINT } from "./hostpath.ts";
+import { HOST_BOUND_ARTIFACTS } from "./build.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -53,8 +54,11 @@ export interface DeployManifest {
 }
 
 /** Per-entry outcome of a copy attempt: which resources/ entries landed,
- * were left alone (already present or diverged), or failed -- returned by
- * both installResources() and, for the prune half, pruneResources(). */
+ * were left alone (already present, or a hand-authored divergence refused
+ * without force -- see isGeneratedEntry() in installResources() for why a
+ * DIVERGED GENERATED entry lands in `installed` instead, not here), or
+ * failed -- returned by both installResources() and, for the prune half,
+ * pruneResources(). */
 export interface InstallResourcesResult {
   installed: string[];
   skipped: string[];
@@ -322,11 +326,56 @@ export function pruneResources({
   return { pruned, skipped, failed };
 }
 
+/** True iff `entry` is one of the tsc-compiled, banner-carrying artifacts
+ * build.ts emits into resources/ -- the GENERATED half of this skill's
+ * resources/ directory, as distinct from the one hand-authored survivor,
+ * `vice-launcher.sh` (CLAUDE.md's three-tier `.claude/mcp/` rule: "resources/
+ * is generated, but committed ... The one exception is
+ * resources/vice-launcher.sh, which stays hand-authored").
+ *
+ * Derived from build.ts's own `HOST_BOUND_ARTIFACTS` rather than a
+ * hardcoded filename here, because that list is already the ENFORCED source
+ * of truth for "what tsc emits": build()'s own "build: emitted file set
+ * does not match HOST_BOUND_ARTIFACTS" assertion throws if the compiler's
+ * real output ever differs from it, and resources-sync.test.ts separately
+ * asserts committed resources/ matches a fresh build using this same list.
+ * A maintainer who adds a new compiled artifact must already extend this
+ * list for build() to succeed at all, so this check cannot silently drift
+ * out of sync with reality without also breaking the build.
+ *
+ * DISCLOSED LIMITATION (autonomy contract): this is a closed-list check,
+ * not a content-sniffed one -- it does not itself inspect the generated
+ * banner text (build.ts's GENERATED_BANNER()). A hypothetical future
+ * resources/ entry that is hand-authored but happens to share a relative
+ * path with something tsc emits would be misclassified as generated; there
+ * is no such collision today, and the one real hand-authored survivor
+ * (`vice-launcher.sh`) is a `.sh` file, so it cannot collide with the
+ * `.mjs`-only compiled set by construction. A more robust version would
+ * additionally require the source file's content to start with the
+ * GENERATED_BANNER() prefix; left as a follow-up rather than done here to
+ * avoid introducing a second, independently-driftable banner check. */
+function isGeneratedEntry(entry: string): boolean {
+  return (HOST_BOUND_ARTIFACTS as readonly string[]).includes(entry);
+}
+
 /**
- * Copies every `missing` entry, and `diverged`/`present` ones only when
- * `force` is true, creating parent directories as needed and setting each
- * target's permission bits from its source (D-5: present means leave alone;
- * forcing is the only overwrite path).
+ * Copies every `missing` entry, every `present`/`diverged` one when `force`
+ * is true, and -- new as of the 260805 stale-deploy fix -- every `diverged`
+ * GENERATED entry even WITHOUT force. `present` (force or not) leaves the
+ * target alone (D-5). Parent directories are created as needed, and each
+ * target's permission bits are set from its source.
+ *
+ * WHY diverged-but-generated is overwritten by default: CLAUDE.md's
+ * `.claude/mcp/` contract says resources/'s generated half (everything
+ * built by build.ts) and tools/ are "never hand-edited". If nothing may be
+ * hand-edited there, a `diverged` GENERATED entry cannot mean "a local edit
+ * worth protecting" -- staleness is the only thing divergence can mean for
+ * it, so refusing it (the old default) was silently no-op'ing on exactly
+ * the files that most needed refreshing (see
+ * .planning/todos/pending/2026-08-05-installresources-cannot-refresh-a-stale-deploy-without-force.md).
+ * The one HAND-AUTHORED entry, `vice-launcher.sh`, keeps the original
+ * refuse-on-divergence posture -- see isGeneratedEntry() above for how the
+ * two are told apart.
  *
  * Every copy is individually wrapped in its own try/catch: a failure is
  * pushed to `failed` and warned through `log`, never thrown (D-3) -- a
@@ -342,6 +391,10 @@ export function pruneResources({
  *
  * Returns { installed, skipped, diverged, failed, pruned }, arrays of the
  * resource's relative path (or, for `pruned`, the manifest's recorded path).
+ * `diverged` now means "refused" (hand-authored divergence only) rather
+ * than "seen diverged, whether or not overwritten" -- nothing in this
+ * module tree ever read the old broader meaning (checked before this
+ * change), so this is not a breaking change to any known caller.
  */
 export function installResources({
   root,
@@ -366,13 +419,34 @@ export function installResources({
       skipped.push(entry);
       continue;
     }
-    if (!force && status === "diverged") {
+    if (!force && status === "diverged" && !isGeneratedEntry(entry)) {
+      // Hand-authored (e.g. vice-launcher.sh): a divergence here MIGHT be a
+      // real local edit, so the original refuse-and-report posture stands.
       diverged.push(entry);
+      log(
+        `warn: install-resources: refusing to overwrite ${entry} -- it diverges from resources/ and is NOT ` +
+          "a generated artifact (hand-authored; see resources/vice-launcher.sh's documented exception in " +
+          "CLAUDE.md's .claude/mcp/ contract). Nothing was deployed for this entry. Pass force:true to " +
+          "overwrite deliberately; this installer will never do so on its own for a hand-authored file."
+      );
       continue;
     }
+    if (!force && status === "diverged" && isGeneratedEntry(entry)) {
+      // Generated (tsc-compiled): divergence can only mean staleness here --
+      // CLAUDE.md says this half of resources/ (and all of tools/) is never
+      // hand-edited -- so fall through to the copy below instead of
+      // refusing it like the hand-authored branch above.
+      log(
+        `note: install-resources: ${entry} was diverged (stale) from resources/ -- refreshing it automatically ` +
+          "because it is a generated artifact, and a generated artifact can only diverge by going stale."
+      );
+    }
 
-    // Reached for status === "missing" (always copied, force or not), or for
-    // "present"/"diverged" when force === true (the only overwrite path).
+    // Reached for status === "missing" (always copied, force or not), for
+    // "present"/"diverged" when force === true (the only overwrite path for
+    // a hand-authored file), and for a "diverged" GENERATED artifact even
+    // without force (staleness is the only thing divergence can mean for
+    // it, per the WHY note above).
     try {
       mkdirSync(dirname(target), { recursive: true });
       copyFileSync(src, target);
@@ -385,6 +459,20 @@ export function installResources({
           "Continuing; a failed deployment must never break the caller."
       );
     }
+  }
+
+  // Make a refused (hand-authored) divergence impossible to skim past: this
+  // is the one remaining case where installResources() intentionally
+  // deploys nothing for an entry while reporting failed: [] -- the exact
+  // shape that read as silent success before this fix (installed: [],
+  // diverged: [N], failed: []). The per-entry warning above already names
+  // each one; this is the loud, count-carrying summary line.
+  if (diverged.length > 0) {
+    log(
+      `warn: install-resources: ${diverged.length} hand-authored entrie(s) refused (diverged, no force): ` +
+        `${JSON.stringify(diverged)}. Nothing was deployed for these -- resolve the divergence manually, or ` +
+        "pass force:true if overwriting is intentional."
+    );
   }
 
   const { pruned } = pruneResources({ root, log });
