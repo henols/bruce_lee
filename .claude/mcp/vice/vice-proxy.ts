@@ -84,6 +84,7 @@ import {
   activeInstance,
   useInstance,
   DENY_LIST,
+  denyListRefusalMessage,
   readEpoch,
   beginSession,
   MachineRestartedError,
@@ -2983,36 +2984,31 @@ server.getServer().setRequestHandler(CallToolRequestSchema, async (request) => {
   // layer leaves the other standing.
   if (DENY_LIST.includes(name)) {
     return {
-      content: [
-        {
-          type: "text",
-          text:
-            `${name} is permanently forbidden -- it is known to crash the shared host VICE MCP server. ` +
-            `Recovery requires a manual, host-side restart. This refusal is permanent; retrying will not help.`,
-        },
-      ],
+      content: [{ type: "text", text: denyListRefusalMessage(name) }],
       isError: true,
     };
   }
-  // KNOWN, PRE-EXISTING, NOT WIDENED BY THIS SWAP (Plan 01.6.3-03, tracking
-  // Phase 01.4 criterion 3's already-recorded open breach concern): this
-  // check inspects only the OUTER `name` -- the literal MCP tool being
-  // called. The manifest also lists the host's own generic-surface
-  // meta-tools (`tools_call`/`tools_list`/`initialize`/
-  // `notifications_initialized`) as ordinary forwardable tools, and NOTHING
-  // at this layer, in the retired handleToolsCall() before it, or in
+  // PARTIALLY CLOSED BY 01.4-01 TASK 1 (tracking Phase 01.4 criterion 3's
+  // already-recorded open breach concern): this check inspects only the
+  // OUTER `name` -- the literal MCP tool being called. The manifest also
+  // lists the host's own generic-surface meta-tools (`tools_call`/
+  // `tools_list`/`initialize`/`notifications_initialized`) as ordinary
+  // forwardable tools. `tools_list` is now itself on DENY_LIST (refused by
+  // the check immediately above, closing the NAMED path for it), but
+  // NOTHING at this layer, in the retired handleToolsCall() before it, or in
   // call()'s own internal guard (vice.ts, DENY_LIST.includes(toolName) --
-  // same outer-name-only shape) inspects a nested `arguments.name` when the
-  // outer tool being forwarded is itself one of those meta-tools. Calling
+  // same outer-name-only shape) yet inspects a nested `arguments.name` when
+  // the outer tool being forwarded is `tools_call` itself. Calling
   // `tools_call` with `arguments: {name: "vice_disk_list", ...}` is
-  // therefore NOT refused here and reaches the host's OWN tools_call
-  // dispatch verbatim -- proven byte-for-byte unchanged from pre-swap
-  // behaviour by a dedicated test (vice-proxy.test.ts), not fixed by this
-  // plan: closing it would mean either refusing to forward the meta-tools
-  // at all or teaching this guard to parse arbitrary nested argument
-  // shapes, both genuine design decisions outside this plan's registration-
-  // loop scope. Recorded in 01.6.3-03-SUMMARY.md and
-  // .planning/todos/pending/ for a future plan to close.
+  // therefore STILL NOT refused here and still reaches the host's OWN
+  // tools_call dispatch verbatim -- proven byte-for-byte unchanged from
+  // pre-swap behaviour by a dedicated test (vice-proxy.test.ts). 01.4-01
+  // task 2 closes this the same way task 1 closed tools_list: by adding
+  // `tools_call` itself (and initialize/notifications_initialized, if that
+  // task's grep clears them) to DENY_LIST -- one array, no new mechanism,
+  // not a nested-argument parser. Recorded in 01.6.3-03-SUMMARY.md and
+  // .planning/todos/pending/ for the history of why this was deferred past
+  // the registration-loop-scoped plan that first surfaced it.
   const tool = tools[name];
   if (!tool || !tool.execute) {
     return { content: [{ type: "text", text: `Unknown tool: ${name}` }], isError: true };

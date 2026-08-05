@@ -174,7 +174,51 @@ export function activeInstance(): ActiveInstance {
 // Forbidden tool names.  Checked by exact string match before any network
 // call is made -- see call() below.  Never remove vice_disk_list from this
 // list; see the project's own hazard note (CLAUDE.md, STATE.md blockers).
-export const DENY_LIST: readonly string[] = ["vice_disk_list"];
+//
+// "tools_list" added (01.4-01 task 1, the phase's tracer slice): the host's
+// own generic-surface meta-tool, which the manifest lists as an ordinary
+// forwardable tool. Reuses this exact same array and the exact same two
+// enforcement seams (this guard, and vice-proxy.ts's registration-loop skip
+// + CallToolRequestSchema override) -- no new mechanism, per 01.4-RESEARCH.md
+// Pattern 1 ("one array, no new mechanism"). See denyListRefusalMessage()
+// below for why this entry's hazard shape differs from vice_disk_list's own.
+export const DENY_LIST: readonly string[] = ["vice_disk_list", "tools_list"];
+
+/**
+ * Renders an accurate refusal message for a DENY_LIST entry, keyed by hazard
+ * shape rather than one wording reused verbatim for every entry (01.4-01
+ * task 1, T-01.4-02): vice_disk_list crashes the shared host VICE MCP server
+ * directly -- a CRASH hazard, the project's original hazard note. Every
+ * other DENY_LIST entry is a generic-surface meta-tool (tools_list,
+ * tools_call, and -- if 01.4-01 task 2's own grep clears them -- initialize
+ * and notifications_initialized) whose hazard is a different shape: it is a
+ * confused-deputy BYPASS, because it can carry a forbidden tool name as a
+ * NESTED argument, sidestepping this exact outer-name-only guard (see
+ * .planning/todos/pending/2026-08-05-generic-surface-deny-list-gap-tools-call-nested-vice-disk-list.md).
+ * It does not itself crash anything. Telling an agent the wrong hazard shape
+ * for what is otherwise the same permanent refusal invites a pointless
+ * retry -- so this is one array (DENY_LIST) and one message-rendering
+ * function, reused at every call site, rather than duplicated refusal text
+ * per site (currently vice.ts's call() guard below and vice-proxy.ts's
+ * CallToolRequestSchema override; task 2 adds the retooled bypass test as a
+ * third consumer of this same function's output shape, not a fourth
+ * inline copy).
+ */
+export function denyListRefusalMessage(toolName: string): string {
+  if (toolName === "vice_disk_list") {
+    return (
+      `${toolName} is permanently forbidden -- it is known to crash the shared host VICE MCP server ` +
+      `(see CLAUDE.md's hazard note). Recovery requires a manual, host-side restart. Refusing to ` +
+      `serialise this request; retrying will not help.`
+    );
+  }
+  return (
+    `${toolName} is permanently forbidden -- it is a generic-surface meta-tool that can carry a ` +
+    `forbidden tool name as a nested argument, bypassing this exact outer-name-only guard (see ` +
+    `.planning/todos/pending/2026-08-05-generic-surface-deny-list-gap-tools-call-nested-vice-disk-list.md). ` +
+    `It does not itself crash the host. Refusing to serialise this request; retrying will not help.`
+  );
+}
 
 export interface ViceErrorOptions {
   code?: number | string;
@@ -630,10 +674,7 @@ export async function assertSameMachine(
  */
 export async function call(toolName: string, args: Record<string, unknown> = {}, opts: RpcOptions = {}): Promise<unknown> {
   if (DENY_LIST.includes(toolName)) {
-    throw new ViceError(
-      `${toolName} is permanently forbidden -- it is known to crash the shared host VICE MCP server ` +
-        `(see CLAUDE.md's hazard note). Refusing to serialise this request.`
-    );
+    throw new ViceError(denyListRefusalMessage(toolName));
   }
   const reconnectsBefore = reconnectCount;
   const result = await withReconnect(toolName, args, opts);
