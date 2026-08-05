@@ -1132,6 +1132,128 @@ test("tools/list declares the same cap it enforces", async () => {
   }
 });
 
+// Quick 260805, task 1: the failure path at vice-proxy.ts:1960 has two
+// distinct hostile inputs -- a token that was issued and then drained
+// ("expired", already covered above) and a token that was never issued at
+// all ("unknown"). Both fall through the same `!token ||
+// !CONTINUATION_STORE.has(token)` guard and the same message, but nothing
+// before this test actually drove a call with a token this proxy process
+// never handed out -- so this closes that gap rather than duplicating the
+// exhausted-token case.
+test("an unknown continuation token (never issued by this proxy) fails loudly, not silently or opaquely", async () => {
+  const { server } = startStandInServer();
+  const port = await listen(server);
+  const proxy = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${port}/mcp` });
+
+  try {
+    proxy.send({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } },
+    });
+    await proxy.nextMessage();
+
+    proxy.send({
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tools/call",
+      params: { name: "vice_result_continue", arguments: { token: "cont-never-issued-0000000000-1" } },
+    });
+    const resp = await proxy.nextMessage();
+    assert.equal(resp.result.isError, true, "a fabricated, never-issued token must fail loudly");
+    assert.match(resp.result.content[0].text, /unknown or has already expired/);
+    assert.match(resp.result.content[0].text, /narrower range/);
+    assert.equal(proxy.child.exitCode, null, "the proxy must still be alive after an unknown-token error");
+
+    // The failure must not have gone anywhere near the host -- served
+    // entirely inside this proxy, exactly like the exhausted-token case.
+    proxy.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
+    const pingResp = await proxy.nextMessage();
+    assert.equal(pingResp.result.isError, false, "the proxy must remain fully functional after the bogus token");
+  } finally {
+    proxy.child.kill("SIGKILL");
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+// Quick 260805, task 1: OUTPUT_CHAR_CAP is read once, at module load, from
+// VICE_MAX_RESULT_CHARS -- and the comment above its declaration (vice-proxy.ts)
+// says the single-definition property (the number tools/list ADVERTISES via
+// `_meta["anthropic/maxResultSizeChars"]` and the number wrapPossiblyChunked()
+// actually ENFORCES as the chunk boundary are the same read) is deliberate.
+// The two tests above exercise each half separately with DIFFERENT cap
+// values (1000 and 12345) -- this test ties them together with ONE cap
+// value, so a future edit that lets the two drift apart fails here even if
+// it left each half's own test green.
+test("the _meta cap stamp and the actual chunk boundary never drift apart", async () => {
+  const CAP = 777;
+  const bigPayload = "PAYLOAD-" + "x".repeat(CAP * 3 + 42) + "-END"; // several chunks' worth, not a clean multiple
+  const { server } = startBigPayloadServer(bigPayload);
+  const port = await listen(server);
+  const proxy = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${port}/mcp`, VICE_MAX_RESULT_CHARS: String(CAP) });
+
+  try {
+    proxy.send({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } },
+    });
+    await proxy.nextMessage();
+
+    proxy.send({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} });
+    const listResp = await proxy.nextMessage();
+    for (const t of listResp.result.tools) {
+      assert.equal(
+        t._meta && t._meta["anthropic/maxResultSizeChars"],
+        CAP,
+        `${t.name} must advertise exactly the enforced cap (${CAP})`
+      );
+    }
+
+    proxy.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "vice_memory_read", arguments: {} } });
+    const first = await proxy.nextMessage();
+    assert.equal(first.result.isError, false);
+    assert.equal(
+      first.result.content[0].text.length,
+      CAP,
+      "the first chunk must be exactly the advertised cap in length, not merely 'under the cap somewhere'"
+    );
+
+    const tokenMatch = first.result.content[1].text.match(/"token":"([^"]+)"/);
+    assert.ok(tokenMatch, "the marker must name a continuation token");
+    const token = tokenMatch[1];
+
+    let reassembled = first.result.content[0].text;
+    let nextMarker = first.result.content[1].text;
+    let guard = 0;
+    while (!/\(last chunk\)/.test(nextMarker) && guard < 100) {
+      guard += 1;
+      proxy.send({
+        jsonrpc: "2.0",
+        id: 100 + guard,
+        method: "tools/call",
+        params: { name: "vice_result_continue", arguments: { token } },
+      });
+      const cont = await proxy.nextMessage();
+      assert.equal(cont.result.isError, false);
+      // Every chunk except possibly the last must also be exactly CAP long --
+      // if the boundary the store enforces ever drifted from CAP, an
+      // intermediate chunk would be the first place a length mismatch shows.
+      if (!/\(last chunk\)/.test(cont.result.content[1].text)) {
+        assert.equal(cont.result.content[0].text.length, CAP, "every non-final chunk must be exactly CAP long");
+      }
+      reassembled += cont.result.content[0].text;
+      nextMarker = cont.result.content[1].text;
+    }
+    assert.equal(reassembled, bigPayload, "reassembly must equal the original payload byte for byte");
+  } finally {
+    proxy.child.kill("SIGKILL");
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 // -----------------------------------------------------------------------
 // Plan 01.1-03 task 1: nothing can kill the proxy, and nothing it does may
 // cache a negative ("the host is down") result. Every hostile-input shape
