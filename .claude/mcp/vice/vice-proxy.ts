@@ -84,6 +84,21 @@ import {
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, relative, resolve } from "node:path";
+// The wire-layer replacement (this plan, D-01): MCPServer owns tools/list's
+// schema-conversion dispatch; the CallToolRequestSchema override installed
+// below (immediately after startStdio(), see that call site's own comment)
+// owns tools/call instead, so this file's own hand-rolled envelope survives
+// unchanged even though the transport underneath it is now the SDK's own
+// StdioServerTransport/Protocol. createTool()/noopObserve are the documented,
+// public @mastra/core/tools API -- see this plan's "Ground truth" section for
+// why a raw JSON Schema needs the rawJsonSchemaAsStandardSchema() adapter
+// below rather than being passed to createTool() directly.
+import { MCPServer } from "@mastra/mcp";
+import { createTool, noopObserve } from "@mastra/core/tools";
+import type { StandardSchemaWithJSON } from "@mastra/core/schema";
+// A real, already-resolved transitive dependency of @mastra/mcp (Plan 01's
+// Task 2 note) -- deliberately NOT added to package.json directly.
+import { CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 
 const HERE_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -94,34 +109,6 @@ const HERE_DIR = dirname(fileURLToPath(import.meta.url));
 // each carry their own shape, narrowed at the point each handler actually
 // reads a field (never cast straight to an interface without a runtime
 // check first, matching vice-broker.mts's own isPlainObject() discipline).
-interface JsonRpcRequest {
-  jsonrpc?: string;
-  id?: string | number | null;
-  method?: string;
-  params?: unknown;
-}
-
-interface JsonRpcResponse {
-  jsonrpc: "2.0";
-  id: string | number | null;
-  result: unknown;
-}
-
-interface JsonRpcErrorResponse {
-  jsonrpc: "2.0";
-  id: string | number | null;
-  error: { code: number; message: string };
-}
-
-type JsonRpcOutgoingMessage = JsonRpcResponse | JsonRpcErrorResponse;
-
-/** tools/call's own params shape -- narrowed from `unknown` before either
- * field is read (handleToolsCall() below), never cast. */
-interface ToolCallParams {
-  name?: unknown;
-  arguments?: unknown;
-}
-
 /** A single MCP tool descriptor, as this file's own three synthetic tools
  * and every manifest-sourced tool share the shape (name/description/
  * inputSchema, plus whatever `_meta` handleToolsList() stamps on afterward).
@@ -172,76 +159,19 @@ process.stdout.on("error", (err) => {
   console.error(`vice-proxy: stdout write error (ignored): ${err && err.message ? err.message : err}`);
 });
 
-// ------------------------------------------------------------------ wire IO
+// ------------------------------------------------------------- @mastra/mcp
 //
-// Spec-literal per modelcontextprotocol.io/specification/draft/basic/transports:
-// newline-delimited JSON-RPC, one message per line, no embedded newlines,
-// and the server MUST NOT write anything to stdout that is not a valid MCP
-// message. All logging in this file goes to stderr, never stdout.
-function writeMessage(msg: JsonRpcOutgoingMessage): void {
-  let line: string;
-  try {
-    line = JSON.stringify(msg);
-  } catch (e) {
-    console.error(`vice-proxy: failed to serialise outgoing message (ignored): ${(e as Error).message}`);
-    return;
-  }
-  try {
-    process.stdout.write(line + "\n");
-  } catch (e) {
-    // Belt-and-suspenders alongside the 'error' listener above -- some
-    // failure modes throw synchronously even with a listener attached on
-    // certain Node versions/streams; never let this propagate.
-    console.error(`vice-proxy: stdout write threw (ignored): ${(e as Error).message}`);
-  }
-}
-
-function respond(id: string | number | null, result: unknown): JsonRpcResponse {
-  return { jsonrpc: "2.0", id, result };
-}
-
-function errorResponse(id: string | number | null, code: number, message: string): JsonRpcErrorResponse {
-  return { jsonrpc: "2.0", id, error: { code, message } };
-}
-
-/** Thrown for genuine JSON-RPC protocol problems (unknown method, malformed
- * params) -- per RESEARCH.md Pattern 2, these are the ONLY cases that become
- * a JSON-RPC `error` object rather than an `isError:true` result. */
-class ProtocolError extends Error {
-  code: number;
-  constructor(code: number, message: string) {
-    super(message);
-    this.code = code;
-  }
-}
-
-// ------------------------------------------------------------- initialize
-//
-// Version negotiation rule (per spec): echo back the client's requested
-// version if this proxy supports it; otherwise respond with the newest
-// version the proxy itself supports. Zero HTTP requests happen here -- the
-// whole point of criterion 4 (enumerate/initialize with no emulator
-// acquired).
-const SUPPORTED_PROTOCOL_VERSIONS: readonly string[] = ["2025-06-18", "2024-11-05"];
+// D-01 (this plan): the entire hand-rolled wire layer that used to live here
+// (writeMessage/respond/errorResponse/ProtocolError/handleInitialize/
+// handleToolsList/handleMessage/handleLine/the stdin loop) is gone, replaced
+// by `@mastra/mcp`'s `MCPServer` + `startStdio()` -- see the construction
+// site near the bottom of this file (right after the teardown region) for
+// the tool registry, the MCPServer instance, and the CallToolRequestSchema
+// override that preserves this file's own `{content, isError}` wire
+// contract exactly (see this plan's "Ground truth" section for why
+// MCPServer's OWN tools/call dispatch cannot be used as-is). PROXY_VERSION
+// survives unchanged, reused as MCPServer's own `version` field.
 const PROXY_VERSION = "0.1.0";
-
-interface InitializeResult {
-  protocolVersion: string;
-  capabilities: { tools: { listChanged: boolean } };
-  serverInfo: { name: string; version: string };
-}
-
-function handleInitialize(params: unknown): InitializeResult {
-  const requested = isPlainObject(params) && typeof params.protocolVersion === "string" ? params.protocolVersion : null;
-  const protocolVersion = requested && SUPPORTED_PROTOCOL_VERSIONS.includes(requested)
-    ? requested
-    : SUPPORTED_PROTOCOL_VERSIONS[0];
-  return {
-    protocolVersion,
-    capabilities: { tools: { listChanged: false } },
-    serverInfo: { name: "vice", version: PROXY_VERSION },
-  };
-}
 
 // --------------------------------------------------------------- tools/list
 //
@@ -434,36 +364,17 @@ function readManifestTools(): ToolInfo[] {
   return (parsed as { tools: ToolInfo[] }).tools;
 }
 
-interface ToolsListResult {
-  tools: ToolDefinition[];
-}
-
-function handleToolsList(): ToolsListResult {
-  // Two independent transforms applied at READ time, not write time, so a
-  // stale or hand-edited snapshot can never leak either property:
-  //   1. re-filter DENY_LIST -- refresh-manifest.mjs's serverInfo() call
-  //      already filters at write time; this is the second, independent
-  //      layer that catches a snapshot generated by any other means.
-  //   2. stamp the same output-size ceiling this proxy enforces onto every
-  //      tool, not a curated subset -- the host's tool set is not this
-  //      repo's to enumerate.
-  const manifestTools = readManifestTools().filter((t) => !DENY_LIST.includes(t.name));
-  const tools = [...manifestTools, RESULT_CONTINUE_TOOL, RECYCLE_TOOL, DIAGNOSE_TOOL].map((t) => ({
-    ...t,
-    _meta: { ...((t._meta as Record<string, unknown> | undefined) || {}), "anthropic/maxResultSizeChars": OUTPUT_CHAR_CAP },
-  }));
-  return { tools };
-}
-
 // --------------------------------------------------------------- tools/call
 //
 // Delegates every real call to the reused `call()` -- the retry ladder
 // already lives there (Pattern 1). Per Pattern 2, EVERY outcome of a tool
-// invocation attempt -- success or failure -- becomes a JSON-RPC *result*
-// carrying `content`/`isError`, never a JSON-RPC `error` object. A JSON-RPC
-// `error` is reserved for genuinely missing/malformed `params` on this
-// method itself, thrown as a `ProtocolError` and caught one layer up in
-// `handleMessage()`.
+// invocation attempt -- success or failure -- becomes a well-formed
+// `{content, isError}` result, never a JSON-RPC `error` object. Malformed
+// `tools/call` params (a missing/non-string `name`) are now rejected one
+// layer further out, by the SDK's own `CallToolRequestSchema` zod validation
+// (installed at the construction site near the bottom of this file) --
+// there is no `ProtocolError`/`handleMessage()` pair left in this file to
+// catch that case.
 //
 // Two hazards are enforced HERE, at the proxy seam, as independent layers on
 // top of what `call()` already does internally:
@@ -2664,51 +2575,17 @@ function renderSeamHazardAnnotations(name: string, args: Record<string, unknown>
   return notes.length ? notes.join("\n\n") : undefined;
 }
 
-async function handleToolsCall(params: unknown): Promise<ToolCallResult> {
-  const name = isPlainObject(params) ? params.name : undefined;
-  if (!name || typeof name !== "string") {
-    throw new ProtocolError(-32602, "tools/call requires params.name to be a non-empty string");
-  }
-  const args: Record<string, unknown> =
-    isPlainObject(params) && typeof params.arguments === "object" && params.arguments !== null
-      ? (params.arguments as Record<string, unknown>)
-      : {};
-
-  // The synthetic continuation tool: entirely a proxy-local concern, served
-  // before any deny-list or epoch logic and NEVER forwarded to the host.
-  if (name === "vice_result_continue") {
-    return handleResultContinue(args);
-  }
-
-  // The recycle tool: also entirely a proxy-local concern (plan 01.3-01),
-  // served in the same synthetic-tool slot as vice_result_continue above --
-  // before any deny-list or epoch logic, and NEVER forwarded to the host as
-  // a plain tools/call (handleRecycle() drives the broker's own recycle
-  // request protocol itself).
-  if (name === RECYCLE_TOOL.name) {
-    return handleRecycle(args);
-  }
-
-  // The diagnose tool (plan 01.3-02): also entirely a proxy-local concern,
-  // served in the same synthetic-tool slot as the two above -- before any
-  // deny-list or epoch logic. handleDiagnose() drives its own forwarded
-  // reads via call() and its own epoch bookkeeping, rather than the generic
-  // forwarding path below, because its epoch-drift and trap outcomes are
-  // REPORTS (a verdict), never a refusal.
-  if (name === DIAGNOSE_TOOL.name) {
-    return handleDiagnose(args);
-  }
-
-  // Layer 1: call-time deny-list refusal, before any forwarding logic and
-  // before any network attempt. Independent from handleToolsList()'s
-  // discovery-time filter -- removing either one leaves the other standing.
-  if (DENY_LIST.includes(name)) {
-    return isErrorText(
-      `${name} is permanently forbidden -- it is known to crash the shared host VICE MCP server. ` +
-        `Recovery requires a manual, host-side restart. This refusal is permanent; retrying will not help.`
-    );
-  }
-
+// forwardToVice() is the retained BODY of what used to be handleToolsCall()
+// -- renamed and trimmed of the name/args extraction, the three synthetic-
+// tool short-circuits, and the deny-list check, all now handled one layer
+// out by the CallToolRequestSchema override and the tool registry
+// construction (both near the bottom of this file, right after the
+// teardown region): each real manifest tool's own buildViceTool() entry
+// wraps this function as its `execute`, so this is reached only for a name
+// already known to be a real, non-deny-listed manifest tool with an
+// already-parsed `args` object. Every function called below is reused
+// completely unchanged from its pre-swap form.
+async function forwardToVice(name: string, args: Record<string, unknown>): Promise<ToolCallResult> {
   const leaseResult = await ensureBrokerLease();
   if (!leaseResult.ok) {
     return isErrorText(leaseResult.message);
@@ -2843,111 +2720,6 @@ async function handleToolsCall(params: unknown): Promise<ToolCallResult> {
   return wrapped;
 }
 
-// ---------------------------------------------------------- message dispatch
-//
-// Structural validation runs BEFORE the hasId/method dispatch below, and is
-// deliberately stricter than "does this look like a notification": a value
-// that parsed as valid JSON but is not an object at all (a bare number, a
-// string, an array), or an object with a missing/non-string "method", is not
-// a well-formed JSON-RPC message of EITHER kind (request or notification) --
-// there is no `id` field to trust as evidence of intent either way, so per
-// spec this is always answered with an Invalid Request (-32600) error,
-// keyed to whatever `id` the malformed value happens to carry (or `null`
-// if it carries none / isn't even an object). Silently dropping it as if it
-// were a "notification we don't understand" would hide a caller bug behind
-// the never-throw discipline instead of surfacing it.
-async function handleMessage(msg: unknown): Promise<JsonRpcOutgoingMessage | null> {
-  if (!isPlainObject(msg)) {
-    return errorResponse(null, -32600, "Invalid Request: message is not a JSON object");
-  }
-  const hasId = Object.prototype.hasOwnProperty.call(msg, "id");
-  const id = (hasId ? msg.id : null) as string | number | null;
-  const method = msg.method;
-  if (typeof method !== "string" || method.length === 0) {
-    return errorResponse(id, -32600, 'Invalid Request: missing or non-string "method"');
-  }
-  const params = msg.params;
-
-  try {
-    if (method === "initialize") {
-      const result = handleInitialize(params);
-      return hasId ? respond(id, result) : null;
-    }
-    if (method === "notifications/initialized") {
-      // A notification: consume it, write nothing at all.
-      return null;
-    }
-    if (method === "tools/list") {
-      const result = handleToolsList();
-      return hasId ? respond(id, result) : null;
-    }
-    if (method === "tools/call") {
-      const result = await handleToolsCall(params);
-      return hasId ? respond(id, result) : null;
-    }
-    // A well-formed message (valid object, valid string method) naming a
-    // method this proxy does not implement. Answered ONLY if the caller
-    // expected an answer -- a notification-shaped message with an unknown
-    // method name is still just consumed, per the same "never respond to a
-    // message with no id" rule as notifications/initialized above.
-    return hasId ? errorResponse(id, -32601, `Method not found: ${method}`) : null;
-  } catch (e) {
-    if (e instanceof ProtocolError) {
-      return hasId ? errorResponse(id, e.code, e.message) : null;
-    }
-    // Never-throw discipline extends even to bugs in this dispatcher itself:
-    // an unexpected internal error becomes a JSON-RPC error response (never
-    // an uncaught throw), keyed to whatever id the request carried.
-    return hasId ? errorResponse(id, -32603, `internal error: ${e && (e as Error).message ? (e as Error).message : String(e)}`) : null;
-  }
-}
-
-// -------------------------------------------------------------- stdin loop
-//
-// Spec-literal per RESEARCH.md's "Don't Hand-Roll" table: a minimal,
-// line-buffered split on `\n`, one `JSON.parse` per line -- no smart
-// framing, no length-prefixing, nothing beyond what the wire format actually
-// requires. A malformed line yields a JSON-RPC parse-error RESPONSE (per
-// spec, `id: null` since the id could not even be determined), never a
-// crash.
-let buffer = "";
-
-function handleLine(line: string): void {
-  const trimmed = line.trim();
-  if (trimmed.length === 0) return;
-
-  let msg: unknown;
-  try {
-    msg = JSON.parse(trimmed);
-  } catch (e) {
-    writeMessage({ jsonrpc: "2.0", id: null, error: { code: -32700, message: `Parse error: ${(e as Error).message}` } });
-    return;
-  }
-
-  handleMessage(msg)
-    .then((response) => {
-      if (response) writeMessage(response);
-    })
-    .catch((e) => {
-      // Defensive: handleMessage() itself already never rejects by design,
-      // but this is the never-throw discipline applied one more layer out,
-      // matching the module-level uncaughtException/unhandledRejection
-      // handlers above.
-      console.error(`vice-proxy: handleMessage rejected unexpectedly (ignored): ${e && (e as Error).message ? (e as Error).message : e}`);
-    });
-}
-
-process.stdin.setEncoding("utf8");
-process.stdin.on("data", (chunk: Buffer | string) => {
-  buffer += chunk;
-  let idx: number;
-  while ((idx = buffer.indexOf("\n")) !== -1) {
-    const line = buffer.slice(0, idx);
-    buffer = buffer.slice(idx + 1);
-    handleLine(line);
-  }
-});
-
 // -------------------------------------------------------------- teardown
 //
 // TWO ladders, not one, firing DIFFERENT handlers (spike-findings-bruce-lee
@@ -3017,5 +2789,187 @@ process.on("SIGHUP", () => onTeardown("SIGHUP"));
 // TEARDOWN-REGION-END
 
 warnOnceAboutOutputLimit(); // D-1.2-H -- one stderr line, at most once per process, never a refusal
+
+// ------------------------------------------------------- @mastra/mcp seam
+//
+// D-01 (this plan): the wire layer is now MCPServer + startStdio(), with
+// broker leasing, epoch, probe, path rewriting, call() and chunking all
+// reused completely unchanged inside forwardToVice() above -- only the
+// top-level caller changed. See this plan's PLAN.md "Ground truth" section
+// (read directly from @mastra/mcp's compiled source, not its docs) for why
+// tools/call is answered by the CallToolRequestSchema override below rather
+// than by MCPServer's own dispatch.
+
+/**
+ * Adapts a manifest tool's raw JSON Schema into the minimal
+ * StandardSchemaWithJSON shape createTool() requires, matching TODAY's
+ * zero-validation-at-the-proxy behaviour exactly: `~standard.validate`
+ * always succeeds (this proxy has never validated argument shape itself --
+ * the host does), and `~standard.jsonSchema.input()`/`.output()` both
+ * return the SAME schema object verbatim regardless of `target`/`io`, so
+ * tools/list's wire output stays byte-identical to the manifest's own raw
+ * schema (proven by a deep-equal assertion in vice-proxy.test.ts, not
+ * assumed from either library's documentation).
+ */
+function rawJsonSchemaAsStandardSchema(schema: unknown): StandardSchemaWithJSON {
+  const jsonSchema = isPlainObject(schema) ? schema : { type: "object", properties: {} };
+  return {
+    "~standard": {
+      version: 1,
+      vendor: "vice-proxy",
+      validate: (value: unknown) => ({ value }),
+      jsonSchema: {
+        input: () => jsonSchema,
+        output: () => jsonSchema,
+      },
+    },
+  };
+}
+
+/** Turns a `ToolCallResult` (this file's own internal `{content, isError}`
+ * shape) into the SDK's `CallToolResult` wire shape -- a direct, lossless
+ * pass-through, since the two shapes are structurally identical. The whole
+ * point of the CallToolRequestSchema override below building the response
+ * itself is that no translation or mangling happens here. */
+function toolCallResultToWire(result: ToolCallResult): { content: ToolCallResult["content"]; isError: boolean } {
+  return { content: result.content, isError: result.isError };
+}
+
+/** Narrows an `unknown` execute() return value to this file's own
+ * ToolCallResult shape before trusting it. Every tool this file registers
+ * is one this file itself wrote (buildViceTool()'s own `run` callbacks
+ * always return this shape), but the override still checks rather than
+ * casting blind, matching this file's own isPlainObject() discipline. */
+function isToolCallResult(value: unknown): value is ToolCallResult {
+  return isPlainObject(value) && Array.isArray(value.content) && typeof value.isError === "boolean";
+}
+
+/**
+ * Wraps a ToolDefinition (a manifest tool, or one of this file's own three
+ * proxy-local synthetic tools) plus its own runner into a Mastra Tool via
+ * createTool(), reproducing exactly the `_meta` merge handleToolsList() used
+ * to perform at read time (now construction-time, see the registry below).
+ */
+function buildViceTool(def: ToolDefinition, run: (args: Record<string, unknown>) => Promise<ToolCallResult>) {
+  return createTool({
+    id: def.name,
+    description: def.description ?? "",
+    inputSchema: rawJsonSchemaAsStandardSchema(def.inputSchema),
+    mcp: {
+      _meta: {
+        ...((def._meta as Record<string, unknown> | undefined) || {}),
+        "anthropic/maxResultSizeChars": OUTPUT_CHAR_CAP,
+      },
+    },
+    execute: async (inputData) => run(isPlainObject(inputData) ? inputData : {}),
+  });
+}
+
+// Plan 01.6.3-02's tracer proved this mechanism on `vice_ping` alone
+// (TRACER_MANIFEST_TOOL_NAMES, since removed). Plan 01.6.3-03 widens the
+// input set to the FULL manifest -- the loop body itself is unchanged from
+// the tracer: no per-tool special case, only the same DENY_LIST filter
+// already proven in Plan 02. This includes the host's own generic-surface
+// meta-tools (`tools_call`/`tools_list`/`initialize`/`notifications_initialized`,
+// which the manifest lists as ordinary tools) -- see this file's own header
+// note near DENY_LIST below on why registering them here does not change
+// the pre-existing generic-surface risk one layer down in call().
+//
+// Construction-time, not read-time -- a deliberate, disclosed narrowing this
+// plan records explicitly: tools/list is now served entirely by MCPServer's
+// own ListToolsRequestSchema handler (unmodified, not overridden), reading
+// from this SAME `tools` object, so vice_disk_list's absence from it is the
+// ONLY enforcement discovery-time needs any more -- no separate filter
+// function runs at read time. A manifest hot-reload mid-session is
+// therefore no longer picked up until the proxy restarts; the manifest is
+// regenerated by a manual, rare build step, never mid-session in practice.
+const tools: Record<string, ReturnType<typeof buildViceTool>> = {};
+for (const def of readManifestTools()) {
+  if (DENY_LIST.includes(def.name)) continue;
+  tools[def.name] = buildViceTool(def, (args) => forwardToVice(def.name, args));
+}
+tools[RESULT_CONTINUE_TOOL.name] = buildViceTool(RESULT_CONTINUE_TOOL, (args) => Promise.resolve(handleResultContinue(args)));
+tools[RECYCLE_TOOL.name] = buildViceTool(RECYCLE_TOOL, (args) => handleRecycle(args));
+tools[DIAGNOSE_TOOL.name] = buildViceTool(DIAGNOSE_TOOL, (args) => handleDiagnose(args));
+
+const server = new MCPServer({ name: "vice", version: PROXY_VERSION, tools });
+await server.startStdio();
+// Installed with ZERO await between this line and the one above (see this
+// plan's "Ground truth" section for why that ordering is load-bearing --
+// StdioServerTransport.start() has already wired its 'data' listener by the
+// time startStdio()'s promise resolves, but Node does not deliver a queued
+// 'data' event until the next event-loop turn): MCPServer's own tools/call
+// dispatch always forces isError:false on success and prepends "Error: " on
+// a thrown failure (read directly from @mastra/mcp's compiled source this
+// session, not its docs), which matches neither this file's own
+// {content, isError} contract nor the deny-list's exact refusal wording a
+// pre-existing test pins verbatim -- so tools/call is answered entirely by
+// this override, never by MCPServer's own handler. tools/list is NOT
+// overridden -- MCPServer's own ListToolsRequestSchema handler answers it,
+// the one piece of genuine library value this swap adopts.
+server.getServer().setRequestHandler(CallToolRequestSchema, async (request) => {
+  const name = request.params.name;
+  // Layer 1 (unchanged mechanism, now here instead of the retired
+  // handleToolsCall()): call-time deny-list refusal, before any tool lookup
+  // and before any network attempt -- independent from `tools`'s own
+  // construction-time absence of vice_disk_list (layer 2, the
+  // discovery-time enforcement tools/list reads from). Removing either
+  // layer leaves the other standing.
+  if (DENY_LIST.includes(name)) {
+    return {
+      content: [
+        {
+          type: "text",
+          text:
+            `${name} is permanently forbidden -- it is known to crash the shared host VICE MCP server. ` +
+            `Recovery requires a manual, host-side restart. This refusal is permanent; retrying will not help.`,
+        },
+      ],
+      isError: true,
+    };
+  }
+  // KNOWN, PRE-EXISTING, NOT WIDENED BY THIS SWAP (Plan 01.6.3-03, tracking
+  // Phase 01.4 criterion 3's already-recorded open breach concern): this
+  // check inspects only the OUTER `name` -- the literal MCP tool being
+  // called. The manifest also lists the host's own generic-surface
+  // meta-tools (`tools_call`/`tools_list`/`initialize`/
+  // `notifications_initialized`) as ordinary forwardable tools, and NOTHING
+  // at this layer, in the retired handleToolsCall() before it, or in
+  // call()'s own internal guard (vice.ts, DENY_LIST.includes(toolName) --
+  // same outer-name-only shape) inspects a nested `arguments.name` when the
+  // outer tool being forwarded is itself one of those meta-tools. Calling
+  // `tools_call` with `arguments: {name: "vice_disk_list", ...}` is
+  // therefore NOT refused here and reaches the host's OWN tools_call
+  // dispatch verbatim -- proven byte-for-byte unchanged from pre-swap
+  // behaviour by a dedicated test (vice-proxy.test.ts), not fixed by this
+  // plan: closing it would mean either refusing to forward the meta-tools
+  // at all or teaching this guard to parse arbitrary nested argument
+  // shapes, both genuine design decisions outside this plan's registration-
+  // loop scope. Recorded in 01.6.3-03-SUMMARY.md and
+  // .planning/todos/pending/ for a future plan to close.
+  const tool = tools[name];
+  if (!tool || !tool.execute) {
+    return { content: [{ type: "text", text: `Unknown tool: ${name}` }], isError: true };
+  }
+  try {
+    const raw = await tool.execute(request.params.arguments ?? {}, { observe: noopObserve });
+    if (!isToolCallResult(raw)) {
+      return {
+        content: [
+          { type: "text", text: `vice-proxy: internal error -- tool "${name}"'s execute() returned an unexpected shape` },
+        ],
+        isError: true,
+      };
+    }
+    return toolCallResultToWire(raw);
+  } catch (e) {
+    // The never-throw discipline this file already lives by (matching the
+    // retired handleToolsCall()'s own "NEVER rethrow past this point"
+    // comment) -- forwardToVice() and the synthetic-tool handlers should
+    // never actually throw in normal operation, but this override must not
+    // depend on that being true.
+    return { content: [{ type: "text", text: e instanceof Error ? e.message : String(e) }], isError: true };
+  }
+});
 
 console.error(`vice-proxy: ready, forwarding to ${activeInstance().url} (port ${activeInstance().port})`);

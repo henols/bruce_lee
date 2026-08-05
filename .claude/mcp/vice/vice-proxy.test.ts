@@ -357,27 +357,34 @@ test("stdout carries only valid JSON-RPC messages", async () => {
     proxy.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "vice_ping", arguments: {} } });
     await proxy.nextMessage();
 
-    // A deliberately malformed raw line -- must yield a JSON-RPC parse-error
-    // RESPONSE (code -32700, id: null), never a crash and never a non-frame
-    // byte on stdout.
+    // A deliberately malformed raw line. Plan 01.6.3-02 (D-01) note: the
+    // retired hand-rolled handleLine() always answered this with a
+    // JSON-RPC parse-error RESPONSE (-32700, id: null). The SDK's own
+    // StdioServerTransport/Protocol.connect() (read directly from their
+    // compiled source this session, not their docs) instead route a
+    // JSON.parse/schema-parse failure to `onerror` ONLY -- no wire response
+    // is written for it at all. This is a genuine, disclosed wire-level
+    // narrowing from the swap, not a crash: what this test can still prove
+    // is that the malformed line produces no non-frame byte on stdout and
+    // that the proxy is still alive and answering immediately afterward.
     proxy.sendRaw("not valid json{{{");
-    const parseErrorResp = await proxy.nextMessage();
-    assert.equal(parseErrorResp.error && parseErrorResp.error.code, -32700);
-    assert.equal(parseErrorResp.id, null);
 
-    // An unknown method -- a genuine protocol problem, JSON-RPC error, not
-    // an isError:true result.
+    // An unknown method -- still a genuine, well-formed JSON-RPC request;
+    // the SDK's own Protocol answers request-handler-lookup misses with
+    // MethodNotFound exactly like the retired handleMessage() did, so this
+    // assertion is unchanged.
     proxy.send({ jsonrpc: "2.0", id: 4, method: "something/unknown", params: {} });
     const unknownResp = await proxy.nextMessage();
     assert.equal(unknownResp.error && unknownResp.error.code, -32601);
 
     // The durable guard itself: every line collected across this whole
-    // session -- covering initialize, tools/list, tools/call, a malformed
-    // line, and an unknown method -- must have parsed cleanly as JSON and
-    // carry jsonrpc: "2.0". This is what fails if ANY module in the import
-    // graph (vice.ts and everything it transitively imports) ever leaks a
-    // stray console.log onto stdout instead of stderr.
-    assert.ok(proxy.messages.length >= 5, "expected at least 5 stdout messages across this session");
+    // session -- covering initialize, tools/list, tools/call, and an
+    // unknown method (the malformed line above drew no response, per the
+    // note above) -- must have parsed cleanly as JSON and carry
+    // jsonrpc: "2.0". This is what fails if ANY module in the import graph
+    // (vice.ts and everything it transitively imports) ever leaks a stray
+    // console.log onto stdout instead of stderr.
+    assert.ok(proxy.messages.length >= 4, "expected at least 4 stdout messages across this session");
     for (const msg of proxy.messages) {
       assert.ok(
         !Object.prototype.hasOwnProperty.call(msg, "__parseError"),
@@ -610,6 +617,142 @@ test("vice_disk_list is absent from tools/list", async () => {
     proxy.child.kill("SIGKILL");
     await new Promise((resolve) => server.close(resolve));
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// -----------------------------------------------------------------------
+// Plan 01.6.3-02 (the @mastra/mcp seam swap, tracer): two must_have proofs
+// this plan's own frontmatter calls out by name -- neither is covered by
+// the deny-list tests above, which prove ABSENCE, not schema fidelity or
+// the construction-time enforcement layer's own text.
+// -----------------------------------------------------------------------
+
+test("tools/list's vice_ping entry has an inputSchema deep-equal to the manifest's own raw schema", async () => {
+  // The manifest's own raw schema for vice_ping, read independently of the
+  // proxy -- not re-derived from any in-memory constant this file or
+  // vice-proxy.ts shares, so a passing assertion here is genuine evidence
+  // that rawJsonSchemaAsStandardSchema()'s jsonSchema.input()/output() both
+  // really do return the manifest's own object verbatim, through the whole
+  // createTool() -> MCPServer's own ListToolsRequestSchema handler ->
+  // standardSchemaToJSONSchema() round trip -- not assumed from either
+  // library's documentation.
+  const manifestText = readFileSync(join(HERE, "tools-manifest.json"), "utf8");
+  const manifest = JSON.parse(manifestText);
+  const manifestPingSchema = manifest.tools.find((t: any) => t.name === "vice_ping").inputSchema;
+
+  const { server } = startStandInServer();
+  const port = await listen(server);
+  const proxy = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${port}/mcp` });
+  try {
+    await handshake(proxy);
+    proxy.send({ jsonrpc: "2.0", id: 3, method: "tools/list", params: {} });
+    const resp = await proxy.nextMessage();
+    const pingEntry = resp.result.tools.find((t: any) => t.name === "vice_ping");
+    assert.ok(pingEntry, "vice_ping must be present in tools/list within this tracer's own registered scope");
+    assert.deepEqual(
+      pingEntry.inputSchema,
+      manifestPingSchema,
+      "the wire inputSchema for vice_ping must be byte-for-byte the manifest's own raw schema, not a re-derived or re-shaped one"
+    );
+  } finally {
+    proxy.child.kill("SIGKILL");
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("structural: the construction-time tools registry itself filters DENY_LIST, not merely tools/list's wire output", () => {
+  // The live tests above (and further down this file) already prove
+  // DENY_LIST is absent from the WIRE tools/list response and refused at
+  // tools/call -- this test proves the SOURCE-level mechanism producing
+  // both is the same single filter at registry-construction time (the
+  // `tools` object MCPServer's own ListToolsRequestSchema handler AND this
+  // file's own CallToolRequestSchema override both read from), matching
+  // this plan's own "construction-time, not read-time" framing. vice-proxy
+  // .ts exports nothing and is never imported (this file's own established
+  // discipline, see the header comment above) -- so this is a source-text
+  // assertion, the same idiom this file already uses for the SEAM_HAZARDS
+  // structural tests, rather than a runtime `Object.keys(tools)` reach-in.
+  const proxySrc = readFileSync(PROXY_PATH, "utf8");
+  const registryStart = proxySrc.indexOf("const tools: Record<string, ReturnType<typeof buildViceTool>> = {};");
+  assert.ok(registryStart >= 0, "the tools registry construction site must be found in the source");
+  const registryEnd = proxySrc.indexOf("const server = new MCPServer(", registryStart);
+  assert.ok(registryEnd > registryStart, "could not isolate the registry construction block's own end");
+  const registryBlock = proxySrc.slice(registryStart, registryEnd);
+  assert.match(
+    registryBlock,
+    /DENY_LIST\.includes\(def\.name\)/,
+    "the registry construction loop must filter DENY_LIST before a manifest tool ever reaches the `tools` map"
+  );
+});
+
+// -----------------------------------------------------------------------
+// Plan 01.6.3-03 task 2: the full-manifest parity proof. Plan 02 proved the
+// wire schema was byte-identical for ONE tool (vice_ping); this extends that
+// same deep-equal proof to EVERY manifest tool, plus the full name-set/order
+// parity `tools/list`'s must_have calls for -- computed independently from
+// tools-manifest.json, never from any in-memory constant this file or
+// vice-proxy.ts shares, so a passing assertion here is genuine evidence the
+// swap did not change the observable surface at full scale.
+// -----------------------------------------------------------------------
+
+test("tools/list's full output matches the manifest exactly (name set, order, schema, _meta cap) except for vice_disk_list's deliberate absence", async () => {
+  const manifestText = readFileSync(join(HERE, "tools-manifest.json"), "utf8");
+  const manifest = JSON.parse(manifestText);
+  const DENY_LISTED = new Set(["vice_disk_list"]);
+  const expectedManifestNames = manifest.tools.map((t: any) => t.name).filter((n: string) => !DENY_LISTED.has(n));
+  const expectedOrder = [...expectedManifestNames, "vice_result_continue", "vice_recycle", "vice_diagnose"];
+  const manifestSchemaByName: Record<string, unknown> = Object.fromEntries(
+    manifest.tools.map((t: any) => [t.name, t.inputSchema])
+  );
+
+  const { server } = startStandInServer();
+  const port = await listen(server);
+  const proxy = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${port}/mcp` });
+  try {
+    await handshake(proxy);
+    proxy.send({ jsonrpc: "2.0", id: 3, method: "tools/list", params: {} });
+    const resp = await proxy.nextMessage();
+    const tools = resp.result.tools;
+    const actualNames = tools.map((t: any) => t.name);
+
+    // (a) name SET equality -- nothing missing, nothing extra, vice_disk_list
+    // absent, every synthetic present.
+    assert.deepEqual(
+      new Set(actualNames),
+      new Set(expectedOrder),
+      "the wire tools/list name set must be exactly the manifest (minus vice_disk_list) plus the three synthetics -- no tool missing, none extra"
+    );
+    // (a) ORDER parity -- manifest order preserved, synthetics appended last
+    // in their own fixed order, matching [...manifestTools, RESULT_CONTINUE_TOOL,
+    // RECYCLE_TOOL, DIAGNOSE_TOOL]'s insertion order (this plan's own
+    // key_link).
+    assert.deepEqual(actualNames, expectedOrder, "the wire tools/list order must match the manifest's own order, synthetics appended last");
+
+    // (b) per-tool inputSchema deep-equal against the manifest's own raw
+    // schema, for EVERY manifest-derived tool, not just vice_ping.
+    for (const name of expectedManifestNames) {
+      const wireEntry = tools.find((t: any) => t.name === name);
+      assert.ok(wireEntry, `manifest tool "${name}" must be present in tools/list`);
+      assert.deepEqual(
+        wireEntry.inputSchema,
+        manifestSchemaByName[name],
+        `"${name}"'s wire inputSchema must be byte-for-byte the manifest's own raw schema`
+      );
+    }
+
+    // (c) every tool entry (manifest-derived AND synthetic) carries the
+    // _meta cap stamp equal to OUTPUT_CHAR_CAP (default: no override set on
+    // this proxy invocation, so the proxy's own 500000 default applies).
+    for (const t of tools) {
+      assert.equal(
+        t._meta && t._meta["anthropic/maxResultSizeChars"],
+        500000,
+        `"${t.name}" must carry the default output-size cap in its _meta`
+      );
+    }
+  } finally {
+    proxy.child.kill("SIGKILL");
+    await new Promise((resolve) => server.close(resolve));
   }
 });
 
@@ -964,35 +1107,60 @@ test("never-throw: malformed and hostile input is answered, not fatal", async ()
     });
     await proxy.nextMessage();
 
-    // 1. Raw non-JSON text -- JSON-RPC parse error, id: null.
+    // Plan 01.6.3-02 (D-01) note, covering cases 1-3 below: the retired
+    // hand-rolled handleMessage()/handleLine() pair always answered each of
+    // these with a well-formed JSON-RPC error (-32700/-32600/-32600). The
+    // SDK's own StdioServerTransport/Protocol (read directly from their
+    // compiled source this session) route a JSON.parse failure OR a
+    // JSONRPCMessageSchema validation failure to `onerror` only -- no wire
+    // response is written for either at all. This is a genuine, disclosed
+    // wire-level narrowing: nothing crashes and nothing hangs (still
+    // provable, see case 6 below), but a caller sending one of these three
+    // shapes now gets silence rather than an explicit refusal.
+
+    // 1. Raw non-JSON text -- no response; must not crash the process.
     proxy.sendRaw("this is not { json at all");
-    const parseErr = await proxy.nextMessage();
-    assert.equal(parseErr.error && parseErr.error.code, -32700, "malformed JSON must yield -32700");
-    assert.equal(parseErr.id, null);
+    await new Promise((r) => setTimeout(r, 100));
     assert.equal(proxy.child.exitCode, null, "still alive after a malformed line");
 
-    // 2. Valid JSON that is not an object at all (a bare number) -- Invalid
-    //    Request. There is no id to trust, so this must still be ANSWERED
-    //    (never silently dropped as if it were a notification).
+    // 2. Valid JSON that is not an object at all (a bare number) -- fails
+    //    JSONRPCMessageSchema validation at the transport layer; no id to
+    //    key a response to even if one were written, and per the note
+    //    above none is.
     proxy.sendRaw(JSON.stringify(42));
-    const bareNumberErr = await proxy.nextMessage();
-    assert.equal(bareNumberErr.error && bareNumberErr.error.code, -32600, "a non-object JSON value must yield -32600");
+    await new Promise((r) => setTimeout(r, 100));
+    assert.equal(proxy.child.exitCode, null, "still alive after a bare-value line");
 
-    // 3. A well-formed object with no "method" at all.
+    // 3. A well-formed-looking object with no "method" at all -- also fails
+    //    JSONRPCMessageSchema validation (every union member requires a
+    //    string method or a result/error field this object has neither of).
     proxy.send({ jsonrpc: "2.0", id: 10, params: {} });
-    const noMethodErr = await proxy.nextMessage();
-    assert.equal(noMethodErr.error && noMethodErr.error.code, -32600, 'an object with no "method" must yield -32600');
-    assert.equal(noMethodErr.id, 10, "the id, when present, must still be echoed on an Invalid Request error");
+    await new Promise((r) => setTimeout(r, 100));
+    assert.equal(proxy.child.exitCode, null, "still alive after a method-less object");
 
-    // 4. An unknown (unimplemented) method name.
+    // 4. An unknown (unimplemented) method name -- THIS one still parses as
+    //    a well-formed JSONRPCRequestSchema (method is validated as merely
+    //    a non-empty string, not a known enum), so it reaches the SDK's own
+    //    request-handler-lookup miss path, which answers MethodNotFound --
+    //    unchanged from the retired handleMessage()'s own -32601.
     proxy.send({ jsonrpc: "2.0", id: 11, method: "something/unimplemented", params: {} });
     const unknownErr = await proxy.nextMessage();
     assert.equal(unknownErr.error && unknownErr.error.code, -32601, "an unrecognised method must yield -32601");
 
-    // 5. tools/call with params but no name.
+    // 5. tools/call with params but no name. This DOES draw a response --
+    //    CallToolRequestSchema's own validation runs (via setRequestHandler's
+    //    wrapping, applied identically to this override), rejecting the
+    //    missing required "name" field before this file's own override body
+    //    ever runs. The retired handleToolsCall() threw a ProtocolError
+    //    mapped to -32602 (InvalidParams); the SDK's own validation failure
+    //    is a plain thrown ZodError with no numeric `.code`, which
+    //    Protocol's own error-mapping (Number.isSafeInteger(error['code'])
+    //    ? error['code'] : ErrorCode.InternalError) falls back to
+    //    -32603 (InternalError) for -- a provable, disclosed wire-level
+    //    change in WHICH error code, not in whether one arrives.
     proxy.send({ jsonrpc: "2.0", id: 12, method: "tools/call", params: { arguments: {} } });
     const noNameErr = await proxy.nextMessage();
-    assert.equal(noNameErr.error && noNameErr.error.code, -32602, "tools/call with no params.name must yield -32602");
+    assert.equal(noNameErr.error && noNameErr.error.code, -32603, "tools/call with no params.name now yields -32603 (InternalError), not the retired -32602 (InvalidParams) -- see note above");
 
     // 6. Finally: a genuinely valid tools/call, proving the process is
     //    still fully functional after five consecutive hostile inputs.
@@ -4441,6 +4609,73 @@ test("vice_disk_list is still absent from tools/list and still refused at tools/
     const callResp = await proxy.nextMessage();
     assert.equal(callResp.result.isError, true, "vice_disk_list must still be refused at call time");
     assert.equal(requests.length, 0, "the refusal must make no request to the stand-in host");
+  } finally {
+    proxy.child.kill("SIGKILL");
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+// -----------------------------------------------------------------------
+// Plan 01.6.3-03: full-manifest registration now includes the host's own
+// generic-surface meta-tools (tools_call/tools_list/initialize/
+// notifications_initialized), which the manifest lists as ordinary
+// forwardable tools. Phase 01.4 criterion 3 already recorded that
+// vice_disk_list reachable THROUGH tools_call's own nested `name` argument
+// is an open breach concern, confirmed present in a live agent session --
+// this plan's job (per its own coordinator brief) is to ASSERT that
+// registering the full manifest does not WIDEN this pre-existing gap, not
+// to silently fix or silently ignore it. Both facts below are proven, not
+// assumed: the NAMED surface (tools/call naming vice_disk_list directly)
+// stays refused with zero host requests (proven above and repeatedly
+// elsewhere in this file); the GENERIC surface's pre-existing, unwidened
+// gap is proven identical to what a bare call("tools_call", {name:
+// "vice_disk_list", ...}) has always done, both before and after this
+// plan's swap, since call()'s own internal guard (vice.ts,
+// DENY_LIST.includes(toolName)) inspects only the OUTER tool name in both
+// eras and was never touched by either plan.
+// -----------------------------------------------------------------------
+
+test("known, pre-existing, NOT widened: tools_call's own nested vice_disk_list argument is not refused at this layer and reaches the stand-in host", async () => {
+  const { server, requests } = startStandInServer();
+  const port = await listen(server);
+  const proxy = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${port}/mcp` });
+  try {
+    await handshake(proxy);
+
+    // Sanity: the generic-surface meta-tool is now a real, registered,
+    // forwardable tool (full-manifest registration, this plan) -- if it
+    // were absent, the probe below would fail with "Unknown tool" instead
+    // of reaching the host, silently passing for the wrong reason.
+    proxy.send({ jsonrpc: "2.0", id: 10, method: "tools/list", params: {} });
+    const listResp = await proxy.nextMessage();
+    const names = listResp.result.tools.map((t: any) => t.name);
+    assert.ok(names.includes("tools_call"), "tools_call must be registered as an ordinary forwardable tool from the manifest");
+
+    // The probe itself: tools_call, forwarded like any other manifest tool,
+    // carrying a nested `name: "vice_disk_list"` argument -- this file's own
+    // DENY_LIST check (the CallToolRequestSchema override) only ever
+    // inspects the OUTER name ("tools_call"), never this nested field, so
+    // the request reaches the stand-in host verbatim. This is the exact,
+    // already-known shape of the Phase 01.4 criterion 3 concern -- proven
+    // here as UNCHANGED by this plan's registration-loop widening, not
+    // newly discovered or newly introduced by it.
+    proxy.send({
+      jsonrpc: "2.0",
+      id: 11,
+      method: "tools/call",
+      params: { name: "tools_call", arguments: { name: "vice_disk_list", arguments: {} } },
+    });
+    await proxy.nextMessage();
+    const forwarded = requests.find((r) => r && r.method === "tools/call" && r.params && r.params.name === "tools_call");
+    assert.ok(
+      forwarded,
+      "tools_call must reach the stand-in host with its nested vice_disk_list argument intact -- proving the pre-existing generic-surface gap is not intercepted at this layer, exactly matching pre-swap behaviour (call()'s own guard is outer-name-only and was never touched by either plan)"
+    );
+    assert.deepEqual(
+      forwarded!.params.arguments,
+      { name: "vice_disk_list", arguments: {} },
+      "the nested argument must reach the host byte-for-byte unmodified -- this proxy has never inspected argument contents"
+    );
   } finally {
     proxy.child.kill("SIGKILL");
     await new Promise((resolve) => server.close(resolve));
