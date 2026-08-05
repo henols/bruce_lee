@@ -3623,3 +3623,32 @@ container-relative or absolute, under which it would appear. Reclassified CF-01.
 `blocked-on-HV-08` to `permanently-unverifiable-from-container` on this basis. Any future row of this
 shape (verifying `tools/`'s real contents) should be written expecting a developer's direct report,
 never a container-side read.
+
+### 2026-08-05 — A gitignored directory is absent in a worktree, and a mis-scoped `find` proves nothing
+
+Two compounding mistakes produced a confident, wrong conclusion in a carry-forward ledger: that the
+broker's deployment directory "does not exist anywhere in this container's filesystem, under any path".
+
+1. **The search was mis-scoped.** It looked for a `tools/` directory *under `mcp/vice` paths*. The real
+   target is `installTargetDir(root)` → `join(root, "tools")` — the **repo root**
+   (`/workspaces/bruce_lee/tools/`), not a path under `.claude/mcp/vice/`. No amount of searching the
+   wrong subtree can find it.
+2. **The search ran inside a git worktree.** `tools/` is untracked, so a freshly created worktree never
+   materialises it. Its absence *there* says nothing about the project — the main checkout had it all
+   along, with seven generated artifacts in it.
+
+Either error alone would have been caught by the other; together they reinforced a false negative, and
+the conclusion was then written into a ledger as a permanent classification.
+
+**Saves:** the general rule is that **an untracked or generated directory is systematically invisible
+from a worktree**, so any "X does not exist in this project" claim established from inside one is
+unreliable for exactly the artifacts most likely to be generated — `tools/`, `node_modules/`, build
+output. Resolve the path from the code that creates it (here, `installTargetDir()`) rather than guessing
+its parent, and re-check from the main checkout before recording an absence as a fact. This is the same
+family as the two earlier worktree hazards on this project: an absolute `cd` inside a worktree silently
+targeting the main checkout, and a plan's `<verify>` block doing the same.
+
+**Evidence:** direct comparison, 2026-08-05 — `ls tools/` in the main checkout returned 7 `.mjs`
+artifacts plus `lib/` and `vice-launcher.sh`, while the same path was absent in the worktree that had
+concluded otherwise; `installTargetDir()` read from source to confirm the correct parent.
+**Confidence:** HIGH.
