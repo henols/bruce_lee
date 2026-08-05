@@ -613,6 +613,71 @@ test("vice_disk_list is absent from tools/list", async () => {
   }
 });
 
+// -----------------------------------------------------------------------
+// Plan 01.6.3-02 (the @mastra/mcp seam swap, tracer): two must_have proofs
+// this plan's own frontmatter calls out by name -- neither is covered by
+// the deny-list tests above, which prove ABSENCE, not schema fidelity or
+// the construction-time enforcement layer's own text.
+// -----------------------------------------------------------------------
+
+test("tools/list's vice_ping entry has an inputSchema deep-equal to the manifest's own raw schema", async () => {
+  // The manifest's own raw schema for vice_ping, read independently of the
+  // proxy -- not re-derived from any in-memory constant this file or
+  // vice-proxy.ts shares, so a passing assertion here is genuine evidence
+  // that rawJsonSchemaAsStandardSchema()'s jsonSchema.input()/output() both
+  // really do return the manifest's own object verbatim, through the whole
+  // createTool() -> MCPServer's own ListToolsRequestSchema handler ->
+  // standardSchemaToJSONSchema() round trip -- not assumed from either
+  // library's documentation.
+  const manifestText = readFileSync(join(HERE, "tools-manifest.json"), "utf8");
+  const manifest = JSON.parse(manifestText);
+  const manifestPingSchema = manifest.tools.find((t: any) => t.name === "vice_ping").inputSchema;
+
+  const { server } = startStandInServer();
+  const port = await listen(server);
+  const proxy = startProxy({ VICE_MCP_URL: `http://127.0.0.1:${port}/mcp` });
+  try {
+    await handshake(proxy);
+    proxy.send({ jsonrpc: "2.0", id: 3, method: "tools/list", params: {} });
+    const resp = await proxy.nextMessage();
+    const pingEntry = resp.result.tools.find((t: any) => t.name === "vice_ping");
+    assert.ok(pingEntry, "vice_ping must be present in tools/list within this tracer's own registered scope");
+    assert.deepEqual(
+      pingEntry.inputSchema,
+      manifestPingSchema,
+      "the wire inputSchema for vice_ping must be byte-for-byte the manifest's own raw schema, not a re-derived or re-shaped one"
+    );
+  } finally {
+    proxy.child.kill("SIGKILL");
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("structural: the construction-time tools registry itself filters DENY_LIST, not merely tools/list's wire output", () => {
+  // The live tests above (and further down this file) already prove
+  // DENY_LIST is absent from the WIRE tools/list response and refused at
+  // tools/call -- this test proves the SOURCE-level mechanism producing
+  // both is the same single filter at registry-construction time (the
+  // `tools` object MCPServer's own ListToolsRequestSchema handler AND this
+  // file's own CallToolRequestSchema override both read from), matching
+  // this plan's own "construction-time, not read-time" framing. vice-proxy
+  // .ts exports nothing and is never imported (this file's own established
+  // discipline, see the header comment above) -- so this is a source-text
+  // assertion, the same idiom this file already uses for the SEAM_HAZARDS
+  // structural tests, rather than a runtime `Object.keys(tools)` reach-in.
+  const proxySrc = readFileSync(PROXY_PATH, "utf8");
+  const registryStart = proxySrc.indexOf("const tools: Record<string, ReturnType<typeof buildViceTool>> = {};");
+  assert.ok(registryStart >= 0, "the tools registry construction site must be found in the source");
+  const registryEnd = proxySrc.indexOf("const server = new MCPServer(", registryStart);
+  assert.ok(registryEnd > registryStart, "could not isolate the registry construction block's own end");
+  const registryBlock = proxySrc.slice(registryStart, registryEnd);
+  assert.match(
+    registryBlock,
+    /DENY_LIST\.includes\(def\.name\)/,
+    "the registry construction loop must filter DENY_LIST before a manifest tool ever reaches the `tools` map"
+  );
+});
+
 test("epoch drift is reported loudly and not cached", async () => {
   const dir = mkdtempSync(join(tmpdir(), "vice-proxy-epoch-"));
   const epochFile = join(dir, "epoch.json");
