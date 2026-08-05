@@ -3292,3 +3292,72 @@ the mis-attribution.
 on the control port while the broker was independently confirmed healthy). HIGH for fact 2 (the
 mis-attribution is a direct read of the pre-fix source plus the developer's own recorded
 correction, not an inference).
+
+### 2026-08-05 — CR-01: a state-field-only recheck missed a concurrent DROP, letting a grant outlive its process and letting a stale release cross into an unrelated instance
+
+**Type:** hazard
+
+`selectWarmInstance()`'s (`vice-broker.mts`) post-probe recheck, before this entry's own fix, tested
+only `record.state !== "ready"` to decide whether a probe-live candidate was still safe to return as
+a grant winner. That check correctly rejects a candidate a CONCURRENT sibling acquire has already
+GRANTED, because a grant flips `record.state` to `"granted"` synchronously. It does NOT reject a
+candidate a concurrent sibling has already DROPPED (a failed grant-time re-probe:
+`markDeliberateDeath()` + `state.instances.delete(record.port)`), because the drop path never touches
+`record.state` at all — it removes the record from the map outright, leaving the orphaned object
+itself still reporting `state === "ready"` to any other holder of the same stale reference. A second,
+concurrent `selectWarmInstance()` walk holding that stale reference (snapshotted via
+`Array.from(state.instances.values())` before either caller's probe resolved) could pass the
+state-only recheck and be granted a record whose process was, at that exact moment, being torn down
+by the sibling call — producing a grant naming a port that `nextFreePort()` could legitimately
+reallocate to a brand-new, UNRELATED cold launch. `handleRelease()`'s OWN pre-existing behaviour
+compounded this: it resolved its kill target purely by `state.instances.get(grant.port)` — the port's
+CURRENT occupant — with no check that the occupant was the SAME process the grant was actually issued
+for. A later release on the orphaned grant would therefore identity-verified-kill whatever unrelated,
+live, in-use instance had since taken over that port number — a genuine cross-session
+availability/data-loss risk, not merely a theoretical one.
+
+This is exactly Defect 3's own failure shape ("a grant can outlive its process") reappearing via a
+race on the very hot path P-01/P-02 built to close it, and it falsified the phase's own threat-model
+disposition of T-01.6.2.1-03 ("the selection -> state=granted -> grant-record transition is one
+synchronous step with no intervening await, so two concurrent acquires cannot both select the same
+record") — that claim was true only for the already-granted case, never the already-dropped case. No
+test anywhere in the phase (unit, e2e, or structural) exercised two concurrent `selectWarmInstance()`
+walks against a shared candidate with differing probe outcomes, so a fully green, extensively tested
+suite reported nothing wrong — the same "correct module, exercised path never actually proven under
+concurrency" shape this project's own 2026-08-04 entry already named for `superviseChild()`'s own
+orphaning.
+
+**Fix (two independent parts, deliberately not one):** (1) broaden the recheck to ALSO verify map
+membership by identity (`state.instances.get(record.port) === record`, not merely a port-number
+lookup) before trusting a probe-live candidate — this closes the specific concurrent-acquire race at
+its source. (2) add a REQUIRED `pid` field to `GrantRecord`, set at grant time, and have
+`handleRelease()` compare the port's current occupant's own pid against the grant's recorded pid
+before treating it as this grant's instance — this closes the BROADER class of "a port's occupant
+swapped out without the grant being cleared" (CR-01's race is one cause; an ordinary
+crash-and-give-up that frees a port for an unrelated cold launch is another, requiring no concurrent
+acquire at all). A legitimate recycle (`broker-launch.mts`'s `handleExit()`) needed its own companion
+fix — syncing the matching grant's pid to the respawned record's pid — so the new identity check never
+misfires against the one case where the SAME grant legitimately continues to own a DIFFERENT pid on
+the SAME port.
+
+**Saves:** the next "is this concurrency-safety comment still true" question in this codebase from
+trusting a header comment's own claimed invariant at face value — the comment `selectWarmInstance()`
+carried was CORRECT about the grant path and SILENT about the drop path, and reading only the
+comment (rather than tracing every path that could remove or alter the object between the snapshot
+and the return) would have missed this. Any function that snapshots a collection and later re-checks
+one field on a candidate must ask whether OTHER mutation paths on the SAME object exist that the
+re-checked field is blind to.
+
+**Evidence:** independent code reading at HEAD by this phase's own verifier (`01.6.2.1-VERIFICATION.md`,
+filed as the phase's sole BLOCKER gap, score 8/9), reconfirmed by this entry's own read of the landed
+code, and closed by a deterministic two-overlapping-acquires regression test (`vice-broker-acquire.test.ts`)
+that reproduces the race without relying on real concurrency: two `handleAcquire()` calls share one
+seeded candidate; the first caller's probe is resolved `false` (drop path) and the second caller's
+probe is resolved `true` only after polling confirms the first caller's drop has already executed
+(proving ordering rather than assuming it). Observed RED against the pre-fix code (the second
+caller's own cold-spawn factory invoked 0 times instead of 1 — it incorrectly won a grant naming the
+already-dropped record) and GREEN after the fix, per this project's own RED-first discipline.
+
+**Confidence:** HIGH (read the landed code directly, reproduced the race with a deterministic
+regression test rather than trusting the review's narrative alone, and observed both the RED and
+GREEN states).

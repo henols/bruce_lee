@@ -223,6 +223,39 @@ test("structural: vice-broker.mts records a grant in exactly one place, and its 
   );
 });
 
+// ===========================================================================
+// 01.6.2.1-07-PLAN.md, Task 3: WR-04's structural anti-regression gate --
+// the warm-launch log-path variable must no longer sit at module scope
+// (the cross-call-sharing risk the review names), and must instead be
+// declared, indented, inside maintainWarmFloorForRealBroker()'s own body --
+// proving it MOVED rather than merely vanished.
+// ===========================================================================
+
+test("structural: vice-broker.mts's warm-launch log-path variable is declared inside maintainWarmFloorForRealBroker()'s own body, not at module scope (WR-04)", () => {
+  const brokerSource = stripComments(readFileSync(join(HERE, "vice-broker.mts"), "utf8"));
+
+  // The identifier must NOT be declared at module scope (column zero).
+  const moduleScopeDeclaration = /^let\s+lastWarmLaunchLogRelPath\b/m.test(brokerSource);
+  assert.equal(
+    moduleScopeDeclaration,
+    false,
+    "the warm-launch log-path variable must no longer be declared at module scope (column zero) -- WR-04's cross-call-sharing risk",
+  );
+
+  // The identifier must still exist, indented, inside a function body.
+  const indentedDeclaration = /^[ \t]+let\s+lastWarmLaunchLogRelPath\b/m.test(brokerSource);
+  assert.ok(
+    indentedDeclaration,
+    "the warm-launch log-path variable must still be declared, indented, inside maintainWarmFloorForRealBroker()'s own body -- proving it MOVED rather than merely vanished",
+  );
+
+  // Sanity: the declaration, the write site and the read site all still
+  // reference the SAME identifier -- a regression that renamed rather than
+  // relocated it would otherwise pass the two checks above vacuously.
+  const referenceCount = (brokerSource.match(/\blastWarmLaunchLogRelPath\b/g) ?? []).length;
+  assert.ok(referenceCount >= 3, `expected at least 3 references (declaration, write, read) to lastWarmLaunchLogRelPath, found ${referenceCount}`);
+});
+
 function makeInstance(overrides: Partial<InstanceRecord> = {}): InstanceRecord {
   return {
     port: 6600,

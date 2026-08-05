@@ -464,3 +464,99 @@ test("handleAcquire: the grant-time-probe-failure log line is distinct from brok
     assert.doesNotMatch(line, /shutdown complete/, "the grant-time-probe-failure line must never read like the shutdown kill's own line");
   }
 });
+
+// ---------------------------------------------------------------------------
+// Task 3 (01.6.2.1-07-PLAN.md): WR-01 -- atCapacity() gates ONLY the
+// cold-launch arm, not the warm-instance arm. At the instance ceiling with a
+// probe-live ready candidate present, handleAcquire() must still grant it
+// (granting an existing warm candidate creates no NEW instance and does not
+// raise countTotal()); with the ceiling reached and NO ready candidate, the
+// refusal is unchanged.
+// ---------------------------------------------------------------------------
+
+// The DEFAULT instance ceiling this test seeds -- read directly from
+// broker-state.mts's own ceiling resolver (VICE_BROKER_MAX's default, 16,
+// resolveCeiling()). If this default ever changes, this test's own seeding
+// must change with it -- noted here so a silent default change makes this
+// test visibly wrong rather than silently so.
+const DEFAULT_INSTANCE_CEILING = 16;
+
+test("handleAcquire: at the instance ceiling with one probe-live ready candidate present, the acquire is granted rather than refused (WR-01)", async () => {
+  const { handleAcquire } = await loadBrokerModule();
+  const state = createState();
+  // Seed exactly the default ceiling's worth of records: one ready and
+  // probe-live, the rest in a non-selectable ("granted") state.
+  state.instances.set(6600, makeReadyInstance({ port: 6600, pid: 5001, expectedIdentity: "x64sc" }));
+  for (let i = 1; i < DEFAULT_INSTANCE_CEILING; i++) {
+    const port = 6600 + i;
+    state.instances.set(port, makeReadyInstance({ port, state: "granted", pid: 6000 + i, expectedIdentity: "x64sc" }));
+  }
+  assert.equal(state.instances.size, DEFAULT_INSTANCE_CEILING, "this test's own seeding must match the ceiling it exercises");
+
+  const spawnCalls: number[] = [];
+  const outcome = await handleAcquire("req-wr01-a", "/tmp/vice-broker-acquire-test", state, {
+    probe: alwaysReadyProbe(),
+    buildColdSpawnFactory: stubColdSpawnFactory(spawnCalls),
+  });
+
+  assert.equal(spawnCalls.length, 0, "the ready candidate must satisfy the acquire -- no cold launch, even at the ceiling");
+  assert.equal(outcome.ok, true, `expected the ready candidate to be granted despite the ceiling, got ${JSON.stringify(outcome)}`);
+  if (outcome.ok) {
+    assert.equal(outcome.grant.port, 6600, "the grant must name the ready candidate's own port");
+  }
+});
+
+test("handleAcquire: at the instance ceiling with NO ready candidate, the acquire is still refused with at_capacity (WR-01 regression guard)", async () => {
+  const { handleAcquire } = await loadBrokerModule();
+  const state = createState();
+  // Same ceiling, but every seeded record is non-selectable ("granted") --
+  // no ready candidate anywhere.
+  for (let i = 0; i < DEFAULT_INSTANCE_CEILING; i++) {
+    const port = 6600 + i;
+    state.instances.set(port, makeReadyInstance({ port, state: "granted", pid: 6000 + i, expectedIdentity: "x64sc" }));
+  }
+  assert.equal(state.instances.size, DEFAULT_INSTANCE_CEILING, "this test's own seeding must match the ceiling it exercises");
+
+  const spawnCalls: number[] = [];
+  const outcome = await handleAcquire("req-wr01-b", "/tmp/vice-broker-acquire-test", state, {
+    probe: alwaysReadyProbe(), // would succeed if (incorrectly) offered a candidate -- there must be none
+    buildColdSpawnFactory: stubColdSpawnFactory(spawnCalls),
+  });
+
+  assert.equal(spawnCalls.length, 0, "at_capacity must refuse before ever touching the port allocator");
+  assert.equal(outcome.ok, false, `expected a refusal at the ceiling with no ready candidate, got ${JSON.stringify(outcome)}`);
+  if (!outcome.ok) {
+    assert.equal(outcome.reason, "at_capacity", "the refusal reason must be at_capacity, unchanged from before this task");
+  }
+});
+
+// ---------------------------------------------------------------------------
+// WR-03: a cold launch whose spawned child never gets a pid must leave NO
+// broken record in state.instances, cleaned up at the point the failure is
+// detected rather than deferred to crash supervision's own delayed
+// respawn/give-up machinery.
+// ---------------------------------------------------------------------------
+
+test("handleAcquire: a cold-launched child that never receives a pid reports internal and leaves no broken record in state.instances (WR-03)", async () => {
+  const { handleAcquire } = await loadBrokerModule();
+  const state = createState();
+
+  const outcome = await handleAcquire("req-wr03", "/tmp/vice-broker-acquire-test", state, {
+    probe: alwaysReadyProbe(), // irrelevant -- no ready candidate exists at all, so this always falls to cold-launch
+    buildColdSpawnFactory: (_port: number) => {
+      return (): ChildProcess => {
+        return { pid: undefined } as unknown as ChildProcess; // spawn() failed to fork -- no real pid
+      };
+    },
+  });
+
+  assert.equal(outcome.ok, false, `expected an internal failure, got ${JSON.stringify(outcome)}`);
+  if (!outcome.ok) {
+    assert.equal(outcome.reason, "internal", "a pid-null cold launch must report internal");
+  }
+  assert.equal(
+    state.instances.size,
+    0,
+    "state.instances must have NO entry at all for the port that was attempted -- the broken record must be deleted immediately, not left for crash supervision to find later",
+  );
+});

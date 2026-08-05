@@ -422,23 +422,28 @@ async function selectWarmInstance(
  * obtaining one, not the only one (this task's own assumption-delta
  * decision: "resolve a grantable instance" is now the primary operation).
  * The warm-instance selection arm (selectWarmInstance(), P-01) runs BEFORE
- * the cold-launch arm; `atCapacity()` runs before EITHER arm, so a full host
- * refuses before ever walking the pool or touching the port allocator.
- * Both arms converge on exactly ONE `state.grants.set()` call -- load-
- * bearing for task 2's structural anti-regression gate, which counts it --
- * fed by whichever arm produced a record. Answers the full discriminated
- * AcquireOutcome (plan 05): `at_capacity` when the instance ceiling is
- * already reached, `no_free_port`/`launch_in_flight` passed straight
- * through from acquirePortAndLaunch()'s own typed failure (the cold arm
- * only), and `internal` only for a genuine, otherwise-unclassified fault. A
+ * the cold-launch arm; `atCapacity()` gates ONLY the cold-launch arm --
+ * checked only once selectWarmInstance() has already answered `null` (no
+ * probe-live candidate available) -- NOT before either arm (WR-01,
+ * 01.6.2.1-REVIEW.md). A full host still refuses a fresh cold launch before
+ * ever touching the port allocator, but a ready, probe-live warm candidate
+ * is grantable even when the ceiling is already reached: granting it
+ * creates no NEW instance and does not raise `countTotal()`, so refusing to
+ * hand out an already-existing idle one was a real availability bug, not a
+ * correct interpretation of the ceiling's own purpose (bounding concurrent
+ * emulator *processes*, not bounding how many of those processes may be
+ * *handed out*). Both arms converge on exactly ONE `state.grants.set()`
+ * call -- load-bearing for task 2's structural anti-regression gate, which
+ * counts it -- fed by whichever arm produced a record. Answers the full
+ * discriminated AcquireOutcome (plan 05): `at_capacity` when the ceiling is
+ * already reached AND no warm candidate could be served,
+ * `no_free_port`/`launch_in_flight` passed straight through from
+ * acquirePortAndLaunch()'s own typed failure (the cold arm only), and
+ * `internal` only for a genuine, otherwise-unclassified fault. A
  * `launch_in_flight` outcome is NOT a control-plane error -- broker-
  * control.mts's own attemptAcquire()/enqueueAcquire() queue the request and
  * retry it later rather than refusing it. */
 export async function handleAcquire(requestId: string, stateDir: string, state: BrokerState, deps: HandleAcquireDeps = {}): Promise<AcquireOutcome> {
-  if (atCapacity(state)) {
-    return { ok: false, reason: "at_capacity" };
-  }
-
   const probe = deps.probe ?? ((port: number) => probeReady(port));
   // Textually a verifiedKill( call site, not merely a reference -- reused
   // UNCHANGED from broker-kill.mts (Phase 01.6.2 criterion 6), never
@@ -451,6 +456,8 @@ export async function handleAcquire(requestId: string, stateDir: string, state: 
   let record: InstanceRecord;
   if (winner) {
     record = winner;
+  } else if (atCapacity(state)) {
+    return { ok: false, reason: "at_capacity" };
   } else {
     // acquirePortAndLaunch() holds the single in_flight owner across its own
     // async port allocation (not merely tryLaunchOne()'s synchronous spawn
@@ -480,6 +487,14 @@ export async function handleAcquire(requestId: string, stateDir: string, state: 
       return { ok: false, reason: result.reason };
     }
     if (result.record.pid === null) {
+      // WR-03 (01.6.2.1-REVIEW.md): the spawn never forked a real process
+      // (e.g. a bad VICE_BIN path), so there is nothing to signal -- the
+      // fix is deleting the just-created broken record alone. Without this,
+      // a configuration failure would silently occupy a port slot and count
+      // toward countTotal()/atCapacity() until crash supervision's own
+      // delayed respawn/give-up machinery eventually noticed and freed it,
+      // even though the caller was already told "internal" right now.
+      state.instances.delete(result.record.port);
       return { ok: false, reason: "internal" };
     }
     record = result.record;
@@ -597,8 +612,21 @@ async function handleRecycleForRealBroker(targetId: string, state: BrokerState):
  * (never reused across passes) wiring broker-state.mjs's real
  * allocatePort/counts and broker-launch.mjs's real probeReady, and hooks
  * onLaunched to write the SAME epoch record a cold acquire writes -- a
- * warm instance is a real process the moment it exists, per D-04. */
+ * warm instance is a real process the moment it exists, per D-04.
+ *
+ * WR-04 (01.6.2.1-REVIEW.md): the log-path stash below is a LOCAL variable,
+ * declared fresh once per call to THIS function -- exactly mirroring how
+ * handleAcquire()'s own equivalent cold-launch log-path variable
+ * (`lastLogRelPath`) is already scoped locally rather than to the module.
+ * Both the write site (the spawn-wrapping closure) and the read site (the
+ * `onLaunched` callback) live inside this SAME function body, so this is a
+ * pure relocation with no behavioural change -- it removes the
+ * cross-call-sharing risk a module-level `let` carried (correct only
+ * because of invariants -- at most one launch per call, never invoked
+ * concurrently with itself -- enforced elsewhere and never checked at the
+ * point the variable used to be declared). */
 function maintainWarmFloorForRealBroker(stateDir: string, state: BrokerState): Promise<void> {
+  let lastWarmLaunchLogRelPath = "";
   return maintainWarmFloor({
     state,
     stateDir,
@@ -630,7 +658,6 @@ function maintainWarmFloorForRealBroker(stateDir: string, state: BrokerState): P
     log: (line: string) => process.stderr.write(`${line}\n`),
   });
 }
-let lastWarmLaunchLogRelPath = "";
 
 /** Releases a grant and identity-verified-kills its instance -- but ONLY
  * when the port's CURRENT occupant is proven to be the SAME process this
