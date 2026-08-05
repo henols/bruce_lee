@@ -5,16 +5,16 @@ milestone_name: insertion note
 current_phase: 01.6.2.1
 current_phase_name: broker-lifecycle-policy
 status: executing
-stopped_at: 01.6.2.1 SEALED 9/9; 01.6.3 waves 1-3 merged (mastra installed, wire layer swapped, all tools registered); wave 4 close-out in flight
+stopped_at: 01.6.2.1 and 01.6.3 both SEALED; next 01.4 (live access available, anchors now stable)
 last_updated: "2026-08-05T10:30:00.000Z"
 last_activity: 2026-08-05
 progress:
   total_phases: 12
-  completed_phases: 6
+  completed_phases: 7
   total_plans: 54
-  completed_plans: 54
+  completed_plans: 58
   percent: 42
-last_activity_desc: 01.6.3 waves 1-3 merged at 434/429/0 fail; first runtime dependency in the repo
+last_activity_desc: 01.6.3 sealed 6/6; deny-list gap structurally proven unwidened
 ---
 
 # Project State
