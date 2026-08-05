@@ -5,16 +5,16 @@ milestone_name: insertion note
 current_phase: 01.6.2.1
 current_phase_name: broker-lifecycle-policy
 status: executing
-stopped_at: 01.6.2.1 and 01.6.3 both SEALED; next 01.4 (live access available, anchors now stable)
+stopped_at: 01.6.2.1, 01.6.3 sealed. 01.4 executed 5/5, verification human_needed on ONE live check (HV-09). Next 01.3-06
 last_updated: "2026-08-05T10:30:00.000Z"
 last_activity: 2026-08-05
 progress:
   total_phases: 12
   completed_phases: 7
   total_plans: 54
-  completed_plans: 58
+  completed_plans: 63
   percent: 42
-last_activity_desc: 01.6.3 sealed 6/6; deny-list gap structurally proven unwidened
+last_activity_desc: 01.4 executed 5/5; generic-path deny-list closed in code, HV-09 awaits a fresh-session live check
 ---
 
 # Project State
