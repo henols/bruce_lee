@@ -5,16 +5,16 @@ milestone_name: insertion note
 current_phase: 01.6.2.1
 current_phase_name: broker-lifecycle-policy
 status: executing
-stopped_at: 01.6.2.1, 01.6.3 sealed. 01.4 executed 5/5, verification human_needed on ONE live check (HV-09). Next 01.3-06
+stopped_at: v1.1 phase work COMPLETE. 01.6/01.6.1/01.6.2/01.6.2.1/01.6.3 sealed; 01.4 human_needed (HV-09); 01.3 gate open (HV-05). 3 developer-owned rows remain
 last_updated: "2026-08-05T10:30:00.000Z"
 last_activity: 2026-08-05
 progress:
   total_phases: 12
-  completed_phases: 7
+  completed_phases: 8
   total_plans: 54
   completed_plans: 63
   percent: 42
-last_activity_desc: 01.4 executed 5/5; generic-path deny-list closed in code, HV-09 awaits a fresh-session live check
+last_activity_desc: 01.6 re-verified 14/14 off HV-01's closure; all 49 v1.1 plans have summaries
 ---
 
 # Project State
@@ -235,6 +235,15 @@ re-surfacing on 01.6.2 would be new, not inherited.
 `nyquist_compliant: false` (`/gsd-validate-phase 01.6.1`), and learnings have not been extracted
 (`/gsd-extract-learnings 01.6.1` — the TypeScript closure-narrowing hazard, the negated-clause gate
 false positives, and the tracer-vs-daemon distinction are all worth harvesting).
+
+
+**01.6.1's UAT test 3 — skipped on a premise that has now cleared (noted 2026-08-05, deliberately NOT
+edited).** It was skipped 2026-08-03 on the same host-side truth that held 01.6 at 12/14: the broker was
+up, but `written_by` named `vice-broker.sh` and `node_version` was absent. Both are now settled live, so
+test 3 **is answerable today on exactly the evidence that sealed 01.6 at 14/14**.
+`01.6.1-VERIFICATION.md` is already `passed` at 13/13 and does not need to change — this note exists so
+the skip does not sit permanently on a stale premise, which is how a skipped test quietly becomes
+permanent. Whoever next touches 01.6.1 can close it by reading `.vice-supervisor/broker.json`.
 
 Status: Executing Phase 01.6.2.1
 
