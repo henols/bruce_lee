@@ -51,3 +51,19 @@ Assert on the *message* in both cases, not only on the control flow: a test that
 message names two DIFFERENT epochs" and "the replacement message names two DIFFERENT ports" would
 have caught both, and is the same shape as the `brokerControlUnreachableMessage()` test added in
 `502b4a8` (which asserts both the presence of the right wording and the absence of the wrong).
+
+## THIRD independent confirmation, 2026-08-05 (Phase 01.4 plan 04)
+
+A deliberate `vice_recycle` — issued as a planned criterion-1 verification against a healthy instance,
+not as an incident — again reported the epoch as **`1 -> 1`**, with readiness `ECONNREFUSED` at return
+and a genuinely fresh pid (3362603) observed on the following `vice_ping`. The machine really was
+replaced; the epoch text still did not move.
+
+That makes three sightings from **two different code paths** (the broker-connection-gone path and the
+deliberate-recycle path), so this is not a one-off race in a single caller. It also means the recycle
+path reproduces it **on demand**, which is the cheapest possible reproduction for whoever fixes it:
+recycle a healthy instance and read the message.
+
+Note the contrast that isolates the defect: `vice_diagnose` on the same session reported `epoch changed
+from 1 to 2` — a correct, moving pair — so the epoch *mechanism* works and it is specifically the
+message construction (or the point at which it samples) that is wrong.
