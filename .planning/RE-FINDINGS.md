@@ -3468,3 +3468,51 @@ description of *why* the hole existed; only the "still open" status is stale, no
 **Confidence:** HIGH for the mechanism and its closure (both independently re-derived from landed code
 and passing tests this session); the live "after" refusal call remains explicitly deferred to a fresh
 session/process, as 01.4-01's own entry already states.
+
+### 2026-08-05 — `vice_result_continue`'s continuation path is structurally unreachable from this session's own tool surface at documented-maximum parameters
+
+**Type:** dead end (structural, not effort-related)
+**Evidence:** live, this session (Phase 01.4 plan 04, task 2). Four tool shapes were called at their
+documented parameter maximums, each specifically chosen to be the largest single-response candidate
+in the exposed surface: `vice_memory_read` (`size:65535, encoding:"array"`, ~330,000 chars),
+`vice_display_screenshot` (`format:"BMP", return_base64:true`, ~140,000 chars for a 52,342-byte BMP
+returned twice as `data_uri` + `base64`), `vice_memory_search` (`max_results:10000`, ~80,000 chars),
+and `vice_memory_compare` (`mode:"ranges", max_differences:10000`, the largest of the four, still
+under the cap). None produced a continuation token or chunk-count marker; every response arrived as
+one self-contained JSON payload.
+**Confidence:** HIGH (four independent live attempts, one arithmetic proof: `vice_memory_read`'s
+`size` schema cap of 65535 bytes times the `"array"` encoding's ~5-chars-per-byte overhead tops out
+at ~327,675 characters — mathematically incapable of reaching the 500,000-char `OUTPUT_CHAR_CAP`
+regardless of address or bank, so this is not a parameter-tuning problem).
+**Saves / costs:** saves a future session from re-deriving this the slow way — do not spend a cycle
+trying larger `vice_memory_read`/`vice_memory_search`/`vice_memory_compare` calls to trip
+`vice_result_continue`; the ceiling cannot be crossed by *this* tool surface's documented maxima. If
+`vice_result_continue` needs live proof, the answer is a different tool shape (a bigger single-call
+payload than any of these four), not a bigger parameter on these four. Costs: `01.4-LIVE-EVIDENCE.md`
+criterion 1 closes with `vice_result_continue` honestly unproven rather than executed — the plan's
+own autonomy contract anticipated and accepted this outcome rather than a manufactured pass.
+
+### 2026-08-05 — `vice_recycle` proven live: deliberate kill, restarted signal, clean recovery, third independent confirmation of the epoch-text bug
+
+**Type:** confirmation
+**Evidence:** live, this session (Phase 01.4 plan 04, task 1). Called `vice_recycle` deliberately
+against a healthy, `live`-verdict instance (35,145-cycle bracket just prior). Response: kill stage
+`sigterm`, epoch before/after both reported `1` (did not move synchronously inside the call),
+readiness probe `ECONNREFUSED` at return time, snapshot accepted, incident record written before the
+kill (per the skill's contract) at `.planning/incidents/20260805160045723-port6603-epoch1.md` — in
+the **main workspace root**, not this worktree's own `.planning/incidents/`, confirming
+`.claude/CLAUDE.md`'s documented path-resolution rule holds for host-side incident writes triggered
+from inside a worktree dispatch, not just for tool `path` arguments. The very next forwarded call
+(`vice_ping`) hit the restarted-machine error, carrying a fresh `pid` (3362603) and `spawned_at`
+timestamp — the mechanism that proves genuine replacement independent of the epoch number. A second
+`vice_ping` succeeded cleanly against the new instance, and a follow-up `vice_diagnose` confirmed
+verdict `live` with its own fresh cycle bracket (29,994 cycles).
+**Confidence:** HIGH (live, full before/after evidence, cross-checked against the incident record
+written to disk).
+**Saves / costs:** closes `01.4-LIVE-EVIDENCE.md` criterion 1's `vice_recycle` row from "yes —
+deliberately not invoked" to "yes — executed, dated". Also a **third** independent confirmation
+(after two prior sessions) of the `"changed from 1 to 1"` reporting defect filed in
+`.planning/todos/pending/2026-08-05-epoch-drift-and-replacement-messages-name-impossible-values.md`
+— the epoch-number text is wrong on every observed genuine replacement so far, while the `pid`/
+`spawned_at` fields the same error carries are the reliable tell. Do not trust the epoch numbers in
+that error string; trust the `pid` change.
