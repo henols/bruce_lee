@@ -102,12 +102,48 @@ HV-01 (which was closable by reading the record directly, no forwarded call need
 
 ## Separate but related: the host deploy is stale
 
-`tools/vice-broker.mjs` and `tools/broker-launch.mjs` **differ** from committed
-`.claude/mcp/vice/resources/`, and the host copies are dated **Aug 4 05:43** — hours before
-01.6.2.1 merged. The live record proves it: `"spares_target": 3`, the pre-rename key *and* the
-pre-change default, where 01.6.2.1 renamed it to `warm_floor` and changed the default to 1.
+**Carried forward, NOT closed by this todo's resolution below** -- moved to its own file,
+`.planning/todos/pending/2026-08-05-host-tools-deploy-is-stale-relative-to-committed-resources.md`,
+so it survives this file's own archival to `completed/` rather than reading as fixed alongside
+the dial-address defect this file actually resolves.
 
-**Consequence:** any live verification performed right now exercises the **pre-01.6.2.1** broker.
-Live-verifying 01.6.2.1's five lifecycle-policy changes requires re-running the installer to
-refresh `tools/`, **and** restarting the broker so it loads the new code. The restart kills the three
-warm spares and any granted instance, so it is the developer's call, not an incidental step.
+## RESOLVED 2026-08-05 (quick-260805-9ha)
+
+**The dial-address defect (this file's main subject) is fixed. The mis-attributing message is
+fixed alongside it, as this file's own text already argued it should be.**
+
+**What changed, on the CONSUMER side only** -- `broker.json`'s own `control_host` record is
+deliberately UNCHANGED; the fix belongs on the side that reads it, exactly as this file's own
+"Fix direction" section argued:
+
+- `vice-broker-client.ts` gained `classifyConnectHost()`/`resolveControlTarget()`, placed above the
+  `BROKER-CONTROL-CLIENT REGION START` marker and consumed by BOTH existing connect sites
+  (`acquireOverControlPlane()`, `openBrokerControl()`). Precedence: a new env var,
+  `VICE_BROKER_CONTROL_DIAL_HOST` (deliberately NOT a homonym of the existing
+  `VICE_BROKER_CONTROL_HOST`, which is the broker's own BIND host on the host side), otherwise
+  `vice.ts`'s `mcpHost()` -- the module tree's single definition of the container-visible host
+  alias, already used correctly by the DATA plane. `broker.json`'s `control_host` is never read as
+  a dial target again; it survives only as diagnostic text. A resolved host that classifies as a
+  wildcard bind (`0.0.0.0`, `::`, etc., matched structurally) is refused BEFORE any connect is
+  attempted, naming the address and port.
+- `vice-proxy.ts`'s `ensureBrokerLease()` no longer collapses every `openBrokerControl()` failure
+  into the dead-or-hung message. Only `never_started`/`stale` (a genuine liveness re-read) still
+  route there; every other failure kind reaches a new `brokerControlUnreachableMessage()` that
+  names the resolved address and port and states plainly that the heartbeat is fresh -- the exact
+  "I could not reach the control plane at `<addr>:<port>`" wording this file's own "Fix direction"
+  section asked for.
+- Every control-plane test across `vice-broker-client.test.ts`, `vice-proxy.test.ts`,
+  `broker-e2e.test.ts` and `broker-kill.test.ts` now names its own in-container listener explicitly
+  (`VICE_BROKER_CONTROL_DIAL_HOST`/`VICE_MCP_HOST` set to `127.0.0.1`, or the two pre-existing
+  `eth0` tests left as they were) -- no test dials the real bridge alias.
+
+**Full suite green, generated tree unchanged:** `node --test '.claude/mcp/vice/'*.test.*`,
+406/406 non-todo tests; `node .claude/mcp/vice/build.ts` then `git status --porcelain --
+.claude/mcp/vice/resources/` empty, proving nothing host-bound was touched by mistake (this
+change touches none of `build.ts`'s seven `HOST_BOUND_ARTIFACTS`).
+
+**Evidence:** direct read of every file this fix touches, plus the live evidence this file's own
+"ROOT CAUSE" section already recorded (no in-container listener on the control port; a healthy
+broker with three warm spares idle while every forwarded call failed). See
+`.planning/RE-FINDINGS.md`'s 2026-08-05 entries for the two reusable lessons this incident yields.
+**Confidence:** HIGH.
