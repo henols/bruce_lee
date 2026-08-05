@@ -943,6 +943,17 @@ Plans:
 
   E. **Package legitimacy is verified before install, as a blocking human checkpoint.** `@mastra/mcp` (453 K/wk) and `@mastra/core` (1.36 M/wk) were both flagged `[SUS]` by the legitimacy audit on a weak "too-new" heuristic. Non-auto-approvable.
 
+**Plans:** 4 plans
+
+Plans:
+
+- [ ] 01.6.3-01-PLAN.md — Legitimacy gate (pre-answered by `01.6.3-APPROVALS.md`), exact-pinned install, D-06 decided against the real 69 MB/35-dependency figure (provision via devcontainer `npm ci`, do not bundle), telemetry non-import structural guard (criteria D, E)
+- [ ] 01.6.3-02-PLAN.md — **Tracer.** Swap the wire layer for `@mastra/mcp`'s `MCPServer`; `vice_ping` + the three synthetic tools proven end-to-end; the deny-list preserved by a `CallToolRequestSchema` override installed immediately after `startStdio()` (criteria A, B, C3)
+- [ ] 01.6.3-03-PLAN.md — Full expansion: every remaining manifest tool registered through the same generic mechanism; `tools/list` full parity proof; `COVERAGE.md` re-confirmed against shipped code (criteria A, B, C)
+- [ ] 01.6.3-04-PLAN.md — Full regression repair of the ~5,300-line proxy test suite, every wire-level difference disclosed; rollback path documented; phase close-out with zero `resources/` drift (criteria B, C3)
+
+**Wave 1** — 01.6.3-01 · **Wave 2** — 01.6.3-02 · **Wave 3** — 01.6.3-03 · **Wave 4** — 01.6.3-04. Strictly sequential: every plan after the first modifies `vice-proxy.ts` and/or its test file, so same-wave parallelism is impossible by file ownership.
+
 **Risks**: This is the first runtime dependency this repository has ever had — `@mastra/core` is ~59 MB unpacked across 33 direct dependencies, and it is an agent-orchestration framework whose `MCPServer` exists to expose *Mastra's own* agents and tools. Research rated the fit a mismatch. Reversible, but only by re-hand-rolling the seam — rated **costly**, not one-way.
 
 ---
