@@ -3413,3 +3413,58 @@ proves the refusal mechanism works; only the live, in-process confirmation is de
 agent session that made the edit — that verification is structurally unobtainable there regardless of
 how many times the call is retried, and should be deferred to a fresh session/process rather than
 treated as a failed fix.
+
+### 2026-08-05 — Phase 01.4 criterion 2: the bypass route named in writing again, against today's live evidence, superseding the stale 64-vs-63-tool figures
+
+**Type:** confirmation (re-established against current code, not assumed from a stale record)
+**Evidence:** cross-references this same file's own `2026-08-05 — Phase 01.4 criterion 3, generic-path
+half` entry (immediately above) and `01.4-01-SUMMARY.md`'s live before/after `tools_list`/`tools_call`
+calls; no new live call was made by this entry itself
+**Confidence:** HIGH (re-derived from a live-witnessed source recorded in the same session window,
+cross-checked against the landed code at `.claude/mcp/vice/vice.ts`/`vice-proxy.ts`)
+
+**The route, named plainly:** the bypass was never a flaw in the named-tool call path (`vice.ts`'s
+`call()` guard, checked and holding since 2026-08-02). It was that four host JSON-RPC meta-methods —
+`tools_list`, `tools_call`, `initialize`, `notifications_initialized` — sat in the manifest as
+ordinary forwardable tools, reachable through the **generic dispatch path**, a second, un-guarded
+route into the same proxy that the named-tool guard never saw. `tools_call` could carry
+`vice_disk_list` as a **nested** `arguments.name`, which is a confused-deputy shape: the outer,
+guarded name (`tools_call`) looks benign, and the guard that checks `params.name` never inspects the
+nested argument that names the real, hazardous target underneath it.
+
+**Superseding the stale figures:** the original 2026-08-02 research recorded a flat **64**-tool live
+session against a committed **63**-tool manifest, with the three proxy-local synthetic tools
+(`vice_diagnose`, `vice_recycle`, `vice_result_continue`) absent and `vice_disk_list` reachable and
+answering the host's own `Tool not found` when called directly — i.e. the literal name reaching
+`x64sc` unintercepted. **That figure no longer describes the running system and must not be restated
+as current.** This same file's immediately-preceding 2026-08-05 entry re-ran the live "before" call
+this session, post-01.6.3 (the TypeScript conversion) and pre-01.4-01's fix: `mcp__vice__tools_list`
+returned the same **64**-tool raw inventory (coincidentally the identical count, but re-established
+live against today's code, not carried over from the stale record), with all three synthetic tools
+now present and correctly registered, and `vice_disk_list`/`tools_list`/`tools_call`/`initialize`/
+`notifications_initialized` all still reachable pre-fix. Plan 01.4-01 then closed the generic path by
+extending `DENY_LIST` (`.claude/mcp/vice/vice.ts`) from `[vice_disk_list]` to all five names, reusing
+the two existing enforcement seams with no new mechanism — proven by 4 new/repointed unit tests
+(441/436/0/5) and a clean typecheck, though the live "after" refusal could not be observed from
+01.4-01's own session because `.mcp.json` spawns one persistent, never-hot-reloaded proxy process per
+session (see that entry for the full mechanism).
+
+**This plan's own contribution (01.4-02):** confirms, from a *second*, independent dispatch of the
+same `gsd-executor` shape (this plan's own task 1/2, see `01.4-LIVE-EVIDENCE.md`'s "Criterion 4"
+section), that `vice_disk_list` is now absent even from this session's own tool inventory before any
+forward is attempted — a stronger absence than the wire-level refusal 01.4-01 proved, consistent with
+the fix having landed before this dispatch's own proxy process was spawned. No new live "after" call
+against `tools_list`/`tools_call` was attempted here (that would require the same fresh-process
+confirmation 01.4-01 deferred, and this plan's own scope is the tool-schema self-report, not a repeat
+of 01.4-01's task 3); this entry's contribution is naming the route in writing once more, cross-
+referenced against today's evidence, per Phase 01.4 criterion 2's "identified and named in writing"
+requirement and ROADMAP.md's explicit instruction to re-establish rather than restate stale numbers.
+
+**Saves:** the next reader of `01.4-RESEARCH.md`'s original 64-vs-63 figures from citing them as the
+current state of the generic-dispatch surface — they describe the pre-01.4-01 system. The bypass
+mechanism they identified (confused-deputy via `tools_call`'s nested argument) is still the correct
+description of *why* the hole existed; only the "still open" status is stale, not the diagnosis.
+
+**Confidence:** HIGH for the mechanism and its closure (both independently re-derived from landed code
+and passing tests this session); the live "after" refusal call remains explicitly deferred to a fresh
+session/process, as 01.4-01's own entry already states.
