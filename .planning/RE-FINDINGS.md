@@ -3548,3 +3548,78 @@ dead end on the specific "is the bridge's register-read path actually caching?" 
 session wanting to settle (a) vs (b) should reproduce with a disk attached and the machine confirmed
 mid-gameplay (not idling at a KERNAL wait loop) and see whether the identical-snapshot shape still
 occurs.
+
+### 2026-08-05 — A pre-warmed acquire leaves no trace in `.vice-supervisor/` other than "no new port directory appeared"
+
+**Type:** trick
+**Evidence:** live, this session (quick task 260805-revisit-cf-rows-after-redeploy). Before this
+session's first forwarded `mcp__vice__*` call, `.vice-supervisor/` held exactly ports 6600/6601/6602/
+6603. A `vice_diagnose` call returned verdict `live` with a clean cycle bracket and no boot-time
+signal. Re-reading `.vice-supervisor/` immediately afterward showed the identical four port
+directories — no new `epoch.json`, no new `logs/` dir, no new numbered port. This absence is the
+proof: a cold launch would have created a fifth port directory with a fresh `spawned_at` close to
+the call's own wall-clock time; a warm acquire creates nothing new at all.
+**Confidence:** HIGH (directly observed, before/after file listing across a real forwarded call).
+**Saves / costs:** saves a future session from needing wall-clock instrumentation (forbidden by
+CLAUDE.md's no-`sleep`/no-wall-clock-sync rule anyway) to distinguish a warm-served acquire from a
+cold-launched one — just diff `.vice-supervisor/`'s port-directory listing before and after the call.
+No new directory = served warm. A new directory whose `spawned_at` is within the call's own window =
+served cold. This discharged `01.6.2-VALIDATION.md`'s CF-01.4-25.
+
+### 2026-08-05 — Two spawn timestamps ~2 minutes apart, same broker pid, is enough to prove "never simultaneous" without deliberately forcing a launch
+
+**Type:** trick, confirmation
+**Evidence:** live, this session, same task as above. `.vice-supervisor/6600/epoch.json` and
+`.vice-supervisor/6601/epoch.json` both carry `supervisor_pid: 3704994` (the current broker's own
+pid, matching `broker.json`), but `spawned_at` values `2026-08-05T20:16:39.844Z` and
+`2026-08-05T20:18:39.971Z` respectively — roughly two minutes apart, never the same second. Two
+launch events already existed under the SAME broker generation before this session made any call of
+its own, so this is passive evidence gathered by reading files, not a deliberately produced test.
+**Confidence:** HIGH (direct file read; the pid match rules out these being leftover instances from a
+prior broker generation — compare `.vice-supervisor/6602`/`6603`, whose `supervisor_pid: 2740161` is
+a stale, non-current broker pid, and which this session correctly did NOT cite as evidence for
+anything about the current broker).
+**Saves / costs:** saves a future session from needing to deliberately trigger a warm-floor
+replenishment pass (which would require consuming an existing warm instance) just to prove
+"serialised, not simultaneous" — if the broker has been up for more than one warm-floor pass
+interval, `.vice-supervisor/<port>/epoch.json`'s own `spawned_at` timestamps, filtered to the CURRENT
+broker's own pid via `supervisor_pid`, already carry this proof passively. This narrow-discharged
+`01.6.2-VALIDATION.md`'s CF-01.4-29, the same pattern `01.4-05`'s CF-01.4-04 used at the prior floor.
+
+### 2026-08-05 — The broker's own stderr/stdout is never persisted anywhere this container can read; only per-instance `epoch.json`/`x64sc-*.log` exist
+
+**Type:** hazard (a limit that looks like it should be checkable but structurally isn't), confirmation
+**Evidence:** live, this session. `find .vice-supervisor -maxdepth 1 -type f` returns only
+`broker.json` — no sibling log file of any kind. `find .vice-supervisor -iname "*.log" -newer
+broker.json` (i.e. any log touched since the current broker started) returns nothing. Every `*.log`
+file that does exist lives under `.vice-supervisor/<port>/logs/` and is `x64sc`'s own emulator-process
+log, not the broker's. This corroborates `01.4-LIVE-EVIDENCE.md`'s prior finding for CF-01.4-01 ("no
+top-level broker startup log") and extends it: the gap is not just the one-time startup verdict line,
+it is the broker's entire stdout/stderr stream, for the life of the process.
+**Confidence:** HIGH (direct, repeatable filesystem search; absence confirmed by two different
+`find` invocations with different filters).
+**Saves / costs:** saves a future session from treating "the host redeployed the banner/log code"
+as sufficient to discharge any row that depends on reading the broker's own log lines (as opposed to
+`broker.json`, which IS readable) — `01.6.2-VALIDATION.md`'s CF-01.4-33 and half of CF-01.4-34 both
+depend on this stream and were reclassified `permanently-unverifiable-from-container` on this basis,
+not merely left `blocked-on-HV-08`. Costs: any future criterion written against "the broker's log
+output" should budget for this being unreachable from inside this container unless the broker's own
+launch mechanism changes to redirect stdout/stderr to a file under `.vice-supervisor/` — that would be
+an architecture change, not a test.
+
+### 2026-08-05 — `tools/` (the real MCP deployment target) does not exist anywhere in this container's filesystem, under any path
+
+**Type:** dead end (confirms a limitation rather than working around it)
+**Evidence:** live, this session. `find / -maxdepth 6 -type d -iname "tools" -path "*mcp/vice*"`
+(scoped, not a full-filesystem crawl) returned no hits, from the worktree. `install-resources.ts`'s
+own `installTargetDir()` resolves against `hostPath()`, which requires `CONTAINER_WORKSPACE_PATH` or
+an explicit host root — consistent with the deployment target being a HOST path this container's
+mounts never expose, as opposed to merely "not yet created here."
+**Confidence:** HIGH (direct, scoped filesystem search; corroborated by source-level reasoning about
+`hostPath()`'s own resolution contract).
+**Saves / costs:** saves a future session from trying to read the real `tools/` directory's contents
+to verify a deployment/prune claim (e.g. `01.6.2-VALIDATION.md`'s CF-01.4-20) — there is no path,
+container-relative or absolute, under which it would appear. Reclassified CF-01.4-20 from
+`blocked-on-HV-08` to `permanently-unverifiable-from-container` on this basis. Any future row of this
+shape (verifying `tools/`'s real contents) should be written expecting a developer's direct report,
+never a container-side read.
