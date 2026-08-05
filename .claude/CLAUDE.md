@@ -231,6 +231,22 @@ the tools handle the boundary.
   **`tools/` is now purely a generated, gitignored deployment target** — the broker copies the
   installer places there, copied from `resources/`, never hand-edited. No authored project code
   lives in `tools/` any more; the recovery pipeline moved into the skills that use it.
+- **`.claude/mcp/vice/` has a real `dependencies` block** (`@mastra/mcp@1.15.0`,
+  `@mastra/core@1.55.0`, both exact-pinned, added in Phase 01.6.3 plan 01). This is the
+  repository's first runtime dependency. **Decision: provision, don't bundle.** The two packages
+  together are ~69 MB unpacked across 35 direct dependencies (a triple-vendored
+  `@ai-sdk/provider-v5`/`v6`/`v7` set among them) — bundling that into a single committed file
+  would mean shipping someone else's minified dependency tree as this directory's "authored
+  TypeScript source" and standing up a whole new build toolchain (`tsc` via `build.ts` is not a
+  bundler and was deliberately scoped to the host-bound files only) for a file that has never
+  needed one. Instead, `.devcontainer/devcontainer.json`'s `postCreateCommand` runs `npm ci
+  --prefix .claude/mcp/vice` on every container build, so `node_modules` is populated before any
+  session's first tool call. **Disclosed cost:** the "fresh clone, bare `node`, no build step"
+  property this directory has always had is now narrower — a `git clone` followed directly by
+  `node .claude/mcp/vice/vice-proxy.ts`, bypassing the devcontainer's own provisioning, fails with
+  `Cannot find module '@mastra/mcp'` until `npm ci --prefix .claude/mcp/vice` runs once. This
+  project has no supported bare-clone-outside-a-devcontainer path today, so the narrowing is
+  scoped to an already-devcontainer-scoped property, not a new external requirement.
 - `.vice-supervisor/` is runtime state written by the running broker/supervisor/pool; nobody
   hand-edits it, in either mode of work.
 
