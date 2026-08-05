@@ -327,9 +327,8 @@ function warnOnceAboutOutputLimit(): void {
 const RESULT_CONTINUE_TOOL: ToolDefinition = {
   name: "vice_result_continue",
   description:
-    "Retrieve the next chunk of an oversized tools/call result that vice-proxy split across a " +
-    "continuation sequence. Served entirely inside this proxy -- never forwarded to the host VICE " +
-    "MCP server, and has no counterpart there.",
+    "Retrieve the next chunk of an oversized tools/call result. Call with the token named in the " +
+    "previous chunk's trailing marker.",
   inputSchema: {
     type: "object",
     properties: {
@@ -503,9 +502,8 @@ function epochDriftMessage(when: string, baseline: EpochResult, current: EpochRe
   const pidNote = current && current.pid != null ? `, pid ${current.pid}` : "";
   const spawnedNote = current && current.spawned_at ? `, spawned_at ${current.spawned_at}` : "";
   return (
-    `vice-proxy: epoch drift detected ${when} -- the host VICE MCP server's epoch changed from ` +
-    `${baseline.epoch} to ${current.epoch}${pidNote}${spawnedNote}. Any work done since the previous ` +
-    `call may have hit a different, freshly-booted machine and should be redone.`
+    `vice: treat every result since the previous call as void and redo that work -- epoch drift was ` +
+    `detected ${when} (epoch changed from ${baseline.epoch} to ${current.epoch}${pidNote}${spawnedNote}).`
   );
 }
 
@@ -1444,7 +1442,7 @@ function brokerHostPath(): string {
  * read a request, so ensureBrokerLease() returns this BEFORE writing one. */
 function brokerNeverStartedMessage(): string {
   return (
-    `vice-proxy: the on-demand VICE broker has never been started on this host -- no broker.json ` +
+    `vice: the on-demand VICE broker has never been started on this host -- no broker.json ` +
     `record exists at all. Start it on the host with:\n` +
     `  ${brokerHostPath()}\n` +
     ONLY_ROUTE_NOTE
@@ -1458,7 +1456,7 @@ function brokerNeverStartedMessage(): string {
 function brokerDeadOrHungMessage(liveness: BrokerLivenessResult): string {
   const pidNote = liveness && liveness.pid != null ? ` (pid ${liveness.pid})` : "";
   return (
-    `vice-proxy: the on-demand VICE broker appears to be dead or hung${pidNote} -- its last recorded ` +
+    `vice: the on-demand VICE broker appears to be dead or hung${pidNote} -- its last recorded ` +
     `heartbeat is older than the stale threshold. Restart it on the host with:\n` +
     `  ${brokerHostPath()}\n` +
     ONLY_ROUTE_NOTE
@@ -1477,7 +1475,7 @@ function brokerDeadOrHungMessage(liveness: BrokerLivenessResult): string {
 function brokerLaunchFailedMessage(reason: string): string {
   const hostRef = brokerHostPath().split("\n")[0];
   return (
-    `vice-proxy: the on-demand VICE broker (running via the host-side launcher at ${hostRef}) declined ` +
+    `vice: the on-demand VICE broker (running via the host-side launcher at ${hostRef}) declined ` +
     `to grant an instance for this session: ${reason} ${ONLY_ROUTE_NOTE}`
   );
 }
@@ -1491,7 +1489,7 @@ function brokerLaunchFailedMessage(reason: string): string {
  * the SAME call, not to treat this as a failure requiring a different fix. */
 function brokerWarmingMessage(elapsedMs: number): string {
   return (
-    `vice-proxy: the on-demand VICE broker is still warming up an instance for this session -- no ` +
+    `vice: the on-demand VICE broker is still warming up an instance for this session -- no ` +
     `grant or denial appeared within ${elapsedMs}ms. This is expected for a cold start; retry the same ` +
     `call now, it should succeed once the instance finishes booting.`
   );
@@ -1529,9 +1527,9 @@ function brokerControlUnreachableMessage(opened: { kind: ControlFailureKind; mes
   const hostRef = brokerHostPath().split("\n")[0];
   const targetNote = opened.target ?? opened.message;
   return (
-    `vice-proxy: the on-demand VICE broker${pidNote} (running via the host-side launcher at ${hostRef}) has ` +
-    `a fresh, healthy heartbeat -- this is NOT a dead or hung broker. This proxy could not reach the ` +
-    `control plane at ${targetNote}. broker.json's own control_host field records the broker's BIND ` +
+    `vice: the on-demand VICE broker${pidNote} (running via the host-side launcher at ${hostRef}) has ` +
+    `a fresh, healthy heartbeat -- this is NOT a dead or hung broker. This MCP tool surface could not ` +
+    `reach the control plane at ${targetNote}. broker.json's own control_host field records the broker's BIND ` +
     `address, valid on the host where the broker wrote it and structurally undialable from inside this ` +
     `container -- a control-plane connectivity failure, not a broker health problem. ${ONLY_ROUTE_NOTE}`
   );
@@ -1557,7 +1555,7 @@ function isConnectionRefusedReason(reason: unknown): boolean {
 
 function neverStartedMessage(probe: ProbeResult): string {
   return (
-    `vice-proxy: the host VICE MCP server has never been started at this configured path -- no ` +
+    `vice: the host VICE MCP server has never been started at this configured path -- no ` +
     `restart-epoch record exists, and the connection was refused (${probe.reason}). Start it on the host with:\n` +
     `  ${brokerHostPath()}\n` +
     ONLY_ROUTE_NOTE
@@ -1570,7 +1568,7 @@ function deadOrHungMessage(probe: ProbeResult, epoch: EpochResult): string {
       ? ` (pid ${epoch.pid}${epoch.spawned_at ? `, spawned_at ${epoch.spawned_at}` : ""})`
       : "";
   return (
-    `vice-proxy: the host VICE MCP server appears to be dead or hung${pidNote} -- ${probe.reason}. ` +
+    `vice: the host VICE MCP server appears to be dead or hung${pidNote} -- ${probe.reason}. ` +
     `Restart it on the host with:\n` +
     `  ${brokerHostPath()}\n` +
     ONLY_ROUTE_NOTE
@@ -1588,7 +1586,7 @@ function deadOrHungMessage(probe: ProbeResult, epoch: EpochResult): string {
 function aliveButFailedMessage(errMessage: string): string {
   const hostRef = brokerHostPath().split("\n")[0];
   return (
-    `vice-proxy: the host VICE MCP server (reachable via the host-side launcher at ${hostRef}) rejected ` +
+    `vice: the host VICE MCP server (reachable via the host-side launcher at ${hostRef}) rejected ` +
     `this call: ${errMessage} ${ONLY_ROUTE_NOTE}`
   );
 }
@@ -1731,9 +1729,9 @@ function rewritePathsIn(value: unknown, argPath: string, root: string, depth: nu
     if (!isInsideWorkspace(normalized, root)) {
       throw new PathOutOfWorkspaceError(
         (escapedRelative
-          ? `vice-proxy: ${argPath} is the relative path "${asWritten}", which resolves to ${normalized} -- ` +
+          ? `vice: ${argPath} is the relative path "${asWritten}", which resolves to ${normalized} -- ` +
             `outside the mounted workspace (${root})`
-          : `vice-proxy: ${argPath} is an absolute path (${value}) outside the mounted workspace (${root})` +
+          : `vice: ${argPath} is an absolute path (${value}) outside the mounted workspace (${root})` +
             (normalized === value ? "" : `; it resolves to ${normalized}`)) +
           `. The host emulator can only be handed paths that live inside the mounted workspace -- move the ` +
           `artifact inside the workspace and call again.`
@@ -1747,7 +1745,7 @@ function rewritePathsIn(value: unknown, argPath: string, root: string, depth: nu
       // and cannot act on a host-side location, so quoting only the resolved
       // form makes a fixable mistake look like an emulator fault.
       throw new PathTranslationError(
-        `vice-proxy: ${argPath} ` +
+        `vice: ${argPath} ` +
           (escapedRelative ? `("${asWritten}", which resolves to ${normalized})` : `(${value})`) +
           ` could not be translated to a host path: ${(e as Error).message}\n  ${SET_ENV_HINT}`
       );
@@ -1850,7 +1848,7 @@ function rewriteArguments(
 function resolutionNote(resolutions: PathResolution[] | undefined): string {
   if (!resolutions || !resolutions.length) return "";
   const parts = resolutions.map((r) => `${r.arg}: "${r.asWritten}" -> ${r.container}`);
-  return `vice-proxy: resolved relative path${resolutions.length > 1 ? "s" : ""} against the workspace root -- ${parts.join("; ")}`;
+  return `vice: resolved relative path${resolutions.length > 1 ? "s" : ""} against the workspace root -- ${parts.join("; ")}`;
 }
 
 // ------------------------------------------------------- oversized results
@@ -1895,12 +1893,12 @@ interface ChunkMarkerArgs {
 function chunkMarkerText({ chunkIndex, totalChunks, totalChars, token }: ChunkMarkerArgs): string {
   if (chunkIndex >= totalChunks) {
     return (
-      `vice-proxy: chunk ${chunkIndex} of ${totalChunks} (last chunk) -- ${totalChars} total characters ` +
+      `vice: chunk ${chunkIndex} of ${totalChunks} (last chunk) -- ${totalChars} total characters ` +
       `served across this continuation sequence.`
     );
   }
   return (
-    `vice-proxy: chunk ${chunkIndex} of ${totalChunks} -- ${totalChars} total characters. Call ` +
+    `vice: chunk ${chunkIndex} of ${totalChunks} -- ${totalChars} total characters. Call ` +
     `vice_result_continue with arguments {"token":"${token}"} to retrieve the next chunk.`
   );
 }
@@ -1949,7 +1947,7 @@ function handleResultContinue(args: Record<string, unknown>): ToolCallResult {
   const token = args && typeof args.token === "string" ? args.token : null;
   if (!token || !CONTINUATION_STORE.has(token)) {
     return isErrorText(
-      `vice-proxy: continuation token "${token}" is unknown or has already expired. Re-issue the ` +
+      `vice: continuation token "${token}" is unknown or has already expired. Re-issue the ` +
         `original tools/call with a narrower range instead of resuming.`
     );
   }
@@ -2288,14 +2286,13 @@ function machineReplacedMessage(opts: {
   const driftSentence =
     oldEpoch.present && newEpoch.present
       ? epochDriftMessage(where, oldEpoch, newEpoch)
-      : `vice-proxy: epoch drift detected ${where} -- the old instance (port ${oldPort}) and the new ` +
-        `instance (port ${newPort}) could not both be compared by epoch (old epoch present: ` +
-        `${oldEpoch.present}, new epoch present: ${newEpoch.present}).`;
+      : `vice: treat every result since the previous call as void and redo that work -- the old instance ` +
+        `(port ${oldPort}) and the new instance (port ${newPort}) could not both be compared by epoch ` +
+        `(old epoch present: ${oldEpoch.present}, new epoch present: ${newEpoch.present}).`;
   return (
-    `vice-proxy: ${reason}. A replacement instance (port ${newPort}) has already been acquired and ` +
-    `adopted for this session -- the machine was REPLACED, the replacement is a FRESH emulator, and all ` +
-    `prior state on the old instance (port ${oldPort}) is GONE. ${driftSentence} Make this call again; ` +
-    `it will run on the replacement.`
+    `${driftSentence} The machine was REPLACED, the replacement is a FRESH emulator, and all prior state ` +
+    `on the old instance (port ${oldPort}) is GONE (${reason}). Make this call again -- it will run on ` +
+    `the replacement instance (port ${newPort}), already acquired and adopted for this session.`
   );
 }
 
@@ -2306,10 +2303,9 @@ function machineReplacedMessage(opts: {
  * broker that cannot currently grant is how one failure becomes a hang. */
 function replacementFailedMessage(probe: ProbeResult, failure: { kind: string; message: string }): string {
   return (
-    `vice-proxy: the granted instance stopped answering -- ${probe.reason}. A replacement was attempted ` +
-    `over the same broker session and it ALSO failed (${failure.kind}: ${failure.message}). No further ` +
-    `replacement will be attempted for this call -- retry the call yourself once the underlying problem ` +
-    `is fixed.`
+    `vice: retry this call yourself once the underlying problem is fixed -- no further replacement will ` +
+    `be attempted automatically. The granted instance stopped answering (${probe.reason}), and a ` +
+    `same-session replacement attempt also failed (${failure.kind}: ${failure.message}).`
   );
 }
 
@@ -2320,9 +2316,9 @@ function replacementFailedMessage(probe: ProbeResult, failure: { kind: string; m
  * session can succeed until it is running again. */
 function sessionMustRestartMessage(failure: { kind: string; message: string }): string {
   return (
-    `vice-proxy: the on-demand VICE broker connection is gone and a fresh session could not be opened ` +
-    `(${failure.kind}: ${failure.message}). This session must be restarted -- no further call in this ` +
-    `session can succeed until the broker is running again. The broker, not this proxy, is the cause.`
+    `vice: this session must be restarted -- no further call in this session can succeed until the ` +
+    `broker is running again. The on-demand VICE broker connection is gone and a fresh session could ` +
+    `not be opened (${failure.kind}: ${failure.message}). The broker itself is the cause.`
   );
 }
 
@@ -2531,12 +2527,12 @@ function renderCheckpointArmingHazard(detection: CheckpointArmingHazardDetection
   const { addrLabel, repeat } = detection;
   if (repeat) {
     return (
-      `vice-proxy hazard (repeat): a stopping exec checkpoint was armed again at ${addrLabel} -- the full ` +
+      `vice hazard (repeat): a stopping exec checkpoint was armed again at ${addrLabel} -- the full ` +
       "hazard note for this address was already issued earlier this session; see that note."
     );
   }
   return [
-    `vice-proxy hazard: a stopping exec checkpoint was just armed at ${addrLabel}, and the call was NOT ` +
+    `vice hazard: a stopping exec checkpoint was just armed at ${addrLabel}, and the call was NOT ` +
       "blocked -- it will not be, because this is core reverse-engineering technique.",
     "",
     "This shape -- a stopping exec checkpoint armed, then execution resumed -- is common to every recorded " +
@@ -2738,9 +2734,8 @@ async function forwardToVice(name: string, args: Record<string, unknown>): Promi
       const current = currentEpoch();
       epochBaseline = current;
       return isErrorText(
-        `vice-proxy: epoch drift detected mid-call -- the host VICE MCP server's epoch changed from ` +
-          `${e.baselineEpoch} to ${e.currentEpoch}. Any work done since the previous call may have hit ` +
-          `a different, freshly-booted machine and should be redone. (${e.message})`
+        `vice: treat every result since the previous call as void and redo that work -- the emulator was ` +
+          `replaced mid-call (epoch changed from ${e.baselineEpoch} to ${e.currentEpoch}). (${e.message})`
       );
     }
     // NEVER rethrow past this point -- a tool-execution failure (transport
@@ -3022,7 +3017,7 @@ server.getServer().setRequestHandler(CallToolRequestSchema, async (request) => {
     if (!isToolCallResult(raw)) {
       return {
         content: [
-          { type: "text", text: `vice-proxy: internal error -- tool "${name}"'s execute() returned an unexpected shape` },
+          { type: "text", text: `vice: internal error -- tool "${name}"'s execute() returned an unexpected shape` },
         ],
         isError: true,
       };
