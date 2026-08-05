@@ -3506,6 +3506,44 @@ test("structural: no message quotes the launcher with a subcommand -- vice-launc
 });
 
 // ---------------------------------------------------------------------------
+// Phase 01.4 plan 03 (criterion 5), executing
+// .planning/todos/pending/de-architecture-agent-visible-proxy-messages.md: a
+// permanent regression guard against the topology-naming "vice-proxy:"
+// prefix silently creeping back into an agent-visible message. A
+// backtick-opened template literal beginning with the literal sequence
+// "vice-proxy:" is agent-visible tool-result `content` in every case in
+// this file EXCEPT when it is an argument to `console.error(...)` (stderr
+// only, never read by the model, and deliberately out of this todo's
+// scope). The check below is proximity-based (does "console.error(" appear,
+// modulo whitespace/newlines, immediately before the backtick?), matching
+// this suite's own existing regex-based structural-test idiom (e.g. the
+// DENY_LIST-membership checks above) rather than a full parse -- sufficient
+// because every console.error call site in this file already writes its
+// template literal as either `console.error(\`...\`)` on one line or
+// `console.error(\n    \`...\`)` on the next, with nothing else between the
+// open-paren and the backtick.
+// ---------------------------------------------------------------------------
+test("structural: no agent-visible template literal begins with the vice-proxy: prefix", () => {
+  const src = readFileSync(join(HERE, "vice-proxy.ts"), "utf8");
+  const violations: number[] = [];
+  const pattern = /`vice-proxy:/g;
+  let m: RegExpExecArray | null;
+  while ((m = pattern.exec(src))) {
+    const idx = m.index;
+    const before = src.slice(Math.max(0, idx - 40), idx);
+    if (!/console\.error\(\s*$/.test(before)) {
+      violations.push(idx);
+    }
+  }
+  assert.deepEqual(
+    violations,
+    [],
+    `found a non-console.error backtick literal beginning with "vice-proxy:" at source offset(s): ${violations.join(", ")} -- ` +
+      `every agent-visible message in this file must use the "vice:" identity instead (see the de-architecture todo)`
+  );
+});
+
+// ---------------------------------------------------------------------------
 // Plan 01.6.2-09 task 2 (D-18): the per-occurrence port triage's own
 // counterpart to "do not change the allocation band's default in this
 // task" -- proving it, not merely stating it. broker-state.mts's
@@ -5428,7 +5466,7 @@ test("seam: the annotated result's error flag is false and the host payload is i
     assert.equal(resp.result.isError, false);
     const text = resp.result.content[0].text;
     assert.match(text, /"checkpoint_num":42/, "the host's own payload must still be present, byte-for-byte, in full");
-    assert.match(text, /vice-proxy hazard/, "the hazard note must also be present alongside the payload");
+    assert.match(text, /vice hazard/, "the hazard note must also be present alongside the payload");
   } finally {
     proxy.child.kill("SIGKILL");
     await new Promise((resolve) => server.close(resolve));
@@ -5450,7 +5488,7 @@ test("seam: a continue-only checkpoint, a disabled one and a non-exec watchpoint
 
     // Continue-only: stop explicitly false.
     const continueOnly = await sendCheckpointAdd(proxy, { start: "$5000", stop: false }, 3);
-    assert.doesNotMatch(continueOnly.result.content[0].text, /vice-proxy hazard/, "a continue-only arm must draw no annotation");
+    assert.doesNotMatch(continueOnly.result.content[0].text, /vice hazard/, "a continue-only arm must draw no annotation");
 
     // A "disabled" re-arm: vice_checkpoint_toggle is NOT in CHECKPOINT_ARMING_TOOLS
     // at all -- its own arguments never carry a stop flag, matching the
@@ -5463,11 +5501,11 @@ test("seam: a continue-only checkpoint, a disabled one and a non-exec watchpoint
       params: { name: "vice_checkpoint_toggle", arguments: { checkpoint_num: 1, enabled: true } },
     });
     const toggleResp = await proxy.nextMessage();
-    assert.doesNotMatch(toggleResp.result.content[0].text, /vice-proxy hazard/, "vice_checkpoint_toggle must draw no annotation");
+    assert.doesNotMatch(toggleResp.result.content[0].text, /vice hazard/, "vice_checkpoint_toggle must draw no annotation");
 
     // A non-exec watchpoint: exec explicitly false (a load/store watchpoint).
     const watchpoint = await sendCheckpointAdd(proxy, { start: "$6000", exec: false, store: true }, 5);
-    assert.doesNotMatch(watchpoint.result.content[0].text, /vice-proxy hazard/, "a non-exec watchpoint arm must draw no annotation");
+    assert.doesNotMatch(watchpoint.result.content[0].text, /vice hazard/, "a non-exec watchpoint arm must draw no annotation");
   } finally {
     proxy.child.kill("SIGKILL");
     await new Promise((resolve) => server.close(resolve));
@@ -5486,7 +5524,7 @@ test("seam: a checkpoint-add call the host rejects is returned as an error, with
     await handshake(proxy);
     const resp = await sendCheckpointAdd(proxy, { start: "$7000" });
     assert.equal(resp.result.isError, true, "a rejected arm must come back as an error");
-    assert.doesNotMatch(resp.result.content[0].text, /vice-proxy hazard/, "a failed arm has no hazard to warn about");
+    assert.doesNotMatch(resp.result.content[0].text, /vice hazard/, "a failed arm has no hazard to warn about");
   } finally {
     proxy.child.kill("SIGKILL");
     await new Promise((resolve) => server.close(resolve));
@@ -5500,7 +5538,7 @@ test("seam: the annotation makes no additional forwarded calls", async () => {
   try {
     await handshake(proxy);
     const resp = await sendCheckpointAdd(proxy, { start: "$8000" });
-    assert.match(resp.result.content[0].text, /vice-proxy hazard/);
+    assert.match(resp.result.content[0].text, /vice hazard/);
     // Excludes the seam's own pre-flight vice_ping liveness probe (present on
     // every forwarded call, annotated or not) -- what this asserts is that
     // the ANNOTATION contributes zero calls beyond the arm itself, which the
@@ -5525,10 +5563,10 @@ test("seam: a repeat arm at the same address is suppressed to a pointer, and an 
     await handshake(proxy);
 
     const first = await sendCheckpointAdd(proxy, { start: "$2000" }, 3);
-    assert.match(first.result.content[0].text, /vice-proxy hazard:/, "the first arm at this address must draw the full note");
+    assert.match(first.result.content[0].text, /vice hazard:/, "the first arm at this address must draw the full note");
 
     const second = await sendCheckpointAdd(proxy, { start: "$2000" }, 4);
-    assert.match(second.result.content[0].text, /vice-proxy hazard \(repeat\)/, "a repeat arm at the same address must be a one-line pointer");
+    assert.match(second.result.content[0].text, /vice hazard \(repeat\)/, "a repeat arm at the same address must be a one-line pointer");
     assert.doesNotMatch(
       second.result.content[0].text,
       /common to every recorded freeze/,
@@ -5551,10 +5589,10 @@ test("seam: a repeat arm at the same address is suppressed to a pointer, and an 
     assert.equal(afterDrift.result.isError, false);
     assert.match(
       afterDrift.result.content[0].text,
-      /vice-proxy hazard:/,
+      /vice hazard:/,
       "the full annotation must reappear once the epoch has genuinely changed -- a new machine has seen none of the earlier warnings"
     );
-    assert.doesNotMatch(afterDrift.result.content[0].text, /vice-proxy hazard \(repeat\)/);
+    assert.doesNotMatch(afterDrift.result.content[0].text, /vice hazard \(repeat\)/);
   } finally {
     proxy.child.kill("SIGKILL");
     await new Promise((resolve) => server.close(resolve));
