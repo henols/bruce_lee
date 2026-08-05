@@ -67,3 +67,29 @@ recycle a healthy instance and read the message.
 Note the contrast that isolates the defect: `vice_diagnose` on the same session reported `epoch changed
 from 1 to 2` — a correct, moving pair — so the epoch *mechanism* works and it is specifically the
 message construction (or the point at which it samples) that is wrong.
+
+## FOURTH artifact, and it narrows the fix: the persisted record samples too early
+
+The deliberate recycle's own incident record
+(`.planning/incidents/20260805160045723-port6603-epoch1.md`) carries:
+
+```
+epoch_before: 1
+epoch_after: 1
+outcome: 'ok'
+kill_stage: 'sigterm'
+evidence_complete: true
+```
+
+So the equal pair is **not merely a message-formatting slip** — it is persisted into the permanent,
+repo-tracked record as structured frontmatter, and the record self-describes as
+`evidence_complete: true` while carrying an epoch pair that cannot be right for a machine that was in
+fact replaced (a fresh pid was observed on the next forwarded call).
+
+**This narrows the fix considerably.** The defect is in **when `epoch_after` is sampled**, not in how it
+is rendered: the recycle path reads it before the respawn has advanced the epoch, then reports and
+persists that stale read. Fixing only the message string would leave every incident record still
+carrying a false pair — and the record is the artifact a future investigation would trust most.
+
+Worth pairing with the contrast already noted above: `vice_diagnose` reports a correct moving pair
+(`1 -> 2`) from the same underlying mechanism, so nothing is wrong with the epoch counter itself.
