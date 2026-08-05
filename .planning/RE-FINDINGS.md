@@ -3516,3 +3516,35 @@ deliberately not invoked" to "yes — executed, dated". Also a **third** indepen
 — the epoch-number text is wrong on every observed genuine replacement so far, while the `pid`/
 `spawned_at` fields the same error carries are the reliable tell. Do not trust the epoch numbers in
 that error string; trust the `pid` change.
+
+### 2026-08-05 — Phase 01.3-06: the criterion-3 partial-staleness shape reproduced live on a healthy instance, `vice_diagnose` correctly classified it `stale_read_path`, and the underlying cause is genuinely ambiguous from the tool surface alone
+
+**Type:** confirmation, with a recorded dead end on the mechanism question
+**Evidence:** live, this session (Phase 01.3-06, criterion 3's two-attempt budget, attempt 2 of 2).
+Baseline `vice_registers_get` after a resume/poll/pause cycle returned `PC:58833 A:0 X:0 Y:10 SP:243`
+with all flags false except `Z`. A second resume (five `vice_ping` polls, then pause) produced a
+**byte-for-byte identical** `vice_registers_get` snapshot — same PC, same A/X/Y/SP, same every flag —
+while `vice_vicii_get_state` reported a genuinely different `raster_line` (311 → 57) and a different
+internal `registers` array between the two reads. `vice_diagnose`, called immediately after, returned
+verdict `stale_read_path` verbatim, citing a 50,756-cycle load-bearing bracket and naming the
+register-read path as the stale one explicitly in its own report text.
+**Confidence:** HIGH for the observable shape and the tool's classification (both directly measured,
+this session); LOW for the underlying cause. Two explanations produce the identical observable shape
+and this project's D-11 boundary (container-side observation only) cannot distinguish them: (a) a
+genuinely stale/cached register-read response path, matching the original hypothesis in
+`.planning/todos/pending/2026-08-01-vice-registers-frozen-after-reset-during-01-04-task2.md`, or (b)
+a mundane explanation — a boot-fresh instance with no disk attached spends nearly all its time in a
+KERNAL/BASIC keyboard-wait idle loop, so two register reads taken moments apart can legitimately
+sample the identical instruction while the VIC-II raster position (which advances every line
+regardless of CPU activity) has moved in between. Distinguishing (a) from (b) needs a stale-read
+proven against a machine **known** to be doing something other than idling at a fixed PC — not
+attempted this session, and not answerable from `mcp__vice__*` alone if the difference is in the
+proxy's or bridge's own caching behaviour versus VICE's genuine CPU state.
+**Saves / costs:** saves a future session from assuming `stale_read_path` reproductions prove a
+caching defect — they may, or they may just be an idle machine sampled at both ends of a bracket, and
+either way `vice_diagnose` classifies it the same, correctly, as *not wedged*. Costs: this remains a
+dead end on the specific "is the bridge's register-read path actually caching?" question first raised
+2026-08-01 — recorded here as still open rather than silently closed by this reproduction. A future
+session wanting to settle (a) vs (b) should reproduce with a disk attached and the machine confirmed
+mid-gameplay (not idling at a KERNAL wait loop) and see whether the identical-snapshot shape still
+occurs.
