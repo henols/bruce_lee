@@ -1068,7 +1068,7 @@ Plans:
 | ~~**HV-08**~~ *(CLOSED 2026-08-05 — redeploy + restart done; warm_floor=1 running)* | Any **live** verification of 01.6.2.1's five lifecycle-policy changes | Re-run the installer to refresh host `tools/`, then restart the broker so it loads the new code — **the restart kills the 3 warm spares and any granted instance, so it is deliberately your call** | The host deploy is stale: `tools/vice-broker.mjs` and `tools/broker-launch.mjs` **differ** from committed `resources/` and are dated 05:43, hours before 01.6.2.1 merged. The live record proves it — `"spares_target": 3`, both the pre-rename key *and* the pre-change default, where 01.6.2.1 renamed it `warm_floor` and defaulted it to 1. Until then, anything verified live exercises the **pre-01.6.2.1** broker, and I will label it that way rather than claiming the new code was exercised |
 | ~~**HV-03**~~ | ~~01.6.3 criterion D~~ | **DISSOLVED 2026-08-05 — decided by measurable cost, so it never became yours** | ✅ D-06 taken in 01.6.3's plan 01: **provision, not bundle** — `npm ci --prefix .claude/mcp/vice` wired into the devcontainer's `postCreateCommand`. The row existed in case the decision turned on developer *preference*; it turned on cost, so taking it here was correct rather than a quiet grab. Grounds: `vice-proxy.ts` is not host-bound (it runs in-container on Node's native TS stripping, no build step), so D-06 only ever concerned the container's clone-and-go property; bundling would mean committing ~69 MB / 35 dependencies of third-party minified code as authored source plus a bundler toolchain this repo has never needed. **Disclosed cost:** a bare clone that bypasses devcontainer provisioning now fails until `npm ci` runs once. That cost proved itself the same day — after wave 1 merged, `main`'s `node_modules` lacked `@mastra/*` and one telemetry test failed until `npm ci` ran |
 | **HV-04** *(mostly discharged)* | 01.4 criteria 1–4 | **Already provided — you started the launcher 2026-08-05 and live access now works** | ⬤ **Criterion 1 partially discharged live**, recorded in `01.4-LIVE-EVIDENCE.md`: all three synthetic tools are present in a real session (against a recorded state of *"the session still cannot see them"*), and **`vice_diagnose` actually executed** — `verdict: restarted`, epoch 1 → 2. `vice_recycle` is deliberately **not** probed (destructive: proving it by probing destroys a healthy instance) and `vice_result_continue` needs a continuation token from an oversized result, so both are honestly unproven rather than inferred from presence. **Criterion 3 split:** named path holds (`vice_disk_list` absent from the surface); the generic path still exists (`tools_call`/`tools_list` both present) and its `tools_list` probe is deferred to 01.4's plan — `tools_call` with that name must never be the probe, since that *is* the hazard. **Criterion 4** (subagent schema) not probed. **Nothing further needed from you here** — the remainder is mine, once 01.6.3 stops rewriting the files 01.4 points into |
-| **HV-05** | 01.3-06 (`gate="blocking"`, `01.3-06-PLAN.md:259`) and therefore 01.3's seal | Read the phase records and confirm no criterion was reworded to fit its outcome (threat T-01.3-20) | Nothing — **this row is structurally unautomatable.** It is a check on the agent's own honesty, so the agent cannot be the one to answer it |
+| **HV-05** *(substantively answered; formal sign-off still yours)* | 01.3-06 (`gate="blocking"`, `01.3-06-PLAN.md:259`) and therefore 01.3's seal | Read the phase records and confirm no criterion was reworded to fit its outcome (threat T-01.3-20) | Nothing — **this row is structurally unautomatable.** It is a check on the agent's own honesty, so the agent cannot be the one to answer it |
 | ~~**HV-06**~~ *(discharged)* | The `CF-01.4-NN` carry-forward rows (01.6.2.1 plan 06, ~35 expected) that 01.4 cannot discharge container-side | Same live-broker access as HV-04, once | Walk the carry-forward list row by row and mark each discharged or permanently unverifiable, with the reason |
 | **HV-07+** | *(open)* | *(appended during the autonomous run)* | Any blocker the run hits is appended here with these same four fields, never dropped and never answered by inference |
 
@@ -1083,6 +1083,50 @@ Plans:
   4. **v1.1's per-phase seals are re-read after the answers land, not assumed to still be accurate.** 01.6, 01.6.1 and whichever of 01.6.3 / 01.4 / 01.3 sealed with carried items each move to fully verified or state exactly what remains and why.
 
   5. **The autonomous run's deferral decisions are auditable.** Every criterion that was marked CARRIED rather than verified names its HV row, so the developer can see what was routed here and — more importantly — what was *not* routed here and closed for real.
+
+### HV-05 — answered by adversarial audit, not by self-approval (2026-08-05)
+
+The developer delegated this gate with "you decide". **It was not self-approved**, because the gate's
+entire value is independence: an author's verdict on their own records carries no information, and one
+recorded as though it were a check would corrupt the file it sits in.
+
+Instead the strongest available substitute ran — an **adversarial audit by an agent that authored none of
+the work**, given the records and the ROADMAP criteria and told to hunt for claims exceeding evidence,
+defaulting to skepticism.
+
+**It found six overclaims.** That result is the justification for not self-approving: the gate was doing
+real work.
+
+| ID | The overclaim |
+|---|---|
+| OC-1 | The trigger hunt's **"0 of 6"** rendered twice as *six failed reproduction attempts*. **Zero attempts were made.** Origin: a plan premise written *before* the hunt ran |
+| OC-2 | Criterion 11's "could not be produced on demand" — evidence supports only "never attempted", and the sole blocker had **already cleared** when the record was written |
+| OC-3 | Criterion 10 claimed "RE-PROVEN, current count recorded" over a literal `PLACEHOLDER-PENDING-SUITE-RESULT`, plus a four-layer guard description citing **retired** functions |
+| OC-4 | `COVERAGE.md` upgraded the zero-attempt hunt into "**confirmed** no call or ordering to add" — the exact *no-trigger-found → no-trigger-exists* slip |
+| OC-5 | Recycle proofs inflated **two → three**, counting a *fabricated stub* process as "a real healthy instance" |
+| OC-6 | Criterion 8 claimed a **hard-rule prohibition** where a discretionary decision (D-12) existed, answering an easier question |
+
+All six are corrected — as corrections carrying their reason, not deletions — plus a `COVERAGE.md` total
+that contradicted itself (66/1 → the true 62/5) and three weak-wording items softened. Ledger:
+`01.3-OVERCLAIM-CORRECTIONS.md`.
+
+**What the audit tried and failed to break** is what makes the six credible: the topology adaptation
+checks out in full (`handleExit()` really does relaunch on the same port via `launchSupervised()`, really
+is wired into both production launch paths, `resources/vice-supervisor.sh` really is gone), criterion 7's
+epoch claim holds, `DENY_LIST` holds exactly five names, and **`01.3-TRIGGER-HUNT.md` itself is clean** —
+it reported its own zero-attempt outcome honestly, preserved the PC:2014 / N=2 coincidence, and explicitly
+declined to promote it. OC-1 was the *other* record misreading a clean one.
+
+**A decision taken here, and recorded rather than buried:** the trigger hunt is now **attemptable** (its
+resume condition — both tools reachable from a live session — is satisfied), and it is **deliberately not
+being run**. The developer has no machine access, so a reproduction that wedges the emulator beyond
+`vice_recycle`'s reach would leave nobody able to restore it. That downside is asymmetric against
+reproducing a state we can already detect and recover from. Criterion 11's escape hatch therefore rests on
+**that choice**, not on impossibility — a weaker and more honest footing than the record previously claimed.
+
+**What remains yours:** the formal sign-off. What you would now be signing is a record set whose six
+overreaches have been found and corrected by something other than its author — which is a materially
+better thing to sign than what existed this morning.
 
 ### Register status, 2026-08-05 close-out
 
