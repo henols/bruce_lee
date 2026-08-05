@@ -3361,3 +3361,55 @@ already-dropped record) and GREEN after the fix, per this project's own RED-firs
 **Confidence:** HIGH (read the landed code directly, reproduced the race with a deterministic
 regression test rather than trusting the review's narrative alone, and observed both the RED and
 GREEN states).
+
+### 2026-08-05 — Phase 01.4 criterion 3, generic-path half: `tools_list`/`tools_call` returned the host's raw 64-tool inventory live, then both were closed on `DENY_LIST` and re-confirmed as still-open in the SAME session (the fix cannot hot-reload the already-running proxy process)
+
+**Type:** confirmation (before/after) + hazard (a live-session limitation, not a code defect)
+**Evidence:** live, this session, 2026-08-05 — three real `mcp__vice__tools_list` / `mcp__vice__tools_call`
+calls against the running proxy, cross-checked against the landed fix in `.claude/mcp/vice/vice.ts` /
+`vice-proxy.ts` (commits `0a1323f`, `ee0cece`)
+**Confidence:** HIGH for the live "before" observation and the DENY_LIST fix landing (both witnessed
+directly); the LIVE "after" refusal is explicitly **not** established by this entry — see below.
+
+**Before (pre-fix, live):** `mcp__vice__tools_list`, called live in this session before any code
+change, returned the host's raw, unfiltered inventory: **64 tools**, `count: 64`, including
+`vice_disk_list`, `tools_list`, `tools_call`, `initialize` and `notifications_initialized` all as
+ordinary entries, and — as `01.4-LIVE-EVIDENCE.md` predicted — the three proxy-local synthetic tools
+(`vice_diagnose`, `vice_recycle`, `vice_result_continue`) absent, since a raw `tools_list` forward
+never passes through this proxy's own synthetic-tool registration. This re-establishes
+01.4-RESEARCH.md's "four host JSON-RPC meta-methods sitting in the manifest as forwardable tools"
+mechanism against the CURRENT, post-01.6.3 code — the actual count (64) matches the research's own
+stale figure exactly, which is itself worth recording since 01.1-REVIEW.md's WR-01 flagged that figure
+as needing re-derivation, not assumption. `mcp__vice__tools_call` with the benign nested name
+`{name: "vice_ping", arguments: {}}` (never `vice_disk_list` — that call was never made, per this
+phase's own standing prohibition) was also, separately, confirmed forwarded and successful pre-fix.
+
+**The fix (this session, 01.4-01 tasks 1+2):** `DENY_LIST` (`.claude/mcp/vice/vice.ts`) extended from
+`["vice_disk_list"]` to `["vice_disk_list", "tools_list", "tools_call", "initialize",
+"notifications_initialized"]`, reusing the existing two enforcement seams (the registration-loop skip
+and the `CallToolRequestSchema` override's Layer-1 check) with no new mechanism — closing Phase 01.4
+criterion 3's generic-dispatch hole named in
+`.planning/todos/pending/2026-08-05-generic-surface-deny-list-gap-tools-call-nested-vice-disk-list.md`.
+Proven by two new unit tests (`vice-proxy.test.ts`) mirroring the existing `vice_disk_list` refusal
+test's exact shape, plus the historical bypass test repointed to assert closure instead of the gap.
+Full suite: 441 tests / 436 pass / 0 fail / 5 todo (baseline 437/432/0/5 plus 4 new tests), typecheck
+clean.
+
+**The live "after" limitation (why this entry is HIGH confidence on the fix and explicitly UNPROVEN,
+not merely undone, on the live refusal):** `.mcp.json` launches `node .claude/mcp/vice/vice-proxy.ts`
+as ONE persistent stdio process per Claude Code session, spawned once and never hot-reloaded — this
+file's own header comment already states a stdio MCP server is never auto-reconnected once it dies.
+Calling `mcp__vice__tools_list` a THIRD time, after both commits landed on disk, returned the exact
+same raw 64-tool inventory byte-for-byte (vice_disk_list, tools_list, tools_call, initialize,
+notifications_initialized all still present, unrefused) — proving the already-running process is
+executing the pre-fix code held in memory from session start, not the edited source on disk. Editing
+a `.ts` file mid-session cannot change what an already-running Node process has already loaded. The
+"after" refusal this plan's own task 1/3 `<done>` criteria describe as observable "in this same
+session" is therefore not obtainable by the executing agent at all — it requires a fresh proxy process
+(a new session, or an orchestrator-level restart), not a defect in the fix itself. The unit-test suite
+proves the refusal mechanism works; only the live, in-process confirmation is deferred.
+
+**Saves:** the next session attempting to live-verify a `.claude/mcp/vice/` fix from within the SAME
+agent session that made the edit — that verification is structurally unobtainable there regardless of
+how many times the call is retried, and should be deferred to a fresh session/process rather than
+treated as a failed fix.
