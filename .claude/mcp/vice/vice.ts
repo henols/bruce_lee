@@ -15,6 +15,7 @@ import { resolve, join } from "node:path";
 import { readFileSync } from "node:fs";
 
 import { supervisorDir } from "./repo-root.ts";
+import { isInsideContainer, type ContainerGuardDeps } from "./container-guard.mts";
 
 // Renamed from ENDPOINT to DEFAULT_ENDPOINT (D-5): a pool lease redirects
 // the seam to a DIFFERENT endpoint at runtime via useInstance() below, so
@@ -29,25 +30,51 @@ import { supervisorDir } from "./repo-root.ts";
 // allocated band (6600+, DEFAULT_BASE_PORT in broker-state.mts) -- that
 // would be the broker squatting a port a human wants, the exact defect
 // D-18 exists to prevent.
-const DEFAULT_ENDPOINT: string = process.env.VICE_MCP_URL || "http://host.docker.internal:6510/mcp";
+// The host part is resolved through mcpHost() rather than baked in as a
+// literal, for the same container-versus-host reason documented on mcpHost()
+// below -- this URL was the LAST remaining unconditional
+// "host.docker.internal" in the tree. Calling mcpHost() here is legal despite
+// it being declared further down: it is a function DECLARATION, so it is
+// hoisted, and its own import is initialised before this module body runs.
+// Evaluated once at startup, which also warms isInsideContainer()'s cache
+// before any tool call needs it.
+const DEFAULT_ENDPOINT: string = process.env.VICE_MCP_URL || `http://${mcpHost()}:6510/mcp`;
 const DEFAULT_TIMEOUT_MS: number = Number(process.env.VICE_MCP_TIMEOUT_MS || 30000);
 
-// The container-visible alias for the host machine -- the ONE definition
-// every consumer that needs to build a host-facing URL from a bare port
-// reads, instead of each inlining its own
-// `process.env.VICE_MCP_HOST || "host.docker.internal"` copy (there were
-// three such copies before this: vice-pool.mjs's instanceFor() and
+// The address of the host machine -- the ONE definition every consumer that
+// needs to build a host-facing URL from a bare port reads, instead of each
+// inlining its own `process.env.VICE_MCP_HOST || "host.docker.internal"` copy
+// (there were three such copies before this: vice-pool.mjs's instanceFor() and
 // defaultInstance(), and vice-session.mjs's readSession()). A FUNCTION, not
 // a module-level constant, so it stays sensitive to a runtime env override
 // -- vice-pool.test.mjs's own withMcpHostEnv() helper mutated
 // process.env.VICE_MCP_HOST across test cases within the SAME process
 // (before that file's 2026-08-02 deletion), which a constant captured once
 // at import time would have silently stopped honouring.
-// Leaves DEFAULT_ENDPOINT (above) untouched -- that is a full URL read once
-// at startup, a different concern from this alias, which is read fresh on
-// every call.
-export function mcpHost(): string {
-  return process.env.VICE_MCP_HOST || "host.docker.internal";
+//
+// CONTAINER-AWARE (2026-08-05, developer instruction). The default was
+// previously the bare literal "host.docker.internal", which is correct in
+// exactly ONE of the two environments this code runs in: it is a
+// Docker-provided alias, published into the container by
+// .devcontainer/devcontainer.json's `--add-host=host.docker.internal:host-gateway`,
+// and it does not resolve on the host at all. Host-bound modules genuinely do
+// consume this tree (vice-broker.mts references vice-broker-client), so a
+// single unconditional answer was wrong for one side by construction.
+//
+// Detection is delegated to container-guard.mts's isInsideContainer() rather
+// than re-derived -- see that function's own comment for why a second
+// detector is a bug waiting to happen here.
+//
+// Non-container branch is 127.0.0.1 rather than "localhost" DELIBERATELY:
+// "localhost" may resolve to ::1 first, and the broker binds 0.0.0.0 --
+// IPv4-only (broker-control.mts's documented bind), so an IPv6 loopback
+// connect would be refused by a listener that is in fact running. An explicit
+// IPv4 literal cannot pick the wrong family. It also classifies as `loopback`
+// under vice-broker-client.ts's classifyConnectHost(), which that resolver
+// deliberately does NOT refuse, and is not `wildcard_bind`, so it does not
+// trip the pre-connect refusal.
+export function mcpHost(deps?: ContainerGuardDeps): string {
+  return process.env.VICE_MCP_HOST || (isInsideContainer(deps) ? "host.docker.internal" : "127.0.0.1");
 }
 
 // Where tools/vice-supervisor.sh (host-only) writes its restart epoch --

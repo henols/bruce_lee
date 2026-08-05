@@ -14,7 +14,8 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { useInstance, serverInfo, activeInstance } from "./vice.ts";
+import { useInstance, serverInfo, activeInstance, mcpHost } from "./vice.ts";
+import type { ContainerGuardDeps } from "./container-guard.mts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -121,4 +122,66 @@ test("structural: assertSameMachine()'s no-evidence message names the surviving 
   const msg = match![0];
   assert.match(msg, /tools\/vice-launcher\.sh/, "must name the surviving launcher");
   assert.doesNotMatch(msg, /vice-supervisor\.sh/, "must not still name the retiring per-instance supervisor");
+});
+
+// ---------------------------------------------------------------- mcpHost()
+//
+// mcpHost() must be CONTAINER-AWARE: "host.docker.internal" is published into
+// the container by devcontainer.json's --add-host and does not resolve on the
+// host, so a single unconditional answer is wrong for one of the two
+// environments this tree runs in. Both branches are driven through INJECTED
+// deps, so the non-container branch is provable from inside this container --
+// no test may depend on the environment it happens to run in.
+
+/** Deps fixture with every container signal CLEAR, mirroring
+ * container-guard.test.ts's own helper. */
+function hostDeps(overrides: Partial<ContainerGuardDeps> = {}): ContainerGuardDeps {
+  return {
+    fileExists: () => false,
+    readFile: () => {
+      throw new Error("readFile should not be called when fileExists is false");
+    },
+    env: {},
+    runSystemdDetectVirt: () => null,
+    ...overrides,
+  };
+}
+
+/** Runs `fn` with VICE_MCP_HOST set to `value` (or deleted when null),
+ * restoring the previous value afterward. */
+function withMcpHostEnv<T>(value: string | null, fn: () => T): T {
+  const saved = process.env.VICE_MCP_HOST;
+  if (value === null) delete process.env.VICE_MCP_HOST;
+  else process.env.VICE_MCP_HOST = value;
+  try {
+    return fn();
+  } finally {
+    if (saved === undefined) delete process.env.VICE_MCP_HOST;
+    else process.env.VICE_MCP_HOST = saved;
+  }
+}
+
+test("mcpHost(): inside a container resolves to the bridge alias host.docker.internal", () => {
+  withMcpHostEnv(null, () => {
+    assert.equal(mcpHost(hostDeps({ fileExists: (p) => p === "/.dockerenv" })), "host.docker.internal");
+  });
+});
+
+test("mcpHost(): on a host resolves to 127.0.0.1, never the Docker-only alias that would not resolve there", () => {
+  withMcpHostEnv(null, () => {
+    const resolved = mcpHost(hostDeps());
+    assert.equal(resolved, "127.0.0.1");
+    assert.notEqual(resolved, "host.docker.internal");
+    // 127.0.0.1 rather than "localhost" is deliberate: "localhost" can resolve
+    // to ::1 first, and the broker binds 0.0.0.0 (IPv4 only), so an IPv6
+    // loopback connect would be refused by a listener that IS running.
+    assert.notEqual(resolved, "localhost");
+  });
+});
+
+test("mcpHost(): an explicit VICE_MCP_HOST override beats BOTH branches", () => {
+  withMcpHostEnv("10.1.2.3", () => {
+    assert.equal(mcpHost(hostDeps()), "10.1.2.3");
+    assert.equal(mcpHost(hostDeps({ fileExists: (p) => p === "/.dockerenv" })), "10.1.2.3");
+  });
 });
