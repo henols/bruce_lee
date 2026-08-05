@@ -20,7 +20,15 @@ import {
   brokerJsonPath,
   readBrokerLiveness,
   openBrokerControl,
+  classifyConnectHost,
+  resolveControlTarget,
+  CONTROL_CONNECT_TIMEOUT_MS,
 } from "./vice-broker-client.ts";
+// The bridge alias itself (quick-260805-9ha) -- used only to assert
+// resolveControlTarget()'s default answer against the SAME function it
+// delegates to, never a second, hand-derived expectation of what that
+// answer should be.
+import { mcpHost } from "./vice.ts";
 import { startControlListener, newControlToken, type AcquireOutcome, type RecycleOutcome, type StatusInstanceEntry, type HostStateFields } from "./broker-control.mts";
 // Namespace import, read-only, for the export-list closure test below --
 // the whole point is comparing the module's OWN live key set against an
@@ -29,6 +37,20 @@ import { startControlListener, newControlToken, type AcquireOutcome, type Recycl
 import * as viceBrokerClient from "./vice-broker-client.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+
+// quick-260805-9ha: every listener THIS FILE starts (startFullBrokerListener()/
+// startRawSocketServer() below) is bound on 127.0.0.1, inside this
+// container. openBrokerControl()/acquireOverControlPlane() no longer dial
+// broker.json's own `control_host` field (that is the broker's BIND
+// address, never a dial target -- see vice-broker-client.ts's own "dial
+// resolution" section header). Without this override, every one of this
+// file's connect-driving tests would instead resolve the real bridge alias
+// (mcpHost(), "host.docker.internal" by default) and either hang or fail
+// against a host nothing here has ever bound -- which is also exactly the
+// hard rule this project enforces: nothing under this module tree's tests
+// may dial the real host. Setting it once, at module scope, is the seam
+// that keeps this whole suite in-container.
+process.env.VICE_BROKER_CONTROL_DIAL_HOST = "127.0.0.1";
 
 const tmpPoolDir = (): string => mkdtempSync(join(tmpdir(), "vice-broker-client-test-"));
 
@@ -50,6 +72,25 @@ async function withPoolDir(fn: (dir: string) => Promise<void> | void): Promise<v
 }
 
 const sleepMs = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+/** Temporarily sets or deletes `process.env[key]` for the duration of `fn`,
+ * restoring the prior value (or absence) afterwards regardless of how `fn`
+ * exits -- the same finally-restore discipline withPoolDir() above uses,
+ * scoped to a single env var. `value: undefined` deletes the key entirely
+ * (needed by the tests below that must prove resolveControlTarget()'s
+ * DEFAULT behaviour with the module-scope override above deliberately
+ * absent). */
+async function withEnv(key: string, value: string | undefined, fn: () => Promise<void> | void): Promise<void> {
+  const prev = process.env[key];
+  if (value === undefined) delete process.env[key];
+  else process.env[key] = value;
+  try {
+    await fn();
+  } finally {
+    if (prev === undefined) delete process.env[key];
+    else process.env[key] = prev;
+  }
+}
 
 // -------------------------------------------------------------- request ids
 
@@ -107,6 +148,94 @@ test("readBrokerLiveness(): classifies a stale heartbeat as stale", async () => 
     writeFileSync(path, JSON.stringify({ version: 1, pid: 4242, heartbeat_at: longAgo }));
     const result = readBrokerLiveness(path);
     assert.equal(result.state, "stale");
+  });
+});
+
+// =============================================================================
+// quick-260805-9ha: dial resolution -- classifyConnectHost()/
+// resolveControlTarget(). `broker.json`'s own `control_host` field is the
+// broker's BIND address (vice-broker.mts:782 writes `listener.host` into
+// it, which is deliberately `0.0.0.0`); dialing it from inside THIS
+// container reaches this container's own network stack, where nothing
+// listens. These two functions are the fix -- see vice-broker-client.ts's
+// own "dial resolution" section header for the full rationale.
+// =============================================================================
+
+test("resolveControlTarget(): a record carrying 0.0.0.0 never yields it as the dial target -- with no override set, resolves to the bridge alias", async () => {
+  await withEnv("VICE_BROKER_CONTROL_DIAL_HOST", undefined, () => {
+    const result = resolveControlTarget({ control_host: "0.0.0.0" }, 6600);
+    assert.equal(result.ok, true, `must resolve ok against an alive-classified port: ${JSON.stringify(result)}`);
+    if (!result.ok) return;
+    assert.notEqual(result.target.host, "0.0.0.0");
+    assert.equal(result.target.host, mcpHost(), "the resolved host must be exactly what mcpHost() answers");
+    assert.equal(result.target.source, "bridge_alias");
+    assert.equal(result.target.recorded, "0.0.0.0", "the record's own control_host is carried through for diagnostics only");
+  });
+});
+
+test("resolveControlTarget(): neither 127.0.0.1 nor localhost in the record ever surfaces as the dial target, with no override set", async () => {
+  await withEnv("VICE_BROKER_CONTROL_DIAL_HOST", undefined, () => {
+    for (const recordedHost of ["127.0.0.1", "localhost"]) {
+      const result = resolveControlTarget({ control_host: recordedHost }, 6600);
+      assert.equal(result.ok, true, `must resolve ok for recorded host ${recordedHost}: ${JSON.stringify(result)}`);
+      if (!result.ok) return;
+      assert.notEqual(result.target.host, recordedHost, `the recorded value ${recordedHost} must never become the dial target`);
+      assert.equal(result.target.host, mcpHost());
+      assert.equal(result.target.recorded, recordedHost);
+    }
+  });
+});
+
+test("classifyConnectHost(): classifies a corpus of wildcard-bind, loopback and routable hosts structurally", () => {
+  const wildcardBind = ["0.0.0.0", "::", "[::]"];
+  const loopback = ["127.0.0.1", "127.1.2.3", "localhost", "[::1]"];
+  const routable = ["host.docker.internal", "172.17.0.1", "203.0.113.1"];
+  for (const host of wildcardBind) {
+    assert.equal(classifyConnectHost(host), "wildcard_bind", `expected wildcard_bind for ${host}`);
+  }
+  for (const host of loopback) {
+    assert.equal(classifyConnectHost(host), "loopback", `expected loopback for ${host}`);
+  }
+  for (const host of routable) {
+    assert.equal(classifyConnectHost(host), "routable", `expected routable for ${host}`);
+  }
+});
+
+test("resolveControlTarget(): the env override is honoured verbatim, regardless of what the record says", async () => {
+  await withEnv("VICE_BROKER_CONTROL_DIAL_HOST", "127.0.0.1", () => {
+    const result = resolveControlTarget({ control_host: "0.0.0.0" }, 6600);
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.equal(result.target.host, "127.0.0.1");
+    assert.equal(result.target.source, "dial_override");
+    assert.equal(result.target.recorded, "0.0.0.0");
+  });
+});
+
+test("openBrokerControl(): a wildcard-bind dial target is refused before any connect is attempted, naming the address and port", async () => {
+  await withPoolDir(async (dir) => {
+    await withEnv("VICE_BROKER_CONTROL_DIAL_HOST", "0.0.0.0", async () => {
+      writeBrokerJson(dir, {
+        version: 1,
+        pid: process.pid,
+        heartbeat_at: new Date().toISOString(),
+        control_host: "0.0.0.0",
+        control_port: 6600,
+        control_token: "unused",
+      });
+      const startedAt = Date.now();
+      const result = await openBrokerControl(dir);
+      const elapsed = Date.now() - startedAt;
+      assert.equal(result.ok, false);
+      if (result.ok) return;
+      assert.equal(result.kind, "unreachable_control_plane");
+      assert.match(result.message, /0\.0\.0\.0:6600/, `message must name the address and port: ${result.message}`);
+      assert.equal(result.target, "0.0.0.0:6600");
+      assert.ok(
+        elapsed < CONTROL_CONNECT_TIMEOUT_MS,
+        `must resolve well inside the connect timeout without ever attempting a connect, took ${elapsed}ms (bound ${CONTROL_CONNECT_TIMEOUT_MS}ms)`
+      );
+    });
   });
 });
 
@@ -729,6 +858,9 @@ test("the client module's export list is exactly the surviving surface", () => {
     "RECYCLE_TIMEOUT_MS",
     "CONTROL_CONNECT_TIMEOUT_MS",
     "openBrokerControl",
+    // quick-260805-9ha: the dial-resolution layer's own two runtime exports.
+    "classifyConnectHost",
+    "resolveControlTarget",
   ].sort();
   assert.deepEqual(
     actualKeys,
