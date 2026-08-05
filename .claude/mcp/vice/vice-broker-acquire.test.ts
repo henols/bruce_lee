@@ -195,7 +195,7 @@ test("handleAcquire: an instance released through handleRelease() is never promo
   const { handleAcquire, handleRelease } = await loadBrokerModule();
   const state = createState();
   state.instances.set(6600, makeReadyInstance({ port: 6600, state: "granted", pid: 5001, expectedIdentity: "x64sc" }));
-  state.grants.set("req-4", { id: "req-4", port: 6600, grantedAt: Date.now() });
+  state.grants.set("req-4", { id: "req-4", port: 6600, grantedAt: Date.now(), pid: 5001 });
 
   // The real release path -- deletes the grant and the instance record
   // synchronously; the identity-verified kill it fires is a fire-and-forget
@@ -213,6 +213,50 @@ test("handleAcquire: an instance released through handleRelease() is never promo
 
   assert.equal(spawnCalls.length, 1, "with no ready candidate left, the acquire must cold-launch exactly once");
   assert.equal(outcome.ok, true, `expected a successful grant, got ${JSON.stringify(outcome)}`);
+});
+
+// ---------------------------------------------------------------------------
+// Task 2 (T-01.6.2.1-28): handleRelease()'s grant-pid identity check. A
+// stale/orphaned grant -- one whose recorded pid does NOT match the port's
+// CURRENT occupant -- must never delete or signal that mismatched occupant.
+// This is CR-01's own cross-session-kill blast radius, closed independently
+// of Task 1's race fix: an ordinary crash-and-respawn that frees a port for
+// an unrelated cold launch (broker-launch.mts's handleExit(), give-up
+// branch) leaves exactly this shape behind, with no concurrent acquire race
+// required to produce it.
+// ---------------------------------------------------------------------------
+
+test("handleRelease: a grant whose recorded pid does not match the port's current occupant retires the grant's own bookkeeping but leaves the mismatched occupant untouched", async () => {
+  const { handleRelease } = await loadBrokerModule();
+  const state = createState();
+  // An UNRELATED instance now occupies port 6600 -- e.g. because the
+  // originally-granted process crashed, was given up on, and the port was
+  // reallocated to a brand-new cold launch with a DIFFERENT pid.
+  state.instances.set(6600, makeReadyInstance({ port: 6600, state: "granted", pid: 7777, expectedIdentity: "x64sc" }));
+  // The stale grant still names port 6600 but recorded a DIFFERENT
+  // (now-dead) pid at grant time.
+  state.grants.set("req-stale", { id: "req-stale", port: 6600, grantedAt: Date.now(), pid: 5001 });
+
+  handleRelease("req-stale", state);
+
+  assert.equal(state.grants.has("req-stale"), false, "the stale grant's own bookkeeping must still be retired");
+  assert.ok(state.instances.has(6600), "the unrelated (mismatched-pid) occupant must still be present -- it was NOT deleted");
+  const stillThere = state.instances.get(6600)!;
+  assert.equal(stillThere.pid, 7777, "the unrelated occupant's own record must be untouched");
+  assert.equal(stillThere.deliberateKill, undefined, "the unrelated occupant must never have deliberateKill set -- no kill was attempted against it");
+});
+
+test("handleRelease: a grant naming a port with NO current occupant at all (an already-gone instance) retires the grant's own bookkeeping with no error", async () => {
+  const { handleRelease } = await loadBrokerModule();
+  const state = createState();
+  // No instance at port 6600 at all -- e.g. the instance already exited and
+  // its exit handler already deleted the record via a separate path.
+  state.grants.set("req-gone", { id: "req-gone", port: 6600, grantedAt: Date.now(), pid: 5001 });
+
+  handleRelease("req-gone", state);
+
+  assert.equal(state.grants.has("req-gone"), false, "the grant's own bookkeeping must still be retired even when the port is already empty");
+  assert.equal(state.instances.has(6600), false, "there was never an instance to touch");
 });
 
 // ---------------------------------------------------------------------------

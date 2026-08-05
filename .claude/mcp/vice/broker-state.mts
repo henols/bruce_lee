@@ -92,6 +92,22 @@ export interface GrantRecord {
   id: string;
   port: number;
   grantedAt: number;
+  /** The pid of the process THIS grant was actually issued for, recorded at
+   * grant time (handleAcquire()'s own single state.grants.set() call site,
+   * vice-broker.mts). REQUIRED, not optional -- a grant with no identity to
+   * check against is exactly the gap CR-01's blast radius exploited:
+   * handleRelease() used to resolve its kill target purely by CURRENT port
+   * occupant (state.instances.get(grant.port)), which is unsafe against ANY
+   * event that swaps a port's occupant without also clearing the grant (a
+   * concurrent-acquire race, an ordinary crash-and-respawn that frees the
+   * port for an unrelated cold launch, or a give-up). Comparing this field
+   * against the port's current occupant's own pid before releasing is what
+   * proves "the same process this grant was actually issued for," not
+   * merely "whatever now holds this port number." A legitimate recycle
+   * (broker-launch.mts's handleExit()) keeps this field in sync with the
+   * respawned record's own pid, so the check never misfires against this
+   * project's own kill-never-recycle design. */
+  pid: number | null;
 }
 
 export interface BrokerState {

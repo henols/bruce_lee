@@ -497,7 +497,7 @@ export async function handleAcquire(requestId: string, stateDir: string, state: 
   // synchronous pair, so two concurrent acquires can never both grant the
   // SAME record (T-01.6.2.1-03; see selectWarmInstance()'s own re-check for
   // the other half of that guarantee).
-  state.grants.set(requestId, { id: requestId, port: record.port, grantedAt: Date.now() });
+  state.grants.set(requestId, { id: requestId, port: record.port, grantedAt: Date.now(), pid: record.pid });
   record.state = "granted";
 
   return {
@@ -632,31 +632,67 @@ function maintainWarmFloorForRealBroker(stateDir: string, state: BrokerState): P
 }
 let lastWarmLaunchLogRelPath = "";
 
-/** Releases a grant and identity-verified-kills its instance. Marks the
- * death as broker-ordered with a FALSE respawn-after-kill answer BEFORE the
- * kill -- the opposite answer from the recycle handler above, since a
- * release wants no replacement. The instance entry is still deleted here on
- * purpose, exactly as before: the exit handler's own final-death branch
- * would also delete it, and both deleting is harmless, whereas neither
- * deleting would leak the record if the exit event were never delivered.
- * Fire-and-forget from the control listener's close handler's own
- * perspective -- the full shutdown wiring and the startup reap are plan
- * 04's; this task only needs release-on-close to actually tear the child
- * down. */
+/** Releases a grant and identity-verified-kills its instance -- but ONLY
+ * when the port's CURRENT occupant is proven to be the SAME process this
+ * grant was actually issued for (its own recorded `pid`, set at grant time
+ * by handleAcquire()'s single state.grants.set() call site), not merely
+ * "whatever now holds this port number." This is Task 2's own closure of
+ * CR-01's cross-session-kill blast radius (T-01.6.2.1-28): even after Task
+ * 1 closes the specific concurrent-acquire race, this lookup was ALREADY
+ * unsafe against any OTHER event that swaps a port's occupant without also
+ * clearing the grant -- the clearest independent example being an ordinary
+ * (non-deliberate) crash of a GRANTED instance that hits the give-up
+ * threshold: broker-launch.mts's handleExit() deletes the record from
+ * state.instances regardless of record.state, freeing the port for
+ * nextFreePort() to hand to a brand-new, unrelated cold launch, while the
+ * original grant sits untouched in state.grants.
+ *
+ * On a pid MATCH: unchanged from before this task -- marks the death as
+ * broker-ordered with a FALSE respawn-after-kill answer BEFORE the kill
+ * (the opposite answer from the recycle handler above, since a release
+ * wants no replacement), deletes the instance entry (harmless double-delete
+ * if the exit handler's own final-death branch also runs), and
+ * fire-and-forget identity-verified-kills it.
+ *
+ * On a pid MISMATCH -- including when there is no instance at all at that
+ * port: the grant's own bookkeeping is still removed (a release always
+ * retires its OWN request's bookkeeping), but the mismatched CURRENT
+ * occupant is left running, untouched -- neither deleted nor signalled in
+ * any way -- and a distinct log line names the request id, the port, the
+ * grant's own recorded pid, and the current occupant's pid (or "none" when
+ * the port is empty), worded distinctly from both the shutdown-complete
+ * line (broker-kill.mts) and the grant-time-probe-failure line this same
+ * file already emits (D-07's standing constraint that a lifecycle decision
+ * must be reconstructable from the log after an incident).
+ *
+ * A legitimate recycle (broker-launch.mts's handleExit() recycle branch)
+ * keeps this grant's `pid` in sync with the respawned record's own pid, so
+ * this check never misfires against a recycled instance the grant still
+ * legitimately owns. */
 export function handleRelease(requestId: string, state: BrokerState): void {
   const grant = state.grants.get(requestId);
   if (!grant) return;
   const instance = state.instances.get(grant.port);
-  if (instance) {
+
+  if (instance && instance.pid === grant.pid) {
     markDeliberateDeath(instance, false);
-  }
-  state.grants.delete(requestId);
-  state.instances.delete(grant.port);
-  if (instance) {
+    state.grants.delete(requestId);
+    state.instances.delete(grant.port);
     verifiedKill({ pid: instance.pid, expectedIdentity: instance.expectedIdentity }).catch(() => {
       // best-effort; nothing further to report on this path this task
     });
+    return;
   }
+
+  // Stale/orphaned grant: the port's current occupant (if any) is NOT the
+  // same process this grant was issued for. Retire the grant's own
+  // bookkeeping only -- the mismatched occupant, if any, is left running.
+  state.grants.delete(requestId);
+  process.stderr.write(
+    `vice-broker: release for request ${requestId} found a different instance at port ${grant.port} than the one this grant was issued for ` +
+      `(grant pid ${grant.pid ?? "null"}, current occupant pid ${instance ? instance.pid ?? "null" : "none"}) -- the grant's own bookkeeping was retired, ` +
+      `and the current occupant was left untouched\n`,
+  );
 }
 
 async function run(args: ParsedArgs): Promise<void> {
