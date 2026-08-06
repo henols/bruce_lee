@@ -4,8 +4,8 @@ Do not wait until everything is understood. Stand up a buildable tree early, inc
 unidentified bulk as binary, and replace regions with real source as they are confirmed. The tree
 stays assemblable at every commit, so a regression has a small blast radius.
 
-`acme-build` covers assembling; this file covers the shape of the source and the verification
-milestone.
+`acme-build` covers assembling; this file covers the shape of the source and what makes a
+reconstruction correct.
 
 ## Start with binary inclusion
 
@@ -34,32 +34,23 @@ src/
     sprites.a     levels.a        text.a
 ```
 
-## Byte-identity is the first milestone — and it is narrower than it sounds
+## Behavioural equivalence is this project's definition of correctness
 
-> Reassemble the source and produce exactly the original **extracted region**.
+**Correctness here means scripted replay plus comparison at checkpoints — nothing else**
+(`.claude/CLAUDE.md` § Constraints). A reconstruction is right when driving it through the
+checkpoint set produces the same observable behaviour as the original. **Anything not observable
+at a checkpoint is not verified** — the constraint's own conclusion, and the reason checkpoint
+design is part of the reconstruction work rather than something to bolt on afterwards.
 
-That proves addresses, code and data boundaries, alignment, padding and binary inclusions are all
-right. It is a much stronger signal than "it seems to work".
+**That bar is what buys you the freedom to rename routines, reorganise files, replace constants
+with symbols and add macros** (`.planning/REQUIREMENTS.md` § Out of Scope makes the same
+argument). **But** reorganising changes addresses, which breaks self-modifying code and
+timing-sensitive raster routines. Replay through the checkpoint set after EACH reorganisation, not
+at the end of several: one changed address per failing replay is a short diagnosis, ten is a
+bisect.
 
-```bash
-cmp original.prg rebuilt.prg
-sha256sum original.prg rebuilt.prg
-```
-
-**Scope this claim carefully.** Byte-identity applies to the assembled artifact against the
-extracted region. It does **not** apply to a 64K RAM capture: never-written RAM drifts
-continuously, so full-64K byte-identity is impossible in principle (`observation-hazards.md` § 7).
-Two different questions that both use the word "identical".
-
-**This project's definition of correctness is behavioural equivalence** — replay plus checkpoint
-comparison (`.claude/CLAUDE.md` § Constraints). Byte-identity is the stronger, earlier check on
-the *reconstruction*, not a replacement for the behavioural one. Anything not observable at a
-checkpoint is not verified.
-
-After identity holds you can safely rename routines, reorganise files, replace constants with
-symbols and add macros. **Be careful:** reorganising changes addresses, which breaks
-self-modifying code and timing-sensitive raster routines. Re-verify after each reorganisation, not
-at the end of several.
+A full 64K RAM capture is not a comparison surface: never-written RAM drifts continuously, so
+full-64K identity is impossible in principle (`observation-hazards.md` § 7).
 
 ## Self-modifying code needs explicit labels
 
