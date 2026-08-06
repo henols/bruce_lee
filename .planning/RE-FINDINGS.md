@@ -3827,3 +3827,46 @@ reproduces under stock play too, it would mean the x~290-304 hazard itself is en
 something that stresses the emulator (a tight interrupt loop, a sprite-multiplexing edge case at
 that screen column, or similar) rather than being purely a gameplay-navigation puzzle — worth a
 dedicated disassembly pass at that PC range if a future session has budget for it.
+
+### 2026-08-06 — the death/FALLS-decrement code path for danish, traced from the DEC $28 site backward through two call layers
+
+**Type:** confirmation (address-level code trace, not yet a full attribution of the collision that
+sets the gate)
+**Evidence:** live, 01-04 attempt 7, danish, via `vice_disassemble` starting from the `$1826: DEC
+$28` site found earlier the same day (see the `$0028` entry above) and walking backward through its
+only static caller. `$1818: JSR $255E` (a SID-silence routine — clears `$D400`-`$D420` — unrelated
+to collision, just a "stop the hit sound" side effect) `/ LDA $0104 / BNE $1826` (else `STA $09BB /
+JMP $0584`, the no-death path) is the gate: `$1826` (`DEC $28`) fires only when the byte at `$0104`
+(inside the CPU stack page, not a conventional flag address) is nonzero. `$1818` itself is reached
+from `$2D55`'s per-object-slot loop (`X` counts `2,1,0`) only when object slot `X=0` — Bruce's own
+slot — satisfies a chain of per-slot animation-state checks (`$95+X` bit 0 set, `$BF+X` equal to
+`$13` or `$19`, `$CE+X` zero, `$D1+X` negative) via `$2D6F: TXA / BEQ $2D79` → `JMP $1818`; the same
+loop calls `$3001` instead for nonzero `X` (the enemy slots), which is a *different* routine
+(disables a VIC sprite-enable bit and dispatches to `$1131`/`$1145` depending on which enemy slot) —
+i.e. `$2D55` is a **shared per-object hit-confirmation dispatcher**, and Bruce's own branch of it is
+what reaches the FALLS decrement.
+**What is NOT yet confirmed, stated plainly:** the writer of `$0104` itself. `vice_memory_search`
+found no absolute `STA $0104` anywhere in `$0200`-`$9FFF`, so it is written via an indexed or
+indirect addressing mode this search did not cover, or possibly not written at all on the path that
+matters and is instead a genuinely sticky stack-page byte left over from an earlier call depth. A
+store-watch checkpoint armed directly on `$0104` recorded **zero hits** across a run in which
+`$0028` (FALLS) demonstrably decremented four times (`$56`→`$52`), which rules out "a fresh store to
+`$0104` immediately precedes every decrement" and leaves two live possibilities: either `$0104`
+was set once, earlier, and stays nonzero across many decrement cycles (making the `BNE` a
+near-tautology once whatever sets it fires once), or the actual death path for at least some of
+those four decrements does not go through `$1818` at all and there is a second, still-unfound call
+site into the `$1826`/`DEC $28` region — `vice_memory_search` for a direct `JMP`/`JSR $1826` also
+found no matches in `$0800`-`$3FFF`, so if a second site exists it reaches `$1826` by falling
+through from immediately-preceding code, not by a jump, and was not searched for by this pass.
+**Confidence:** MEDIUM — the `$1826`/`$1818`/`$2D55` chain is disassembly-verified and internally
+consistent (X==0 selects Bruce's own branch), but the actual trigger condition for `$0104` going
+nonzero, and hence the precise moment/cause of a real death, is still open.
+**Saves / costs:** a future session attributing the x~290-304 hazard mechanically (per this
+project's own suggested next step) has a concrete starting point rather than a blank disassembly:
+arm an exec checkpoint at `$1826` itself (not a store-watch on `$28`, which fires identically but
+one step later) and read `$95`, `$BF`, `$CE`, `$D1` at offset 0 (Bruce's slot) on the pass
+immediately before it fires, to see which of the four gating conditions just became true and
+correlate it against sprite/enemy state at that exact frame. Costs: this pass used four checkpoint
+add/delete cycles and two `vice_memory_search` calls without resolving `$0104`'s writer — a future
+session should search indexed-addressing opcode forms (`STA $0100,X` = `9D 00 01`, `STA
+$0100,Y`) rather than only the absolute form searched here.
