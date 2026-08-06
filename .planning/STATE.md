@@ -5,7 +5,7 @@ milestone_name: insertion note
 current_phase: 01.6.2.1
 current_phase_name: broker-lifecycle-policy
 status: executing
-stopped_at: 01.4 SEALED 5/5. HV-08 and HV-09 both CLOSED live. Only HV-05 (honesty gate) remains developer-owned. Next: revisit the 11 previously-deploy-blocked carry-forward rows
+stopped_at: v1.1 complete (all HV rows closed, signed off, pushed). v1.0 Phase 1 resumed: 01-04 attempt 6 closed saeger's two evidentiary gaps; both releases 5/7, blocked on ONE cross-release hazard
 last_updated: "2026-08-05T10:30:00.000Z"
 last_activity: 2026-08-05
 progress:
@@ -14,7 +14,7 @@ progress:
   total_plans: 54
   completed_plans: 63
   percent: 42
-last_activity_desc: 01.4 sealed 5/5; post-01.6.2.1 broker running (warm_floor=1); HV-08/HV-09 closed
+last_activity_desc: Phase 1 attempt 6: saeger's death+restart gaps closed with full proof; x~290-304 hazard proven cross-release
 ---
 
 # Project State
@@ -260,6 +260,31 @@ silent no-op reporting `failed: []`. **Now fixed**: a diverged *generated* artif
 genuinely hand-authored entry, `resources/vice-launcher.sh`, still refuses on divergence — loudly. The
 generated/hand-authored split derives from `build.ts`'s `HOST_BOUND_ARTIFACTS`, an already-enforced list,
 rather than a hardcoded filename.
+
+
+**Phase 1 resumed 2026-08-06 (plan 01-04 attempt 6) — the tooling blocker is gone and it showed.** No
+wedge occurred this session, the first attempt of six where that is true, and the plausible reason is that
+the pause discipline was adopted from the first call rather than mid-session.
+
+**What closed.** saeger's `death` and `restart` milestones now carry **full mechanical proof** — screen
+matrix SHA-256 (`170ceb75…`, `bc914a06…`), `sprite_enable`, real `cycles_advanced` (death's was `null`),
+and attempt-6 screenshots — closing the two `evidentiary_gap` fields attempt 4 recorded honestly rather
+than papering over. The gap *prose* survives in `attempt_4_note`/`attempt_6_note` as history; no live
+milestone carries a gap field. Both releases now stand at **5/7 with parity of proof**.
+
+**Two findings worth more than the milestones.** First, the FALLS counter is an ordinary
+**lives-remaining** counter that decrements once per confirmed enemy-contact death — which **corrects
+attempt 4's "depletes per input event" conclusion** and corroborates danish's own attempt-5 reading. That
+conclusion was already flagged as threatened by the think-time discovery; it is now settled. Second, and
+more useful: saeger dies at the **identical sprite x-coordinate (~290-304)** danish did across six of its
+attempts, so **the blocker on both releases' final two milestones is ONE shared hazard in shared game
+code, not two independent ones.** That reframes it from a per-release grind into a single problem worth
+solving once.
+
+**Still open:** a second chamber transition and both-opponents-encountered, on both releases, plus Task 4 —
+unreached in all six attempts. Recorded as `01-04-ATTEMPT-6-HALT.md`, deliberately **not** a SUMMARY,
+because a `SUMMARY.md` here would make `phase-plan-index` report `has_summary: true` and silently drop
+01-04 from the incomplete list.
 
 Status: Executing Phase 01.6.2.1
 
