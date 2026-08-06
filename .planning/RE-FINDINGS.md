@@ -1366,6 +1366,39 @@ HIGH; danish's own attempt-5 finding (still graded HIGH there, `MEDIUM/open` onl
 disassembly-level trigger) is unchanged by this entry — this is a second, independent release
 confirming the same mechanism, not a re-grade of the first.**
 
+### 2026-08-06 — the x~290-304 chamber-1 hazard is now confirmed on saeger too, not danish-only; `vice_joystick_tap`'s `direction` schema rejects both array and hyphenated-string diagonal forms
+
+**Type:** confirmation (cross-release corroboration of an existing danish-only finding) plus a dead
+end (diagonal-jump syntax)
+**Evidence:** live, 01-04 attempt 6, saeger Task 3, disciplined pausing throughout. Walked Bruce
+from spawn to sprite `x=244` (the doorway, matching danish's own approach position), then issued a
+`vice_joystick_tap` call with `direction: ["up","right"]` (a genuine JSON array, per the tool's own
+description text "array for diagonals") — rejected with `Invalid direction` before reaching the
+emulator. The subsequent `vice_execution_run`/`vice_execution_pause` pair (with the joystick left
+centered from the rejected call, i.e. no new input at all) advanced the machine and landed Bruce's
+sprite at `x=300, enabled:false` — a death at the identical x-coordinate danish died at across six
+independent attempts, confirmed via screenshot showing the same "PLAYER 1" interstitial.
+**Confidence:** HIGH for the cross-release corroboration (one clean repetition, exact coordinate
+match, same interstitial screen) — this is now a shared-game-code hazard, not release-specific.
+MEDIUM for the syntax dead end (only two forms tried).
+**Follow-up tried and also ruled out:** `direction: "up-right"` and `direction: "upright"` (plain
+hyphenated and concatenated strings) were both rejected identically with `Invalid direction`. The
+tool's own JSON Schema declares `direction` as `type: "string"` despite its description text
+promising "array for diagonals" — the description and the schema disagree, and the schema is what
+the transport actually enforces. Neither the danish session (attempt 5, string-encoded array) nor
+this session (real array, plus two string spellings) found a `direction` value the transport
+accepts for a diagonal tap.
+**Saves/costs:** a future session should not re-attempt any of these three forms for a diagonal
+`vice_joystick_tap` — all three are now ruled out identically. If a jump-over is still the
+suspected fix, the remaining untried approaches are: (a) two separate, precisely-timed single-axis
+taps (an `up` tap landing while a `right` hold or tap is still in flight, rather than one combined
+call), or (b) accepting that this room's exit is not a ground-level jump at all and investigating
+the central chain-ladder structure or an off-screen exit instead, per the existing danish todo's own
+third suggestion. **This session did not spend further budget on either** — per the plan's own
+explicit instruction not to grind on this hazard, and because saeger's own FALLS counter was down to
+`01` (one life from terminal) at the point this was tried, with the death/restart evidentiary-gap
+fix (this session's primary, prescribed task) already secured and committed.
+
 Neither `$0314/$0315` nor `$FFFE/$FFFF` was read this session, live, against a real IRQ-driven
 screen, because Variant B (the variant that would have exercised this lookup) was never started.
 The existing MEDIUM-confidence vector-table entries stand exactly as they were.
