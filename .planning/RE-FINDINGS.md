@@ -3890,3 +3890,65 @@ releases sharing this game's original code" (matching plan 01-03's own establish
 cracks load byte-identical original Datasoft code at the shared `$08B1`/`$139E` trigger/scanner) —
 a future session never needs to re-derive or re-verify this address per release. Costs nothing
 beyond the boot-and-one-death cycle already needed to apply the cheat there in the first place.
+
+---
+
+### 2026-08-06 — `$0104`'s writer found statically in 2 minutes: it is `STA $0100,X` at `$0F90`, and `$0100` is an 8-slot per-object array — so the death gate reads slot **4**, not Bruce
+
+**Type:** shortcut + confirmation + hazard (a wrong mental model corrected)
+**Evidence:** static byte-pattern search over the committed `recovery/danish/dumps/danish-gameentry-run1.bin`
+and `recovery/saeger/dumps/saeger-gameentry-run1.bin` (65536 bytes each), **no emulator involved at
+all**, followed by hand-decoding the surrounding bytes. Attempt 7's halt record left this as an open
+question for a future session: *"search indexed-addressing opcode forms (`STA $0100,X` = `9D 00 01`,
+`STA $0100,Y`) for `$0104`'s writer, which this attempt's absolute-mode search did not cover."*
+Searching all 12 store/load forms found **exactly one** writer, at the same address in both releases:
+
+```
+$0F89: A2 07      LDX #$07        ; 8 slots, 7 down to 0
+$0F8B: A9 01      LDA #$01
+$0F8D: 9D 4B 01   STA $014B,X     ; a second 8-slot array
+$0F90: 9D 00 01   STA $0100,X     ; <-- $0104 is SLOT 4 of THIS array
+$0F93: CA         DEX
+$0F94: 10 F7      BPL $0F8D
+```
+
+There is **no absolute-mode `STA $0104` anywhere in either image**, which is exactly why attempt 7's
+search came back empty. There are **11 `LDA $0104` read sites** (`$0BDF $1159 $1614 $169D $1723
+$1748 $17A1 $181B $19B8 $1BC9 $3184`), and `$181B` is the one inside the death gate attempt 7 had
+already located at `$1818`. Decoding that gate resolves its polarity:
+
+```
+$181B: AD 04 01   LDA $0104       ; reads slot 4
+$181E: D0 06      BNE $1826       ; NON-ZERO -> lose a life
+$1820: 8D BB 09   STA $09BB       ; ZERO     -> no life lost
+$1823: 4C 84 05   JMP $0584
+$1826: C6 28      DEC $28         ; the lives decrement (A is 0 here, so STA $09BB stores 0)
+$1828: 30 64      BMI $188E
+```
+
+Live values corroborate the array reading: `$0100..$0107` is `FF 01 01 01 01 01 00 01` in **both**
+releases' gameentry dumps, while `$0F8D`/`$0F90` initialise all 8 slots to `$01` — so slots 0 (`FF`)
+and 6 (`00`) have been written since init, which is what a live per-object state array should look
+like and not what stack traffic would look like.
+
+**Confidence:** HIGH for the writer's identity, the loop's 8-slot shape, the gate's polarity, and
+the cross-release identity of all of it — every claim is a direct byte read from two committed
+images, independently reproducible with no emulator. **MEDIUM** for the interpretation that slot
+index = object/actor slot in the same numbering `$95`/`$BF`/`$CE`/`$D1` use (consistent with
+`$0F8D`'s parallel `$014B,X` array and with `$2D55` being a per-object-slot dispatcher, but not yet
+confirmed by watching a known object change a known slot live).
+
+**Saves / costs:** **The hazard is the mental model, and it is worth more than the shortcut.**
+Attempt 7's own recommended next step was to read `$95`, `$BF`, `$CE`, `$D1` **"at offset 0 (Bruce's
+own object slot)"** on the pass before `$1826` fires. But the gate does not consult Bruce's slot — it
+consults **`$0104`, slot 4**. A live session that armed `$1826` and read only offset 0 would have
+measured the wrong actor and could easily have concluded the gate was nondeterministic. Reading slot
+**4** alongside slot 0 is the correction.
+
+**And the shortcut generalises:** an "unfound writer" for a low-page address is a signal to search
+**indexed** forms and to treat the address as `base+index` rather than as a scalar. Two minutes of
+static pattern search over an already-committed dump answered a question that had been left to a
+future *live* session — live emulator time is the scarcest resource in this project and the wedge
+hazard at `x~290-304` makes it risky, so **the standing order should be: try the committed dump
+first, and only go live for what the dump genuinely cannot answer.** Costs nothing; needs no
+emulator, no boot, no cheat, and cannot wedge.
