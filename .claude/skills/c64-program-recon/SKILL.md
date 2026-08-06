@@ -151,7 +151,7 @@ This one is the route between the stations. It does not restate what the others 
 | `references/sound-and-input.md` | SID player vs `$D41B`-as-RNG vs digi; CIA#1 vs CIA#2 |
 | `references/observation-hazards.md` | Every way a live read gives a wrong answer. **Read before driving.** |
 | `references/tool-selection.md` | Which `mcp__vice__*` call answers which question, and what to delegate |
-| `references/reconstruction.md` | Binary inclusion, byte-identity scope, SMC labels, label vocabulary |
+| `references/reconstruction.md` | Binary inclusion, behavioural-equivalence correctness bar, SMC labels, label vocabulary |
 | `templates/memory-map.template.md` | Region map with per-row confidence grading |
 
 Findings that make RE faster go in `.planning/RE-FINDINGS.md` **at the moment you find them**,
