@@ -11,7 +11,7 @@
 |---|---|---|---|
 | **v1.1 — Emulator Access Hardened** *(active, inserted 2026-08-02)* | 01.3–01.6 | 0 (tooling) | Every proxy tool reaches the agent that needs it; a dead or wedged instance costs one acquisition, not the session; the broker never warms, grants or retains an instance that is not real; broker coordination moves into Node behind a TCP control plane. Deliverable is **live emulator work that survives its own failure modes**. |
 | **v1.0 — Pipeline Proven** *(paused behind v1.1)* | 1–4 | 24 | Clean canonical image with per-byte provenance, full code/data map, working replay-verification harness with the original's baselines, and one subsystem driven end-to-end to a verified `.prg`. Deliverable is a **proven pipeline**. |
-| **v2.0 — Complete Reconstruction** | 5–7 | 20 | All remaining subsystems documented and reconstructed, formats proven by round-trip, listing complete, source split, bootable `.d64`, full replay suite passing. **This is where "fully documented and recompiled" is met.** |
+| **v2.0 — Complete Reconstruction** | 5–7 | 20 | All remaining subsystems documented and reconstructed, formats proven by replaying their re-serialised output, listing complete, source split, bootable `.d64`, full replay suite passing. **This is where "fully documented and recompiled" is met.** |
 | **v3.0 — Editable** | not yet phased | 6 | Round-trip asset converters and the change guide + chamber editor. |
 
 **Scope note.** v1.0 deliberately ships short of the original project goal in order to de-risk it — every pipeline stage is proven on one subsystem before scaling out. A v1.0 close is not project completion; v2.0 is.
@@ -59,7 +59,7 @@ One subsystem through every stage. The documented subsystem is the artifact; the
 - [ ] **DOCS-01**: Sprite handling and display are documented — how the game gets its actors on screen, including any multiplexing, sprite pointer management, and VIC configuration
 - [ ] **DATA-02**: The sprite data format is specified, and all sprites are extracted to viewable images
 - [ ] **BUILD-01**: The ACME source tree assembles with ACME 0.97 under `--strict-segments` with zero warnings, and any warning fails the build
-- [ ] **BUILD-02**: Every transcribed region passes a round-trip byte diff against the canonical image, catching addressing-mode drift and alignment mistakes at transcription time
+- [ ] **BUILD-02**: A transcribed region is promoted only when replaying the scenarios that exercise it diverges nowhere against the baselines, so addressing-mode drift and alignment mistakes -- ACME silently widening a zero-page operand to 16-bit absolute shifts every following address -- surface at transcription time rather than at the end
 - [ ] **BUILD-03**: The build emits a `.prg` at the game's load address that runs in VICE
 - [ ] **BUILD-04**: The build emits a VICE label file from the source, so source, documentation, and debugger share one set of names
 - [ ] **VERIFY-05**: The rebuild is compared against the baselines, and any divergence is reported precisely enough to act on — which checkpoint, which memory region, what differed
@@ -86,7 +86,7 @@ Phases 5–7. Phased and mapped, but not the active milestone. Promoted into the
 - **DATA-01**: The chamber/level data format is specified, and all 20 chambers are extracted to an inspectable form
 - **DATA-03**: The character set and background graphics format is specified and extracted to viewable images
 - **DATA-05**: The music and sound effect data format is specified
-- **DATA-06**: Each format spec is validated by round-tripping the extraction — re-serialising the extracted representation reproduces the original bytes exactly, proving the spec is correct rather than plausible
+- **DATA-06**: Each format spec is validated by feeding the re-serialised extraction back into the build and replaying the scenarios that exercise it -- a spec whose output drives the game to identical behaviour at every checkpoint is correct rather than merely plausible
 
 ### Completion & Packaging — Phase 7
 
@@ -119,7 +119,7 @@ Explicitly excluded, with reasoning, to prevent re-adding.
 
 | Feature | Reason |
 |---------|--------|
-| Byte-identical rebuild as the acceptance gate | Would forbid restructuring source for readability, which conflicts directly with the "base to build on" driver. Byte comparison is still used as a *development-time* check per transcribed block (BUILD-02) and as a structural invariant on pure-reorganisation commits — just not as the definition of done. |
+| Byte-identical rebuild, at any stage and in any role | Would forbid restructuring source for readability, which conflicts directly with the "base to build on" driver. Behaviour is the only gate -- checkpoint replay against the baselines decides whether a region, a format spec, or the whole rebuild is correct (BUILD-02, DATA-06, VERIFY-05, VERIFY-07). No byte comparison is a gate, a promotion bar, or a definition of done anywhere in this project. |
 | Round-trip asset converters before v3.0 | Wanted later, not now. v1.0/v2.0 still write and validate the format specs (DATA-01..06), so v3.0 becomes a build-pipeline addition rather than a research project. |
 | Deep documentation of title screen / hi-score entry | Chosen coverage floor is gameplay systems. They execute, so they are in the rebuild and get light documentation (DOCS-10), but detailed effort goes where the craft is. |
 | Documenting the crackers' loaders and cruncher as subjects | TCS and SSG code is an obstacle to get past and to attribute, not the object of study. Analysed only as far as RECOVER-02/03/06 require. |
