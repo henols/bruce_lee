@@ -16,7 +16,7 @@ These apply across every phase and every plan; `/gsd-plan-phase` should inherit 
 | **`vice_disk_list` crashes the host MCP server** | Never called. Disk directory inspection is done by parsing `.d64` bytes directly. Recovery from an accidental call needs a manual host-side VICE restart. |
 | **Host-side tools need translated paths** | Every artifact a host-side tool touches stays inside the workspace and goes through the `devcontainer-host-path` skill. **Phase 01.1 is expected to retire the manual half of this**: the proxy sees every forwarded call, so it can translate container paths to host paths itself and callers stop doing it by hand. Until 01.1 lands, this constraint stands exactly as written. |
 | **All ACME warnings are build-blocking; `--strict-segments` always** | Established as a gate in Phase 4 and inherited by every later phase. The `acme-build` skill's wrapper does not currently expose `--strict-segments` or a warning-gated exit — Phase 4 must extend it (or wrap it) rather than assume the flag is reachable. |
-| **Checkpoint replay is the transcription gate** | A region is not "transcribed" until replaying the scenarios that exercise it diverges nowhere against the baselines. Behaviour is the only gate -- no byte comparison against the canonical image gates anything. Non-optional, every region, every phase from 4 onward. |
+| **Checkpoint replay is the transcription gate** | A region is not "transcribed" until replaying the scenarios that exercise it diverges nowhere against the baselines. Behaviour is the only gate — no byte comparison against the canonical image gates anything. Non-optional, every region, every phase from 4 onward. |
 | **Confidence-marker convention from Phase 2 onward** | Speculative labels/claims carry a `?` suffix; unknown regions use `unk_$addr`. `grep -rn '^unk_' src/` and `grep -rn '?' docs/` are live completeness metrics. A correction is incomplete until the old name/claim is swept out of `docs/` and `src/` in the same change. |
 | **Provenance ledger is the single source of truth** | `recovery/PROVENANCE.md` → `docs/provenance.md` summary → inline `; PROVENANCE:` tags in `src/`. One direction only; never edit a downstream copy independently. |
 
@@ -1328,7 +1328,7 @@ Plans:
 - [ ] 06-02: Scoring, lives, and both two-player modes; light documentation of title/attract/hi-score entry (DOCS-08, DOCS-10) — *parallel*
 - [ ] 06-03: Sound — SID usage, player routine, event-driven playback; music and SFX data format spec (DOCS-09, DATA-05) — *parallel*
 - [ ] 06-04: Character set and background graphics format spec + extraction to viewable images (DATA-03) — *parallel*
-- [ ] 06-05: Format-spec replay validation across all five formats -- re-serialise, rebuild, replay (DATA-06) — *strictly last; needs every spec from 06-01, 06-03, 06-04 and Phase 4's DATA-02, Phase 5's DATA-04*
+- [ ] 06-05: Format-spec replay validation across all five formats — re-serialise, rebuild, replay (DATA-06) — *strictly last; needs every spec from 06-01, 06-03, 06-04 and Phase 4's DATA-02, Phase 5's DATA-04*
 
 **Parallelisation**: 06-01 ∥ 06-02 ∥ 06-03 ∥ 06-04 — four genuinely independent subsystems touching disjoint files. 06-05 is a hard gate at the end. Same two coordination hazards as Phase 5 apply: `zeropage.a`/`main.a` must be allocated for the whole phase before the parallel plans start, and live-trace steps queue on the single VICE instance. This phase can also overlap Phase 5 if the workstream budget allows — nothing in it depends on Phase 5's output.
 

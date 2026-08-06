@@ -59,7 +59,7 @@ One subsystem through every stage. The documented subsystem is the artifact; the
 - [ ] **DOCS-01**: Sprite handling and display are documented — how the game gets its actors on screen, including any multiplexing, sprite pointer management, and VIC configuration
 - [ ] **DATA-02**: The sprite data format is specified, and all sprites are extracted to viewable images
 - [ ] **BUILD-01**: The ACME source tree assembles with ACME 0.97 under `--strict-segments` with zero warnings, and any warning fails the build
-- [ ] **BUILD-02**: A transcribed region is promoted only when replaying the scenarios that exercise it diverges nowhere against the baselines, so addressing-mode drift and alignment mistakes -- ACME silently widening a zero-page operand to 16-bit absolute shifts every following address -- surface at transcription time rather than at the end
+- [ ] **BUILD-02**: A transcribed region is promoted only when replaying the scenarios that exercise it diverges nowhere against the baselines, so addressing-mode drift and alignment mistakes — ACME silently widening a zero-page operand to 16-bit absolute shifts every following address — surface at transcription time rather than at the end
 - [ ] **BUILD-03**: The build emits a `.prg` at the game's load address that runs in VICE
 - [ ] **BUILD-04**: The build emits a VICE label file from the source, so source, documentation, and debugger share one set of names
 - [ ] **VERIFY-05**: The rebuild is compared against the baselines, and any divergence is reported precisely enough to act on — which checkpoint, which memory region, what differed
@@ -86,7 +86,7 @@ Phases 5–7. Phased and mapped, but not the active milestone. Promoted into the
 - **DATA-01**: The chamber/level data format is specified, and all 20 chambers are extracted to an inspectable form
 - **DATA-03**: The character set and background graphics format is specified and extracted to viewable images
 - **DATA-05**: The music and sound effect data format is specified
-- **DATA-06**: Each format spec is validated by feeding the re-serialised extraction back into the build and replaying the scenarios that exercise it -- a spec whose output drives the game to identical behaviour at every checkpoint is correct rather than merely plausible
+- **DATA-06**: Each format spec is validated by feeding the re-serialised extraction back into the build and replaying the scenarios that exercise it — a spec whose output drives the game to identical behaviour at every checkpoint is correct rather than merely plausible
 
 ### Completion & Packaging — Phase 7
 
@@ -119,7 +119,7 @@ Explicitly excluded, with reasoning, to prevent re-adding.
 
 | Feature | Reason |
 |---------|--------|
-| Byte-identical rebuild, at any stage and in any role | Would forbid restructuring source for readability, which conflicts directly with the "base to build on" driver. Behaviour is the only gate -- checkpoint replay against the baselines decides whether a region, a format spec, or the whole rebuild is correct (BUILD-02, DATA-06, VERIFY-05, VERIFY-07). No byte comparison is a gate, a promotion bar, or a definition of done anywhere in this project. |
+| Byte-identical rebuild, at any stage and in any role | Would forbid restructuring source for readability, which conflicts directly with the "base to build on" driver. Behaviour is the only gate — checkpoint replay against the baselines decides whether a region, a format spec, or the whole rebuild is correct (BUILD-02, DATA-06, VERIFY-05, VERIFY-07). No byte comparison is a gate, a promotion bar, or a definition of done anywhere in this project. |
 | Round-trip asset converters before v3.0 | Wanted later, not now. v1.0/v2.0 still write and validate the format specs (DATA-01..06), so v3.0 becomes a build-pipeline addition rather than a research project. |
 | Deep documentation of title screen / hi-score entry | Chosen coverage floor is gameplay systems. They execute, so they are in the rebuild and get light documentation (DOCS-10), but detailed effort goes where the craft is. |
 | Documenting the crackers' loaders and cruncher as subjects | TCS and SSG code is an obstacle to get past and to attribute, not the object of study. Analysed only as far as RECOVER-02/03/06 require. |
