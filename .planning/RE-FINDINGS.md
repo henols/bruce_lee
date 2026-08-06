@@ -3870,3 +3870,23 @@ correlate it against sprite/enemy state at that exact frame. Costs: this pass us
 add/delete cycles and two `vice_memory_search` calls without resolving `$0104`'s writer — a future
 session should search indexed-addressing opcode forms (`STA $0100,X` = `9D 00 01`, `STA
 $0100,Y`) rather than only the absolute form searched here.
+
+### 2026-08-06 — `$0028` confirmed as the FALLS/lives counter on saeger too, cross-release, address-level
+
+**Type:** confirmation
+**Evidence:** live, 01-04 attempt 7, saeger, same worktree/session as the danish `$0028` discovery
+above. Booted saeger via its own documented boot procedure (disk_attach → autostart → execution_run
+→ arm `$08B1` trigger → `vice_keyboard_petscii([32])` queued only after `vice_backtrace` confirmed
+the call chain was inside the `$08F4` gate's `JSR $FFE4`, `called_from $08F6`, exactly as
+`saeger-loading-hits.json`'s own `technique_note` records) — trigger hit on the very next resume.
+`$0028` already read `04` at the title screen (before any game start), and after `vice_memory_write($0028,
+99)` post-F7-start and a real death (enemy contact, chamber 1), `$0028` read back `98` with the HUD's
+own FALLS digit showing `98` in a confirming screenshot — byte-for-byte the same mechanism, same
+address, same behaviour as danish.
+**Confidence:** HIGH — same live differential method (write, real death, read-back, HUD
+cross-check) that established danish's address, now repeated end-to-end on the second release.
+**Saves / costs:** generalises the `$0028` finding from "true for danish" to "true for both
+releases sharing this game's original code" (matching plan 01-03's own established fact that both
+cracks load byte-identical original Datasoft code at the shared `$08B1`/`$139E` trigger/scanner) —
+a future session never needs to re-derive or re-verify this address per release. Costs nothing
+beyond the boot-and-one-death cycle already needed to apply the cheat there in the first place.
