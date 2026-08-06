@@ -1,20 +1,20 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.1
-milestone_name: insertion note
-current_phase: 01.6.2.1
-current_phase_name: broker-lifecycle-policy
-status: executing
-stopped_at: v1.1 complete (all HV rows closed, signed off, pushed). v1.0 Phase 1 resumed: 01-04 attempt 6 closed saeger's two evidentiary gaps; both releases 5/7, blocked on ONE cross-release hazard
-last_updated: "2026-08-05T10:30:00.000Z"
-last_activity: 2026-08-05
+milestone: v1.0
+milestone_name: Pipeline Proven
+current_phase: 01-recovery-provenance
+current_phase_name: recovery-provenance
+status: blocked
+stopped_at: "v1.1's tooling work is done — every phase with a VERIFICATION.md reads passed (01.1, 01.2, 01.4 5/5, 01.6 14/14, 01.6.1, 01.6.2 15/15, 01.6.2.1 9/9 with CR-01 closed, 01.6.3 6/6); 01.5 and 01.7 are ABSORBED and 01.8 has no plans. ONE v1.1 item is genuinely open and only the developer can close it: HV-05, deliberately left unanswered by 01.3-06 (61ae663), which is why 01.3 has no VERIFICATION.md and cannot seal fully verified. v1.0 Phase 1 is the live front: plan 01-04 has halted SEVEN times on the same x~290-304 gameplay hazard; attempt 7 (2026-08-06) disproved the community $1560 cheat, found the real lives counter at $0028, applied it to both releases — and the hazard survived unlimited lives, so it is a mechanical game-state puzzle, not a lives problem. Both releases sit at 5/7 Task 3 milestones."
+last_updated: "2026-08-06T20:55:00.000Z"
+last_activity: 2026-08-06
 progress:
-  total_phases: 12
-  completed_phases: 9
-  total_plans: 54
-  completed_plans: 63
-  percent: 42
-last_activity_desc: Phase 1 attempt 7 (cheat round): community $1560 address disproven, real lives counter found at $0028 (HIGH); hazard survives unlimited lives
+  total_phases: 4
+  completed_phases: 0
+  total_plans: 20
+  completed_plans: 4
+  percent: 20
+last_activity_desc: "State corrected 2026-08-06 — v1.1's tooling work is done and sealed; the live front is v1.0 Phase 1 plan 01-04 attempt 8 (exec checkpoint at $1826). One v1.1 item, HV-05, is open and only the developer can answer it."
 ---
 
 # Project State
@@ -24,14 +24,25 @@ last_activity_desc: Phase 1 attempt 7 (cheat round): community $1560 address dis
 See: .planning/PROJECT.md (updated 2026-07-31)
 
 **Core value:** An ACME source tree that rebuilds a Bruce Lee which plays identically to the original, where every gameplay system is explained well enough that someone could change it.
-**Current milestone:** v1.1 — Emulator Access Hardened (Phases 01.3–01.7, 0 requirements — tooling)
-**Current focus:** Phase 01.6.2.1 — broker-lifecycle-policy
+**Current milestone:** v1.0 — Pipeline Proven (Phases 1–4, 24 requirements). v1.1's tooling work is done.
+**Current focus:** Phase 1 — recovery & provenance, plan 01-04 (attempt 8)
 
 ## Current Position
 
-Milestone: **v1.1 — Emulator Access Hardened** *(inserted 2026-08-02, ahead of the rest of v1.0)*
-Phase: 01.6.2.1 (broker-lifecycle-policy) — EXECUTING
-Next: **`/gsd-execute-phase 01.6.2.1`** — six plans in six sequential waves, planned 2026-08-04 and verified by `gsd-plan-checker`. **Then continue autonomously through 01.6.3 → 01.4 → 01.3 → 01.8 without check-ins**, per § AUTONOMOUS RUN PROTOCOL below — the developer's standing instruction of 2026-08-04. Every developer-gated item routes to Phase 01.8's HV register instead of halting the run.
+Milestone: **v1.0 — Pipeline Proven** *(resumed 2026-08-05 once v1.1's tooling work landed)*
+Phase: 1 (recovery-provenance) — plan **01-04 BLOCKED after seven attempts**
+Next: **plan 01-04 attempt 8, and it must open with attribution rather than input technique.** Arm an **exec** checkpoint at `$1826` — *not* a store-watch on `$28`, which fires one step later — and on the pass immediately before it fires read `$95`, `$BF`, `$CE`, `$D1` at offset 0 (Bruce's own object slot) to see which of the four gating conditions in `$2D55`'s dispatcher just became true, correlated against sprite/enemy state at that frame. Also search **indexed** addressing forms for `$0104`'s writer (`STA $0100,X` = `9D 00 01`, `STA $0100,Y`); attempt 7 searched absolute mode only, which is why the writer is still unfound. Full reasoning in `01-04-ATTEMPT-7-HALT.md` § Next Phase Readiness.
+
+> **Why not another input round.** Eight attempts (six danish, one saeger, one on both) have failed
+> at `x~290-304` without a stock-play fix, and attempt 7 established that **unlimited lives does not
+> help** — the game-over consequence is removed and the survival problem is unchanged. The remaining
+> unknown is a specific game-state condition, not a joystick sequence.
+
+**Already banked — do not re-derive.** The lives counter is **`$0028`** (zero page), found live by two independent `vice_memory_compare(mode:snapshot)` differentials and corroborated at its write site (`$1826: DEC $28 / BMI $188E`); the community-published `$1560` is **wrong on both cracked releases**, exactly as the 2026-08-03 finding's own untested caveat warned. The cheat `vice_memory_write($0028, 99)` is verified working on danish *and* saeger, and **resets to `04` on every F7 game-start**, so it must be re-applied per game rather than once per session.
+
+**Hazard to plan around:** lingering at the `x~290-304` coordinate under the cheat wedged host VICE **twice** in one session, both recovered via `vice_recycle` with incident records. Whether that is cheat-specific or a pre-existing sensitivity at that screen column is **untested** — one stock-play comparison at `x=300` would settle it, and it changes whether the hazard's own code path is stressing the emulator.
+
+**The one v1.1 item still open, and only the developer can close it: `HV-05`.** Plan 01.3-06 landed complete on 2026-08-05 (`61ae663`) with its Task 3 human-verify gate **deliberately unanswered** — it asks whether 01.3's records overclaim, and every party in that run authored the work being checked, so a subject cannot be its own witness. The specific failure it exists to catch is softening claims until they pass. This is why 01.3 has no `VERIFICATION.md` and cannot seal fully verified. The four records to read are named in `01.3-06-SUMMARY.md`.
 
 > **Phase 01.6.2's four gaps are closed.** They were closed by its own gap-closure plan 15 on
 > 2026-08-04; `01.6.2-VERIFICATION.md` reads 20/20 at seal. The block below is retained as the
@@ -217,7 +228,12 @@ now owns**. A run that reports every phase green has either had no gates or has 
 dishonestly; 01.3 in particular cannot seal fully verified without HV-05, and HV-05 cannot be
 answered by the agent.
 
-**Next step, and why it is the right one (updated 2026-08-04, after gap-closure planning).**
+**SUPERSEDED 2026-08-06 — this was the next step on 2026-08-04, and 01.6.2 has since sealed 15/15
+(20/20 verified). It is retained as the record of what the four gaps looked like and why they
+happened, not as work to do. The live next step is in § Current Position: Phase 1, plan 01-04
+attempt 8.**
+
+~~**Next step, and why it is the right one (updated 2026-08-04, after gap-closure planning).**~~
 `/gsd-execute-phase 01.6.2` — waves 1–11 are executed and merged; waves 12–15 are authored and
 unexecuted. Three things to carry in: (1) **the four gaps share one root**, and it is a planning-scope
 root, not a coding mistake — plan 03 built and exhaustively unit-tested `superviseChild()`, but
@@ -357,7 +373,7 @@ Status: Executing Phase 01.6.2.1
 
 Last activity: 2026-08-06 - Completed quick tasks 260806-q2g and 260806-sd5: byte-identity is no longer a requirement, gate or definition of done anywhere in the skills, ROADMAP or REQUIREMENTS. Behavioural equivalence (checkpoint replay, `VERIFY-01..07`) is the project's only correctness gate. Two byte-comparison records survive deliberately, both about capturing the *original* rather than judging the rebuild: phase `01-01` (`[x]` complete) and Pitfall 7's harness self-validation
 
-Progress (v1.1): 38 of 39 authored plans done — 01.6 complete (4/4), 01.6.1 complete (8/8), 01.3 paused at 5/6 (01.3-06 outstanding), **01.6.2 complete and sealed 15/15 (20/20 verified, 2026-08-04)**, **01.6.2.1 executed 6/6 on 2026-08-04 but NOT sealed — verification returned `gaps_found`, 8/9 must-haves, with one BLOCKER (CR-01) open.** **No percentage given on purpose:** 01.6.3 and 01.4 are not yet broken into plans, so the denominator is still not knowable and any bar here would overstate progress. (01.5 and 01.7 are `ABSORBED` and contribute no plans.)
+Progress (v1.1) — **every authored plan is done, and every phase carrying a `VERIFICATION.md` reads `passed`** (updated 2026-08-06 from each phase's own verification file plus its seal commit, not from prose): 01.1 `passed`, 01.2 `passed`, **01.4 sealed 5/5** (`4dffa6a`, HV-08 and HV-09 both closed live), **01.6 sealed 14/14** (`4b3db66`, both host-side backstops closed on live evidence), 01.6.1 `passed`, **01.6.2 sealed 15/15** (20/20 verified, 2026-08-04), **01.6.2.1 sealed 9/9** (`d7666aa` — CR-01 **closed**, 01.5 absorption sealed; it had returned `gaps_found` at 8/9 on 2026-08-04 and that is now history), **01.6.3 sealed 6/6** (`3bb00fb`, "adoption real but narrow, honestly recorded"). 01.3's six plans are all complete (`61ae663`) but it has **no `VERIFICATION.md` and cannot seal fully verified while `HV-05` is unanswered** — see § Current Position. 01.5 and 01.7 are `ABSORBED` and contribute no plans; 01.8 has no plans authored. **No percentage given on purpose:** v1.1 was inserted as tooling work with 0 requirements, so a bar over it measures nothing about the project's actual deliverable.
 
 **01.6.2.1's open blocker — CR-01, and it is a real defect, not a paperwork gap.** `selectWarmInstance()`
 rechecks `record.state !== "ready"` after its probe, but the drop path calls `markDeliberateDeath()`,
@@ -374,8 +390,15 @@ claim holds for the already-*granted* case but not the already-*dropped* one. Fo
 enumerated in `01.6.2.1-VERIFICATION.md`'s `missing` list, including correcting Defect 3's unqualified
 "DISCHARGED here" row in `01.6.2-VALIDATION.md`'s criterion-M table. Plus **WR-01…WR-04** (advisory).
 **Consequence for criterion M:** absorbing Phase 01.5 does not actually seal until CR-01 closes.
-Progress (v1.0, paused): [████░░░░░░] 40% — 8/20 plans
-Progress (overall): [██░░░░░░░░] 23% — 8/35 plans
+Progress (v1.0, **active again**): [██░░░░░░░░] 20% — 4/20 plans
+Progress (overall): [█░░░░░░░░░] 11% — 4/35 plans
+
+> **These two bars were recounted 2026-08-06 and both moved DOWN.** They previously read `8/20` (40%)
+> and `8/35` (23%). Only **four** v1.0 plans have a `SUMMARY.md` and an `[x]` in ROADMAP.md — `01-01`,
+> `01-02`, `01-03`, `01-05` — with `01-04` blocked after seven attempts and `01-06` unstarted. The
+> earlier `8` could not be reproduced from any artifact on disk, so it is corrected rather than
+> carried; if it was counting v1.1's tooling plans toward v1.0, that is exactly the overstatement
+> the recount removes. Denominators remain **projections**: phases 2–4 are not yet broken into plans.
 
 <sub>The frontmatter `progress` block now counts **v1.1** (4 phases, 0 complete; 5 of 6 known plans done, all in the paused 01.3). The 20/35 denominators in the two lines above are v1.0's and the project's *projected* plan counts and are unchanged by this insertion; phases 2–7 are not yet broken into plans.</sub>
 
