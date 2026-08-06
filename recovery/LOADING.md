@@ -1,14 +1,12 @@
 # `recovery/LOADING.md` -- the on-demand-load detection record
 
-This document is the absence-as-evidence record: per release, the armed set with its justification, the idle calibration result, the coverage reached with a mechanical arrival proof per milestone, the states not reached, the attributed hits, and the teardown enumeration. Every measurement below was fetched by the executing agent's own `mcp__vice__*` tool calls; `tools/watch-loads.mjs` and `tools/dump-artifacts.mjs` hold only the pure logic that resolves, attributes, orders and renders it -- neither module contacted the emulator.
+This document is the absence-as-evidence record: per release, the armed set with its justification, the idle calibration result, the coverage reached with a mechanical arrival proof per milestone, the states not reached, the attributed hits, and the teardown enumeration. Every measurement below was fetched by the executing agent's own `mcp__vice__*` tool calls; `.claude/skills/c64-ram-capture/scripts/watch-loads.mjs` and `.claude/skills/c64-ram-capture/scripts/dump-artifacts.mjs` hold only the pure logic that resolves, attributes, orders and renders it -- neither module contacted the emulator.
 
 ## Release: danish
 
 **Load-event count:**
 
 0
-
-> **⚠ THIS IS NOT AN EVIDENCED ZERO.** The count above is `0` only because no live emulator work reached completion for this release this run -- it is a bare absence of attempted measurement, not a null result earned by an idle calibration on a machine proven to have executed. Task 2 (above) is complete and genuinely evidenced -- nothing about it is blocked. Task 3's play-through for THIS release specifically was never attempted in any session to date: attempt 2 (this file's own Task 2 work) halted on a host-side stall before Task 3 could start; attempt 3 spent its live-emulator budget earning saeger's Task 2 pass (which attempt 2 had left blocked) and then began saeger's own Task 3 play-through, which itself halted on a fresh (silent, non-epoch-changing) stall after 2 milestones -- see recovery/saeger/dumps/saeger-loading-hits.json. Danish's own Task 3 pass was not reached at all in attempts 2 or 3. Attempt 4 (2026-08-01, a fresh session) also did not reach it: the whole session's live budget went to saeger (re-deriving its boot from scratch, reaching 5 of 7 milestones -- death, game-over and restart newly this session, on top of the already-durable title-screen and game-start-chamber1 -- see recovery/saeger/dumps/saeger-loading-hits.json), and the session then hit a SECOND genuine silent host VICE stall (distinct occurrence from attempt 3's, though at the identical frozen PC $07DE) before danish's play-through could even begin. This is recorded as blocked/not-attempted rather than as a completed zero-milestone result, per the same rule that governs an unevidenced zero anywhere else in this record.
 
 **Route:** the executing agent's own `mcp__vice__*` tool calls -- machine C64SC, video standard PAL, VICE server version 3.10.
 
@@ -36,10 +34,16 @@ Observed hit count: 432. Execution stopped during the probe: false.
 
 | Milestone | Reached | Screen signature | Cycles advanced | Retries | Screenshot |
 |---|---|---|---|---|---|
+| title-screen | yes | 5bd33261ae91e055be878de2312fe97ec2dd82ef2b4607dc2bae59ea6adc8315 | 18492325 | 0 | recovery/danish/dumps/danish-loading-attempt5-title.png |
+| game-start-chamber1 | yes | 12e6ed2ca8abf272ea3dc291aa9b1ac2ad26f3da540e773a264a20a658e6c836 | 80063552 | 0 | recovery/danish/dumps/danish-loading-attempt5-check1.png |
+| death | yes |  | 81041688 | 0 | recovery/danish/dumps/danish-loading-attempt5-check18.png |
+| game-over | yes | 3e16a2f4e4cbab1cc9080d704b94ec83a02af19ab45af702e8c131bcfb0c6e73 | 106083432 | 0 | recovery/danish/dumps/danish-loading-attempt5-check22.png |
+| restart | yes | 5bd33261ae91e055be878de2312fe97ec2dd82ef2b4607dc2bae59ea6adc8315 | 226358495 | 0 | recovery/danish/dumps/danish-loading-attempt5-check46.png |
 
 ### States not reached
 
-- The entire Task 3 milestone set for danish (title screen re-confirmation, at least two real chamber transitions, both opponents, a death, a game over, a restart) -- not attempted in any session to date; see run_status_note.
+- A second real chamber transition for danish -- across SIX independent attempts this session (spanning three re-boots after host crashes and one fresh restart), Bruce died at the exact same sprite x-coordinate (~290-304) on the ground-level rightward path every single time, always transitioning to a PLAYER-1/GAME-OVER interstitial rather than a new room. Not yet root-caused: attempts included plain walking, walking-then-attacking, and an 'up' input partway along the path, none of which changed the outcome. The room's central blue chain-ladder structure was never successfully climbed -- 'up' input tried at three different x-positions (76, 148, 196) along the path produced only continued forward walking or a duck animation, never ascent -- so a vertical route to the room's exit, if one exists, was never located. A diagonal-jump attempt failed on a tool-parameter format error (direction passed as a string instead of an array) and was not successfully retried before the session's budget ran out.
+- Both opponents encountered for danish -- one green ground-level enemy was repeatedly encountered (contact/attack exchanges observed via FALLS depletion and screenshots), and the static white/domed object on the pedestal appears to be scenery rather than an active opponent (never observed to move across many observations, across two separate game sessions). A new, distinct, elevated sprite (x=318,y=127) appeared after this session's restart -- positionally consistent with being the second opponent type -- but was not engaged before the session's live budget ran out.
 
 ### Attributed hits
 
@@ -55,13 +59,19 @@ The registry's `watch_set` entries for this release are the re-armable specifica
 
 ### Input sequence notes
 
-Task 2 only: boot danish, walk the $0900 cracktro gate holding SPACE (matrix), release at the $08B1 trigger checkpoint. No gameplay input issued yet -- see Task 3 for the play-through, which has not been attempted for this release in any session to date.
+Task 2: boot danish, walk the $0900 cracktro gate holding SPACE (matrix), release at the $08B1 trigger checkpoint. Task 3 (attempt 5, this session): F7 held 10 frames from title to start a 1-player game; vice_joystick_tap(right, 30-90 frames) repeatedly to cross chamber 1's opening room rightward, vice_joystick_tap(right, fire:true, 20-40 frames) attacks near enemy contact (this was also the technique that reliably unblocked Bruce's first steps away from the starting pole); vice_joystick_set(right) then vice_joystick_set(center) tested once (caused a fall, reverted to joystick_tap thereafter); vice_joystick_tap(up, 60-90 frames) tried at three x-positions to test climbing (no ascent observed at any of them). Strict discipline adopted mid-session and held for the remainder: vice_execution_pause immediately after every screenshot/memory-read/registers observation, vice_execution_run only for the bounded duration of the next scripted input -- see RE-FINDINGS.md 2026-08-02 entries.
 
 Per D-12 this is plain notes, not a `verify/scripts/` artifact -- VERIFY-01 in Phase 3 owns the real input-script format; these notes are a seed for it, not a pre-empting specification.
 
 ### Teardown proof
 
-Checkpoints remaining after teardown, from an explicit `mcp__vice__vice_checkpoint_list` enumeration: **0** (enumerated at post-idle-calibration, via an explicit mcp__vice__vice_checkpoint_list call after deleting checkpoints 1, 174, 175, 176 individually by checkpoint_num).
+Checkpoints remaining after teardown, from an explicit `mcp__vice__vice_checkpoint_list` enumeration: **0** (enumerated at post-idle-calibration (Task 2), via an explicit mcp__vice__vice_checkpoint_list call after deleting checkpoints 1, 174, 175, 176 individually by checkpoint_num. Re-confirmed count:0 three more times this session (2026-08-02) after each of the three host crashes and again at session end, via explicit mcp__vice__vice_checkpoint_list calls after deleting checkpoints 1 and 2 by checkpoint_num each time -- final enumeration at session end confirmed count:0 with the machine left running (execution_run issued last).).
+
+### Identity changes
+
+- {"when":"attempt 5, 2026-08-02, immediately after capturing the game-over milestone's full mechanical evidence and issuing vice_execution_run + vice_keyboard_matrix(F7) to test the restart milestone","what":"epoch 4 -> 5 (new pid 32923, spawned_at 2026-08-02T10:37:31Z). vice_execution_pause failed with UND_ERR_SOCKET naming a specific stale lease, the next vice_ping reported the epoch drift explicitly, and the call after that succeeded normally (execution:\"paused\", a fresh boot). vice_checkpoint_list on the new instance immediately returned count:0.","action":"voided only the in-flight restart-test step; the game-over milestone's evidence (screen signature, sprite_enable, registers, cycles_advanced) had already been read successfully on the prior confirmed-live epoch-4 instance with no crash indicator in between, so it stands unchanged. The whole boot procedure was redone from vice_disk_attach on the new epoch-5 instance to continue the play-through."}
+- {"when":"attempt 5, same session, ~10 minutes later, immediately after re-booting on the epoch-5 instance and re-entering chamber1 (Bruce back at spawn x=52,y=225, FALLS 04), attempting a fire+right attack tap near the pole","what":"epoch 5 -> 6 (new pid 113631, spawned_at 2026-08-02T10:43:40Z). Same shape: UND_ERR_SOCKET then ECONNREFUSED on the tap/pause calls, then the next vice_ping reported the epoch drift explicitly, then the call after that succeeded (execution:\"paused\", fresh boot).","action":"voided the whole in-progress chamber1 re-entry (nothing had been captured as evidence yet on this leg -- only a screenshot at spawn with FALLS 04, no new milestone reached). Redid the full boot from vice_disk_attach on the new epoch-6 instance."}
+- {"when":"attempt 5, same session, ~10 minutes later, near sprite x=76 on the last (4th) life while re-approaching the x~290-300 hazard zone that had killed Bruce twice already at that same location","what":"epoch 6 -> 7 (new pid 259402, spawned_at 2026-08-02T10:54:50Z). Same three-call shape as the prior two occurrences.","action":"voided the in-progress approach (no new milestone evidence lost). Redid the full boot from vice_disk_attach on the new epoch-7 instance. Three host crashes in roughly 20 minutes of continuous live work this session -- matching the historical rate recorded during saeger's attempt-4 boot."}
 
 ## Release: saeger
 
@@ -99,9 +109,9 @@ Observed hit count: 432. Execution stopped during the probe: false.
 |---|---|---|---|---|---|
 | title-screen | yes | 4797375c21d2cb1ec44d2713f14a68e778442d1a153cc10fc9c202b60010c2bd | 51563549 | 0 | recovery/saeger/dumps/saeger-loading-01-title.png |
 | game-start-chamber1 | yes | 6b0010cecea54728fecb6b35d09bf80a41f4a741be6fb17b73898a22165f1f42 | 24071261 | 0 | recovery/saeger/dumps/saeger-loading-02-postf7.png |
-| death | yes |  |  | 0 | recovery/saeger/dumps/saeger-loading-attempt4-check12.png |
+| death | yes | 170ceb758bc23c12f8904ff9f91af34ac7892bbbcc2ffdba5e8c369825aea269 | 79390584 | 0 | recovery/saeger/dumps/saeger-loading-attempt6-death-falls00.png |
 | game-over | yes | 5bd33261ae91e055be878de2312fe97ec2dd82ef2b4607dc2bae59ea6adc8315 | 22595389 | 0 | recovery/saeger/dumps/saeger-loading-attempt4-check4.png |
-| restart | yes |  | 22595389 | 0 | recovery/saeger/dumps/saeger-loading-attempt4-check5.png |
+| restart | yes | bc914a06db575c7acda78fe4060a7b2ca7c60eb9caf36bf0584c9cad22ccedfc | 5837832 | 0 | recovery/saeger/dumps/saeger-loading-attempt6-restart-check.png |
 
 ### States not reached
 
@@ -124,7 +134,7 @@ The registry's `watch_set` entries for this release are the re-armable specifica
 
 ### Input sequence notes
 
-Task 2: boot saeger, queue a PETSCII SPACE (mcp__vice__vice_keyboard_petscii, data:[32]) into the KERNAL keyboard buffer only after vice_backtrace confirmed the call chain was inside the $08F4 gate's own JSR $FFE4 (called_from $08F6), release at the $08B1 trigger checkpoint. Task 3 (this session, partial): held F7 (vice_keyboard_matrix, 10 frames) at the title screen to begin a 1-player game, reaching chamber 1; sent one vice_joystick_tap(direction:right, duration_frames:60) then one vice_joystick_tap(direction:right, duration_frames:90) to move Bruce Lee, which produced the one attributed $DD00 hit above; no further input was sent once the silent stall was confirmed.
+Task 2: boot saeger, queue a PETSCII SPACE (mcp__vice__vice_keyboard_petscii, data:[32]) into the KERNAL keyboard buffer only after vice_backtrace confirmed the call chain was inside the $08F4 gate's own JSR $FFE4 (called_from $08F6), release at the $08B1 trigger checkpoint. Task 3 (attempt 4, partial): held F7 (vice_keyboard_matrix, 10 frames) at the title screen to begin a 1-player game, reaching chamber 1; sent one vice_joystick_tap(direction:right, duration_frames:60) then one vice_joystick_tap(direction:right, duration_frames:90) to move Bruce Lee, which produced the one attributed $DD00 hit above; no further input was sent once the silent stall was confirmed. Task 3 (attempt 6, 2026-08-06, closing the death/restart evidentiary gaps): F7 hold via keyboard_matrix hold_frames proved unreliable this session (repeated attempts at 10/15/30/60 frames left the machine on the title screen); switched to an explicit vice_keyboard_matrix(key:F7, pressed:true) immediately followed by vice_execution_run/ping/vice_execution_pause/vice_keyboard_matrix(key:F7, pressed:false), which registered reliably every time it was tried (both to start a fresh game from title and to restart directly from GAME OVER). Movement used vice_joystick_tap(direction:right, duration_frames:30-60) for plain walking and vice_joystick_tap(direction:right, fire:true, duration_frames:30) for the punch-attack that both advances Bruce past a blocking enemy and depletes the enemy's own health; repeated fire+right taps against chamber1's green ground enemy produced the full FALLS 04->03->02->01->00 depletion sequence and the terminal GAME OVER, each transition captured with a paired vice_memory_read of the screen matrix in the same paused instant as its confirming screenshot.
 
 Per D-12 this is plain notes, not a `verify/scripts/` artifact -- VERIFY-01 in Phase 3 owns the real input-script format; these notes are a seed for it, not a pre-empting specification.
 

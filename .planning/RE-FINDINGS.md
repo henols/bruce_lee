@@ -1317,6 +1317,55 @@ proved correct... re-log it... If it was not exercised live, say so and leave th
 alone" — this entry is that explicit statement, so a future reader does not have to check whether
 promotion silently happened or was silently skipped
 
+### 2026-08-06 — `vice_keyboard_matrix`'s `hold_frames` auto-release is unreliable for the F7 title-screen dispatch; an explicit `pressed:true` then `pressed:false` pair registers every time
+
+**Type:** hazard, plus a working fix
+**Evidence:** live, 01-04 attempt 6, saeger Task 3. Four consecutive attempts to press F7 at the
+title screen with `vice_keyboard_matrix({key:"F7", hold_frames:N})` for N = 10, 15, 30, 60 all left
+the machine on the title screen afterward (confirmed by screenshot each time, with `vice_diagnose`
+and a two-read cycle-stopwatch bracket confirming the machine was genuinely live and paused, not
+stalled, throughout). Switching to `vice_keyboard_matrix({key:"F7", pressed:true})` immediately
+followed by `vice_execution_run` / a `vice_ping` poll / `vice_execution_pause` / then
+`vice_keyboard_matrix({key:"F7", pressed:false})` registered correctly on the very next attempt,
+and again later the same session to restart directly from a GAME OVER screen.
+**Confidence:** HIGH (four failures with the timed-hold form, two successes with the explicit
+press/release form, in the same session against the same title dispatcher).
+**Hypothesis, not confirmed:** `hold_frames` may schedule its auto-release against host wall-clock
+time rather than emulated frame count, so a paused machine (which this session was, between the
+press call and the following `execution_run`) can have the key already released by the time
+execution actually resumes — explaining why the earlier session's *first* F7 press this same attempt
+worked (calls were back-to-back with minimal reasoning in between) while later, slower attempts
+failed. Not verified against the tool's implementation; recorded as a hypothesis worth testing if
+this recurs.
+**Saves:** a future session hitting "F7 press produced no visible change" on a machine confirmed
+live (not stalled, not checkpoint-trapped) should try the explicit press/release pair before
+suspecting the emulator or the game code — this cost four attempts and four screenshots to isolate
+here.
+
+### 2026-08-06 — saeger's `FALLS` counter is lives-remaining, decrementing once per confirmed death, not once per input event — corroborates and completes danish's own attempt-5 reframing for the identical shared game code
+
+**Type:** confirmation (promotes a MEDIUM/open finding to HIGH for saeger specifically), plus four
+new fully-evidenced death-sequence captures
+**Evidence:** live, 01-04 attempt 6, saeger Task 3. Drove a complete FALLS 04→03→02→01→00 depletion
+sequence in chamber 1 via repeated `vice_joystick_tap(direction:right, fire:true)` attacks on the
+room's green ground enemy, with `vice_execution_pause` called immediately after every observation
+per this project's standing discipline. FALLS held steady across every plain movement tap with no
+enemy contact, and decremented by exactly 1 on each of four confirmed enemy-contact deaths (each
+captured with a screen-matrix SHA-256, `sprite_enable`, `cycles_advanced` and a screenshot — see
+`recovery/saeger/dumps/saeger-loading-hits.json`'s `death` milestone and its note for the full
+signature list) before reaching a genuine terminal GAME OVER on the fifth.
+**Confidence:** HIGH for saeger (previously MEDIUM/open per attempt 4's own "not yet root-caused at
+the disassembly level" hedge). Attempt 4's original "~1 per input event regardless of direction"
+conclusion is now understood as the same unpaused-think-time confound danish's own attempt 5
+diagnosed for its own copy of this counter (2026-08-02 entry above) — attempt 4 never adopted the
+pause-after-every-observation discipline either.
+**Saves:** a future session driving either release's chamber 1 does not need to re-treat FALLS as
+an elapsed-time or per-input hazard; it is a straightforward lives counter, and normal combat play
+with disciplined pausing is sufficient to traverse it. **Confidence for saeger specifically is now
+HIGH; danish's own attempt-5 finding (still graded HIGH there, `MEDIUM/open` only on the exact
+disassembly-level trigger) is unchanged by this entry — this is a second, independent release
+confirming the same mechanism, not a re-grade of the first.**
+
 Neither `$0314/$0315` nor `$FFFE/$FFFF` was read this session, live, against a real IRQ-driven
 screen, because Variant B (the variant that would have exercised this lookup) was never started.
 The existing MEDIUM-confidence vector-table entries stand exactly as they were.
@@ -3652,3 +3701,31 @@ targeting the main checkout, and a plan's `<verify>` block doing the same.
 artifacts plus `lib/` and `vice-launcher.sh`, while the same path was absent in the worktree that had
 concluded otherwise; `installTargetDir()` read from source to confirm the correct parent.
 **Confidence:** HIGH.
+
+### 2026-08-06 — a relative `vice_display_screenshot` path from inside a worktree lands in the MAIN workspace checkout, not the calling worktree, and the tool's own success response does not reveal this
+
+**Type:** hazard
+**Evidence:** live, 01-04 attempt 6, executing from worktree
+`/workspaces/bruce_lee/.claude/worktrees/agent-a850f2bfc8013dc60`. Called
+`vice_display_screenshot({ path: "recovery/saeger/dumps/saeger-loading-attempt6-title-check.png" })`;
+the tool returned `{"status":"ok",...}` plus a resolution note naming the absolute container path
+it wrote to. Reading that file back with the `Read` tool at the worktree-relative path failed with
+"File does not exist" — `ls` confirmed the file had actually been written to
+`/workspaces/bruce_lee/recovery/saeger/dumps/...` (the main checkout), not
+`/workspaces/bruce_lee/.claude/worktrees/agent-.../recovery/saeger/dumps/...` (the worktree). This
+matches `.claude/CLAUDE.md`'s own documented rule ("a relative one resolves against the workspace
+root, never the caller's directory, so a worktree gets the main workspace's copy unless it passes
+an absolute path") — but the rule is easy to forget mid-session because the tool's own success
+response looks identical whether the path landed in the right place or not; only the resolution
+note's absolute path (or a manual `ls`/`Read` check) reveals it.
+**Confidence:** HIGH (reproduced once, matches documented rule, root-caused and fixed within the
+same call sequence).
+**Fix, adopted immediately:** pass an **absolute** path rooted at the calling worktree's own
+checkout (e.g. `/workspaces/bruce_lee/.claude/worktrees/<agent-id>/recovery/<release>/dumps/...`)
+for every `vice_display_screenshot`/`vice_symbols_load`/`vice_disk_attach`/`vice_autostart` call
+made from inside a worktree, never a bare relative path — and check the tool's own resolution note
+for the absolute path it actually used, every time, rather than trusting a bare `status: "ok"`.
+**Saves:** a future worktree-executing session does not have to rediscover this by finding a stray
+file in the main checkout after the fact (as this session did, and removed) — screenshots and other
+committed artifacts that silently land in the wrong tree are exactly the kind of gap that makes a
+downstream diff or a `git status` misleading.
