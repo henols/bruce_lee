@@ -3762,3 +3762,68 @@ for the absolute path it actually used, every time, rather than trusting a bare 
 file in the main checkout after the fact (as this session did, and removed) — screenshots and other
 committed artifacts that silently land in the wrong tree are exactly the kind of gap that makes a
 downstream diff or a `git status` misleading.
+
+### 2026-08-06 — `$1560` is NOT the lives counter on the cracked releases; the real counter is `$0028`, address-level and code-confirmed
+
+**Type:** dead end (the `$1560` hypothesis) plus a confirmation (the real address)
+**Evidence:** live, 01-04 attempt 7, danish, executing from worktree
+`/workspaces/bruce_lee/.claude/worktrees/agent-a67a857915e88db6c`. Method: read `$1560` at
+FALLS=04 (value `$D0`), triggered a death via repeated `vice_joystick_tap(right, fire:true)`
+against chamber 1's ground enemy (FALLS 04→03), re-read `$1560` — unchanged at `$D0`. This is the
+clean differential test the 2026-08-03 finding itself prescribed ("set a watch on `$1560` in a
+live run and take a hit"), and it came back negative: **the community `POKE 5472,99` cheat address
+does not hold the lives counter on either cracked release**, exactly the caveat that finding's own
+text flagged as possible ("on a cracked release with a relocating loader it may not hold").
+Located the real address by `vice_snapshot_save` before a death, `vice_memory_compare(mode:
+"snapshot")` over `$0000`-`$1FFF` after it, twice in a row (FALLS 03→02, then 02→01): `$0028`
+decremented by exactly 1 both times (3→2→1), while a second superficially-matching candidate
+(`$0048`, coincidentally also 3→2 the first time) did **not** move on the second transition and is
+ruled out — a single differential is not enough; two in a row is what separates the real counter
+from a coincidence. Code-confirmed via `vice_memory_search`: `$1826: DEC $28 / BMI $188E` is the
+death handler's decrement-and-check-exhausted instruction pair (`BMI` catches the wrap to `$FF`
+when the last life is spent, branching to the game-over path), and `$1774: LDA $28 / CMP #$05 /
+... SBC #$05` reads it back out for the FALLS HUD digit. `$0028` is zero page, consistent with a
+frequently-touched, cheaply-addressed counter.
+**Confidence:** HIGH for both halves — the `$1560` negative result and the `$0028` positive result
+are each a live differential across a real, screenshot-confirmed death, and `$0028`'s identity is
+corroborated by disassembly at both its write site and a read site, not merely by value-tracking.
+**Saves / costs:** a future session (this project's own, or a fresh disassembly of either
+`danish.d64` or `saeger.d64`) does not need to re-derive the lives-counter address by trial and
+error — `$0028` is it, cross-releases untested but very likely shared since plan 01-03 already
+established both cracks load byte-identical original game code at the shared trigger. Costs one
+clean lesson: a community cheat published against "the original program" is a hypothesis, not a
+fact, on a cracked release with a relocating loader — exactly as the 2026-08-03 entry warned, now
+confirmed rather than merely flagged. This supersedes nothing in that entry (its grading stands,
+correctly, as an unrun MEDIUM hypothesis); this entry is the promotion-by-live-evidence it called
+for, and the evidence went the other way.
+
+### 2026-08-06 — lingering at the x~290-304 death coordinate under the unlimited-lives cheat wedged host VICE twice in one session
+
+**Type:** hazard
+**Evidence:** live, 01-04 attempt 7, danish, executing from worktree
+`/workspaces/bruce_lee/.claude/worktrees/agent-a67a857915e88db6c`, with the `$0028=99` cheat
+active (see the same-date entry above). Both times, Bruce's sprite (sprite_0) was pinned at
+`x=300,y=225` — the recorded cross-release death coordinate, at chamber 1's door/gate next to the
+ground enemy — across several consecutive `vice_sprite_get`/`vice_memory_read($0028)` checks with
+no player input sent in between, and `$0028` was observed to keep decrementing (once, 90→89) with
+*no new joystick call issued that period* — i.e. the death/decrement routine appeared to keep
+re-firing while Bruce's sprite stayed rooted at the same coordinate, not the normal
+respawn-to-spawn (x=52) behaviour every other captured death in this project's history shows.
+Shortly after, a `vice_joystick_tap(left)` produced no position change, and two independent
+`vice_cycles_stopwatch` brackets (reset→run→3×ping→read) both retired exactly 0 cycles;
+`vice_diagnose` independently returned verdict `wedged` both times this happened. No checkpoint
+was armed at either point (confirmed via `vice_checkpoint_list: count 0` shortly before each
+wedge), so this is not a checkpoint_trap. Recovered both times with `vice_recycle`, full incident
+records at `.planning/incidents/20260806140516528-port6601-epoch1.md` and
+`.planning/incidents/20260806142248336-port6601-epoch2.md`.
+**Confidence:** MEDIUM — two occurrences in one session, same location, same cheat-active
+condition, but not yet reproduced under stock (non-cheat) play at the same coordinate, so it is
+not yet established whether the wedge is specific to the cheat-mutated counter or would also occur
+under ordinary single-life play that simply never lingers there.
+**Saves / costs:** a future session pushing this hazard under the cheat should avoid letting Bruce
+dwell at this exact coordinate across multiple no-input observation cycles — retreat or send a new
+input promptly after a death is confirmed there, rather than polling repeatedly in place. If this
+reproduces under stock play too, it would mean the x~290-304 hazard itself is entangled with
+something that stresses the emulator (a tight interrupt loop, a sprite-multiplexing edge case at
+that screen column, or similar) rather than being purely a gameplay-navigation puzzle — worth a
+dedicated disassembly pass at that PC range if a future session has budget for it.
