@@ -1068,7 +1068,7 @@ Plans:
 | ~~**HV-08**~~ *(CLOSED 2026-08-05 — redeploy + restart done; warm_floor=1 running)* | Any **live** verification of 01.6.2.1's five lifecycle-policy changes | Re-run the installer to refresh host `tools/`, then restart the broker so it loads the new code — **the restart kills the 3 warm spares and any granted instance, so it is deliberately your call** | The host deploy is stale: `tools/vice-broker.mjs` and `tools/broker-launch.mjs` **differ** from committed `resources/` and are dated 05:43, hours before 01.6.2.1 merged. The live record proves it — `"spares_target": 3`, both the pre-rename key *and* the pre-change default, where 01.6.2.1 renamed it `warm_floor` and defaulted it to 1. Until then, anything verified live exercises the **pre-01.6.2.1** broker, and I will label it that way rather than claiming the new code was exercised |
 | ~~**HV-03**~~ | ~~01.6.3 criterion D~~ | **DISSOLVED 2026-08-05 — decided by measurable cost, so it never became yours** | ✅ D-06 taken in 01.6.3's plan 01: **provision, not bundle** — `npm ci --prefix .claude/mcp/vice` wired into the devcontainer's `postCreateCommand`. The row existed in case the decision turned on developer *preference*; it turned on cost, so taking it here was correct rather than a quiet grab. Grounds: `vice-proxy.ts` is not host-bound (it runs in-container on Node's native TS stripping, no build step), so D-06 only ever concerned the container's clone-and-go property; bundling would mean committing ~69 MB / 35 dependencies of third-party minified code as authored source plus a bundler toolchain this repo has never needed. **Disclosed cost:** a bare clone that bypasses devcontainer provisioning now fails until `npm ci` runs once. That cost proved itself the same day — after wave 1 merged, `main`'s `node_modules` lacked `@mastra/*` and one telemetry test failed until `npm ci` ran |
 | **HV-04** *(mostly discharged)* | 01.4 criteria 1–4 | **Already provided — you started the launcher 2026-08-05 and live access now works** | ⬤ **Criterion 1 partially discharged live**, recorded in `01.4-LIVE-EVIDENCE.md`: all three synthetic tools are present in a real session (against a recorded state of *"the session still cannot see them"*), and **`vice_diagnose` actually executed** — `verdict: restarted`, epoch 1 → 2. `vice_recycle` is deliberately **not** probed (destructive: proving it by probing destroys a healthy instance) and `vice_result_continue` needs a continuation token from an oversized result, so both are honestly unproven rather than inferred from presence. **Criterion 3 split:** named path holds (`vice_disk_list` absent from the surface); the generic path still exists (`tools_call`/`tools_list` both present) and its `tools_list` probe is deferred to 01.4's plan — `tools_call` with that name must never be the probe, since that *is* the hazard. **Criterion 4** (subagent schema) not probed. **Nothing further needed from you here** — the remainder is mine, once 01.6.3 stops rewriting the files 01.4 points into |
-| **HV-05** *(substantively answered; formal sign-off still yours)* | 01.3-06 (`gate="blocking"`, `01.3-06-PLAN.md:259`) and therefore 01.3's seal | Read the phase records and confirm no criterion was reworded to fit its outcome (threat T-01.3-20) | Nothing — **this row is structurally unautomatable.** It is a check on the agent's own honesty, so the agent cannot be the one to answer it |
+| ~~**HV-05**~~ *(CLOSED 2026-08-06 — developer signed off)* | 01.3-06 (`gate="blocking"`, `01.3-06-PLAN.md:259`) and therefore 01.3's seal | Read the phase records and confirm no criterion was reworded to fit its outcome (threat T-01.3-20) | Nothing — **this row is structurally unautomatable.** It is a check on the agent's own honesty, so the agent cannot be the one to answer it |
 | ~~**HV-06**~~ *(discharged)* | The `CF-01.4-NN` carry-forward rows (01.6.2.1 plan 06, ~35 expected) that 01.4 cannot discharge container-side | Same live-broker access as HV-04, once | Walk the carry-forward list row by row and mark each discharged or permanently unverifiable, with the reason |
 | **HV-07+** | *(open)* | *(appended during the autonomous run)* | Any blocker the run hits is appended here with these same four fields, never dropped and never answered by inference |
 
@@ -1127,6 +1127,25 @@ reproducing a state we can already detect and recover from. Criterion 11's escap
 **What remains yours:** the formal sign-off. What you would now be signing is a record set whose six
 overreaches have been found and corrected by something other than its author — which is a materially
 better thing to sign than what existed this morning.
+
+### HV-05 SIGNED OFF — 2026-08-06, and the register is now empty
+
+> **"I sign it of"** — developer, 2026-08-06, after the six audited overclaims were corrected.
+
+**All nine HV rows are closed.** The register that Phase 01.8 was created to hold has nothing left in it,
+and the phase's purpose — collect what genuinely needs the developer so an autonomous run never stalls —
+is discharged.
+
+**Final accounting of who closed what.** Five rows (HV-01, HV-03, HV-06, HV-07 and most of HV-04) closed
+**without** the developer, three of them because writing the row forced someone to name the blocker
+precisely enough to discover it was not developer-gated at all. HV-07 is the sharpest case: filed as a
+blocker with a confident and *wrong* diagnosis, then resolved by the developer pointing at loopback, and
+the actual defect was a one-line bind-versus-connect address bug. Three rows (HV-02, HV-08, HV-09) needed
+a single developer action each. **One row — HV-05 — was the only one that could not be delegated, closed,
+or worked around, because it asks whether the author's own records overclaim.**
+
+That is the row worth remembering. It was answered by an adversarial audit rather than a self-approval,
+**it found six real overclaims**, and it is the evidence that the register was not ceremony.
 
 ### Register status, 2026-08-05 close-out
 
