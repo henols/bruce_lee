@@ -14,7 +14,7 @@ progress:
   total_plans: 54
   completed_plans: 63
   percent: 42
-last_activity_desc: Phase 1 attempt 6: saeger's death+restart gaps closed with full proof; x~290-304 hazard proven cross-release
+last_activity_desc: Phase 1 attempt 7 (cheat round): community $1560 address disproven, real lives counter found at $0028 (HIGH); hazard survives unlimited lives
 ---
 
 # Project State
@@ -285,6 +285,38 @@ solving once.
 unreached in all six attempts. Recorded as `01-04-ATTEMPT-6-HALT.md`, deliberately **not** a SUMMARY,
 because a `SUMMARY.md` here would make `phase-plan-index` report `has_summary: true` and silently drop
 01-04 from the incomplete list.
+
+
+**Attempt 7 — the approved cheat round (2026-08-06). The milestones did not move; the findings are the
+return.** Developer approved the unlimited-lives cheat on condition it be documented; both hit logs carry
+an `attempt_7_note`, and attempt 6's stock signatures were left untouched rather than overwritten.
+
+**The published cheat is wrong, and now we own the right answer.** `POKE 5472,99` → `$1560`, carried at
+MEDIUM from a community wiki and never run, is **not** the lives counter on either cracked release —
+disproven by two before/after death differentials showing the value unchanged. The real counter is
+**`$0028`** (zero page), found by two independent `vice_memory_compare` differentials across real
+screenshot-confirmed deaths and **corroborated in code**: written at `$1826` (`DEC $28 / BMI $188E`), read
+back at `$1774` (`LDA $28 … SBC #$05`) for the FALLS HUD digit. Graded **HIGH** for both halves — the
+negative and the positive. That is a top-tier disassembly anchor: everything that can kill the player
+writes it.
+
+**The cheat worked and the hazard survived it.** `$0028 = 99` applied via `vice_memory_write` (never a
+typed POKE), durable across a death, needing re-application after each F7 game-start. Yet roughly **15
+varied techniques all still died at x ≈ 290-304**. So the blocker is **not** a lives problem, which
+eliminates a whole class of explanation and is why this round was worth spending. A partial trace
+attributes the death check to `$1826` → `$1818` → `$2D55`, gated on a still-unfound writer of `$0104`.
+
+**One observation worth chasing next:** `$0028` was seen to keep decrementing (90→89) across consecutive
+checks **with no player input sent in between** — so at that coordinate something kills Bruce repeatedly
+on contact, rather than a mistimed input killing him once. The next attempt should treat the hazard as a
+persistent contact condition, not a timing failure.
+
+**The recovery tooling paid for itself.** The host wedged **twice** while lingering at the hazard, and both
+were recovered with `vice_recycle` (`outcome: 'ok'`, incident records committed). Three earlier attempts of
+this same plan **ended** on that signature with no recovery available.
+
+Both releases remain **5/7**; Task 4 unreached; RECOVER-04 unsatisfied. Recorded as
+`01-04-ATTEMPT-7-HALT.md`, not a SUMMARY.
 
 Status: Executing Phase 01.6.2.1
 
