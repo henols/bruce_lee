@@ -3952,3 +3952,64 @@ future *live* session — live emulator time is the scarcest resource in this pr
 hazard at `x~290-304` makes it risky, so **the standing order should be: try the committed dump
 first, and only go live for what the dump genuinely cannot answer.** Costs nothing; needs no
 emulator, no boot, no cheat, and cannot wedge.
+
+---
+
+### 2026-08-07 — the input tool's accepted encodings can be probed with the machine PAUSED at zero game-state cost, and the diagonal is now 5-for-5 ruled out; the bitmask is canonical, so the tool is NOT axis-inverted
+
+**Type:** shortcut + dead end (extended) + confirmation (a tempting hypothesis killed)
+**Evidence:** live, plan 01-04 attempt 8, saeger (release identified by `$4771` = `IABOLO`, see the
+sibling entry below), on the developer's own hand-off game state — VICE paused throughout, joystick
+returned to `center` afterwards, and the state verified intact after probing: `$0028` still `$4A`
+(74 falls, no life consumed), sprite 0 still `x=$58 y=$E1`, byte-for-byte where the developer left it.
+
+**The shortcut.** `vice_joystick_set` can be called while the machine is **paused**, and:
+- a call the transport *rejects* never reaches the emulator, so it costs nothing at all;
+- a call it *accepts* does not take effect until execution resumes, so it costs nothing yet;
+- the response's own `value` field reports the **bitmask** the tool applied.
+
+That makes the accepted-encoding space explorable for free, with no life spent, no frame advanced,
+and no risk of the wedge hazard — in a project where live emulator budget and Bruce's remaining
+falls have been the binding constraint on seven consecutive attempts. **Probe the input surface
+paused, before spending a single life on a technique that may not even be expressible.**
+
+**The bitmask mapping is canonical, which kills the best available explanation for a 7-attempt
+symptom.** Confirmed by the tool's own `value` field, machine paused:
+
+| `direction` | `value` | bit | canonical C64 joystick bit |
+|---|---|---|---|
+| `up` | 1 | 0 | bit 0 = up ✓ |
+| `down` | 2 | 1 | bit 1 = down ✓ |
+| `right` | 8 | 3 | bit 3 = right ✓ |
+| `center` | 0 | — | ✓ |
+
+This matters because attempt 5 recorded that `up` taps at three x-positions "produced only continued
+forward walking or a **duck/crouch** animation ... never vertical ascent". A crouch is what *down*
+should do, so an inverted up/down axis in the tool was the most attractive single explanation for
+the whole blocker. **It is wrong** — the tool sets bit 0 for `up`, exactly as a real C64 joystick
+does. The crouch has some other cause (candidates, none yet tested: the game samples joystick
+**port 2** while the tool defaults to port 1; or a 3-frame default tap is simply missed by the
+game's own poll).
+
+**Dead end extended to five forms.** No diagonal encoding is accepted by the transport. Previously
+ruled out (attempts 5-6): a genuine JSON array, `"up-right"`, `"upright"`. Now also ruled out:
+`"up,right"` and `"9"` (the numeric bitmask for up|right, tried because `value` proves the
+underlying representation *is* a bitmask). All five fail identically with `Invalid direction`.
+**Both** `vice_joystick_tap` **and** `vice_joystick_set` declare `direction` as `type: "string"`
+while both descriptions promise "or array for diagonals" — the description and the schema
+contradict each other in both tools, and the schema is what the transport enforces.
+
+**Confidence:** HIGH for the bitmask table and for all five rejected encodings (direct tool
+responses, reproduced this session). HIGH for the paused-probing shortcut (exercised end-to-end
+with the state verified unchanged afterwards). MEDIUM for the two remaining candidate causes of the
+crouch — named, not tested.
+
+**Saves / costs:** **reframes the blocker from a game puzzle to a tool-surface limitation.** The
+fix six attempts converged on — a jump-over of a gap, which the manual's own hazard vocabulary
+supports ("electrical charges in the gaps between ledges", against a counter the HUD literally
+calls `FALLS`) — has **never once been attempted**, because no diagonal has ever reached the
+emulator. Seven attempts of "input technique" were spending lives on a technique the transport
+could not express. The remaining untried routes, in order of cheapness: (a) `vice_joystick_set` as
+a persistent **hold** rather than a `tap`, since a hold cannot be missed by the game's poll and
+"continued forward walking" is exactly what a *missed* input looks like; (b) `port: 2`; (c) a
+`right` hold with an `up` set landing while it is still in flight.
