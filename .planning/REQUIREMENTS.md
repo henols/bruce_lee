@@ -3,20 +3,20 @@
 **Defined:** 2026-07-30
 **Core Value:** An ACME source tree that rebuilds a Bruce Lee which plays identically to the original, where every gameplay system is explained well enough that someone could change it.
 **Active milestone:** v1.1 — Emulator Access Hardened (Phases 01.3–01.6, 0 requirements — tooling)
-**Paused behind it:** v1.0 — Pipeline Proven (Phases 1–4, 24 requirements)
+**Paused behind it:** v1.0 — Pipeline Proven (Phases 1–4, 25 requirements)
 
 ## Milestone Map
 
 | Milestone | Phases | Reqs | Delivers |
 |---|---|---|---|
 | **v1.1 — Emulator Access Hardened** *(active, inserted 2026-08-02)* | 01.3–01.6 | 0 (tooling) | Every proxy tool reaches the agent that needs it; a dead or wedged instance costs one acquisition, not the session; the broker never warms, grants or retains an instance that is not real; broker coordination moves into Node behind a TCP control plane. Deliverable is **live emulator work that survives its own failure modes**. |
-| **v1.0 — Pipeline Proven** *(paused behind v1.1)* | 1–4 | 24 | Clean canonical image with per-byte provenance, full code/data map, working replay-verification harness with the original's baselines, and one subsystem driven end-to-end to a verified `.prg`. Deliverable is a **proven pipeline**. |
-| **v2.0 — Complete Reconstruction** | 5–7 | 20 | All remaining subsystems documented and reconstructed, formats proven by replaying their re-serialised output, listing complete, source split, bootable `.d64`, full replay suite passing. **This is where "fully documented and recompiled" is met.** |
+| **v1.0 — Pipeline Proven** *(paused behind v1.1)* | 1–4 | 25 | Clean canonical image with per-byte provenance, full code/data map, working replay-verification harness with the original's baselines, and one subsystem driven end-to-end to a verified `.prg`. Deliverable is a **proven pipeline**. |
+| **v2.0 — Complete Reconstruction** | 5–7 | 21 | All remaining subsystems documented and reconstructed, formats proven by replaying their re-serialised output, listing complete, source split, bootable `.d64`, full replay suite passing. **This is where "fully documented and recompiled" is met.** |
 | **v3.0 — Editable** | not yet phased | 6 | Round-trip asset converters and the change guide + chamber editor. |
 
 **Scope note.** v1.0 deliberately ships short of the original project goal in order to de-risk it — every pipeline stage is proven on one subsystem before scaling out. A v1.0 close is not project completion; v2.0 is.
 
-**v1.1 carries no requirements, deliberately.** Phases 01.1, 01.2 and 01.3 already set this precedent: tooling insertions are ROADMAP-only and the requirement-coverage gate reads them as unmapped by design. The 24 requirements below are RE-domain scope and are **untouched** by the v1.1 insertion — v1.0 is paused, not closed, and `/gsd-complete-milestone` must not be run against it.
+**v1.1 carries no requirements, deliberately.** Phases 01.1, 01.2 and 01.3 already set this precedent: tooling insertions are ROADMAP-only and the requirement-coverage gate reads them as unmapped by design. The 25 requirements below are RE-domain scope and are **untouched** by the v1.1 insertion — v1.0 is paused, not closed, and `/gsd-complete-milestone` must not be run against it.
 
 ## v1.0 Requirements — Pipeline Proven (active)
 
@@ -42,6 +42,7 @@ The subject exists only as two cracked releases, one of them crunched. Nothing d
 - [ ] **MAP-03**: A hazard catalogue records every construct that constrains reconstruction: self-modifying code, computed-jump and RTS-dispatch tables, page-alignment-sensitive data, and any illegal/undocumented opcodes
 - [ ] **MAP-04**: A memory map documents what the game keeps where — zero-page variables, buffers, table locations, VIC bank layout, and hardware register usage
 - [ ] **MAP-05**: Coverage is reported as an explicit number so remaining unknown regions are visible rather than implied
+- [ ] **MAP-06**: Every cracker-modified range carries a *function* verdict alongside its origin verdict — loader, cracktro, or gameplay-altering — and any gameplay-altering patch (a trainer) is catalogued with what it changes, found by signature hunt as well as by diff, because a two-release diff cannot detect a trainer both releases contain
 
 ### Verification Harness & Baselines — Phase 3
 
@@ -94,6 +95,7 @@ Phases 5–7. Phased and mapped, but not the active milestone. Promoted into the
 - **BUILD-05**: The build emits a bootable `.d64` that starts the game the way the original disk does
 - **BUILD-06**: The whole build runs from a single command, and the resolved `.d64` writing tool is committed and documented
 - **BUILD-07**: Source is split into per-subsystem files matching the documentation structure, with any split that would break address-dependent code identified and avoided
+- **BUILD-08**: The default build emits no cheat or debug code at all — every cheat, whether inherited from a crack or added as an RE aid, sits behind an ACME conditional-assembly switch and is named in one registry recording what it does, which addresses it touches, and why it exists, so the default `.prg` plays as the original shipped
 - **VERIFY-06**: The replay suite exercises all 20 chambers, both opponents, the full move set, and both two-player modes, so passing verification means something
 - **VERIFY-07**: The rebuild passes the full replay suite with no divergence — the reconstruction's definition of done
 
@@ -149,6 +151,7 @@ Which milestone and phase cover which requirements.
 | MAP-03 | v1.0 | Phase 2 | Pending |
 | MAP-04 | v1.0 | Phase 2 | Pending |
 | MAP-05 | v1.0 | Phase 2 | Pending |
+| MAP-06 | v1.0 | Phase 2 | Pending |
 | VERIFY-01 | v1.0 | Phase 3 | Pending |
 | VERIFY-02 | v1.0 | Phase 3 | Pending |
 | VERIFY-03 | v1.0 | Phase 3 | Pending |
@@ -178,18 +181,19 @@ Which milestone and phase cover which requirements.
 | BUILD-05 | v2.0 | Phase 7 | Pending |
 | BUILD-06 | v2.0 | Phase 7 | Pending |
 | BUILD-07 | v2.0 | Phase 7 | Pending |
+| BUILD-08 | v2.0 | Phase 7 | Pending |
 | VERIFY-06 | v2.0 | Phase 7 | Pending |
 | VERIFY-07 | v2.0 | Phase 7 | Pending |
 
 **Coverage:**
 
-- Phased requirements: 44 total
-- Mapped to phases: 44 ✓
+- Phased requirements: 46 total
+- Mapped to phases: 46 ✓
 - Unmapped: 0 ✓
-- v1.0 (active): 24 · v2.0: 20 · v3.0 (not yet phased): 6
+- v1.0 (active): 25 · v2.0: 21 · v3.0 (not yet phased): 6
 
-**Per-phase totals:** Phase 1: 8 · Phase 2: 5 · Phase 3: 4 · Phase 4: 7 · Phase 5: 5 · Phase 6: 9 · Phase 7: 6
+**Per-phase totals:** Phase 1: 8 · Phase 2: 6 · Phase 3: 4 · Phase 4: 7 · Phase 5: 5 · Phase 6: 9 · Phase 7: 7
 
 ---
 *Requirements defined: 2026-07-30*
-*Last updated: 2026-07-30 after milestone split at the Phase 4 boundary*
+*Last updated: 2026-08-08 — added MAP-06 and BUILD-08 from the /gsd-explore session on cheat policy (see `.planning/notes/cheat-policy-and-build-time-switch.md`)*

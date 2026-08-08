@@ -4013,3 +4013,49 @@ could not express. The remaining untried routes, in order of cheapness: (a) `vic
 a persistent **hold** rather than a `tap`, since a hold cannot be missed by the game's poll and
 "continued forward walking" is exactly what a *missed* input looks like; (b) `port: 2`; (c) a
 `right` hold with an `up` set landing while it is still in flight.
+
+### 2026-08-08 — A two-release provenance diff cannot detect a trainer that both releases contain; trainer detection is gated on RECOVER-07's ancestry verdict
+
+**Type:** hazard
+**Evidence:** reasoning from the diff method's own definition, cross-checked against
+`RECOVER-06`/`RECOVER-07` in `.planning/REQUIREMENTS.md` and the `c64-provenance-diff` skill's
+stated premise. Not established by a live hunt — no trainer hunt has been run on either release.
+**Confidence:** MEDIUM
+**Saves / costs:** costs a silently wrong rebuild. A clean diff read as "no cracker gameplay
+patch" would let an inherited trainer pass into the reconstruction unnoticed, and behaviour-only
+verification would never flag it — the baselines are captured from the same cracked image, so the
+rebuild and the reference would agree *while both differ from the original game*.
+
+The provenance method's whole leverage is that two independently-cracked releases disagree
+exactly where a cracker intervened. That leverage is **conditional on the independence**, and
+`RECOVER-07` — "whether the two cracks are genuinely independent or share a common ancestor" — is
+still open. Three cases, with different consequences:
+
+| Ancestry | What a clean diff means |
+|---|---|
+| Genuinely independent | A shared trainer is unlikely; the diff is a real backstop |
+| Shared ancestor | A shared trainer produces **zero diff bytes**; the diff detects nothing |
+| Unknown (today) | A clean diff means **nothing** about trainers either way |
+
+**The trap is directional.** A diff *hit* is informative — something was patched. A diff *miss*
+is not, and it is the miss that reads as reassurance.
+
+Compounding it: `RECOVER-06` already assigns every range an *origin* verdict (original /
+cracker-modified / uncertain), which makes the ledger look like it has covered this. It has not —
+origin says who wrote a range, not what it does, so a trainer and a relocated loader stub carry
+the same label today.
+
+**The independent detector**, which does not depend on the ancestry answer, is a signature hunt
+against the canonical image: writes to `$0028` from any site other than the known `$1826`
+(`DEC $28`) — **including indexed forms**, since attempt 7's `$0104` writer search checked
+absolute mode only and missed it for exactly that reason; armed-but-never-executed code
+cross-referenced against `MAP-01`'s coverage map; title-screen key-combo scanners reading
+`$DC00`/`$DC01`/`$00CB` outside the game's own input handler; and `NOP` sleds or inverted
+branches sitting inside otherwise-original code.
+
+Recorded as `MAP-06`. Recipe in
+`.planning/todos/pending/2026-08-08-hunt-for-inherited-trainers-in-both-cracked-releases.md`;
+policy in `.planning/notes/cheat-policy-and-build-time-switch.md`.
+
+**Promote to HIGH** by running the hunt and recording what it found — including a negative, which
+must state its own coverage limits rather than reading as proof of absence.
