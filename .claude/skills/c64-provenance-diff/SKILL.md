@@ -1,6 +1,6 @@
 ---
 name: c64-provenance-diff
-description: Decide whether a byte in a cracked C64 release is original game code or something a cracker changed, by diffing two or more independently-cracked releases at an anchor-proven offset. Use when asked to diff two releases or disk images, work out which bytes the cracker patched, tell loader or cracktro code from game code, prove a byte is original, establish provenance or confidence for a memory range, regenerate the provenance ledger, or run anchor-search, count-patches or diff-images.
+description: Decide whether a byte in a cracked C64 release is original game code or something a cracker changed, by diffing two or more independently-cracked releases at an anchor-proven offset. Use when asked to diff two releases or disk images, work out which bytes the cracker patched, tell loader or cracktro code from game code, prove a byte is original, establish provenance or confidence for a memory range, regenerate the provenance ledger, or run anchor-search, count-patches or diff-images. Also use when asked whether a crack added a trainer or cheat, whether a patch changes gameplay rather than loading, whether a rebuild would inherit a cracker's gameplay alteration, or whether two releases are genuinely independent rather than sharing an ancestor.
 ---
 
 # Deciding what a cracker changed
@@ -98,6 +98,12 @@ committed corpus; `ledger` reproduced the committed
 `generated_tier_sha256 dc7eb080…` byte-identically, so the classification is
 deterministic.
 
+**One qualifier on the 102, and it is the example's premise rather than its output:**
+"independently-cracked" is asserted at the top of this example, not proven by it. The
+determinism is HIGH; the `ORIGINAL` verdicts inherit whatever confidence that
+independence claim carries. See § *The independence precondition* below before
+quoting an `ORIGINAL` count as settled.
+
 ## The five kinds and the three verdicts
 
 `bucketManifest` promotes a manifest from `ranges-only` to `bucketed`, assigning
@@ -123,6 +129,74 @@ assigned at capture time and kept verbatim. Everything the trace reaches is `gam
 Per D-05 the `.bin` files are **never** edited or zeroed. Classification lives in
 the manifests; the bytes stay verbatim evidence.
 
+## A `CRACKER-PATCH` in `game` code is a trainer until proven otherwise
+
+`count-patches` counts exactly one intersection — verdict `CRACKER-PATCH`, kind
+`game`. That intersection has a name the pipeline never says out loud: a **trainer**.
+A cracker changing bytes *inside game code* is altering gameplay, and unlimited
+lives, disabled collision or a frozen timer is the usual reason.
+
+This matters because the three verdicts answer **who wrote a range**, not **what it
+does**. A relocated loader stub and a life-decrement patched to a `NOP` both come
+back `CRACKER-PATCH`. So give every patch a **function verdict** alongside its origin
+verdict:
+
+| Function | Means | Why it matters |
+|---|---|---|
+| `loader` | raw-sector loading, decrunch, relocation, drive code | an obstacle to get past, not a subject |
+| `cracktro` | intro, scroller, music, the crack's own presentation | not the object of study |
+| `gameplay` | reads or writes game state — **a trainer** | any rebuild copying these bytes inherits it |
+| `unknown` | not yet attributed | scrutinise before trusting |
+
+**A rebuild reconstructed from these bytes inherits a `gameplay` patch silently**, and
+behaviour-only verification will not catch it: the baselines come from the same
+cracked image, so the rebuild and its reference agree *while both differ from the
+game as it shipped*.
+
+### The independence precondition — this skill's own premise
+
+`ORIGINAL` means "identical across two **independently**-cracked releases". Delete the
+word *independently* and the verdict is worthless: two releases sharing an ancestor
+are identical everywhere the ancestor was, **including everywhere the ancestor's
+cracker patched**. Establish the independence. Do not infer it from two releases
+carrying different group names, different loaders, or different cracktros — those are
+the cheapest things for a re-cracker to replace.
+
+Until it is established, the diff is directional, and the direction is the trap:
+
+- A diff **hit** is informative — something was patched.
+- A diff **miss** is not, and it is the miss that reads as reassurance.
+
+So `count-patches` reporting `0` is not evidence that no trainer exists. It is
+evidence that no trainer exists **in one release and not the other**. With unproven
+ancestry those are different claims, and only the second one was tested.
+
+### The detector that does not depend on the diff
+
+A signature hunt over the canonical image, read against the coverage map rather than
+against another release. None of it needs a second release at all, which is precisely
+why it survives the shared-ancestor case:
+
+1. **Writes to a consequence counter from an unexpected site.** Once the memory map
+   names what the game decrements on failure — lives, timer, health — every writer
+   that is not the game's own is a candidate. Search **every addressing form that can
+   reach the address**, indexed included. An absolute-mode-only search is the standard
+   way this hunt returns a false negative.
+2. **Armed but never reached.** Code jumped to from a patched region that never
+   executes across full gameplay coverage is either dead crack scaffolding or a
+   trainer waiting on a trigger. Both need a verdict; neither should be reproduced
+   without one.
+3. **Trigger scanners.** Reads of the keyboard or joystick registers in code that is
+   not the game's own input handler, and comparisons against key codes inside a range
+   already marked `CRACKER-PATCH`.
+4. **`NOP` sleds and inverted branches.** The cheapest trainer is a patched-out check
+   — `EA EA EA` where a `JSR` or a decrement was, or a `BEQ`↔`BNE` flip on a collision
+   or life test. These show as a few bytes inside otherwise-original code: the pattern
+   most easily dismissed as noise, and the one that matters most.
+
+**A negative is a result, and must state its own limits.** "No trainer found, by these
+four signatures, at this coverage level" is an answer. "The diff was clean" is not.
+
 ## Before you trust a verdict
 
 - **Coverage is incomplete, and the ledger says so out loud.**
@@ -142,7 +216,10 @@ the manifests; the bytes stay verbatim evidence.
 - **`--gap-tolerance` is off-by-one sensitive by design.** A gap of identical bytes
   *strictly shorter* than N coalesces; a run of *exactly* N stays its own row.
 - **More agreeing independent releases is the only thing that raises confidence.**
-  Two releases can establish `ORIGINAL`; they cannot establish intent.
+  Two releases can establish `ORIGINAL`; they cannot establish intent. And *agreeing*
+  only counts once *independent* is proven — releases sharing an ancestor agree on
+  the ancestor's patches too, so unproven ancestry makes every `ORIGINAL` verdict
+  conditional rather than earned.
 
 ## Which skill does what
 
@@ -169,7 +246,10 @@ through a GSD command (`/gsd-quick`).
 | `anchor-search` reports `ok=false` | Anchors disagreed, so there is no single offset. Do **not** pick the majority — the images are not the same fully-loaded state, or one capture is bad. Re-capture rather than force it. |
 | `git status` dirty after a run | Expected — two verbs write. Diff the two files; if only `proven_at`/`generated_at` moved, `git checkout --` them. |
 | `generated_tier_sha256` changed | The classification changed, not just a timestamp. Find the cause before committing; the digest is the determinism check. |
-| `count-patches` reports 0 | Usually correct. It counts `CRACKER-PATCH` **and** `game`-kind addresses; with two releases and no signature match, nothing qualifies. Check the `diff --json` tally before treating it as a bug. |
+| `count-patches` reports 0 | Usually correct. It counts `CRACKER-PATCH` **and** `game`-kind addresses; with two releases and no signature match, nothing qualifies. Check the `diff --json` tally before treating it as a bug. But do not read it as "no trainer" — see the next two rows. |
+| Asked whether the crack added a trainer | `count-patches` is the diff-side answer: `CRACKER-PATCH` ∧ `game` **is** the trainer count. It is necessary and not sufficient — it cannot see a trainer both releases carry. Run the signature hunt too. |
+| Asked to confirm a release has no trainer | You cannot confirm that from a diff alone, and saying so is the answer. A clean diff only rules out a trainer in *one* release and not the other; with unproven ancestry that is a weaker claim than it sounds. Report the signature-hunt result with its coverage limits. |
+| Two releases agree everywhere suspicious | Suspect shared ancestry before concluding `ORIGINAL`. Different group names, loaders and cracktros are the cheapest things for a re-cracker to swap and prove nothing about independence. |
 | Everything is `UNKNOWN` | Also usually correct. `UNKNOWN` means "differs, no recognised signature, alternatives ruled out". Read the range's `reason` field. |
 | A range's `kind` looks wrong past its start | You resolved `kind` from `start`. Use `splitRangeByManifestKind`; coalescing does not respect kind boundaries. |
 | A loader range disagrees with `NOTES.md` | `RELEASES.json`'s `loader_ranges` wins — it is earned from disassembly. Prose is how `$08F5` got misclassified. |
