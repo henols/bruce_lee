@@ -4059,3 +4059,39 @@ policy in `.planning/notes/cheat-policy-and-build-time-switch.md`.
 
 **Promote to HIGH** by running the hunt and recording what it found — including a negative, which
 must state its own coverage limits rather than reading as proof of absence.
+
+> **Recovered 2026-08-08 from an unmerged worktree branch (`aafcffc`, authored 2026-08-02).**
+> It was committed to an executor worktree that was never merged, so it never reached `main`
+> and is out of date order here. Appended rather than inserted, per append-only. It refines
+> the 2026-08-02 unpaused-think-time entry above; its five `attempt6` evidence screenshots
+> were missing from `main` for the same reason and are restored alongside it.
+### 2026-08-02 -- even a single resume-then-observe round-trip (not just unpaused "thinking" time) burns hundreds of real frames of game time, refining the attempt-5 pause-discipline finding
+
+**Type:** hazard (refines/sharpens the 2026-08-02 unpaused-think-time finding logged above)
+**Evidence:** live, 01-04 attempt 6, danish Task 3 resume. Two consecutive brackets, each
+`cycles_stopwatch reset -> execution_run -> ONE vice_ping -> execution_pause -> cycles_stopwatch
+read`, measured **20,363,616** and **10,614,240** cycles respectively for a scripted action whose
+own stated duration was only 10-40 frames (~200-800ms, ~196,000-786,000 cycles). Both brackets
+contained only a single `vice_ping` call between resume and pause -- the minimal possible
+polling loop -- yet still overran the intended duration by roughly 13-50x.
+**Confidence:** HIGH (measured directly, twice, both wildly exceeding the intended frame budget
+despite following the already-adopted "pause after every observation" discipline to the letter)
+**Costs:** the second overrun coincided with Bruce standing idle (post-auto-center) in chamber 1's
+open ground floor for several real seconds longer than intended, during which he died and the game
+returned all the way to the title screen -- i.e. the pause discipline alone, as previously
+formulated ("pause after every observation"), is NOT sufficient to bound how long the machine runs
+per scripted input; the bottleneck is the assistant's own per-tool-call latency (reasoning +
+round-trip), not the absence of a pause call. Reducing the poll loop to a single `vice_ping` (the
+minimum already recommended) still leaves enough real-world latency for 500+ frames to elapse.
+
+**Refined rule for future sessions:** for a short, fixed-duration scripted input (a joystick tap or
+keyboard-matrix press with an explicit `duration_frames`/`hold_frames`), do NOT poll with
+`vice_ping` at all between `vice_execution_run` and `vice_execution_pause` -- go straight from
+resume to pause with no intervening call. This still overshoots the requested frame count (the
+model's own resume-to-pause latency dominates over the requested duration regardless of what
+happens in between), but it is the tightest bound available with the current tool surface, and it
+removes one full extra round-trip's worth of unbounded idle time from every single scripted input.
+Where the room is hazard-dense (as this one proved to be), treat every scripted input as capable of
+producing several real seconds of unattended, unpaused idle game time no matter how tightly the
+call sequence is written, and budget play-throughs accordingly -- this is a property of the
+tool-mediated latency, not a discipline failure that tighter code can fully eliminate.
