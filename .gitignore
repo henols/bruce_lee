@@ -59,20 +59,27 @@ dkms.conf
 # Claude Code state staged for the first devcontainer rebuild (contains credentials)
 .devcontainer/.claude-seed/
 
-# Claude Code: track this project's own instructions, skills and non-skill MCP
-# server implementations, ignore the installed toolkit (agents, commands, hooks,
-# gsd-core and local settings are per-machine)
+# Claude Code: track this project's own instructions, its remaining local
+# skills, and its shared project settings, ignore the installed toolkit
+# (agents, commands, hooks, gsd-core) and per-machine settings.local.json.
 #
 # CLAUDE.md is tracked as of 2026-08-01. It was never per-machine -- it carries
-# the project's own standing rules, including the hard rule that mcp__vice__*
-# is the only route to the emulator. Being caught by the blanket `.claude/*`
-# meant those rules lived in one working copy and a fresh clone silently got
-# none of them, which is the wrong failure direction for a rule whose whole job
-# is to stop something being rebuilt.
+# the project's own standing rules, including the hard rule that
+# mcp__plugin_c64-re-tools_vice__* is the only route to the emulator. Being
+# caught by the blanket `.claude/*` meant those rules lived in one working copy
+# and a fresh clone silently got none of them, which is the wrong failure
+# direction for a rule whose whole job is to stop something being rebuilt.
+#
+# settings.json is tracked as of this migration: it declares the c64-re-tools
+# plugin marketplace (extraKnownMarketplaces) and enables the plugin
+# (enabledPlugins), which every session needs, so it must be shared -- not
+# per-machine. Machine-local overrides still go in settings.local.json, which
+# stays ignored by the blanket `.claude/*` below. (The former `!.claude/mcp/`
+# negation is gone with the MCP source, now in the c64-re-tools plugin repo.)
 .claude/*
 !.claude/CLAUDE.md
+!.claude/settings.json
 !.claude/skills/
-!.claude/mcp/
 
 # scratch notes
 anything.*
@@ -89,28 +96,14 @@ recovery/*/dumps/probe-*.png
 .vice-supervisor/
 .vice-supervisor.bak-*/
 
-# deployed copies of .claude/mcp/vice/resources/ -- the tracked source of
-# truth lives in that directory (the vice MCP implementation, not a skill);
-# these are regenerated automatically by install-resources.mjs the first time
-# any .claude/mcp/vice/ .mjs entry point runs, and are disposable: never
-# hand-edit them here (edit resources/ instead), and a real host setup keeps
-# working exactly as before because they still land at these same paths.
-# vice-supervisor.sh, vice-broker.sh, lib/container-guard.sh and
-# lib/repo-root.sh (the retiring per-instance supervisor, the retiring bash
-# broker, and their two shared libraries) are DELETED (Phase 01.6.2 plan 11)
-# -- the surviving vice-launcher.sh below now inlines the one library
-# function it used (resolve_repo_root()), and the container guard ported to
-# TypeScript (container-guard.mjs) in plan 01.
-# vice-broker.mjs and vice-launcher.sh (Phase 01.6 plan 01) join them --
-# resources/ is now generated-but-committed for these two, tsc-emitted for
-# the former, hand-authored for the latter; tools/ stays the disposable
-# deployment target for both, same as every other entry in this block.
+# Deployed copies of the vice MCP server's resources. The MCP implementation
+# now lives in the c64-re-tools plugin (henols/c64-re-tools), not this repo,
+# but at runtime it still deploys these host-bound artifacts into THIS
+# project's tools/ (it resolves the project root via CLAUDE_PROJECT_DIR), so
+# the ignore lines stay here. They are regenerated on the plugin server's
+# first tool call and are disposable: never hand-edit them.
 /tools/vice-broker.mjs
 /tools/vice-launcher.sh
-# Six new host-bound artifacts (Phase 01.6.2 plan 01) join them -- the
-# tracer's build pipeline (tsc-emitted, generated-but-committed under
-# resources/) now covers all seven .mts sources, and tools/ stays the same
-# disposable deployment target for every one of them.
 /tools/container-guard.mjs
 /tools/broker-state.mjs
 /tools/broker-launch.mjs
@@ -124,14 +117,8 @@ recovery/*/dumps/probe-*.png
 # entry in this block: a real host regenerates it on the next deploy.
 /tools/.vice-deployed.json
 
-# node_modules for .claude/mcp/vice/'s own npm toolchain (Phase 01.6 plan
-# 01) -- the FIRST node_modules this repository has ever had. No leading
-# slash: gitignore matches an unanchored pattern at ANY depth, which is
-# deliberate here (not merely the default) -- an untracked root node_modules/
-# existed at this repo's top level as of 2026-08-02 (01.6-01-PLAN.md's
-# planning_notes, T-01.6-22); it has since been removed by developer decision
-# (not adopted), but a scoped entry would still leave any FUTURE untracked
-# root tree polluting `git status`. package-lock.json is NOT ignored here --
-# it is committed (the compiler version is a build input now that its output
-# is committed).
+# The vice MCP server's node_modules moved out with it to the c64-re-tools
+# plugin (provisioned into the plugin's own install dir by its SessionStart
+# hook, never here). This unanchored entry stays as a backstop so any stray
+# node_modules/ at any depth never pollutes `git status`.
 node_modules/

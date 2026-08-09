@@ -5,7 +5,9 @@
 	// Or use a Dockerfile or Docker Compose file. More info: https://containers.dev/guide/dockerfile
 	"image": "mcr.microsoft.com/devcontainers/base:trixie",
 	"features": {
-		// Needed for npx, which the MCP servers in .mcp.json are launched with.
+		// Node is needed to run the vice MCP server the c64-re-tools plugin provides
+		// (launched with `node`), and for the plugin's SessionStart hook that runs
+		// `npm ci` to provision that server's dependencies.
 		"ghcr.io/devcontainers/features/node:1": {},
 		"ghcr.io/stu-bell/devcontainer-features/claude-code:0": {},
 		"ghcr.io/devcontainer-community/devcontainer-features/github.com-cli:1": {}
@@ -54,7 +56,7 @@
 		"source=claude-history-${devcontainerId},target=/commandhistory,type=volume",
 		"source=gh-config-${devcontainerId},target=/home/vscode/.config/gh,type=volume"
 	],
-	"postCreateCommand": "bash .devcontainer/post-create.sh && bash .devcontainer/install-acme.sh && npm ci --prefix .claude/mcp/vice",
+	"postCreateCommand": "bash .devcontainer/post-create.sh && bash .devcontainer/install-acme.sh",
 
 	// Extensions are reinstalled on every rebuild, so they must be declared here
 	// to survive. The claude-code feature installs only the CLI, not this extension.

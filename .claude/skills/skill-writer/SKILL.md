@@ -95,13 +95,13 @@ however well it is written.
 
 | Rule | What it forbids in a skill |
 |---|---|
-| `mcp__vice__*` is the only route to the emulator | No script, test or module may open its own connection to the host VICE, read broker state to find a port, or import a transport module as a library. A skill that needs a Node process to reach VICE is not implementable — say so instead of designing around it. |
+| `mcp__plugin_c64-re-tools_vice__*` is the only route to the emulator | These tools come from the `c64-re-tools` plugin. No script, test or module may open its own connection to the host VICE, read broker state to find a port, or import a transport module as a library. A skill that needs a Node process to reach VICE is not implementable — say so instead of designing around it. |
 | Everything runs headless in this Linux container | No GUI, no display, no Windows runtime, no Wine. If the capability needs a desktop, the skill reports it unavailable. |
 | ACME is the only assembler | Source idioms stay ACME-compatible. |
 | No wall-clock synchronisation | Skills that drive the emulator synchronise on checkpoint hits and frame counts. Never `sleep`. |
 | A skill's `scripts/` hold pure logic only | Resolution, attribution, ordering, rendering — over data the agent already fetched. Nothing there contacts the emulator; an import-purity test enforces it. |
 | Skills must be portable | No reference to this project's game, releases or disk images. Resolve the project root by walking up for `.git`, never by counting hops; make data locations overridable; let corpus-dependent tests skip rather than fail. |
-| `.claude/mcp/` is off-limits unless the task *is* maintaining it | A skill about using the emulator does not read or edit that tree. |
+| The vice MCP implementation is off-limits unless the task *is* maintaining it | It lives in the `c64-re-tools` plugin repo, not this one; a skill about *using* the emulator does not read or edit it. |
 
 Two more that apply to the skill's own content: findings that make RE faster
 belong in `.planning/RE-FINDINGS.md` at the moment they are found, and file-changing
