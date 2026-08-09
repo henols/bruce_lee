@@ -13,7 +13,7 @@ The documentation and the rebuild are not separate deliverables — the rebuild 
 ### Constraints
 
 - **Tech stack**: ACME cross-assembler as the only assembler — Explicit project goal; the rebuild must assemble with ACME, so all source idioms must be ACME-compatible.
-- **Tooling**: VICE lives on the host, reached only via the `mcp__vice__*` tools — This is a hard rule. Those tools are the single permitted access point to the emulator. No script, module, test or driver may open its own connection to the host VICE, read broker state to find a port, or import a transport module as a library. Reimplementing that route cleanly is the same violation as importing it. If a design needs a Node process to reach VICE, the design is dead — say so and replan.
+- **Tooling**: VICE lives on the host, reached only via the `mcp__plugin_c64-re-tools_vice__*` tools — This is a hard rule. Those tools are the single permitted access point to the emulator. No script, module, test or driver may open its own connection to the host VICE, read broker state to find a port, or import a transport module as a library. Reimplementing that route cleanly is the same violation as importing it. If a design needs a Node process to reach VICE, the design is dead — say so and replan.
 - **Tooling**: Everything runs headless in this Linux container — Any tool that needs a GUI, a display, or a Windows runtime is out of scope and stays out. There is no fallback to a desktop application.
 - **Tooling**: `.d64` packaging is done from Python — The `d64` library reads and writes disk images; `cc1541` builds from source as a fallback for a bootable image.
 - **Source material**: Only cracked releases available, no original master — Provenance must be *reconstructed* by diffing, not assumed. Every documented byte carries a confidence level.
@@ -37,7 +37,7 @@ unavailable, never to reach for a desktop application.
 |------------|---------|---------|-----------------|
 | ACME | 0.97 "Zem" (2021-01-31), Debian pkg `1:0.97~svn20211115+ds-2` | The one true assembler for the rebuild | Already installed at `/usr/bin/acme` — **verified directly** (`acme --version`). It's the project's mandated assembler; nothing to decide here. Confidence: HIGH (verified in-container). |
 | `toacme` | ships with the `acme` Debian package | Static `.prg`→ACME-source dead-listing disassembler | **Verified present** at `/usr/bin/toacme` (`dpkg -L acme` confirms it's part of the same package). The `acme-build` skill already wraps it (`node acme.mjs disasm file.prg`). Zero setup cost, but produces a **linear, untraced** listing — code and data are not separated, illegal opcodes decode as instructions. Use it as the fast first pass, not the final disassembly. Confidence: HIGH (verified in-container). |
-| regenerator2000 | actively maintained, 2026, Rust, `cargo install regenerator2000` | Traced 6502 disassembler producing **reassemblable ACME source** with code/data separation | The real upgrade over `toacme`, and it runs natively on Linux with no display. Accepts `.prg`, `.d64`, `.crt`, `.t64` and VICE `.vsf` snapshots; auto-traces execution flow (x-refs, jump tables) instead of linear decode; exports directly to **ACME**, plus 64tass/KickAssembler/ca65; imports and exports **VICE label files**, so labels round-trip with `mcp__vice__vice_symbols_load` / `mcp__vice__vice_symbols_lookup`. Use its static disassembly, ACME export and label interchange only. Confidence: MEDIUM (documentation cross-checked, not hands-on tested here). Install: `apt-get install -y cargo rustc` (Debian trixie ships rustc/cargo 1.85 — verified via `apt-cache policy`), then `cargo install regenerator2000`. |
+| regenerator2000 | actively maintained, 2026, Rust, `cargo install regenerator2000` | Traced 6502 disassembler producing **reassemblable ACME source** with code/data separation | The real upgrade over `toacme`, and it runs natively on Linux with no display. Accepts `.prg`, `.d64`, `.crt`, `.t64` and VICE `.vsf` snapshots; auto-traces execution flow (x-refs, jump tables) instead of linear decode; exports directly to **ACME**, plus 64tass/KickAssembler/ca65; imports and exports **VICE label files**, so labels round-trip with `mcp__plugin_c64-re-tools_vice__vice_symbols_load` / `mcp__plugin_c64-re-tools_vice__vice_symbols_lookup`. Use its static disassembly, ACME export and label interchange only. Confidence: MEDIUM (documentation cross-checked, not hands-on tested here). Install: `apt-get install -y cargo rustc` (Debian trixie ships rustc/cargo 1.85 — verified via `apt-cache policy`), then `cargo install regenerator2000`. |
 | Python | 3.13.5 | Host language for depacking-dump post-processing, data extraction, `.d64` writing | **Verified present** (`python3 --version`). `pip`/`venv` are not pre-installed but are apt-installable (`python3-pip` 25.1.1, `python3-venv` 3.13.5-1 — verified via `apt-cache policy`). Confidence: HIGH (verified in-container). |
 | `d64` (PyPI) | 1.10 (2023-09-17, Production/Stable) | Read **and write** `.d64`/`.d71`/`.d80`/`.d81`/`.d82` images from Python | This is the resolution to the "no `c1541`" gap. `pip install d64` gives a `DiskImage` context-manager API for directory listing, file extraction, and file writing into a disk image. It is a pure-Python library, so it works unmodified in the container. Confidence: MEDIUM (PyPI page + community references cross-checked; write-path details for building a *bootable* image from scratch were not independently exercised — validate BAM/directory-track behaviour empirically in the build phase). |
 
@@ -54,7 +54,7 @@ unavailable, never to reach for a desktop application.
 
 | Tool | Purpose | Notes |
 |------|---------|-------|
-| VICE, via the `mcp__vice__*` tools | All emulation: running the cracked disk, live-memory depacking, screenshot/RAM/state inspection, scripted input, snapshotting | Not something to install — it is the given execution environment, and the only route to it. The tool schemas are already in front of you; read parameters off them rather than off any description or manifest. See § Emulator Access for the rules that govern their use. |
+| VICE, via the `mcp__plugin_c64-re-tools_vice__*` tools | All emulation: running the cracked disk, live-memory depacking, screenshot/RAM/state inspection, scripted input, snapshotting | Not something to install — it is the given execution environment, and the only route to it. The tool schemas are already in front of you; read parameters off them rather than off any description or manifest. See § Emulator Access for the rules that govern their use. |
 | `cc1541` | Fallback `.d64` writer if the `d64` Python library proves insufficient for a bootable image | C source, MIT-licensed, canonical repo at `bitbucket.org/PTV_Claus/cc1541` (GitHub mirror `TrantorHF/cc1541`). Builds with a plain `make` (small C project, no exotic deps) — buildable in this Debian container with just `build-essential`. Not needed as the primary path, but a good insurance policy: it directly replaces the missing `c1541` for "add file(s), fix interleave, write BAM/directory" duties that a from-scratch Python writer would otherwise have to get exactly right. |
 | `cargo`/`rustc` | Build regenerator2000 from source or via `cargo install` | `apt-get install cargo rustc` — confirmed candidate version 1.85.0+dfsg3-1 in Debian trixie main via `apt-cache policy` (not installed by default in this container, but available). |
 
@@ -98,8 +98,8 @@ unavailable, never to reach for a desktop application.
 | Package A | Compatible With | Notes |
 |-----------|-----------------|-------|
 | ACME 0.97 | `toacme` (same package) | Guaranteed matched version since both ship in the same Debian package — no separate compatibility risk. |
-| ACME `--vicelabels` output (`.vs` file) | `mcp__vice__vice_symbols_load` (format `vice`) | The `acme-build` skill already produces this via `node acme.mjs build game.a`, which passes `--vicelabels ${stem}.vs` to `acme`. This is the working answer to symbol/label interop — no extra tooling, just load the resulting `.vs` after each build. |
-| regenerator2000's exported VICE label files | `mcp__vice__vice_symbols_load` | Same channel as the ACME `.vs` output above, so labels flow disassembler → source → build → debugger and back without translation. Confidence: MEDIUM (not hands-on verified here; check the exact format the first time it is used). |
+| ACME `--vicelabels` output (`.vs` file) | `mcp__plugin_c64-re-tools_vice__vice_symbols_load` (format `vice`) | The `acme-build` skill already produces this via `node acme.mjs build game.a`, which passes `--vicelabels ${stem}.vs` to `acme`. This is the working answer to symbol/label interop — no extra tooling, just load the resulting `.vs` after each build. |
+| regenerator2000's exported VICE label files | `mcp__plugin_c64-re-tools_vice__vice_symbols_load` | Same channel as the ACME `.vs` output above, so labels flow disassembler → source → build → debugger and back without translation. Confidence: MEDIUM (not hands-on verified here; check the exact format the first time it is used). |
 | `d64` (PyPI) 1.10 | Python 3.13.5 (installed) | PyPI classifiers list Python 3 broadly; no version ceiling found in the search. Confirm at install time with `pip install d64` inside a venv rather than assuming; it's a small, stable, single-purpose library so risk is low. |
 | Debian trixie `cargo`/`rustc` 1.85.0+dfsg3-1 | `cargo install regenerator2000` | Current stable Rust toolchains build current crates.io crates without issue; no known incompatibility, but this pairing hasn't been executed in this specific container yet — treat the first `cargo install` as the verification step. |
 
@@ -133,16 +133,16 @@ Architecture not yet mapped. Follow existing patterns found in the codebase.
 
 ## Project Skills
 
+The six C64 reverse-engineering / ACME skills (`acme-build`, `c64-memory-mapping`,
+`c64-program-recon`, `c64-provenance-diff`, `c64-ram-capture`, `vice-wedge-triage`) now ship in
+the `c64-re-tools` plugin (`henols/c64-re-tools`), enabled via `.claude/settings.json`, alongside
+the `vice` MCP server — they are no longer maintained in this repo. Only these two general-purpose
+skills remain local:
+
 | Skill | Description | Path |
 |-------|-------------|------|
-| acme-build | Assemble Commodore 64 6510 assembly with the ACME cross assembler. Use when asked to assemble, build, compile or link .a/.asm 6502/6510 source, produce a C64 .prg, scaffold a new C64 program, list the symbols a program uses, or turn a .prg back into ACME source. | `.claude/skills/acme-build/SKILL.md` |
-| c64-memory-mapping | Look up what any C64 address means and turn raw 6502 disassembly into documented assembly, by resolving every address against the C64 memory map, KERNAL ROM routine list, canonical assembler symbols, and per-bit VIC-II/SID/CIA register tables. Use when asked to annotate or comment assembly, document a disassembly listing, or look up an address like $D020, $EA24 or $FFD2. | `.claude/skills/c64-memory-mapping/SKILL.md` |
-| c64-program-recon | Work out how an unknown C64 program is structured at runtime — entry point, interrupt handlers, main loop, game states, graphics and sound — in a fixed order, before disassembling anything. Use when asked to reverse engineer a C64 game, find the main loop, entry point or IRQ handler, locate the player sprite, charset or music player, identify a game state machine, work out which memory regions are code versus data, or decide where to start on a depacked image. | `.claude/skills/c64-program-recon/SKILL.md` |
-| c64-provenance-diff | Decide whether a byte in a cracked C64 release is original game code or something a cracker changed, by diffing two or more independently-cracked releases at an anchor-proven offset. Use when asked to diff two releases or disk images, work out which bytes the cracker patched, tell loader or cracktro code from game code, prove a byte is original, establish provenance or confidence for a memory range, regenerate the provenance ledger, or run anchor-search, count-patches or diff-images. | `.claude/skills/c64-provenance-diff/SKILL.md` |
-| c64-ram-capture | Capture a running C64's full 64K RAM as a verified flat image, and prove two captures are equivalent. Use when asked to dump RAM, depack a program by running it, capture a memory image at a checkpoint, or compare two captures for reproducibility. | `.claude/skills/c64-ram-capture/SKILL.md` |
 | find-skills | Helps users discover and install capabilities from the open agent skills ecosystem. Use when users ask "how do I do X" for specialized tasks, request "find a skill for X", want to extend agent capabilities, or need help with specific domains (testing, design, deployment, etc.). | `.claude/skills/find-skills/SKILL.md` |
 | skill-writer | Write a new skill for this repo, or fix one that never triggers. Use when asked to create, author, add or scaffold a skill, to turn a repeated procedure into a skill, to review or rewrite an existing SKILL.md, or to work out why a skill is not being picked up. | `.claude/skills/skill-writer/SKILL.md` |
-| vice-wedge-triage | Decide whether a VICE emulator that has stopped responding is genuinely wedged, stopped itself at your own checkpoint, crashed and respawned, or merely paused — and what is safe to do about each. Use when asked why the emulator is stuck, frozen, hung, wedged, dead or not advancing, when a cycle bracket reads zero, when vice_ping says running but nothing happens, when a checkpoint never fires, when deciding whether to recycle or restart VICE, or when a run has to be voided and its evidence recorded. | `.claude/skills/vice-wedge-triage/SKILL.md` |
 <!-- GSD:skills-end -->
 
 <!-- GSD:workflow-start source:GSD defaults -->
@@ -172,7 +172,7 @@ Do not make direct repo edits outside a GSD workflow unless the user explicitly 
 
 Kept outside the GSD-managed blocks above so a regeneration does not drop it.
 
-The `mcp__vice__*` tools are the only allowed way to reach the emulator. Rely on them; never
+The `mcp__plugin_c64-re-tools_vice__*` tools are the only allowed way to reach the emulator. Rely on them; never
 try to break out of them.
 
 Access is per-session and boot-fresh: an instance is
@@ -195,17 +195,17 @@ the tools handle the boundary.
   the tool list, it is not available — do not look for another way to obtain it.
 - Read a disk's directory by parsing `.d64` bytes with the `c64-ram-capture` skill's
   `scripts/d64-parse.mjs`, or with
-  `mcp__vice__vice_disk_read_sector` when the emulated drive's own view is what matters.
-- Most state reads pause the emulator. Read state first, poll with `mcp__vice__vice_ping`, and
+  `mcp__plugin_c64-re-tools_vice__vice_disk_read_sector` when the emulated drive's own view is what matters.
+- Most state reads pause the emulator. Read state first, poll with `mcp__plugin_c64-re-tools_vice__vice_ping`, and
   resume exactly once at the end.
 - Do not try to read the restart epoch — **no exposed tool does.** The proxy compares it around
   every forwarded call and refuses the call, or discards its result, with a loud error naming both
   values. A clean run is one during which no epoch-drift error appeared; record that, not a pair of
-  hand-read numbers. `mcp__vice__vice_recycle` changes the epoch by design, so it voids any run in
+  hand-read numbers. `mcp__plugin_c64-re-tools_vice__vice_recycle` changes the epoch by design, so it voids any run in
   flight. See the `vice-wedge-triage` skill.
 - Synchronise input on checkpoint hits and frame counts. Never on wall-clock delay.
 - **The skills' `scripts/` hold pure logic only** — resolution, attribution, ordering, rendering —
-  over data the agent fetched through the `mcp__vice__*` tools and passed in. Nothing there contacts
+  over data the agent fetched through the `mcp__plugin_c64-re-tools_vice__*` tools and passed in. Nothing there contacts
   the emulator, and an import-purity test in each pipeline skill enforces it mechanically: every
   import must be a `node:` built-in or a module inside the skills bundle, so a transport module
   cannot be pulled in even by accident.
@@ -218,39 +218,21 @@ the tools handle the boundary.
 - Log VICE MCP quirks observed while driving the emulator as a file in `.planning/todos/pending/`
   rather than fixing them inline — a triage rule about not derailing a plan, not a ban on
   maintaining the implementation.
-- `.claude/mcp/` is the tracked `mcp__vice__` implementation. It is read and edited only when the
-  task at hand *is* maintaining that implementation, as opposed to using it to reach the emulator.
-  Three tiers exist, in the order a maintainer touches them: **authored TypeScript** source lives
-  flat in `.claude/mcp/vice/` (`.ts`/`.mts` files, siblings of `resources/`) — this is what a
-  maintainer edits. **`resources/` is generated, but committed** — `tsc` emits here, every
-  generated file carries a banner naming its source and warning that edits are overwritten, it is
-  never hand-edited, and never trusted without rebuilding first, since a stale build looks
-  identical to a fresh one until you diff it (`resources-sync.test.ts` does that diff on every
-  test run). The one exception is `resources/vice-launcher.sh`, which stays hand-authored — it is
-  not generated, and lives there only because the installer deploys the whole directory as a unit.
-  **`tools/` is now purely a generated, gitignored deployment target** — the broker copies the
-  installer places there, copied from `resources/`, never hand-edited. No authored project code
-  lives in `tools/` any more; the recovery pipeline moved into the skills that use it.
-- **`.claude/mcp/vice/` has a real `dependencies` block** (`@mastra/mcp@1.15.0`,
-  `@mastra/core@1.55.0`, both exact-pinned, added in Phase 01.6.3 plan 01). This is the
-  repository's first runtime dependency. **Decision: provision, don't bundle.** The two packages
-  together are ~69 MB unpacked across 35 direct dependencies (a triple-vendored
-  `@ai-sdk/provider-v5`/`v6`/`v7` set among them) — bundling that into a single committed file
-  would mean shipping someone else's minified dependency tree as this directory's "authored
-  TypeScript source" and standing up a whole new bundler-grade build toolchain (the `tsc` step
-  this directory already has is not a bundler, and was deliberately scoped to the host-bound
-  files only) for a file that has never needed one. Instead, `.devcontainer/devcontainer.json`'s
-  `postCreateCommand` runs `npm ci
-  --prefix .claude/mcp/vice` on every container build, so `node_modules` is populated before any
-  session's first tool call. **Disclosed cost:** the "fresh clone, bare `node`, no build step"
-  property this directory has always had is now narrower — a `git clone` followed directly by
-  launching this directory's MCP entry point on bare `node`, bypassing the devcontainer's own
-  provisioning, fails with `Cannot find module '@mastra/mcp'` until `npm ci --prefix
-  .claude/mcp/vice` runs once. This project has no supported bare-clone-outside-a-devcontainer
-  path today, so the narrowing is scoped to an already-devcontainer-scoped property, not a new
-  external requirement.
-- `.vice-supervisor/` is runtime state written by the running broker/supervisor/pool; nobody
-  hand-edits it, in either mode of work.
+- **The `mcp__plugin_c64-re-tools_vice__` implementation no longer lives in this repo.** It moved
+  to the standalone `c64-re-tools` Claude Code plugin (`henols/c64-re-tools`), which bundles the
+  `vice` MCP server together with the six C64 reverse-engineering / ACME skills. This repo consumes
+  it: `.claude/settings.json` declares the marketplace (`extraKnownMarketplaces`) and enables the
+  plugin (`enabledPlugins`), and the plugin's own `SessionStart` hook provisions the server's npm
+  dependencies (`@mastra/mcp`, `@mastra/core`) into its install dir — so there is no longer any
+  `npm ci --prefix .claude/mcp/vice` in `.devcontainer/devcontainer.json`, and no MCP source, tests,
+  or `node_modules` here to maintain. Maintaining that implementation (its authored TypeScript,
+  generated-but-committed `resources/`, and deploy machinery) is now work done in the `c64-re-tools`
+  repo, not this one. When the plugin is enabled its tools are namespaced
+  `mcp__plugin_c64-re-tools_vice__*` (per Claude Code's plugin-bundled-MCP naming), which is why
+  every reference above uses that form rather than a bare `mcp__vice__*`.
+- `.vice-supervisor/` and `tools/` are runtime state the plugin's server still writes **into this
+  project's root** at runtime (it resolves the project root via `CLAUDE_PROJECT_DIR`), which is why
+  their `.gitignore` entries stay here even though the MCP source is gone. Nobody hand-edits them.
 
 ## Reverse-Engineering Findings Log
 

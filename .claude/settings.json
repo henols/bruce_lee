@@ -1,0 +1,13 @@
+{
+  "extraKnownMarketplaces": {
+    "c64-re-tools": {
+      "source": {
+        "source": "github",
+        "repo": "henols/c64-re-tools"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "c64-re-tools@c64-re-tools": true
+  }
+}
