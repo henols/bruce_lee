@@ -8,7 +8,7 @@
 		// Node is needed to run the vice MCP server the c64-re-tools plugin provides
 		// (launched with `node`), and for the plugin's SessionStart hook that runs
 		// `npm ci` to provision that server's dependencies.
-		"ghcr.io/devcontainers/features/node:1": {},
+		"ghcr.io/devcontainers/features/node:2": {},
 		"ghcr.io/stu-bell/devcontainer-features/claude-code:0": {},
 		"ghcr.io/devcontainer-community/devcontainer-features/github.com-cli:1": {}
 	},
